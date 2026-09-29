@@ -67,6 +67,25 @@ the terms of a model with strata interactions. Yates factorial and SAS
 populations retain compound strata as evaluated factors; their labels are
 not parsed back into the original source columns.
 
+Formula expansion also handles `offset()` and `cluster()` inside products,
+nesting, and powers. Each distinct offset contributes once even if it appears
+in a removed term, matching R's `terms()` behavior. Cluster main terms supply
+robust-variance groups; their interaction columns remain in the design. R's
+checks for multiple clusters and missing interaction margins are preserved.
+
+Variables removed by formula subtraction remain in the model frame and take
+part in training-row omission. For new-data predictions, `na.pass` allows a
+missing unused variable without losing the prediction; `na.omit`,
+`na.exclude`, and `na.fail` still check it. Cox and AFT cluster extraction
+rebuilds the formula and drops such unused variables, as R does.
+
+`scripts/generate_formula_special_reference.R` checks these cases against R,
+including numeric and categorical clusters and transformed missing values.
+It retains R's raw offset predictions alongside the intended values: the port
+includes AFT new-data offsets and consistently centers Cox offsets even for
+models without coefficients. For models without covariate terms, term
+prediction returns an empty-column matrix where R's method errors.
+
 ```python
 from survival import datasets, r
 

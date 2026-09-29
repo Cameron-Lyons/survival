@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import replace
 from functools import lru_cache
 from itertools import combinations, compress, product
 from operator import add, ge, mul, sub, truediv
@@ -1286,6 +1287,7 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     terms = _formula_rhs_terms(formula, data)
     columns = (
         ([] if spec is None else list(spec.columns))
+        + _covariate_columns(terms.variables)
         + _covariate_columns(terms.covariates)
         + terms.strata
         + _offset_columns(terms.offsets)
@@ -1486,6 +1488,7 @@ def _apply_formula_na_action(
     terms = _formula_rhs_terms(formula, data)
     variables = [
         *_response_variables(_response_spec(formula)),
+        *terms.variables,
         *(factor for term in terms.covariates for factor in _covariate_factors(term)),
         *terms.offsets,
     ]
@@ -1592,7 +1595,7 @@ def _interaction_from_terms(terms: tuple[_CovariateSpec, ...]) -> _CovariateSpec
     return _interaction_from_factors(factors)
 
 
-def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateSpec]:
+def _dot_covariate_terms(dot_terms: Sequence[str] | None) -> list[_CovariateTerm]:
     if dot_terms is None:
         raise ValueError("formula '.' requires named tabular data")
     return [_CovariateTerm(column) for column in dot_terms]
@@ -1602,9 +1605,25 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if not term:
         raise ValueError("formula interaction terms must not be empty")
 
+    if term.startswith("offset(") and term.endswith(")"):
+        return replace(_parse_offset_term(term[7:-1]), special="offset")
+
+    if term.startswith("cluster(") and term.endswith(")"):
+        items = _formula_name_items(term[8:-1])
+        if not items:
+            raise ValueError("cluster() requires at least one column")
+        if len(items) != 1:
+            raise ValueError("cluster() requires exactly one column")
+        column, quoted = items[0]
+        if _unsupported_formula_name(column, quoted):
+            raise ValueError(f"unsupported formula term(s): {term}")
+        return _CovariateTerm(column, special="cluster")
+
     if term.startswith("strata(") and term.endswith(")"):
         items = _formula_name_items(term[7:-1])
-        if not items or any(_unsupported_formula_name(name, quoted) for name, quoted in items):
+        if not items:
+            raise ValueError("strata() requires at least one column")
+        if any(_unsupported_formula_name(name, quoted) for name, quoted in items):
             raise ValueError(f"unsupported formula term(s): {term}")
         return _strata_covariate(tuple(name for name, _quoted in items))
 
@@ -1730,14 +1749,20 @@ def _parse_call_term(term: str) -> _CovariateTerm | None:
 def _parse_interaction_term(
     term: str,
     dot_terms: Sequence[str] | None,
+    variables: list[_CovariateTerm] | None = None,
 ) -> list[_CovariateSpec]:
     parts = _split_top_level(term, ":")
     if len(parts) == 1:
-        if parts[0] == ".":
-            return _dot_covariate_terms(dot_terms)
-        return [_parse_covariate_atom(parts[0])]
+        atoms = (
+            _dot_covariate_terms(dot_terms)
+            if parts[0] == "."
+            else [_parse_covariate_atom(parts[0])]
+        )
+        if variables is not None:
+            _append_unique(variables, atoms)
+        return atoms
 
-    parsed_groups = [_parse_covariate_expression(part, dot_terms) for part in parts]
+    parsed_groups = [_parse_covariate_expression(part, dot_terms, variables) for part in parts]
     interactions: list[_CovariateSpec] = []
     for term_combo in product(*parsed_groups):
         _append_unique(interactions, [_interaction_from_terms(term_combo)])
@@ -1765,13 +1790,14 @@ def _parse_formula_power_degree(value: str) -> int:
 def _parse_formula_power_base_terms(
     term: str,
     dot_terms: Sequence[str] | None,
+    variables: list[_CovariateTerm] | None = None,
 ) -> list[_CovariateSpec]:
     expression = _strip_outer_formula_parentheses(term)
     terms: list[_CovariateSpec] = []
     for op, base_term in _formula_tokens(expression):
         if base_term in {"0", "1"}:
             continue
-        parsed = _parse_covariate_expression(base_term, dot_terms)
+        parsed = _parse_covariate_expression(base_term, dot_terms, variables)
         if op == "-":
             _remove_values(terms, parsed)
         else:
@@ -1782,6 +1808,7 @@ def _parse_formula_power_base_terms(
 def _parse_formula_power_expression(
     term: str,
     dot_terms: Sequence[str] | None,
+    variables: list[_CovariateTerm] | None = None,
 ) -> list[_CovariateSpec] | None:
     parts = _split_top_level(term, "^")
     if len(parts) == 1:
@@ -1789,7 +1816,7 @@ def _parse_formula_power_expression(
     if len(parts) != 2:
         raise ValueError("formula ^ expressions must contain one degree")
 
-    base_terms = _parse_formula_power_base_terms(parts[0], dot_terms)
+    base_terms = _parse_formula_power_base_terms(parts[0], dot_terms, variables)
     degree = _parse_formula_power_degree(parts[1])
     if degree == 0 or not base_terms:
         return []
@@ -1804,32 +1831,37 @@ def _parse_formula_power_expression(
 def _parse_parenthesized_formula_expression(
     term: str,
     dot_terms: Sequence[str] | None,
+    variables: list[_CovariateTerm] | None = None,
 ) -> list[_CovariateSpec] | None:
     stripped = _strip_outer_formula_parentheses(term)
     if stripped == term.strip():
         return None
-    return _parse_formula_power_base_terms(stripped, dot_terms)
+    return _parse_formula_power_base_terms(stripped, dot_terms, variables)
 
 
 def _parse_covariate_expression(
     term: str,
     dot_terms: Sequence[str] | None,
+    variables: list[_CovariateTerm] | None = None,
 ) -> list[_CovariateSpec]:
     if term == ".":
-        return _dot_covariate_terms(dot_terms)
+        atoms = _dot_covariate_terms(dot_terms)
+        if variables is not None:
+            _append_unique(variables, atoms)
+        return atoms
 
-    power_terms = _parse_formula_power_expression(term, dot_terms)
+    power_terms = _parse_formula_power_expression(term, dot_terms, variables)
     if power_terms is not None:
         return power_terms
 
-    grouped_terms = _parse_parenthesized_formula_expression(term, dot_terms)
+    grouped_terms = _parse_parenthesized_formula_expression(term, dot_terms, variables)
     if grouped_terms is not None:
         return grouped_terms
 
     in_parts = _split_top_level_token(term, "%in%")
     if len(in_parts) > 1:
         # a %in% b is a:b; the fit orders each interaction's factors as R's terms() does
-        parsed_groups = [_parse_interaction_term(part, dot_terms) for part in in_parts]
+        parsed_groups = [_parse_interaction_term(part, dot_terms, variables) for part in in_parts]
         nested_expanded = parsed_groups[0]
         for nested_group in parsed_groups[1:]:
             next_expanded: list[_CovariateSpec] = []
@@ -1840,7 +1872,9 @@ def _parse_covariate_expression(
 
     nested_parts = _split_top_level(term, "/")
     if len(nested_parts) > 1:
-        parsed_parts = [_parse_interaction_term(part, dot_terms) for part in nested_parts]
+        parsed_parts = [
+            _parse_covariate_expression(part, dot_terms, variables) for part in nested_parts
+        ]
         slash_expanded: list[_CovariateSpec] = []
         current_group = parsed_parts[0]
         _append_unique(slash_expanded, current_group)
@@ -1854,10 +1888,10 @@ def _parse_covariate_expression(
 
     parts = _split_top_level(term, "*")
     if len(parts) == 1:
-        return _parse_interaction_term(parts[0], dot_terms)
+        return _parse_interaction_term(parts[0], dot_terms, variables)
 
     crossed_groups: list[list[_CovariateSpec]] = [
-        _parse_covariate_expression(part, dot_terms) for part in parts
+        _parse_covariate_expression(part, dot_terms, variables) for part in parts
     ]
     crossed_expanded: list[_CovariateSpec] = []
     for group in crossed_groups:
@@ -1877,6 +1911,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
         clusters=list(terms.clusters),
         model_terms=list(terms.model_terms),
         intercept=terms.intercept,
+        variables=terms.variables,
     )
 
 
@@ -1886,10 +1921,8 @@ def _split_terms_cached(
     dot_terms: tuple[str, ...] | None = None,
 ) -> _CachedFormulaTerms:
     covariates: list[_CovariateSpec] = []
-    offsets: list[_CovariateTerm] = []
-    clusters: list[str] = []
+    variables: list[_CovariateTerm] = []
     model_terms: list[_FormulaModelTerm] = []
-    unsupported: list[str] = []
     intercept = True
 
     for op, term in _formula_tokens(rhs):
@@ -1901,73 +1934,22 @@ def _split_terms_cached(
         if term == "0":
             intercept = op == "-"
             continue
-        if term == ".":
-            if dot_terms is None:
-                raise ValueError("formula '.' requires named tabular data")
-            terms = [_CovariateTerm(column) for column in dot_terms]
-            model_items = [_ModelCovariateTerm(item) for item in terms]
-            if op == "-":
-                _remove_values(covariates, terms)
-                _remove_values(model_terms, model_items)
-            else:
-                _append_unique(covariates, terms)
-                _append_unique(model_terms, model_items)
-            continue
-        if (
-            term.startswith("strata(")
-            and term.endswith(")")
-            and not any(char == ")" and idx < len(term) - 1 for idx, char in _top_level(term))
-        ):
-            column_items = _formula_name_items(term[7:-1])
-            columns = [column for column, _quoted in column_items]
-            if not columns:
-                raise ValueError("strata() requires at least one column")
-            unsupported.extend(
-                column
-                for column, quoted in column_items
-                if _unsupported_formula_name(column, quoted)
-            )
-            if op == "-":
-                _remove_values(model_terms, [_ModelStrataTerm(tuple(columns))])
-            else:
-                _append_unique(model_terms, [_ModelStrataTerm(tuple(columns))])
-            continue
-        if term.startswith("cluster(") and term.endswith(")"):
-            column_items = _formula_name_items(term[8:-1])
-            columns = [column for column, _quoted in column_items]
-            if not columns:
-                raise ValueError("cluster() requires at least one column")
-            unsupported.extend(
-                column
-                for column, quoted in column_items
-                if _unsupported_formula_name(column, quoted)
-            )
-            if op == "-":
-                _remove_values(clusters, columns)
-                _remove_values(model_terms, [_ModelClusterTerm(column) for column in columns])
-            else:
-                _append_unique(clusters, columns)
-                _append_unique(model_terms, [_ModelClusterTerm(column) for column in columns])
-            continue
-        if term.startswith("offset(") and term.endswith(")"):
-            offset_term = _parse_offset_term(term[7:-1])
-            model_item = _ModelOffsetTerm(offset_term)
-            if op == "-":
-                _remove_values(offsets, [offset_term])
-                _remove_values(model_terms, [model_item])
-            else:
-                _append_unique(offsets, [offset_term])
-                _append_unique(model_terms, [model_item])
-            continue
-        parsed_terms = _parse_covariate_expression(term, dot_terms)
+        parsed_terms = [
+            item
+            for item in _parse_covariate_expression(term, dot_terms, variables)
+            if not any(factor.special == "offset" for factor in _covariate_factors(item))
+        ]
         covariate_terms = [
             item
             for item in parsed_terms
-            if isinstance(item, _InteractionTerm) or not item.strata_columns
+            if isinstance(item, _InteractionTerm)
+            or (not item.strata_columns and item.special != "cluster")
         ]
         model_items = [
             _ModelStrataTerm(item.strata_columns)
             if isinstance(item, _CovariateTerm) and item.strata_columns
+            else _ModelClusterTerm(item.column)
+            if isinstance(item, _CovariateTerm) and item.special == "cluster"
             else _ModelCovariateTerm(item)
             for item in parsed_terms
         ]
@@ -1978,20 +1960,46 @@ def _split_terms_cached(
             _append_unique(covariates, covariate_terms)
             _append_unique(model_terms, model_items)
 
-    if unsupported:
-        joined = ", ".join(unsupported)
-        raise ValueError(f"unsupported formula term(s): {joined}")
+    # R's terms() records offsets and model-frame variables before term removal.
+    # An offset always contributes once, even in an interaction or a subtraction.
+    offsets = [replace(term, special=None) for term in variables if term.special == "offset"]
+    _append_unique(model_terms, [_ModelOffsetTerm(term) for term in offsets])
+    cluster_terms = [term for term in variables if term.special == "cluster"]
+    if len(cluster_terms) > 1:
+        raise ValueError("a formula cannot have multiple cluster terms")
+    clusters = [term.column for term in cluster_terms]
+    if cluster_terms:
+        cluster_term = cluster_terms[0]
+        covered = {frozenset(_covariate_factors(term)) for term in covariates}
+        covered.update(
+            frozenset([_strata_covariate(term.columns)])
+            for term in model_terms
+            if isinstance(term, _ModelStrataTerm)
+        )
+        if any(
+            cluster_term in factors and factors - {cluster_term} not in covered
+            for factors in covered
+        ):
+            raise ValueError("cluster() cannot be in an interaction")
+        if _ModelClusterTerm(cluster_term.column) not in model_terms:
+            raise ValueError("invalid model formula in ExtractVars")
+        # coxph/survreg remove the cluster main term and rebuild the formula.
+        # This also resets variable order and discards unused frame variables.
+        variables = []
+        for item in sorted(model_terms, key=_formula_model_term_degree):
+            if isinstance(item, _ModelCovariateTerm):
+                _append_unique(variables, _covariate_factors(item.term))
+            elif isinstance(item, _ModelStrataTerm):
+                _append_unique(variables, [_strata_covariate(item.columns)])
+        _append_unique(variables, [replace(term, special="offset") for term in offsets])
     return _CachedFormulaTerms(
         covariates=tuple(covariates),
-        strata=tuple(
-            dict.fromkeys(
-                column for group in _model_strata_columns(model_terms) for column in group
-            )
-        ),
+        strata=tuple(dict.fromkeys(column for term in variables for column in term.strata_columns)),
         offsets=tuple(offsets),
         clusters=tuple(clusters),
         model_terms=tuple(model_terms),
         intercept=intercept,
+        variables=tuple(variables),
     )
 
 
@@ -2247,14 +2255,23 @@ def _fit_formula_design(
 
     if full_data is None:
         full_data = data
-    factor_order = _formula_factor_order(
-        [
-            item.term if isinstance(item, _ModelCovariateTerm) else _strata_covariate(item.columns)
-            for item in terms.model_terms
-            if isinstance(item, _ModelCovariateTerm)
-            or (strata_margins and isinstance(item, _ModelStrataTerm))
-        ]
-        or terms.covariates
+    drops_strata = not strata_margins and any(
+        isinstance(term, _ModelStrataTerm) for term in terms.model_terms
+    )
+    factor_order = (
+        _formula_factor_order(terms.variables)
+        if terms.variables and not drops_strata
+        else _formula_factor_order(
+            [
+                item.term
+                if isinstance(item, _ModelCovariateTerm)
+                else _strata_covariate(item.columns)
+                for item in terms.model_terms
+                if isinstance(item, _ModelCovariateTerm)
+                or (strata_margins and isinstance(item, _ModelStrataTerm))
+            ]
+            or terms.covariates
+        )
     )
     ordered_terms = sorted(terms.covariates, key=lambda term: len(_covariate_factors(term)))
     ordered_model_terms = sorted(
@@ -2306,6 +2323,10 @@ def _fit_formula_design(
         term_assignments=tuple(term_assignments[term] for term in ordered_terms),
         strata=tuple(terms.strata),
         intercept=include_intercept and terms.intercept,
+        variables=tuple(
+            replace(term, special=None) if term.special == "offset" else term
+            for term in terms.variables
+        ),
     )
 
 
@@ -2396,6 +2417,8 @@ def _design_rows_from_spec(
 
 
 def _covariate_term_name(term: _CovariateTerm) -> str:
+    if term.special is not None:
+        return f"{term.special}({_covariate_term_name(replace(term, special=None))})"
     if term.call is not None:
         return term.call
     if term.transform is not None:
@@ -2442,9 +2465,13 @@ def _design_term_columns_used(spec: _DesignTerm) -> list[str]:
     return _covariate_term_columns(spec.term)
 
 
-def _formula_design_columns(design: _FormulaDesign) -> list[str]:
+def _formula_design_columns(design: _FormulaDesign, *, include_unused: bool = False) -> list[str]:
     columns = [column for term in design.covariates for column in _design_term_columns_used(term)]
     columns.extend(_offset_columns(design.offsets))
+    if include_unused:
+        columns.extend(
+            _covariate_columns([term for term in design.variables if not term.strata_columns])
+        )
     return list(dict.fromkeys(columns))
 
 
@@ -2465,7 +2492,7 @@ def _formula_model_frame(
     frame: dict[str, Any] = {design.response.name: response}
     columns: list[str] = []
     _append_unique(columns, design.response.columns)
-    _append_unique(columns, _formula_design_columns(design))
+    _append_unique(columns, _formula_design_columns(design, include_unused=True))
     _append_unique(columns, list(design.strata))
     _append_unique(columns, list(extra_columns))
     for column in columns:
@@ -2619,7 +2646,10 @@ def _timeline_counting(
     _lhs, _sep, rhs = formula.partition("~")
     terms = _formula_rhs_terms(formula, data)
     model_columns = (
-        _covariate_columns(terms.covariates) + terms.strata + _offset_columns(terms.offsets)
+        _covariate_columns(terms.variables)
+        + _covariate_columns(terms.covariates)
+        + terms.strata
+        + _offset_columns(terms.offsets)
     )
     variables = _data_order(data, model_columns + terms.clusters)
     sources = {name: _column_source(data, name) for name in variables}
@@ -2843,7 +2873,9 @@ def _strata_keep(data: Any, terms: Sequence[Sequence[str]]) -> StrataFactor:
 def _strata_term_columns(terms: _FormulaTerms) -> tuple[tuple[str, ...], ...]:
     """The columns of each ``strata()`` term of *terms*, in formula order."""
 
-    return _model_strata_columns(terms.model_terms)
+    return tuple(
+        dict.fromkeys(term.strata_columns for term in terms.variables if term.strata_columns)
+    ) or _model_strata_columns(terms.model_terms)
 
 
 def _strata_covariate(columns: tuple[str, ...]) -> _CovariateTerm:
@@ -2865,7 +2897,7 @@ def _model_strata_columns(terms: Sequence[_FormulaModelTerm]) -> tuple[tuple[str
 
 
 def _model_variables(
-    mf: ModelFrame, overrides: Mapping[str, Any] | None = None
+    mf: ModelFrame, overrides: Mapping[str, Any] | None = None, *, include_unused: bool = True
 ) -> list[tuple[str, Any]]:
     """R's ``mf[-1]``: one evaluated column per formula term, in formula order.
 
@@ -2873,6 +2905,7 @@ def _model_variables(
     ``offset()`` the numeric offset; ``cluster()`` terms are left out.
     ``overrides`` supplies already evaluated columns, such as population
     cut terms evaluated before subsetting and missing-value removal.
+    ``include_unused=False`` selects only the fitted terms for curve grouping.
     """
 
     columns: list[tuple[str, Any]] = []
@@ -2884,6 +2917,18 @@ def _model_variables(
             columns.append((name, values))
 
     terms = mf.terms
+    if include_unused and terms.variables:
+        for factor in terms.variables:
+            name = _covariate_term_name(factor)
+            values = (
+                overrides[name]
+                if overrides is not None and name in overrides
+                else _strata_term_values(mf.data, factor.strata_columns)
+                if factor.strata_columns
+                else _term_values(mf.data, factor, mf.n)
+            )
+            add(name, values)
+        return columns
     model_terms: Sequence[_FormulaModelTerm]
     model_terms = terms.model_terms or [_ModelCovariateTerm(term) for term in terms.covariates]
     for model_term in model_terms:
@@ -2921,7 +2966,7 @@ def _model_strata(
         raise ValueError("Interaction terms are not valid for this function")
     variables = [
         (name, values)
-        for name, values in _model_variables(mf, overrides)
+        for name, values in _model_variables(mf, overrides, include_unused=False)
         if not name.startswith("offset(")
     ]
     if not variables:

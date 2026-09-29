@@ -472,16 +472,37 @@ def _newdata_frame(
         if need_response and set(design.response.columns) <= present
         else []
     )
+    pass_missing = _normalize_na_action(na_action) == "pass"
     columns = list(
-        dict.fromkeys([*_formula_design_columns(design), *strata_columns, *response_columns])
+        dict.fromkeys(
+            [
+                *_formula_design_columns(design, include_unused=not pass_missing),
+                *strata_columns,
+                *response_columns,
+            ]
+        )
     )
     n = _formula_design_row_count(newdata, design)
+    # na.pass leaves missing unused variables in the model frame without
+    # propagating them into the design. They still have to exist and align.
+    if pass_missing:
+        used = set(columns)
+        _missing_row_indices(
+            [
+                (name, _column_source(newdata, name))
+                for name in _formula_design_columns(design, include_unused=True)
+                if name not in used
+            ],
+            n,
+        )
     missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
     variables = [
         part.term
         for term in design.covariates
         for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     ]
+    if not pass_missing:
+        variables.extend(design.variables)
     made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
     if made:
         # the design reads the evaluated variables at the rows that stay

@@ -41,6 +41,7 @@ class _CovariateTerm:
     first data column (or the first column of its ``arithmetic`` argument).
     ``strata_columns`` identifies a strata factor used in an interaction;
     its call label and underlying columns stay distinct.
+    ``special`` wraps an offset or cluster variable during formula expansion.
     """
 
     column: str
@@ -50,6 +51,7 @@ class _CovariateTerm:
     arithmetic: str | None = None
     call: str | None = None
     strata_columns: tuple[str, ...] = ()
+    special: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,12 +87,15 @@ _FormulaModelTerm = _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | 
 
 @dataclass(frozen=True)
 class _FormulaTerms:
+    """Fitted terms plus all model-frame variables, including removed terms."""
+
     covariates: list[_CovariateSpec]
     strata: list[str]
     offsets: list[_CovariateTerm]
     clusters: list[str]
     model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,7 @@ class _CachedFormulaTerms:
     clusters: tuple[str, ...]
     model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +171,7 @@ class _FormulaDesign:
     term_assignments: tuple[int, ...] = ()
     strata: tuple[str, ...] = ()
     intercept: bool = False
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)
