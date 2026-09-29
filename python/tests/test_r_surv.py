@@ -138,8 +138,8 @@ def test_format_surv_matches_r_as_character():
     ]
     # R's format(Surv(c(1, 2), factor(c("a", "censor"), levels = c("censor", "a"))))
     assert r.format_surv(r.Surv([1, 2], _factor(["a", "censor"], ["censor", "a"]))) == [
-        "1:a",
-        "2+ ",
+        "1:a     ",
+        "2:censor",
     ]
     # R's format(Surv(c(1.5, 2.25, 10), c(1, 0, 1), type = "left"))
     assert r.format_surv(r.Surv([1.5, 2.25, 10], [1, 0, 1], type="left")) == [
@@ -193,7 +193,7 @@ def test_surv2_codes_states_and_repeated_option():
     assert surv2.states == ("a", "b")
     assert surv2.status == (1, 0, 2)
     assert surv2.repeated == "first"
-    assert r.format_surv(surv2) == ["1:a", "2+ ", "3:b"]
+    assert r.format_surv(surv2) == ["1:a     ", "2:censor", "3:b     "]
     plain = r.Surv2([1, 2], [True, False])
     assert plain.status == (1, 0)
     assert plain.states == ()

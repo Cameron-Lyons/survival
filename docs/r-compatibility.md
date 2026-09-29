@@ -504,6 +504,10 @@ this does not show.
   then removed by the na.action) and a missing factor outcome is censored
   without 3.8-11's level shift. The multi-state `parsecovar2` and `survfitAJ`
   paths follow 3.8-12 as well.
+- `Surv` and `Surv2` retain the censoring factor's first level in `clabel`
+  and format it as `:label`, following 3.8-12. Legacy objects without `clabel`
+  keep the `+` marker. The old formatting fixture reconstructs that legacy
+  metadata; the vector-operation fixtures check current labels against 3.8-12.
 - The censoring column of a transitions table is labelled "(censored)" (3.8-11)
   where 3.8-12 prints "(<first level>)", e.g. "(censor)".
 - `rsurvreg(seed=s)` reproduces R's `set.seed(s)` stream (Mersenne-Twister,
@@ -702,6 +706,41 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Survival response vector operations
+
+`concat_surv`, `rep_surv`, `rev_surv`, `unique_surv`, `duplicated_surv`,
+`transpose_surv`, `levels_surv`, `head_surv`, and `tail_surv` provide R's
+row operations through `survival.r` and the package root. Concatenation
+requires matching censoring types and multistate levels. Row operations
+preserve normalized status codes, state levels, and the censoring label;
+they never recode a subset containing only status 2 as an ordinary 1/2
+event response.
+
+Repetition supports scalar or per-entry `times`, `each`, and `length_out`
+(`length.out`); the length takes precedence over times. Duplicate detection
+and uniqueness support `from_last` (`fromLast`) and compare complete rows,
+including missing values in matching columns. They use a hash set with
+expected linear scan time and storage proportional to distinct rows.
+Python responses represent R's numeric NA and NaN by the same NaN, so
+these are treated as a single missing value. Empty responses remain empty
+under repetition, reversal, head, and tail; R's `1:nrow(x)` in those methods
+can instead produce an out-of-bounds error.
+
+`as_character_surv` returns labels without extra right padding;
+`format_surv` pads them to a common width. Both retain the common numeric
+precision and leading padding of the time columns. `transpose_surv`
+returns a plain matrix with one row per response column, and `levels_surv`
+returns event-state names or `None` for an ordinary response.
+
+`scripts/generate_surv_vector_reference.R` records 144 operations across
+right, left, counting-process, interval, and multistate responses, plus
+concatenations. Run `scripts/benchmark_surv_vectors.py` to measure duplicate
+detection and uniqueness on distinct and repeated rows.
+On Linux x86-64 with Python 3.14.7 (median of 11 calls, excluding response
+construction), duplicate detection took 0.22/2.42/30.25 ms for
+1,000/10,000/100,000 distinct rows. At 100,000 rows, uniqueness took
+35.61 ms for distinct rows and 26.59 ms when each row occurred ten times.
+
 ## Population model components and summaries
 
 Native calendar conversion rejects nonfinite day counts and dates outside
@@ -857,11 +896,9 @@ error; none silently falls back to other behaviour.
   `print_survreg_penal` ports R's printed table, and `format_surv` formats a
   `Surv`; `str(summary_ratetable(...))` exposes the native rate-table text.
   The sparse (frailty) branch of `print.survreg.penal` is not ported.
-- **`Surv` methods beyond subsetting**: `survival.r.Surv` supports `subset`,
-  `len`, `as_matrix`, `format_surv`, `is_na_surv`, and the `median`/`quantile`
-  generics; R's `c`, `rep`, `rev`,
-  `unique`, `duplicated`, `t`, `levels`, `head`/`tail`, `as.character` and the
-  `Math`/`Ops`/`Summary` groups are not ported.
+- **R operator groups**: `Surv` arithmetic, comparisons and reductions do
+  not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
+  operations). Python's ordinary object equality remains structural.
 - **Low-level R exports** that `survival.r` does not re-export: `coxph.fit`,
   `agreg.fit`, `agexact.fit`, `survreg.fit`, `survpenal.fit`, `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,

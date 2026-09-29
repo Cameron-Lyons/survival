@@ -106,12 +106,24 @@ from ._pyears import (
 from ._surv import (
     Surv,
     Surv2,
+    as_character_surv,
     cluster,
     format_surv,
     is_na_surv,
     is_surv,
     strata,
     totimeline,
+)
+from ._surv_vector import (
+    concat_surv,
+    duplicated_surv,
+    head_surv,
+    levels_surv,
+    rep_surv,
+    rev_surv,
+    tail_surv,
+    transpose_surv,
+    unique_surv,
 )
 from ._survdiff import survdiff
 from ._survfit import (
@@ -281,6 +293,16 @@ __all__ = [
     "tmerge",
     "fromtimeline",
     "format_surv",
+    "as_character_surv",
+    "concat_surv",
+    "duplicated_surv",
+    "head_surv",
+    "levels_surv",
+    "rep_surv",
+    "rev_surv",
+    "tail_surv",
+    "transpose_surv",
+    "unique_surv",
     "is_surv",
     "is_na_surv",
     "is_ratetable",
