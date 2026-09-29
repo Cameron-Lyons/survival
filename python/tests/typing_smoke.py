@@ -51,6 +51,14 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(raw_km, r.SurvfitKMResult)
     assert_type(raw_km.n, list[int])
     assert_type(raw_km.strata, dict[str, int] | None)
+    direct = r.coxsurv_fit(y=y, x=data, x2=data, risk=data["age"], risk2=data["age"])
+    assert_type(direct, r.CoxSurvFitResult | r.CoxSurvFitList)
+    if isinstance(direct, r.CoxSurvFitResult):
+        assert_type(direct.n, list[int])
+        assert_type(direct.strata, dict[str, int] | None)
+    else:
+        assert_type(direct[0], r.CoxSurvFitResult)
+    assert_type(r.survfitcoxph_fit(y, data), r.CoxSurvFitResult | r.CoxSurvFitList)
     bare = r.coxph_fit(data["age"], y)
     assert_type(bare, r.CoxFitResult)
     assert_type(bare.coefficients, list[float] | None)

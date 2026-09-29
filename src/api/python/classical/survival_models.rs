@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cox_survfit_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(coxsurv_fit_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfitkm_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(survfit_confint_py, m)?)?;
@@ -97,6 +98,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         GEEConfig,
         GEEResult,
         AgsurvCurve,
+        CoxSurvRawResult,
         SurvfitKMResult,
         SurvfitCounts,
         SurvfitInfluence,

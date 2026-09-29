@@ -12,6 +12,8 @@ __all__ = bind_names(
         "aggregate_survfit",
         "AgsurvCurve",
         "cox_survfit_baseline",
+        "CoxSurvRawResult",
+        "coxsurv_fit",
         "step_values_at",
         "IllnessDeathConfig",
         "IllnessDeathPrediction",

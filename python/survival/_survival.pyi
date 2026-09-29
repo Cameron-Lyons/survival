@@ -2415,6 +2415,34 @@ class CoxRegressionInput:
     @property
     def n_vars(self) -> int: ...
 
+class CoxSurvRawResult:
+    @property
+    def cumhaz(self) -> NDArray[np.float64]: ...
+    @property
+    def hazard(self) -> NDArray[np.float64] | None: ...
+    @property
+    def lengths(self) -> list[int]: ...
+    @property
+    def n(self) -> list[int]: ...
+    @property
+    def n_censor(self) -> NDArray[np.float64]: ...
+    @property
+    def n_event(self) -> NDArray[np.float64]: ...
+    @property
+    def n_risk(self) -> NDArray[np.float64]: ...
+    @property
+    def ndeath(self) -> NDArray[np.float64] | None: ...
+    @property
+    def std_err(self) -> NDArray[np.float64] | None: ...
+    @property
+    def surv(self) -> NDArray[np.float64]: ...
+    @property
+    def time(self) -> NDArray[np.float64]: ...
+    @property
+    def varhaz(self) -> NDArray[np.float64] | None: ...
+    @property
+    def xbar(self) -> NDArray[np.float64] | None: ...
+
 class CoxSurvfitCurve:
     @property
     def cumhaz(self) -> list[list[float]]: ...
@@ -11946,6 +11974,23 @@ def coxscore2(
     strata: ArrayLike | None = None,
     ties: str = "efron",
 ) -> list[list[float]]: ...
+def coxsurv_fit(
+    y: ArrayLike,
+    x: ArrayLike,
+    weights: ArrayLike,
+    risk: ArrayLike,
+    strata: ArrayLike,
+    nstrata: int,
+    x2: ArrayLike,
+    risk2: ArrayLike,
+    stype: int = 2,
+    ctype: int = 1,
+    varmat: ArrayLike | None = None,
+    y2: ArrayLike | None = None,
+    strata2: ArrayLike | None = None,
+    id2: ArrayLike | None = None,
+    keep_details: bool = False,
+) -> CoxSurvRawResult: ...
 def cqr_conformal_survival(
     time: Sequence[float],
     status: Sequence[int],

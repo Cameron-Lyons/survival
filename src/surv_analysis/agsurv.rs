@@ -14,10 +14,10 @@
 //! `sqrt(cumsum(varhaz) + dt' V dt) * risk2` on the cumulative-hazard scale.
 //!
 //! The kernels are plain Rust returning [`SurvivalResult`]; the Python
-//! surface of a fitted model lives on `regression::coxph::CoxPHFit`.  Two
-//! low-level bindings remain here: [`cox_survfit_baseline`], `agsurv()` of
-//! one stratum for the R bridge's `coxsurv.fit`, and [`step_values_at`],
-//! which reads a curve at given times.
+//! surface of a fitted model lives on `regression::coxph::CoxPHFit`. The
+//! direct matrix driver lives in [`super::coxsurv_fit`]. Bindings here expose
+//! [`cox_survfit_baseline`] for one stratum and [`step_values_at`] for reading
+//! a curve at given times.
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
@@ -195,7 +195,12 @@ fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Ve
     let mut j = 0;
     for (i, &deaths) in ndeath.iter().enumerate() {
         if deaths == 1 {
-            km[i] = (1.0 - weights[j] * risk[j] / denom[i]).powf(1.0 / risk[j]);
+            // Subtracting entry risk sets can put a terminal death a few ulps
+            // above its denominator. A fractional power of that negative
+            // rounding residue is NaN; the survival increment is zero.
+            km[i] = (1.0 - weights[j] * risk[j] / denom[i])
+                .clamp(0.0, 1.0)
+                .powf(1.0 / risk[j]);
         } else if deaths > 1 {
             let mut guess: f64 = 0.5;
             let mut inc = 0.25;
@@ -733,14 +738,12 @@ pub fn cum_xbar_at(curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64) ->
 /// `y` has 2 or 3 columns ending in a 0/1 status (with start < stop), `x`
 /// one row per observation; the weights must be finite and non-negative and
 /// the risks finite and positive.
-fn baseline_curve(
+pub(super) fn prepare_baseline(
     y: ArrayView2<'_, f64>,
     x: ArrayView2<'_, f64>,
     weights: &[f64],
     risk: &[f64],
-    survtype: i32,
-    vartype: i32,
-) -> SurvivalResult<AgsurvCurve> {
+) -> SurvivalResult<PreparedBaseline> {
     let (n, ycols) = y.dim();
     if n == 0 {
         return Err(ValidationError::Empty {
@@ -780,6 +783,57 @@ fn baseline_curve(
     validate_length(n, risk.len(), "risk")?;
     validate_finite(risk, "risk")?;
     validate_positive(risk, "risk")?;
+    Ok(PreparedBaseline {
+        start,
+        stop,
+        status: status.iter().map(|&value| value as i32).collect(),
+    })
+}
+
+pub(super) struct PreparedBaseline {
+    pub start: Option<Vec<f64>>,
+    pub stop: Vec<f64>,
+    pub status: Vec<i32>,
+}
+
+impl PreparedBaseline {
+    pub fn data<'a>(
+        &'a self,
+        x: ArrayView2<'a, f64>,
+        weights: &'a [f64],
+        risk: &'a [f64],
+    ) -> AgsurvData<'a> {
+        AgsurvData {
+            start: self.start.as_deref(),
+            stop: &self.stop,
+            status: &self.status,
+            x,
+            means: None,
+            weights,
+            risk,
+        }
+    }
+}
+
+pub(super) fn check_baseline(curve: &AgsurvCurve) -> SurvivalResult<()> {
+    if let Some(g) = curve.hazard.iter().position(|h| h.is_nan()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "risk-set denominator must be positive at time {}",
+            curve.time[g]
+        )));
+    }
+    Ok(())
+}
+
+fn baseline_curve(
+    y: ArrayView2<'_, f64>,
+    x: ArrayView2<'_, f64>,
+    weights: &[f64],
+    risk: &[f64],
+    survtype: i32,
+    vartype: i32,
+) -> SurvivalResult<AgsurvCurve> {
+    let prepared = prepare_baseline(y, x, weights, risk)?;
     let code = |name: &str, code: i32| {
         CoxSurvType::from_code(code)
             .ok_or_else(|| SurvivalError::invalid_input(format!("{name} must be 1, 2, or 3")))
@@ -787,28 +841,9 @@ fn baseline_curve(
     let survtype = code("survtype", survtype)?;
     let vartype = code("vartype", vartype)?;
 
-    let status: Vec<i32> = status.iter().map(|&value| value as i32).collect();
-    let curve = agsurv(
-        &AgsurvData {
-            start: start.as_deref(),
-            stop: &stop,
-            status: &status,
-            x,
-            means: None,
-            weights,
-            risk,
-        },
-        survtype,
-        vartype,
-    )?;
-    // Zero weights are allowed here (coxph rejects them), but a risk set of
-    // zero total weight (0/0 in agsurv) has no hazard.
-    if let Some(g) = curve.hazard.iter().position(|h| h.is_nan()) {
-        return Err(SurvivalError::invalid_input(format!(
-            "risk-set denominator must be positive at time {}",
-            curve.time[g]
-        )));
-    }
+    let curve = agsurv(&prepared.data(x, weights, risk), survtype, vartype)?;
+    // Zero weights are allowed, but a zero-weight risk set has no defined hazard.
+    check_baseline(&curve)?;
     Ok(curve)
 }
 
@@ -971,6 +1006,14 @@ mod tests {
         assert_close(surv[0], (1.0 - 2.0 / 3.0_f64).powf(0.5));
         assert_eq!(surv[1], 1.0);
         assert_close(curve.varhaz[0], 1.0 / (3.0 * 2.0));
+    }
+
+    #[test]
+    fn terminal_kp_death_is_zero_after_risk_set_roundoff() {
+        let risk: f64 = 0.7;
+        let rounded_below = f64::from_bits(risk.to_bits() - 1);
+        assert_eq!(agsurv4(&[1], &[risk], &[1.0], &[rounded_below]), vec![0.0]);
+        assert!(agsurv4(&[1], &[risk], &[1.0], &[f64::NAN])[0].is_nan());
     }
 
     #[test]

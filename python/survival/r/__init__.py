@@ -39,6 +39,7 @@ from ._coxph_print import (
     print_summary_coxph_penal,
 )
 from ._coxphms import CoxphmsModel, CoxphmsSchoenfeldResiduals, CoxphmsShare
+from ._coxsurv import CoxSurvFitList, CoxSurvFitResult, coxsurv_fit, survfitcoxph_fit
 from ._data_prep import (
     aeqSurv,
     cumevent,
@@ -239,6 +240,10 @@ __all__ = [
     "survreg_fit",
     "SurvpenalFitResult",
     "survpenal_fit",
+    "CoxSurvFitResult",
+    "CoxSurvFitList",
+    "coxsurv_fit",
+    "survfitcoxph_fit",
     "SurvfitKMResult",
     "survfitKM",
     "CoxFitResult",
