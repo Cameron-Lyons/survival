@@ -35,7 +35,17 @@ rhs <- c(
     cluster_power="(age + sex + cluster(group))^2",
     cluster_removed_variable="age + unused - unused + cluster(group)",
     cluster_removed_strata="age + strata(sex) - strata(sex) + cluster(group)",
-    cluster_offset="age * cluster(group) + offset(offs)"
+    cluster_offset="age * cluster(group) + offset(offs)",
+    reversed_removal="age * sex - sex:age",
+    reversed_duplicate="age:sex + sex:age",
+    reversed_factor="factor(sex):ph.ecog + ph.ecog:factor(sex)",
+    joint_nesting="(age + sex)/ph.ecog",
+    power_product="(age + sex)^2 * ph.ecog",
+    implicit_margin="(factor(sex) + factor(ph.ecog)):age",
+    nested_no_intercept="(age - 1) + sex",
+    nested_double_negative="age - (sex - 1)",
+    power_interaction="(age + sex)^2:ph.ecog",
+    cluster_implicit_margin="age:sex + age:cluster(group) + cluster(group)"
 )
 cases <- list()
 capture <- function(expr) tryCatch(expr,error=function(e) list(r_error=conditionMessage(e)))
@@ -71,6 +81,7 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
         retained_columns=I(names(fit$model)),scale=if(kind=="survreg") I(unname(fit$scale)) else NULL)
 }
 bad <- c("age:cluster(group)","cluster(group):age + sex",
+    "age:cluster(group) + age:sex + cluster(group)",
     "age + cluster(group) + cluster(sex)","age + cluster(group) - cluster(group)")
 errors <- lapply(bad,function(rhs) {
     formula <- paste("Surv(time,status) ~",rhs)

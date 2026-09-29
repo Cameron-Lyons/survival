@@ -56,7 +56,12 @@ class _CovariateTerm:
 
 @dataclass(frozen=True)
 class _InteractionTerm:
-    factors: tuple[_CovariateTerm, ...]
+    # Factor order controls labels; term identity is independent of that order.
+    factors: tuple[_CovariateTerm, ...] = field(compare=False)
+    _identity: frozenset[_CovariateTerm] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_identity", frozenset(self.factors))
 
 
 _CovariateSpec = _CovariateTerm | _InteractionTerm

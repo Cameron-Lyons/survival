@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import sys
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import combinations, compress, product
 from operator import add, ge, mul, sub, truediv
@@ -1433,7 +1433,9 @@ def _made_nan_rows(
 
     variables = [
         term
-        for term in dict.fromkeys(variables)
+        for term in dict.fromkeys(
+            replace(term, special=None) if term.special == "offset" else term for term in variables
+        )
         if term.call is None and (term.arithmetic is not None or term.transform in {"log", "sqrt"})
     ]
     if not variables:
@@ -1746,29 +1748,6 @@ def _parse_call_term(term: str) -> _CovariateTerm | None:
     return None
 
 
-def _parse_interaction_term(
-    term: str,
-    dot_terms: Sequence[str] | None,
-    variables: list[_CovariateTerm] | None = None,
-) -> list[_CovariateSpec]:
-    parts = _split_top_level(term, ":")
-    if len(parts) == 1:
-        atoms = (
-            _dot_covariate_terms(dot_terms)
-            if parts[0] == "."
-            else [_parse_covariate_atom(parts[0])]
-        )
-        if variables is not None:
-            _append_unique(variables, atoms)
-        return atoms
-
-    parsed_groups = [_parse_covariate_expression(part, dot_terms, variables) for part in parts]
-    interactions: list[_CovariateSpec] = []
-    for term_combo in product(*parsed_groups):
-        _append_unique(interactions, [_interaction_from_terms(term_combo)])
-    return interactions
-
-
 def _parse_offset_term(expression: str) -> _CovariateTerm:
     expression = expression.strip()
     if _is_formula_arithmetic_expression(expression):
@@ -1781,126 +1760,107 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
 
 
 def _parse_formula_power_degree(value: str) -> int:
-    text = value.strip()
-    if not text.isdigit():
-        raise ValueError("formula ^ degree must be a nonnegative integer")
-    return int(text)
+    number = _r_literal(value.strip())
+    if (
+        not isinstance(number, (int, float))
+        or isinstance(number, bool)
+        or not math.isfinite(number)
+    ):
+        raise ValueError("invalid power in formula")
+    degree = int(number)
+    if degree <= 1:
+        raise ValueError("invalid power in formula")
+    return degree
 
 
-def _parse_formula_power_base_terms(
-    term: str,
-    dot_terms: Sequence[str] | None,
-    variables: list[_CovariateTerm] | None = None,
-) -> list[_CovariateSpec]:
-    expression = _strip_outer_formula_parentheses(term)
-    terms: list[_CovariateSpec] = []
-    for op, base_term in _formula_tokens(expression):
-        if base_term in {"0", "1"}:
-            continue
-        parsed = _parse_covariate_expression(base_term, dot_terms, variables)
-        if op == "-":
-            _remove_values(terms, parsed)
-        else:
-            _append_unique(terms, parsed)
-    return terms
+@dataclass
+class _FormulaExpansion:
+    """R terms algebra, with model-frame variables and intercept state kept separately.
 
+    Operations combine sets of factors but preserve their first occurrence for
+    model-matrix column order. Subtraction removes fitted terms, never variables.
+    Constants inside nested expressions change the intercept in the enclosing
+    sign context, including double negatives such as ``x - (y - 1)``.
+    """
 
-def _parse_formula_power_expression(
-    term: str,
-    dot_terms: Sequence[str] | None,
-    variables: list[_CovariateTerm] | None = None,
-) -> list[_CovariateSpec] | None:
-    parts = _split_top_level(term, "^")
-    if len(parts) == 1:
-        return None
-    if len(parts) != 2:
-        raise ValueError("formula ^ expressions must contain one degree")
+    dot_terms: Sequence[str] | None
+    variables: list[_CovariateTerm] = field(default_factory=list)
+    intercept: bool = True
 
-    base_terms = _parse_formula_power_base_terms(parts[0], dot_terms, variables)
-    degree = _parse_formula_power_degree(parts[1])
-    if degree == 0 or not base_terms:
-        return []
-
-    expanded: list[_CovariateSpec] = []
-    for size in range(1, min(degree, len(base_terms)) + 1):
-        for term_combo in combinations(base_terms, size):
-            _append_unique(expanded, [_interaction_from_terms(term_combo)])
-    return expanded
-
-
-def _parse_parenthesized_formula_expression(
-    term: str,
-    dot_terms: Sequence[str] | None,
-    variables: list[_CovariateTerm] | None = None,
-) -> list[_CovariateSpec] | None:
-    stripped = _strip_outer_formula_parentheses(term)
-    if stripped == term.strip():
-        return None
-    return _parse_formula_power_base_terms(stripped, dot_terms, variables)
-
-
-def _parse_covariate_expression(
-    term: str,
-    dot_terms: Sequence[str] | None,
-    variables: list[_CovariateTerm] | None = None,
-) -> list[_CovariateSpec]:
-    if term == ".":
-        atoms = _dot_covariate_terms(dot_terms)
-        if variables is not None:
-            _append_unique(variables, atoms)
+    def atom(self, term: str) -> list[_CovariateSpec]:
+        atoms = (
+            _dot_covariate_terms(self.dot_terms) if term == "." else [_parse_covariate_atom(term)]
+        )
+        _append_unique(self.variables, atoms)
         return atoms
 
-    power_terms = _parse_formula_power_expression(term, dot_terms, variables)
-    if power_terms is not None:
-        return power_terms
+    def expand(self, expression: str, *, negative: bool = False) -> list[_CovariateSpec]:
+        term = _strip_outer_formula_parentheses(expression)
+        if term.replace(".", "_").isidentifier() and _r_literal(term) is None:
+            return self.atom(term)
+        tokens = _formula_tokens(term)
+        if not tokens:
+            return []
+        if len(tokens) > 1 or tokens[0][0] == "-":
+            result: list[_CovariateSpec] = []
+            for op, part in tokens:
+                expanded = self.expand(part, negative=negative != (op == "-"))
+                if op == "-":
+                    _remove_values(result, expanded)
+                else:
+                    _append_unique(result, expanded)
+            return result
+        # Also discard a leading unary plus.
+        term = tokens[0][1]
+        literal = _r_literal(term)
+        if isinstance(literal, (int, float)) and not isinstance(literal, bool):
+            if literal not in (0, 1):
+                raise ValueError("invalid model formula in ExtractVars")
+            self.intercept = negative if literal == 0 else not negative
+            return []
 
-    grouped_terms = _parse_parenthesized_formula_expression(term, dot_terms, variables)
-    if grouped_terms is not None:
-        return grouped_terms
+        # Lowest precedence first; * and / associate from the left.
+        binary = _find_top_level_arithmetic_operator(term, {"*", "/"})
+        if binary is not None:
+            left, op, right = binary
+            lhs = self.expand(left, negative=negative)
+            rhs = self.expand(right, negative=negative)
+            result = list(lhs)
+            if op == "*":
+                _append_unique(result, rhs)
+                combined = [_interaction_from_terms((a, b)) for a, b in product(lhs, rhs)]
+            else:
+                # (a + b)/c nests c within the joint a:b group.
+                combined = [_interaction_from_terms((*lhs, b)) for b in rhs]
+            _append_unique(result, combined)
+            return result
 
-    in_parts = _split_top_level_token(term, "%in%")
-    if len(in_parts) > 1:
-        # a %in% b is a:b; the fit orders each interaction's factors as R's terms() does
-        parsed_groups = [_parse_interaction_term(part, dot_terms, variables) for part in in_parts]
-        nested_expanded = parsed_groups[0]
-        for nested_group in parsed_groups[1:]:
-            next_expanded: list[_CovariateSpec] = []
-            for current, nested in product(nested_expanded, nested_group):
-                _append_unique(next_expanded, [_interaction_from_terms((current, nested))])
-            nested_expanded = next_expanded
-        return nested_expanded
+        nested = _split_top_level_token(term, "%in%")
+        if len(nested) > 1:
+            result = self.expand(nested[0], negative=negative)
+            for part in nested[1:]:
+                rhs = self.expand(part, negative=negative)
+                result = list(dict.fromkeys(_interaction_from_terms((a, *rhs)) for a in result))
+            return result
 
-    nested_parts = _split_top_level(term, "/")
-    if len(nested_parts) > 1:
-        parsed_parts = [
-            _parse_covariate_expression(part, dot_terms, variables) for part in nested_parts
-        ]
-        slash_expanded: list[_CovariateSpec] = []
-        current_group = parsed_parts[0]
-        _append_unique(slash_expanded, current_group)
-        for nested_group in parsed_parts[1:]:
-            current_group = [
-                _interaction_from_terms((current, nested))
-                for current, nested in product(current_group, nested_group)
-            ]
-            _append_unique(slash_expanded, current_group)
-        return slash_expanded
+        crossed = _split_top_level(term, ":")
+        if len(crossed) > 1:
+            groups = [self.expand(part, negative=negative) for part in crossed]
+            return list(dict.fromkeys(_interaction_from_terms(combo) for combo in product(*groups)))
 
-    parts = _split_top_level(term, "*")
-    if len(parts) == 1:
-        return _parse_interaction_term(parts[0], dot_terms, variables)
+        power = _find_top_level_power_operator(term)
+        if power is not None:
+            base, _op, exponent = power
+            degree = _parse_formula_power_degree(exponent)
+            terms = self.expand(base, negative=negative)
+            result = []
+            for size in range(1, min(degree, len(terms)) + 1):
+                _append_unique(
+                    result, [_interaction_from_terms(combo) for combo in combinations(terms, size)]
+                )
+            return result
 
-    crossed_groups: list[list[_CovariateSpec]] = [
-        _parse_covariate_expression(part, dot_terms, variables) for part in parts
-    ]
-    crossed_expanded: list[_CovariateSpec] = []
-    for group in crossed_groups:
-        _append_unique(crossed_expanded, group)
-    for size in range(2, len(crossed_groups) + 1):
-        for group_combo in combinations(crossed_groups, size):
-            for term_combo in product(*group_combo):
-                _append_unique(crossed_expanded, [_interaction_from_terms(term_combo)])
-    return crossed_expanded
+        return self.atom(term)
 
 
 def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
@@ -1920,45 +1880,27 @@ def _split_terms_cached(
     rhs: str,
     dot_terms: tuple[str, ...] | None = None,
 ) -> _CachedFormulaTerms:
-    covariates: list[_CovariateSpec] = []
-    variables: list[_CovariateTerm] = []
-    model_terms: list[_FormulaModelTerm] = []
-    intercept = True
-
-    for op, term in _formula_tokens(rhs):
-        if not term:
-            continue
-        if term == "1":
-            intercept = op != "-"
-            continue
-        if term == "0":
-            intercept = op == "-"
-            continue
-        parsed_terms = [
-            item
-            for item in _parse_covariate_expression(term, dot_terms, variables)
-            if not any(factor.special == "offset" for factor in _covariate_factors(item))
-        ]
-        covariate_terms = [
-            item
-            for item in parsed_terms
-            if isinstance(item, _InteractionTerm)
-            or (not item.strata_columns and item.special != "cluster")
-        ]
-        model_items = [
-            _ModelStrataTerm(item.strata_columns)
-            if isinstance(item, _CovariateTerm) and item.strata_columns
-            else _ModelClusterTerm(item.column)
-            if isinstance(item, _CovariateTerm) and item.special == "cluster"
-            else _ModelCovariateTerm(item)
-            for item in parsed_terms
-        ]
-        if op == "-":
-            _remove_values(covariates, covariate_terms)
-            _remove_values(model_terms, model_items)
-        else:
-            _append_unique(covariates, covariate_terms)
-            _append_unique(model_terms, model_items)
+    expansion = _FormulaExpansion(dot_terms)
+    parsed_terms = [
+        item
+        for item in expansion.expand(rhs)
+        if not any(factor.special == "offset" for factor in _covariate_factors(item))
+    ]
+    variables = expansion.variables
+    covariates = [
+        item
+        for item in parsed_terms
+        if isinstance(item, _InteractionTerm)
+        or (not item.strata_columns and item.special != "cluster")
+    ]
+    model_terms: list[_FormulaModelTerm] = [
+        _ModelStrataTerm(item.strata_columns)
+        if isinstance(item, _CovariateTerm) and item.strata_columns
+        else _ModelClusterTerm(item.column)
+        if isinstance(item, _CovariateTerm) and item.special == "cluster"
+        else _ModelCovariateTerm(item)
+        for item in parsed_terms
+    ]
 
     # R's terms() records offsets and model-frame variables before term removal.
     # An offset always contributes once, even in an interaction or a subtraction.
@@ -1970,17 +1912,14 @@ def _split_terms_cached(
     clusters = [term.column for term in cluster_terms]
     if cluster_terms:
         cluster_term = cluster_terms[0]
-        covered = {frozenset(_covariate_factors(term)) for term in covariates}
-        covered.update(
-            frozenset([_strata_covariate(term.columns)])
-            for term in model_terms
-            if isinstance(term, _ModelStrataTerm)
-        )
-        if any(
-            cluster_term in factors and factors - {cluster_term} not in covered
-            for factors in covered
-        ):
-            raise ValueError("cluster() cannot be in an interaction")
+        covered: set[frozenset[_CovariateTerm]] = {frozenset()}
+        for term in sorted(parsed_terms, key=lambda item: len(_covariate_factors(item))):
+            factors = frozenset(_covariate_factors(term))
+            if cluster_term in factors and not any(
+                factors - {cluster_term} <= earlier for earlier in covered
+            ):
+                raise ValueError("cluster() cannot be in an interaction")
+            covered.add(factors)
         if _ModelClusterTerm(cluster_term.column) not in model_terms:
             raise ValueError("invalid model formula in ExtractVars")
         # coxph/survreg remove the cluster main term and rebuild the formula.
@@ -1998,7 +1937,7 @@ def _split_terms_cached(
         offsets=tuple(offsets),
         clusters=tuple(clusters),
         model_terms=tuple(model_terms),
-        intercept=intercept,
+        intercept=expansion.intercept,
         variables=tuple(variables),
     )
 
@@ -2299,10 +2238,12 @@ def _fit_formula_design(
         fitted_term = _fit_design_term(data, term, n, full_data, factor_order)
         raw_factors = frozenset(_covariate_factors(term))
         categorical_factors = _categorical_design_factors(fitted_term)
+        # R's TermCode accepts a margin contained in an earlier term, even
+        # when that margin has no standalone term of its own.
         full_factors = {
             factor.term
             for factor in categorical_factors
-            if raw_factors - {factor.term} not in covered_terms
+            if not any(raw_factors - {factor.term} <= earlier for earlier in covered_terms)
         }
         if not promoted_no_intercept_factor and categorical_factors:
             full_factors.add(categorical_factors[0].term)

@@ -86,6 +86,15 @@ includes AFT new-data offsets and consistently centers Cox offsets even for
 models without coefficients. For models without covariate terms, term
 prediction returns an empty-column matrix where R's method errors.
 
+Interaction identity ignores factor order: `age:sex` and `sex:age` name the
+same term, so subtraction and duplicate removal follow R. Grouped nesting
+such as `(a + b)/c` produces `a + b + a:b:c`; powers bind before interactions
+and products, and intercept changes inside parentheses are retained.
+Categorical contrasts account for margins contained in earlier interactions,
+even when those margins are not explicit main effects.
+`scripts/generate_formula_algebra_reference.R` records independent R design
+matrices, column names, assignments, and frame variables for these cases.
+
 ```python
 from survival import datasets, r
 
