@@ -28,6 +28,8 @@ __all__ = bind_names(
         "CoxZph",
         "CoxZphTest",
         "cox_zph",
+        "CoxZphSmooth",
+        "cox_zph_smooth",
         "CoxphWtest",
         "coxph_wtest",
         "AgexactFit",

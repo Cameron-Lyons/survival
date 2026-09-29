@@ -871,6 +871,11 @@ The [plotting guide](docs/survival-plotting.md) covers transformations, confiden
 bars, overlays, scaling, R compatibility and benchmarks. Numerical plot data
 remain available without Matplotlib through `plotting.survfit_plot_data`.
 
+For proportional-hazards diagnostics, use
+`plotting.plot_cox_zph(r.cox_zph(cox_fit))`. This draws natural-spline curves
+and two-standard-error bands over the scaled Schoenfeld residuals. Set
+`hr=True` for hazard ratios; see the [diagnostic plotting guide](docs/cox-diagnostic-plotting.md).
+
 ## Scikit-learn estimators
 
 `survival.sklearn_compat` provides estimators and streaming wrappers that accept

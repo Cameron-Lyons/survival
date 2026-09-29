@@ -145,6 +145,7 @@ exactly one module):
   `python_attr`), so `survival.r_api` stays the stable import path.
 - `plotting`: optional Matplotlib rendering of fitted survival curves;
   `_plot_data` prepares typed NumPy curve coordinates without importing the renderer.
+  `_cox_plot_data` prepares Cox diagnostic curves using the Rust smoother.
 
 The `python/survival/r/` package exposes only the R-style API from
 `survival.r` itself: R's exported functions (under Python spellings such as

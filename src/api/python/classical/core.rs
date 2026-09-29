@@ -98,6 +98,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pspline_basis_py, m)?)?;
     m.add_function(wrap_pyfunction!(agexact_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_py, m)?)?;
+    m.add_function(wrap_pyfunction!(cox_zph_smooth_py, m)?)?;
     m.add_function(wrap_pyfunction!(coxph_detail_py, m)?)?;
     m.add_function(wrap_pyfunction!(unpickle, m)?)?;
 
@@ -119,6 +120,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         CoxphDetail,
         CoxZph,
         CoxZphTest,
+        CoxZphSmooth,
         AgexactFit,
         LinkFunctionParams,
         CchFitResult,

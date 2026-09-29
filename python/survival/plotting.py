@@ -6,11 +6,13 @@ and also supports other graphics libraries without creating a figure.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from ._cox_plot_data import CoxDiagnosticCurve, CoxDiagnosticData, cox_zph_plot_data
 from ._plot_data import (
     SurvivalCurve,
     SurvivalFit,
@@ -18,6 +20,7 @@ from ._plot_data import (
     step_at,
     survfit_plot_data,
 )
+from .r._types import CoxZPHResult
 
 __all__ = [
     "SurvivalCurve",
@@ -27,6 +30,11 @@ __all__ = [
     "plot_survfit",
     "lines_survfit",
     "points_survfit",
+    "CoxDiagnosticCurve",
+    "CoxDiagnosticData",
+    "CoxDiagnosticPlot",
+    "cox_zph_plot_data",
+    "plot_cox_zph",
 ]
 
 
@@ -341,3 +349,113 @@ def points_survfit(
     """
 
     return _draw(fit, ax=ax, overlay=True, points=True, censor=censor, marker=marker, **kwargs)
+
+
+@dataclass(frozen=True)
+class CoxDiagnosticPlot:
+    """One subplot per selected Cox diagnostic term and its numerical data."""
+
+    axes: tuple[Any, ...]
+    data: CoxDiagnosticData
+    lines: tuple[Any, ...]
+    confidence: tuple[Any, ...]
+    residuals: tuple[Any, ...]
+
+
+def plot_cox_zph(
+    result: CoxZPHResult,
+    *,
+    ax: Any = None,
+    resid: bool = True,
+    se: bool = True,
+    df: int = 4,
+    nsmo: int = 40,
+    var: str | int | Sequence[str | int] | None = None,
+    hr: bool = False,
+    colors: Any = None,
+    linestyles: Any = ("-", "--"),
+    linewidth: float = 1.5,
+    marker: str = "o",
+    markersize: float = 4,
+    xlabel: str = "Time",
+    ylabel: str | None = None,
+    **line_kwargs: Any,
+) -> CoxDiagnosticPlot:
+    """Plot R's Cox proportional-hazards diagnostics, one subplot per term.
+
+    ``var`` selects term names or one-based indices. ``df`` controls the natural
+    spline and ``nsmo`` the prediction grid. Bands use two standard errors.
+    ``hr=True`` displays hazard ratios on a log y axis. ``resid=False`` hides
+    scaled Schoenfeld residuals. Pass one axis per selected nonsingular term
+    through ``ax``; otherwise new subplots are created. ``colors`` and
+    ``linestyles`` specify the estimate and confidence styles, recycling if
+    needed. Remaining line properties apply to the smoothed curve and bands.
+    Export via ``result.axes[0].figure.savefig(...)``.
+    """
+
+    if not isinstance(resid, bool | np.bool_):
+        raise TypeError("resid must be boolean")
+    data = cox_zph_plot_data(result, df=df, nsmo=nsmo, var=var, se=se, hr=hr)
+    if not data.curves:
+        return CoxDiagnosticPlot((), data, (), (), ())
+    # This is the sole optional dependency boundary, shared with survival curves.
+    if ax is None:
+        first = _axes(None, False)
+        figure = first.figure
+        if len(data.curves) == 1:
+            axes = (first,)
+        else:
+            first.remove()
+            figure.set_size_inches(7, 3 * len(data.curves))
+            axes = tuple(figure.subplots(len(data.curves), 1, squeeze=False).ravel())
+            figure.set_layout_engine("constrained")
+    else:
+        axes = (ax,) if hasattr(ax, "plot") else tuple(np.asarray(ax, dtype=object).ravel())
+        if len(axes) != len(data.curves):
+            raise ValueError("ax must contain one axis per selected nonsingular term")
+    from matplotlib.colors import is_color_like
+
+    colors = [colors] if colors is not None and is_color_like(colors) else _styles(colors, "black")
+    styles = _styles(linestyles, "-")
+    lines, confidence, residuals = [], [], []
+    for axis, curve in zip(axes, data.curves, strict=True):
+        axis.set_xscale("log" if data.xlog else "linear")
+        axis.set_yscale("log" if data.ylog else "linear")
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(
+            f"{'HR' if hr else 'Beta'}(t) for {curve.name}" if ylabel is None else ylabel
+        )
+        if data.tick_positions is not None and data.tick_labels is not None:
+            keep = np.isfinite(data.tick_positions)
+            axis.set_xticks(
+                data.tick_positions[keep],
+                [label for label, ok in zip(data.tick_labels, keep, strict=True) if ok],
+            )
+        if resid:
+            residuals.append(
+                axis.plot(
+                    curve.residual_x,
+                    curve.residual_y,
+                    linestyle="none",
+                    marker=marker,
+                    markersize=markersize,
+                    markerfacecolor="none",
+                    color=colors[0],
+                )[0]
+            )
+        style = {"linewidth": linewidth, **line_kwargs}
+        lines.append(
+            axis.plot(curve.x, curve.estimate, color=colors[0], linestyle=styles[0], **style)[0]
+        )
+        for bound in (curve.upper, curve.lower):
+            if bound is not None:
+                confidence.append(
+                    axis.plot(
+                        curve.x,
+                        bound,
+                        color=colors[1 % len(colors)],
+                        linestyle=styles[1 % len(styles)],
+                        **style,
+                    )[0]
+                )
+    return CoxDiagnosticPlot(axes, data, tuple(lines), tuple(confidence), tuple(residuals))

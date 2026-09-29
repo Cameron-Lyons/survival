@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add Cox proportional-hazards diagnostic plots with natural-spline curves,
+  two-standard-error bands, scaled residuals, and hazard-ratio views. The Rust
+  smoother shares factorizations across terms and releases the Python GIL.
 - Add optional Matplotlib survival graphics for Kaplan–Meier, Turnbull, Cox,
   and multistate curves, including confidence bands, censor marks, transformations,
   and overlays. Numerical plot data is available without a renderer, and constant

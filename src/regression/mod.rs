@@ -22,6 +22,7 @@ pub(crate) mod cause_specific_cox_module;
 pub(crate) mod cch;
 pub(crate) mod cox_optimizer;
 pub(crate) mod cox_zph;
+pub(crate) mod cox_zph_smooth;
 pub(crate) mod coxpenal;
 pub(crate) mod coxph;
 pub(crate) mod coxph_detail;
@@ -66,6 +67,9 @@ pub use cox_optimizer::TieMethod;
 #[cfg(feature = "python")]
 pub use cox_zph::cox_zph_py;
 pub use cox_zph::{CoxZph, CoxZphTest, ZphFit, ZphTransform, cox_zph};
+#[cfg(feature = "python")]
+pub use cox_zph_smooth::cox_zph_smooth_py;
+pub use cox_zph_smooth::{CoxZphSmooth, cox_zph_smooth};
 #[cfg(feature = "python")]
 pub use coxpenal::CallbackPenalty;
 pub use coxpenal::{
