@@ -920,7 +920,14 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
 # --- predict.survreg -------------------------------------------------------------------------
 
 
-def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _NewData:
+def _newdata_inputs(
+    fit: SurvregModelResult,
+    newdata: Any,
+    na_action: str,
+    *,
+    allow_missing_predictors: bool = False,
+    allow_missing_strata: bool = False,
+) -> _NewData:
     """``model.frame(Terms, newdata, na.action)`` and ``model.matrix(object, newframe)``:
     the rows, strata and offset of the complete ``newdata`` rows."""
 
@@ -939,6 +946,9 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
         if missing and na_action == "fail":
             raise ValueError("missing values in newdata")
         gaps = set(missing)
+        if na_action == "pass" and allow_missing_predictors:
+            gaps = set()
+            missing = []
         return _NewData(
             data=None,
             x=[values for row, values in enumerate(rows) if row not in gaps],
@@ -961,6 +971,8 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
         need_strata=bool(fit.strata_levels),
         need_response=False,
         na_action=na_action,
+        allow_missing_predictors=allow_missing_predictors,
+        allow_missing_strata=allow_missing_strata,
     )
 
 
@@ -1019,7 +1031,17 @@ def predict_survreg(
     )
     include_se = _normalize_bool_option(se_fit, "se.fit")
     action = _normalize_na_action(na_action)
-    new = None if newdata is None else _newdata_inputs(fit, newdata, action)
+    new = (
+        None
+        if newdata is None
+        else _newdata_inputs(
+            fit,
+            newdata,
+            action,
+            allow_missing_predictors=True,
+            allow_missing_strata=predict_type not in {"quantile", "uquantile"},
+        )
+    )
     term_names = [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
     quantiles = _quantile_vector(p, "p")
     selection = _term_selection(terms, term_names)
@@ -1037,8 +1059,8 @@ def predict_survreg(
             terms=selection,
         )
         predictions, se_values = result.fit, result.se_fit
-    # naresid: NaN at the rows na.exclude removed from the fit, or at the incomplete
-    # newdata rows, which na.pass carries through to NA predictions
+    # naresid restores omitted rows; na.pass predictor NaNs have already
+    # propagated through just the outputs that use them.
     if new is None:
         gaps = _excluded_rows(fit.na_action)
     else:

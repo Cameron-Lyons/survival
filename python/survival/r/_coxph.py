@@ -1461,7 +1461,13 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
 
 
 def _prediction_newdata(
-    fit: CoxphModel, newdata: Any, *, need_strata: bool, need_response: bool, na_action: str
+    fit: CoxphModel,
+    newdata: Any,
+    *,
+    need_strata: bool,
+    need_response: bool,
+    na_action: str,
+    allow_missing_predictors: bool = False,
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
@@ -1471,6 +1477,7 @@ def _prediction_newdata(
         need_strata=need_strata,
         need_response=need_response,
         na_action=na_action,
+        allow_missing_predictors=allow_missing_predictors,
     )
 
 
@@ -1586,7 +1593,12 @@ def predict_coxph(
             or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
         )
         new = _prediction_newdata(
-            fit, newdata, need_strata=need_strata, need_response=need_response, na_action=action
+            fit,
+            newdata,
+            need_strata=need_strata,
+            need_response=need_response,
+            na_action=action,
+            allow_missing_predictors=True,
         )
         if (
             _has_strata(fit)
@@ -1628,8 +1640,8 @@ def predict_coxph(
         )
         pred, se = list(result.fit), (None if result.se_fit is None else list(result.se_fit))
 
-    # napredict: NaN at the rows na.exclude removed from the fit, or at the incomplete
-    # newdata rows, which na.pass carries through to NA predictions
+    # napredict restores omitted rows. Under na.pass the numeric kernel already
+    # propagated covariate/offset NaNs; gaps here need a missing stratum or time.
     if new is None:
         gaps = _excluded_rows(fit.na_action)
     else:

@@ -3,9 +3,7 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
-use crate::internal::validation::{
-    ProbabilityBounds, validate_finite, validate_length, validate_probability,
-};
+use crate::internal::validation::{ProbabilityBounds, validate_length, validate_probability};
 use crate::regression::parametric_survival::SurvregFit;
 use ndarray::{ArrayView1, ArrayView2};
 use pyo3::prelude::*;
@@ -83,6 +81,7 @@ impl SurvregPrediction {
 /// enters `linear.predictors`.  (R's `predict.survreg` drops the offset of
 /// `newdata` altogether, so its new-data predictions of a model with an
 /// offset disagree with its training predictions; that is not reproduced.)
+/// NaN covariates and offsets propagate only into results that depend on them.
 #[derive(Debug, Clone, Copy)]
 pub struct SurvregNewdata<'a> {
     pub covariates: ArrayView2<'a, f64>,
@@ -117,7 +116,7 @@ fn prediction_rows<'a>(
     if let Some(((row, column), value)) = newdata
         .covariates
         .indexed_iter()
-        .find(|(_, value)| !value.is_finite())
+        .find(|(_, value)| value.is_infinite())
     {
         return Err(SurvivalError::invalid_input(format!(
             "newdata contains non-finite value {value} at row {row}, column {column}"
@@ -125,7 +124,11 @@ fn prediction_rows<'a>(
     }
     if let Some(offset) = newdata.offset {
         validate_length(n, offset.len(), "offset")?;
-        validate_finite(offset, "offset")?;
+        if let Some(value) = offset.iter().find(|value| value.is_infinite()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "offset contains non-finite value {value}"
+            )));
+        }
     }
     let strata = match newdata.strata {
         Some(strata) => {

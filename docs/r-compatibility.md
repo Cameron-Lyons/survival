@@ -602,15 +602,17 @@ this does not show.
 
 ### Missing values and newdata
 
-- Under na.pass (predict's default) and na.exclude, a newdata row with a
-  missing value in any variable the prediction reads predicts NaN in every
-  column, where R lets the NA reach only what uses it: `predict(type =
-  "terms")` keeps the terms whose variables are present in R (lung, age = NA,
-  sex = 2: R's sex term is -0.3106); `predict.survreg` computes lp, response and
-  terms for a row with a missing stratum (R: 6.215335, 6.090643);
-  `predict.coxph(type = "expected")` gives 0 for a missing stratum and ignores
-  a missing status of a right-censored response (R: 0.140304, 0.372894 for
-  status c(1, NA); here 0.1403, NaN). Under na.omit both drop such rows.
+- For ordinary Cox and AFT models under `na.pass` (predict's default), a missing
+  covariate affects only the predictions that use it. Term predictions retain
+  unaffected contributions and standard errors; an unknown offset leaves the linear-predictor standard
+  error available. This includes ridge and P-spline terms. AFT location and
+  term predictions do not require a known scale stratum.
+  Expected-count predictions use follow-up times regardless of a missing
+  event indicator. `na.omit` drops incomplete rows, `na.exclude` restores them
+  as all-NaN rows, and `na.fail` rejects them. The supplemental generator
+  `scripts/generate_partial_prediction_reference.R` checks these outputs.
+- A Cox expected-count prediction with an unknown stratum remains NaN here;
+  R leaves its initial value at zero and reports survival 1 for that row.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)

@@ -1367,6 +1367,57 @@ mod tests {
     }
 
     #[test]
+    fn prediction_nan_offsets_do_not_hide_location_standard_errors() {
+        let fit = survreg_fit(
+            &ovarian(),
+            &SurvregDistribution::from_name("weibull", None).unwrap(),
+            None,
+            0.0,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap();
+        let x = ndarray::array![[1.0, f64::NAN], [1.0, 60.0]];
+        let offset = [0.0, f64::NAN];
+        let newdata = SurvregNewdata {
+            covariates: x.view(),
+            offset: Some(&offset),
+            strata: None,
+        };
+        let lp = fit
+            .predict(
+                Some(&newdata),
+                SurvregPredictType::Lp,
+                true,
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(lp.fit.iter().all(|row| row[0].is_nan()));
+        let se = lp.se_fit.unwrap();
+        assert!(se[0][0].is_nan());
+        assert!(se[1][0].is_finite());
+        let terms = fit
+            .predict(
+                Some(&newdata),
+                SurvregPredictType::Terms,
+                true,
+                &[],
+                Some(&[0, 1]),
+                None,
+            )
+            .unwrap();
+        assert!(terms.fit[0][0].is_nan());
+        assert_close(
+            terms.fit[1][0],
+            (60.0 - fit.means[1]) * fit.coefficients[1],
+            1e-12,
+        );
+        assert!(terms.se_fit.unwrap()[1][0].is_finite());
+    }
+
+    #[test]
     fn weibull_fit_matches_r() {
         // survreg(Surv(futime, fustat) ~ age, ovarian[1:12, ])
         let fit = survreg_fit(

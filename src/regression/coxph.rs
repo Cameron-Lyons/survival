@@ -358,13 +358,39 @@ impl CoxNewData {
         time: Option<Vec<f64>>,
         entry: Option<Vec<f64>>,
     ) -> SurvivalResult<Self> {
+        Self::validated(x, strata, offset, time, entry, false)
+    }
+
+    /// Prediction rows may contain NaN covariates or offsets. Missing values
+    /// propagate only into predictions that use them; times remain finite.
+    pub fn try_new_prediction(
+        x: Array2<f64>,
+        strata: Option<Vec<i32>>,
+        offset: Option<Vec<f64>>,
+        time: Option<Vec<f64>>,
+        entry: Option<Vec<f64>>,
+    ) -> SurvivalResult<Self> {
+        Self::validated(x, strata, offset, time, entry, true)
+    }
+
+    fn validated(
+        x: Array2<f64>,
+        strata: Option<Vec<i32>>,
+        offset: Option<Vec<f64>>,
+        time: Option<Vec<f64>>,
+        entry: Option<Vec<f64>>,
+        allow_missing: bool,
+    ) -> SurvivalResult<Self> {
         let m = x.nrows();
         if m == 0 {
             return Err(SurvivalError::invalid_input(
                 "newdata must have at least one row",
             ));
         }
-        if let Some(value) = x.iter().find(|value| !value.is_finite()) {
+        if let Some(value) = x
+            .iter()
+            .find(|value| value.is_infinite() || (!allow_missing && value.is_nan()))
+        {
             return Err(SurvivalError::invalid_input(format!(
                 "newdata contains non-finite value {value}"
             )));
@@ -374,7 +400,14 @@ impl CoxNewData {
         }
         if let Some(offset) = &offset {
             validate_length(m, offset.len(), "newdata offset")?;
-            validate_finite(offset, "newdata offset")?;
+            if let Some(value) = offset
+                .iter()
+                .find(|value| value.is_infinite() || (!allow_missing && value.is_nan()))
+            {
+                return Err(SurvivalError::invalid_input(format!(
+                    "newdata offset contains non-finite value {value}"
+                )));
+            }
         }
         if let Some(time) = &time {
             validate_length(m, time.len(), "newdata time")?;
@@ -1673,6 +1706,27 @@ pub(crate) fn newdata_from_python(
     time: Option<FloatVec>,
     entry: Option<FloatVec>,
 ) -> SurvivalResult<Option<CoxNewData>> {
+    newdata_from_python_impl(x, strata, offset, time, entry, false)
+}
+
+pub(crate) fn prediction_from_python(
+    x: Option<FloatMatrix>,
+    strata: Option<IntVec>,
+    offset: Option<FloatVec>,
+    time: Option<FloatVec>,
+    entry: Option<FloatVec>,
+) -> SurvivalResult<Option<CoxNewData>> {
+    newdata_from_python_impl(x, strata, offset, time, entry, true)
+}
+
+fn newdata_from_python_impl(
+    x: Option<FloatMatrix>,
+    strata: Option<IntVec>,
+    offset: Option<FloatVec>,
+    time: Option<FloatVec>,
+    entry: Option<FloatVec>,
+    allow_missing: bool,
+) -> SurvivalResult<Option<CoxNewData>> {
     let Some(x) = x else {
         if strata.is_some() || offset.is_some() || time.is_some() || entry.is_some() {
             return Err(SurvivalError::invalid_input(
@@ -1681,12 +1735,13 @@ pub(crate) fn newdata_from_python(
         }
         return Ok(None);
     };
-    Ok(Some(CoxNewData::try_new(
+    Ok(Some(CoxNewData::validated(
         x.into_inner(),
         strata.map(IntVec::into_inner),
         offset.map(FloatVec::into_inner),
         time.map(FloatVec::into_inner),
         entry.map(FloatVec::into_inner),
+        allow_missing,
     )?))
 }
 
@@ -1745,7 +1800,7 @@ impl CoxPHFit {
         se_fit: bool,
         reference: &str,
     ) -> PyResult<CoxPrediction> {
-        let newdata = newdata_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
+        let newdata = prediction_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
         let reference = PredictReference::parse(reference)?;
         let newdata = newdata.as_ref();
         Ok(match r#type {
@@ -1776,7 +1831,7 @@ impl CoxPHFit {
         reference: &str,
         assign: Option<Vec<Vec<usize>>>,
     ) -> PyResult<CoxTermsPrediction> {
-        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
+        let newdata = prediction_from_python(newdata, new_strata, new_offset, None, None)?;
         let reference = PredictReference::parse(reference)?;
         let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
         Ok(py.detach(|| self.predict_terms(newdata.as_ref(), se_fit, reference, &assign))?)
@@ -2027,6 +2082,54 @@ mod tests {
         )
         .unwrap();
         CoxphData::try_new(time, None, status, x, None, None, None).unwrap()
+    }
+
+    #[test]
+    fn missing_prediction_values_preserve_independent_terms_and_errors() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let x = ndarray::array![[f64::NAN, 2.0], [1.0, 3.0]];
+        assert!(CoxNewData::try_new(x.clone(), None, None, None, None).is_err());
+        let newdata =
+            CoxNewData::try_new_prediction(x, None, Some(vec![0.0, f64::NAN]), None, None).unwrap();
+        let lp = fit
+            .predict_lp(Some(&newdata), true, PredictReference::Zero)
+            .unwrap();
+        assert!(lp.fit.iter().all(|v| v.is_nan()));
+        let se = lp.se_fit.unwrap();
+        assert!(se[0].is_nan());
+        assert!(se[1].is_finite());
+        let terms = fit
+            .predict_terms(
+                Some(&newdata),
+                true,
+                PredictReference::Zero,
+                &[vec![0], vec![1]],
+            )
+            .unwrap();
+        assert!(terms.fit[0][0].is_nan());
+        assert_eq!(terms.fit[0][1], 2.0 * fit.coefficients[1]);
+        assert!(terms.fit[1].iter().all(|v| v.is_finite()));
+        assert!(terms.se_fit.unwrap()[0][1].is_finite());
+        assert!(
+            CoxNewData::try_new_prediction(
+                ndarray::array![[f64::INFINITY, 1.0]],
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            CoxNewData::try_new_prediction(
+                ndarray::array![[1.0, 1.0]],
+                None,
+                None,
+                Some(vec![f64::NAN]),
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]

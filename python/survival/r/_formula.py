@@ -2277,11 +2277,26 @@ def _single_design_columns(
     n: int,
     evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
+    allow_missing: bool = False,
 ) -> list[list[float]]:
     if isinstance(spec, _PenaltyDesignTerm):
         values = {column: _column(data, column) for column in spec.columns}
         if any(len(value) != n for value in values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
+        if allow_missing:
+            missing = _missing_row_indices(list(values.items()), n)
+            if missing:
+                kept = [row for row in range(n) if row not in missing]
+                if not kept:
+                    return [[math.nan] * n for _ in spec.names]
+                complete = penalty_columns(
+                    spec, {name: [column[row] for row in kept] for name, column in values.items()}
+                )
+                result = [[math.nan] * n for _ in complete]
+                for source, target in zip(complete, result, strict=True):
+                    for row, value in zip(kept, source, strict=True):
+                        target[row] = value
+                return result
         return penalty_columns(spec, values)
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_variable(data, spec.term, n, evaluated)]
@@ -2315,10 +2330,11 @@ def _design_term_columns(
     n: int,
     evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
+    allow_missing: bool = False,
 ) -> list[list[float]]:
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
-            _single_design_columns(data, factor, n, evaluated, factor_values)
+            _single_design_columns(data, factor, n, evaluated, factor_values, allow_missing)
             for factor in spec.factors
         ]
         interaction_columns: list[list[float]] = []
@@ -2328,7 +2344,7 @@ def _design_term_columns(
                 [math.prod(column[idx] for column in column_combo) for idx in range(n)]
             )
         return interaction_columns
-    return _single_design_columns(data, spec, n, evaluated, factor_values)
+    return _single_design_columns(data, spec, n, evaluated, factor_values, allow_missing)
 
 
 def _design_rows_from_spec(
@@ -2338,6 +2354,7 @@ def _design_rows_from_spec(
     *,
     evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
+    allow_missing: bool = False,
 ) -> list[list[float]]:
     """The rows of the design matrix of *data*.  ``evaluated`` holds numeric variables
     already evaluated at its rows (the ``tt()`` terms' values, the variables the
@@ -2348,7 +2365,7 @@ def _design_rows_from_spec(
     columns = [
         column
         for term in design.covariates
-        for column in _design_term_columns(data, term, n, evaluated, factor_values)
+        for column in _design_term_columns(data, term, n, evaluated, factor_values, allow_missing)
     ]
     if design.intercept:
         columns.insert(0, [1.0] * n)

@@ -561,7 +561,10 @@ def test_survreg_predict_gives_na_rows_of_the_right_width_for_all_missing_newdat
     newdata = {"age": [None, None], "sex": [1, 2]}
     assert r.predict(fit, newdata, type="lp") == approx([NAN, NAN])
     rows_approx(r.predict(fit, newdata, type="quantile"), [[NAN, NAN], [NAN, NAN]])
-    rows_approx(r.predict(fit, newdata, type="terms"), [[NAN, NAN], [NAN, NAN]])
+    rows_approx(
+        r.predict(fit, newdata, type="terms"),
+        [[NAN, -0.1508230814442967], [NAN, 0.23126205821458842]],
+    )
     for predict_type in ("lp", "quantile", "terms"):
         assert r.predict(fit, newdata, type=predict_type, na_action="na.omit") == []
 

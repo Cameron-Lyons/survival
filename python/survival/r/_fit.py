@@ -407,8 +407,9 @@ def _tt_terms(design: _FormulaDesign) -> list[_CovariateTerm]:
 @dataclass(frozen=True)
 class _NewData:
     """``model.frame(Terms2, newdata)``: the pieces a prediction needs, at the rows of
-    ``newdata`` without a missing value; ``missing`` lists the other rows (0-based)
-    and ``data`` holds the model's variables at the kept rows."""
+    ``newdata`` retained by its NA action; ``missing`` lists omitted rows (0-based).
+    Prediction may keep NaN covariates and offsets so independent outputs remain
+    available. ``data`` holds the model's variables at the kept rows."""
 
     data: Any
     x: list[list[float]]
@@ -449,6 +450,8 @@ def _newdata_frame(
     need_strata: bool,
     need_response: bool,
     na_action: str | None,
+    allow_missing_predictors: bool = False,
+    allow_missing_strata: bool = False,
 ) -> _NewData:
     """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
     na.action)``).
@@ -461,6 +464,10 @@ def _newdata_frame(
     NaN that ``log``, ``sqrt`` or arithmetic made included) is left out and listed in
     ``missing``: ``na.fail`` refuses it, and a prediction pads it back as NaN for
     ``na.pass`` and ``na.exclude``.
+    With ``allow_missing_predictors``, ``na.pass`` carries covariate and offset
+    NaNs into the prediction kernel. ``allow_missing_strata`` is used only when
+    strata do not affect the requested prediction; missing codes then use a
+    valid placeholder. Expected-count predictions ignore a missing event code.
     """
 
     present = set(_newdata_columns(newdata))
@@ -496,6 +503,21 @@ def _newdata_frame(
             n,
         )
     missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
+    keep_missing = pass_missing and allow_missing_predictors
+    response = None
+    if keep_missing:
+        missing = _missing_row_indices(
+            [(name, _column_source(newdata, name)) for name in strata_columns]
+            if not allow_missing_strata
+            else [],
+            n,
+        )
+        if response_columns:
+            # Expected counts use follow-up, not the event indicator.
+            response = _newdata_response(newdata, design.response)
+            missing.update(i for i, value in enumerate(response.time) if math.isnan(value))
+            if response.start is not None:
+                missing.update(i for i, value in enumerate(response.start) if math.isnan(value))
     variables = [
         part.term
         for term in design.covariates
@@ -504,7 +526,7 @@ def _newdata_frame(
     if not pass_missing:
         variables.extend(design.variables)
     made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
-    if made:
+    if made and not keep_missing:
         # the design reads the evaluated variables at the rows that stay
         stays = [row not in made for row in range(n) if row not in missing]
         evaluated = {term: list(compress(values, stays)) for term, values in evaluated.items()}
@@ -513,8 +535,13 @@ def _newdata_frame(
         raise ValueError("missing values in newdata")
     m = n - len(missing)
     if missing:
-        newdata = _data_rows(newdata, columns, [row for row in range(n) if row not in missing], n)
-    rows = _design_rows_from_spec(newdata, design, m, evaluated=evaluated)
+        kept = [row for row in range(n) if row not in missing]
+        newdata = _data_rows(newdata, columns, kept, n)
+        if response is not None:
+            response = response.subset(kept)
+    rows = _design_rows_from_spec(
+        newdata, design, m, evaluated=evaluated, allow_missing=keep_missing
+    )
     offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
     if strata_columns:
@@ -524,10 +551,16 @@ def _newdata_frame(
             remap = [level_index[level] for level in factor.levels]
         except KeyError as exc:
             raise ValueError("New data has a strata not found in the original model") from exc
-        strata_codes = [
-            remap[code] for code in _complete_codes(factor, "missing values in the strata")
-        ]
-    y = _newdata_response(newdata, design.response) if response_columns else None
+        strata_codes = (
+            [0 if code is None else remap[code] for code in factor.codes]
+            if keep_missing and allow_missing_strata
+            else [remap[code] for code in _complete_codes(factor, "missing values in the strata")]
+        )
+    y = (
+        response
+        if response is not None
+        else (_newdata_response(newdata, design.response) if response_columns else None)
+    )
     return _NewData(
         data=newdata,
         x=rows,
