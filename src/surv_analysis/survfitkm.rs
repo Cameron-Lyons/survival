@@ -1215,6 +1215,34 @@ fn count_unique(values: impl Iterator<Item = usize>) -> usize {
     seen.len()
 }
 
+fn has_nonunit_weights(weights: &[f64]) -> bool {
+    // R: !isTRUE(all.equal(weights, rep(1, length(weights)))). all.equal
+    // excludes exact matches before averaging the relative error. Keep the
+    // original weights for fitting and for the separate robust-variance rule.
+    let n = weights.iter().filter(|&&weight| weight != 1.0).count();
+    if n == 0 {
+        return false;
+    }
+    let n = n as f64;
+    let tolerance = f64::EPSILON.sqrt();
+    let scale: f64 = weights
+        .iter()
+        .filter(|&&weight| weight != 1.0)
+        .map(|weight| weight.abs() / n)
+        .sum();
+    let scale = if scale.is_finite() && scale > tolerance {
+        scale
+    } else {
+        1.0
+    };
+    let difference: f64 = weights
+        .iter()
+        .filter(|&&weight| weight != 1.0)
+        .map(|weight| ((weight - 1.0).abs() / scale) / n)
+        .sum();
+    difference.is_nan() || difference > tolerance
+}
+
 /// Port of `survfitKM` (`R/survfitKM.R`).
 ///
 /// Every curve (one per distinct `strata` code, in ascending order) goes
@@ -1430,7 +1458,7 @@ pub fn survfitkm(
         influence_surv: None,
         influence_chaz: None,
     };
-    let addcounts = weights.iter().any(|&w| w != 1.0);
+    let addcounts = has_nonunit_weights(&weights);
     let mut counts = addcounts.then(|| SurvfitCounts {
         n_risk: Vec::with_capacity(total),
         n_event: Vec::with_capacity(total),
@@ -1621,6 +1649,18 @@ mod tests {
                 "index {idx}: actual {left} differs from expected {right}"
             );
         }
+    }
+
+    #[test]
+    fn count_table_uses_r_relative_weight_comparison() {
+        assert!(!has_nonunit_weights(&[1.0; 8]));
+        assert!(!has_nonunit_weights(&[1.0 + 1e-10; 8]));
+        // Exactly equal values must not dilute the mean difference.
+        assert!(has_nonunit_weights(&[1.0, 1.0, 1.0, 1.0, 1.0 + 2e-8]));
+        assert!(!has_nonunit_weights(&[1.0, 1.0 + 1e-8]));
+        assert!(has_nonunit_weights(&[0.0, 1.0]));
+        assert!(has_nonunit_weights(&[2.0; 8]));
+        assert!(has_nonunit_weights(&[f64::MAX; 8]));
     }
 
     fn fit(data: SurvfitKMData, options: SurvfitKMOptions) -> SurvfitKMResult {

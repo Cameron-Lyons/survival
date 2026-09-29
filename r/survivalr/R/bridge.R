@@ -8757,560 +8757,87 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   )
 }
 
-.survfitKM_type <- function(y) {
-  if (inherits(y, "survival_py_surv")) {
-    y <- .as_native_surv(y)
-  }
-  surv_type <- attr(y, "type")
-  if (is.null(surv_type)) {
-    return(if (ncol(y) == 3L) "counting" else "right")
-  }
-  as.character(surv_type)
-}
-
-.survfitKM_computation_type <- function(stype, ctype, type) {
-  if (!missing(type)) {
-    if (!is.character(type)) {
-      stop("type argument must be character", call. = FALSE)
-    }
-    matched <- charmatch(type, c("kaplan-meier", "fleming-harrington", "fh2"))
-    if (is.na(matched)) {
-      stop("invalid value for 'type'", call. = FALSE)
-    }
-    return(c(1L, 3L, 4L)[[matched]])
-  }
-  if (!(ctype %in% 1:2)) {
-    stop("ctype must be 1 or 2", call. = FALSE)
-  }
-  if (!(stype %in% 1:2)) {
-    stop("stype must be 1 or 2", call. = FALSE)
-  }
-  as.integer(2L * stype + ctype - 2L)
-}
-
-.survfitKM_robust_active <- function(y, weights, id, cluster, robust) {
-  if (!is.null(robust)) {
-    return(isTRUE(robust))
-  }
-  if (!is.null(cluster) && length(cluster) > 0L) {
-    return(TRUE)
-  }
-  if (any(weights != floor(weights))) {
-    return(TRUE)
-  }
-  if (!is.null(id) && length(id) > 0L) {
-    if (inherits(y, "survival_py_surv")) {
-      y <- .as_native_surv(y)
-    }
-    status <- if (inherits(y, "Surv") && is.matrix(y)) {
-      y[, ncol(y)]
-    } else {
-      y_frame <- as.data.frame(y)
-      y_frame[[ncol(y_frame)]]
-    }
-    event_id <- id[status == 1]
-    return(anyDuplicated(event_id) > 0L)
-  }
-  FALSE
-}
-
-.survfitKM_right_time_status <- function(y, y.frame) {
-  if (inherits(y, "Surv") && is.matrix(y)) {
-    return(list(
-      time = as.numeric(y[, 1L]),
-      status = as.numeric(y[, ncol(y)])
-    ))
-  }
-  if (ncol(y.frame) == 1L && inherits(y.frame[[1L]], "Surv") && is.matrix(y.frame[[1L]])) {
-    y_matrix <- y.frame[[1L]]
-    return(list(
-      time = as.numeric(y_matrix[, 1L]),
-      status = as.numeric(y_matrix[, ncol(y_matrix)])
-    ))
-  }
-  if (all(c("time", "status") %in% names(y.frame))) {
-    return(list(
-      time = as.numeric(y.frame$time),
-      status = as.numeric(y.frame$status)
-    ))
-  }
-  list(
-    time = as.numeric(y.frame[[1L]]),
-    status = as.numeric(y.frame[[ncol(y.frame)]])
-  )
-}
-
-.survfitKM_counting_time_status <- function(y, y.frame) {
-  if (inherits(y, "Surv") && is.matrix(y)) {
-    return(list(
-      start = as.numeric(y[, 1L]),
-      stop = as.numeric(y[, 2L]),
-      status = as.numeric(y[, ncol(y)])
-    ))
-  }
-  if (ncol(y.frame) == 1L && inherits(y.frame[[1L]], "Surv") && is.matrix(y.frame[[1L]])) {
-    y_matrix <- y.frame[[1L]]
-    return(list(
-      start = as.numeric(y_matrix[, 1L]),
-      stop = as.numeric(y_matrix[, 2L]),
-      status = as.numeric(y_matrix[, ncol(y_matrix)])
-    ))
-  }
-  if (all(c("start", "stop", "status") %in% names(y.frame))) {
-    return(list(
-      start = as.numeric(y.frame$start),
-      stop = as.numeric(y.frame$stop),
-      status = as.numeric(y.frame$status)
-    ))
-  }
-  list(
-    start = as.numeric(y.frame[[1L]]),
-    stop = as.numeric(y.frame[[2L]]),
-    status = as.numeric(y.frame[[ncol(y.frame)]])
-  )
-}
-
-.survfitKM_std_err <- function(surv, std_err, std_chaz, stype, logse) {
-  if (length(std_err) == 0L) {
-    return(std_err)
-  }
-  if (as.integer(stype) != 1L) {
-    return(std_chaz)
-  }
-  if (!isTRUE(logse)) {
-    return(std_err)
-  }
-  out <- rep(NA_real_, length(surv))
-  positive <- !is.na(surv) & surv > 0
-  out[positive] <- std_err[positive] / surv[positive]
-  out[!positive & !is.na(surv)] <- Inf
-  out
-}
-
-.survfitKM_modified_std_low <- function(std.err, n.risk, n.event) {
-  events <- n.event > 0
-  if (length(events) > 0L) {
-    events[[1L]] <- TRUE
-  }
-  if (!any(events)) {
-    return(std.err)
-  }
-  positions <- seq_along(events)
-  n.lag <- rep(n.risk[events], diff(c(positions[events], 1L + max(positions))))
-  std.err * sqrt(n.lag / n.risk)
-}
-
-.survfitKM_std_low <- function(fields, conf.lower) {
-  switch(
-    conf.lower,
-    usual = fields$std.err,
-    peto = sqrt((1 - fields$surv) / fields$n.risk),
-    modified = .survfitKM_modified_std_low(
-      fields$std.err,
-      fields$n.risk,
-      fields$n.event
-    )
-  )
-}
-
-.survfitKM_curve_fields <- function(result, se.fit, stype, conf.type,
-                                    conf.lower, conf.int, logse) {
-  surv <- .as_numeric_vector(.result_field(result, "surv"))
-  fields <- list(
-    time = .as_numeric_vector(.result_field(result, "time")),
-    n.risk = .as_numeric_vector(.result_field(result, "n_risk")),
-    n.event = .as_numeric_vector(.result_field(result, "n_event")),
-    n.censor = .as_numeric_vector(.result_field(result, "n_censor")),
-    surv = surv
-  )
-  n_enter <- .result_field(result, "n_enter")
-  if (!is.null(n_enter)) {
-    fields$n.enter <- .as_numeric_vector(n_enter)
-  }
-  # R's `counts` (unweighted numbers when there are case weights or an id)
-  counts <- .result_field(result, "counts")
-  if (!is.null(counts)) {
-    fields$n.risk.count <- .as_numeric_vector(.result_field(counts, "n_risk"))
-    fields$n.event.count <- .as_numeric_vector(.result_field(counts, "n_event"))
-    fields$n.censor.count <- .as_numeric_vector(.result_field(counts, "n_censor"))
-    n_enter_count <- .result_field(counts, "n_enter")
-    if (!is.null(n_enter_count)) {
-      fields$n.enter.count <- .as_numeric_vector(n_enter_count)
-    }
-  }
-  if (isTRUE(se.fit)) {
-    std_chaz <- .as_numeric_vector(.result_field(result, "std_chaz"))
-    # the Python object's std.err is R's (of the log survival when logse)
-    fields$std.err <- .as_numeric_vector(.result_field(result, "std_err"))
-    fields$cumhaz <- .as_numeric_vector(.result_field(result, "cumhaz"))
-    fields$std.chaz <- std_chaz
-    if (!identical(conf.type, "none")) {
-      if (identical(conf.lower, "usual")) {
-        lower <- .as_numeric_vector(.result_field(result, "lower"))
-        upper <- .as_numeric_vector(.result_field(result, "upper"))
-      } else {
-        ci <- survfit_confint(
-          surv,
-          fields$std.err,
-          logse = logse,
-          conf.type = conf.type,
-          conf.int = conf.int,
-          selow = .survfitKM_std_low(fields, conf.lower)
-        )
-        lower <- ci$lower
-        upper <- ci$upper
-      }
-      zero_surv <- !is.na(surv) & surv <= 0 & fields$std.err > 0
-      if (isTRUE(logse) && conf.type %in% c("log", "log-log", "logit")) {
-        lower[zero_surv] <- NA_real_
-        upper[zero_surv] <- NA_real_
-      }
-      fields$lower <- lower
-      fields$upper <- upper
-    }
-  } else {
-    fields$cumhaz <- .as_numeric_vector(.result_field(result, "cumhaz"))
-  }
-  fields
-}
-
-.survfitKM_cbind_fields <- function(curves, name) {
-  values <- lapply(curves, function(curve) curve[[name]])
-  unlist(values, use.names = FALSE)
-}
-
-.survfitKM_counts_matrix <- function(fields) {
-  columns <- list(
-    nrisk = fields$n.risk.count,
-    nevent = fields$n.event.count,
-    ncensor = fields$n.censor.count
-  )
-  if (!is.null(fields$n.enter.count)) {
-    columns$nenter <- fields$n.enter.count
-  }
-  matrix(
-    unlist(columns, use.names = FALSE),
-    ncol = length(columns),
-    dimnames = list(NULL, names(columns))
-  )
-}
-
-.survfitKM_influence_value <- function(influence) {
-  if (is.logical(influence)) {
-    influence <- if (influence) 3L else 0L
-  }
-  if (!(influence %in% 0:3)) {
-    stop("influence argument must be 0, 1, 2, or 3", call. = FALSE)
-  }
-  as.integer(influence)
-}
-
-# The influence matrices the Python curve carries (clusters x times), with the
-# cluster labels as row names; the codes index the clusters in order of appearance.
-# A curve's influence matrices, rows named by the cluster labels Python reports.
-.survfitKM_influence_from_curve <- function(curve) {
-  matrix_of <- function(name) {
-    influence <- .result_field(curve, name)
-    if (is.null(influence)) {
-      return(NULL)
-    }
-    if (is.list(influence) && !inherits(influence, "python.builtin.object")) {
-      influence <- influence[[1L]]
-    }
-    values <- .as_numeric_matrix(.result_field(influence, "values"))
-    rownames(values) <- as.character(unlist(.result_field(influence, "cluster")))
-    values
-  }
-  list(influence.surv = matrix_of("influence_surv"), influence.chaz = matrix_of("influence_chaz"))
-}
-
-.survfitKM_add_influence <- function(fields, influence.fields, influence,
-                                     chaz.first = FALSE) {
-  fields$.influence_chaz_first <- isTRUE(chaz.first)
-  if (influence %in% c(1L, 3L)) {
-    fields$influence.surv <- influence.fields$influence.surv
-  }
-  if (influence %in% c(2L, 3L)) {
-    fields$influence.chaz <- influence.fields$influence.chaz
-  }
-  fields
-}
-
-.survfitKM_apply_influence_se <- function(fields, influence.fields, stype, ctype,
-                                          conf.type, conf.lower, conf.int,
-                                          logse) {
-  if (is.null(fields$std.err)) {
-    return(fields)
-  }
-  surv_se <- sqrt(colSums(influence.fields$influence.surv^2))
-  chaz_se <- sqrt(colSums(influence.fields$influence.chaz^2))
-  fields$std.err <- if (as.integer(stype) == 1L && as.integer(ctype) == 2L && isTRUE(logse)) {
-    surv_se
-  } else {
-    .survfitKM_std_err(fields$surv, surv_se, chaz_se, stype, logse)
-  }
-  fields$std.chaz <- chaz_se
-  if (!identical(conf.type, "none")) {
-    if (identical(conf.lower, "usual")) {
-      ci <- survfit_confint(
-        fields$surv,
-        fields$std.err,
-        logse = logse,
-        conf.type = conf.type,
-        conf.int = conf.int
-      )
-    } else {
-      ci <- survfit_confint(
-        fields$surv,
-        fields$std.err,
-        logse = logse,
-        conf.type = conf.type,
-        conf.int = conf.int,
-        selow = .survfitKM_std_low(fields, conf.lower)
-      )
-    }
-    zero_surv <- !is.na(fields$surv) & fields$surv <= 0 & fields$std.err > 0
-    if (isTRUE(logse) && conf.type %in% c("log", "log-log", "logit")) {
-      ci$lower[zero_surv] <- NA_real_
-      ci$upper[zero_surv] <- NA_real_
-    }
-    fields$lower <- ci$lower
-    fields$upper <- ci$upper
-  }
-  fields
-}
-
-.survfitKM_r_list <- function(fields, n, strata, n.id, curve_type, se.fit,
-                              conf.int, conf.type, conf.lower, logse, add.counts,
-                              t0) {
-  out <- list(
-    n = n,
-    time = fields$time,
-    n.risk = fields$n.risk,
-    n.event = fields$n.event,
-    n.censor = fields$n.censor,
-    surv = fields$surv
-  )
-  if (isTRUE(se.fit)) {
-    out$std.err <- fields$std.err
-  }
-  out$cumhaz <- fields$cumhaz
-  if (isTRUE(se.fit)) {
-    out$std.chaz <- fields$std.chaz
-  }
-  if (!is.null(strata)) {
-    out$strata <- strata
-  }
-  if (!is.null(fields$n.enter)) {
-    out$n.enter <- fields$n.enter
-  }
-  if (isTRUE(add.counts)) {
-    out$counts <- .survfitKM_counts_matrix(fields)
-  }
-  if (!is.null(n.id)) {
-    out$n.id <- n.id
-  }
-  out$type <- curve_type
-  if (isTRUE(se.fit)) {
-    out$logse <- logse
-    out$conf.int <- conf.int
-    out$conf.type <- conf.type
-    if (!identical(conf.lower, "usual")) {
-      out$conf.lower <- conf.lower
-    }
-    if (!identical(conf.type, "none")) {
-      out$lower <- fields$lower
-      out$upper <- fields$upper
-    }
-  }
-  if (isTRUE(fields$.influence_chaz_first) && !is.null(fields[["influence.chaz", exact = TRUE]])) {
-    out$influence.chaz <- fields$influence.chaz
-  }
-  if (!is.null(fields[["influence.surv", exact = TRUE]])) {
-    out$influence.surv <- fields$influence.surv
-  }
-  if (!isTRUE(fields$.influence_chaz_first) && !is.null(fields[["influence.chaz", exact = TRUE]])) {
-    out$influence.chaz <- fields$influence.chaz
-  }
-  out$t0 <- t0
-  out
-}
-
+# Prepared factor/Surv input and raw output shapes; all estimation, confidence
+# limits and influence calculations run through the shared Rust engine.
 survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
                       se.fit = TRUE, conf.int = 0.95,
                       conf.type = c("log", "log-log", "plain", "none", "logit", "arcsin"),
                       conf.lower = c("usual", "peto", "modified"), start.time,
                       id, cluster, robust, influence = FALSE, type,
                       entry = FALSE, time0 = FALSE) {
-  if (!is.factor(x)) {
-    stop("x must be a factor", call. = FALSE)
-  }
+  if (!is.factor(x)) stop("x must be a factor", call. = FALSE)
   if (!inherits(y, "survival_py_surv") && !inherits(y, "Surv")) {
     stop("y must be a Surv object", call. = FALSE)
   }
-  y_frame <- as.data.frame(y)
-  if (length(x) != nrow(y_frame)) {
-    stop("x and y have different lengths", call. = FALSE)
-  }
-  if (length(weights) != length(x)) {
-    stop("weights and x have different lengths", call. = FALSE)
-  }
-  conf.type <- match.arg(conf.type)
-  conf.lower <- match.arg(conf.lower)
-  survfit_type <- .survfitKM_computation_type(stype, ctype, type)
-  influence_value <- .survfitKM_influence_value(influence)
-  if (influence_value > 0L && !missing(robust) && isFALSE(robust)) {
-    warning("robust=FALSE implies influence=FALSE", call. = FALSE)
-    influence_value <- 0L
-  }
-  robust_active <- .survfitKM_robust_active(
-    y,
-    weights,
-    if (missing(id)) NULL else id,
-    if (missing(cluster)) NULL else cluster,
-    if (missing(robust)) NULL else robust
-  )
-  if (influence_value > 0L) {
-    robust_active <- TRUE
-  }
-  logse <- !robust_active || survfit_type %in% c(2L, 4L)
-  add_counts <- !isTRUE(all.equal(weights, rep(1, length(weights))))
-  curve_type <- .survfitKM_type(y)
-  if (influence_value > 0L && !(curve_type %in% c("right", "counting"))) {
-    stop(
-      "survfitKM influence output is currently supported only for right-censored or counting-process data",
-      call. = FALSE
-    )
-  }
-
   args <- list(
-    .as_python_surv(y),
-    group = if (nlevels(x) > 1L) .as_python_vector(as.character(x)) else NULL,
-    weights = .as_python_vector(weights),
-    stype = as.integer(stype),
-    ctype = as.integer(ctype),
-    `se.fit` = isTRUE(se.fit),
-    `conf.int` = conf.int,
-    `conf.type` = conf.type,
-    id = if (missing(id)) NULL else .as_python_vector(id),
-    cluster = if (missing(cluster)) NULL else .as_python_vector(cluster),
-    robust = if (missing(robust)) NULL else robust,
-    influence = influence_value,
-    entry = entry,
-    time0 = time0
+    x = .as_python_factor(x), y = .as_python_surv(y),
+    weights = .as_python_vector(weights), stype = stype, ctype = ctype,
+    se_fit = se.fit, conf_int = conf.int,
+    conf_type = match.arg(conf.type), conf_lower = match.arg(conf.lower),
+    influence = influence, entry = entry
   )
-  if (!missing(start.time)) {
-    args$`start.time` <- start.time
-  }
-  if (!missing(type)) {
-    # the old-style type argument replaces stype/ctype
-    args$type <- type
-    args$stype <- NULL
-    args$ctype <- NULL
-  }
-  result <- .split_survfit_strata(do.call(.python_attr("survfit"), .compact_null(args)))
-  t0 <- if (missing(start.time)) 0 else as.numeric(start.time)[[1L]]
-  group_n <- as.integer(tabulate(as.integer(x), nbins = nlevels(x)))
-  names(group_n) <- levels(x)
-  group_n_id <- if (missing(id)) {
-    NULL
-  } else {
-    vapply(levels(x), function(level) {
-      length(unique(id[x == level]))
-    }, integer(1))
-  }
+  if (!missing(start.time)) args$start_time <- start.time
+  if (!missing(id)) args$id <- .as_python_vector(id)
+  if (!missing(cluster)) args$cluster <- .as_python_vector(cluster)
+  if (!missing(robust)) args$robust <- robust
+  if (!missing(type)) args$type <- type
+  # time0 is intentionally unused by survival::survfitKM.
+  captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr("survfitKM"), .compact_null(args))
+  result <- captured$result
+  for (message in captured$warnings) warning(message, call. = FALSE)
 
-  if (nlevels(x) <= 1L) {
-    fields <- .survfitKM_curve_fields(
-      result,
-      isTRUE(se.fit),
-      stype,
-      conf.type,
-      conf.lower,
-      conf.int,
-      logse
-    )
-    if (influence_value > 0L) {
-      influence_stype <- if (survfit_type %in% c(1L, 2L)) 1L else 2L
-      fields <- .survfitKM_add_influence(
-        fields,
-        .survfitKM_influence_from_curve(result),
-        influence_value,
-        chaz.first = influence_stype == 2L
-      )
-    }
-    return(.survfitKM_r_list(
-      fields,
-      as.integer(nrow(y_frame)),
-      NULL,
-      if (is.null(group_n_id)) NULL else unname(group_n_id[[1L]]),
-      curve_type,
-      isTRUE(se.fit),
-      conf.int,
-      conf.type,
-      conf.lower,
-      logse,
-      add_counts,
-      t0
-    ))
+  numeric_field <- function(name) .as_numeric_vector(.result_field(result, name))
+  out <- list(n = as.integer(numeric_field("n")))
+  fields <- c("time", "n_risk", "n_event", "n_censor", "surv", "std_err", "cumhaz", "std_chaz")
+  for (name in fields) {
+    value <- .result_field(result, name)
+    if (!is.null(value)) out[[gsub("_", ".", name)]] <- .as_numeric_vector(value)
   }
-
-  nonempty_levels <- levels(x)[group_n > 0L]
-  curves <- lapply(nonempty_levels, function(level) {
-    .survfitKM_curve_fields(
-      result[[level]],
-      isTRUE(se.fit),
-      stype,
-      conf.type,
-      conf.lower,
-      conf.int,
-      logse
-    )
-  })
-  names(curves) <- nonempty_levels
-  influence_curves <- NULL
-  influence_stype <- NULL
-  if (influence_value > 0L) {
-    influence_stype <- if (survfit_type %in% c(1L, 2L)) 1L else 2L
-    influence_curves <- lapply(nonempty_levels, function(level) {
-      .survfitKM_influence_from_curve(result[[level]])
-    })
+  strata <- .result_field(result, "strata")
+  if (!is.null(strata)) {
+    out$strata <- stats::setNames(as.integer(unlist(strata)), names(strata))
   }
-  field_names <- unique(unlist(lapply(curves, names), use.names = FALSE))
-  fields <- stats::setNames(lapply(field_names, function(name) {
-    .survfitKM_cbind_fields(curves, name)
-  }), field_names)
-  if (influence_value > 0L) {
-    if (influence_value %in% c(1L, 3L)) {
-      fields$influence.surv <- lapply(
-        influence_curves,
-        function(curve) curve$influence.surv
-      )
-    }
-    if (influence_value %in% c(2L, 3L)) {
-      fields$influence.chaz <- lapply(
-        influence_curves,
-        function(curve) curve$influence.chaz
-      )
-    }
-    fields$.influence_chaz_first <- influence_stype == 2L
+  n_enter <- .result_field(result, "n_enter")
+  if (!is.null(n_enter)) out$n.enter <- .as_numeric_vector(n_enter)
+  counts <- .result_field(result, "counts")
+  if (!is.null(counts)) {
+    fields <- c("n_risk", "n_event", "n_censor")
+    if (!is.null(.result_field(counts, "n_enter"))) fields <- c(fields, "n_enter")
+    values <- lapply(fields, function(name) .as_numeric_vector(.result_field(counts, name)))
+    out$counts <- do.call(cbind, values)
+    colnames(out$counts) <- sub("n_", "n", fields)
   }
-  strata <- group_n
-  strata[group_n > 0L] <- vapply(curves, function(curve) length(curve$time), integer(1))
-  .survfitKM_r_list(
-    fields,
-    unname(group_n),
-    strata,
-    if (is.null(group_n_id)) NULL else unname(group_n_id),
-    curve_type,
-    isTRUE(se.fit),
-    conf.int,
-    conf.type,
-    conf.lower,
-    logse,
-    add_counts,
-    t0
-  )
+  n_id <- .result_field(result, "n_id")
+  if (!is.null(n_id)) out$n.id <- as.integer(.as_numeric_vector(n_id))
+  out$type <- .result_field(result, "type")
+  if (isTRUE(se.fit)) {
+    out$logse <- .result_field(result, "logse")
+    out$conf.int <- .result_field(result, "conf_int")
+    out$conf.type <- .result_field(result, "conf_type")
+    conf_lower <- .result_field(result, "conf_lower")
+    if (!is.null(conf_lower)) out$conf.lower <- conf_lower
+    for (name in c("lower", "upper")) {
+      value <- .result_field(result, name)
+      if (!is.null(value)) out[[name]] <- .as_numeric_vector(value)
+    }
+  }
+  influence_names <- if (.result_field(result, "stype") == 2L) {
+    c("influence_chaz", "influence_surv")
+  } else c("influence_surv", "influence_chaz")
+  for (name in influence_names) {
+    curves <- .result_field(result, name)
+    if (!is.null(curves)) {
+      matrices <- lapply(curves, function(curve) {
+        if (is.null(curve)) return(NULL)
+        value <- .as_numeric_matrix(.result_field(curve, "values"))
+        rownames(value) <- as.character(unlist(.result_field(curve, "cluster")))
+        value
+      })
+      out[[gsub("_", ".", name)]] <- if (length(matrices) == 1L) matrices[[1L]] else matrices
+    }
+  }
+  out$t0 <- .result_field(result, "t0")
+  out
 }
 
 survfit0 <- function(x, ...) {

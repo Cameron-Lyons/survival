@@ -156,6 +156,7 @@ from ._survfit import (
     survfit0,
     survfit_confint,
 )
+from ._survfit_lowlevel import SurvfitKMResult, survfitKM
 from ._survfit_print import SurvfitPrint, print_survfit, print_survfitms
 from ._survfit_residuals import pseudo, survfit_residuals
 from ._survpenal_lowlevel import SurvpenalFitResult, survpenal_fit
@@ -238,6 +239,8 @@ __all__ = [
     "survreg_fit",
     "SurvpenalFitResult",
     "survpenal_fit",
+    "SurvfitKMResult",
+    "survfitKM",
     "CoxFitResult",
     "coxph_fit",
     "agreg_fit",
