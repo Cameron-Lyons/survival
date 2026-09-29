@@ -41,7 +41,7 @@ def test_survcheck_matches_r_on_multistate_data_with_istate():
 
     assert check.states == ["A", "B", "C"]
     assert check.transitions.from_states == ["A", "B", "C"]
-    assert check.transitions.to_states == ["B", "C", "(censored)"]
+    assert check.transitions.to_states == ["B", "C", "(censor)"]
     assert check.transitions.counts == [[2, 1, 1], [0, 1, 0], [0, 0, 0]]
     assert check.events.states == ["B", "C", "(any)"]
     assert check.events.count == [0, 1, 2]

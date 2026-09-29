@@ -1249,6 +1249,11 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
+Response conventions follow \pkg{survival} 3.8-12: \code{Surv2} statuses
+must be logical, numeric, or factors; missing binary statuses remain missing.
+Multistate responses and transition tables preserve the censoring factor level.
+Legacy responses without a censor label retain their \code{+} formatting
+when converted to Python and back.
 \code{survfitKM} delegates prepared factor and \code{Surv} inputs directly
 to the shared Rust curve engine. It preserves unused factor levels and
 returns R-named numerical components without retaining a model frame.

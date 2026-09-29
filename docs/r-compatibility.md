@@ -487,6 +487,14 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   drops the others); a stratum after one that `start.time` emptied reports its
   own `n` and `n.id` (R's `[.survfit` indexes `n` by the curve's position among
   the fitted curves).
+- Counting-process KM curves retain every event time, including events on
+  internal intervals of a subject. R 3.8-12's grouped branch omits those
+  times from its grid, unlike its single-curve branch, so it can lose events
+  and produce incorrect pseudo-values. The bridge's recurrent-event test
+  uses a local R reference with that one grid condition corrected and also
+  compares separate single-group fits. Neither the installed R namespace nor
+  its numerical kernels are changed. Initial interval boundaries without
+  events or terminal censoring are omitted, following the 3.8-12 grid rule.
 - `survfit(coxfit, newdata, start.time =)` where `start.time` empties a stratum
   gives each newdata row its own curve; R's `split()` drops the empty stratum
   and hands a row the curve of the row before it. With `id =` and a subject
@@ -589,7 +597,8 @@ this does not show.
 
 ### Versions
 
-- The fixtures and the R bridge's CI use survival 3.8-11. `Surv2` and
+- Historical numerical fixtures use survival 3.8-11; the R bridge's CI and
+  current response/label references use 3.8-12. `Surv2` and
   `surv2counting` follow 3.8-12: a missing 0/1 status stays NA (the interval is
   then removed by the na.action) and a missing factor outcome is censored
   without 3.8-11's level shift. The multi-state `parsecovar2` and `survfitAJ`
@@ -598,9 +607,11 @@ this does not show.
   and format it as `:label`, following 3.8-12. Legacy objects without `clabel`
   keep the `+` marker. The old formatting fixture reconstructs that legacy
   metadata; the vector-operation fixtures check current labels against 3.8-12.
-- The censoring column of a transitions table is labelled "(censored)" (3.8-11)
-  where 3.8-12 prints "(<first level>)", e.g. "(censor)". `print_survcheck`
-  uses the response's current censoring label in both its report table and text.
+- Transition tables in multi-state curves, Cox models and consistency checks
+  use the response's censoring level, e.g. "(censor)" or "(lost)", following
+  3.8-12. Numeric `survcheck` responses use "(censor)". Curve transformations
+  and serialization preserve the label. Historical fixtures adapt only their
+  fixed "(censored)" column name; all counts remain checked unchanged.
 - `rsurvreg(seed=s)` reproduces R's `set.seed(s)` stream (Mersenne-Twister,
   inversion); without a seed it draws from a clock-seeded generator, since
   there is no R session whose RNG state it could share. Seeds are R's 32-bit
@@ -799,6 +810,13 @@ this does not show.
 
 ### R bridge (`r/survivalr`)
 
+- The bridge follows 3.8-12 response semantics. `Surv2` requires logical,
+  numeric or factor statuses; missing binary statuses remain missing, and
+  factor censor labels survive construction. `Surv` conversion preserves
+  coded status columns and censor labels directly, without reconstructing
+  per-row factor strings. Legacy responses lacking a censor label retain
+  their `+` formatting when converted. Arbitrary R input attributes are not
+  retained by Python response objects.
 - A penalized survreg fit keeps the bridge's `survival_py_survreg` class rather
   than R's `c("survreg.penal", "survreg")`, so survival's own methods do not
   dispatch on it.

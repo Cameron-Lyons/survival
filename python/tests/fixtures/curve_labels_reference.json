@@ -1,0 +1,470 @@
+{
+  "r_version": "R version 4.5.3 (2026-03-11)",
+  "survival_version": "3.8.12",
+  "cases": [
+    {
+      "label": "censor",
+      "counting": false,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["censor", "ill", "death", "censor", "ill", "death"],
+      "levels": ["censor", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0.5, 0.5, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(censor)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "censor",
+      "counting": true,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["censor", "ill", "death", "censor", "ill", "death"],
+      "levels": ["censor", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(censor)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(censor)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "lost",
+      "counting": false,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["lost", "ill", "death", "lost", "ill", "death"],
+      "levels": ["lost", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0.5, 0.5, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(lost)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "lost",
+      "counting": true,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["lost", "ill", "death", "lost", "ill", "death"],
+      "levels": ["lost", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(lost)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(lost)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "not yet",
+      "counting": false,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["not yet", "ill", "death", "not yet", "ill", "death"],
+      "levels": ["not yet", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0.5, 0.5, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(not yet)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "not yet",
+      "counting": true,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["not yet", "ill", "death", "not yet", "ill", "death"],
+      "levels": ["not yet", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(not yet)"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(not yet)"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "gone (A)",
+      "counting": false,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["gone (A)", "ill", "death", "gone (A)", "ill", "death"],
+      "levels": ["gone (A)", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0.5, 0.5, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(gone (A))"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    },
+    {
+      "label": "gone (A)",
+      "counting": true,
+      "time": [1, 2, 3, 4, 5, 6],
+      "start": [0, 0.5, 1, 0, 3, 2],
+      "id": [1, 2, 3, 4, 5, 6],
+      "event": ["gone (A)", "ill", "death", "gone (A)", "ill", "death"],
+      "levels": ["gone (A)", "ill", "death"],
+      "group": ["b", "b", "a", "a", "b", "a"],
+      "x": [0.2, 0.8, 0.3, 0.7, 0.1, 0.9],
+      "curve": {
+        "time": [3, 4, 6, 1, 2, 5],
+        "pstate": [
+          [0.666666666666667, 0, 0.333333333333333],
+          [0.666666666666667, 0, 0.333333333333333],
+          [0, 0, 1],
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 1, 0]
+        ],
+        "transitions": {
+          "rows": ["(s0)", "ill", "death"],
+          "columns": ["ill", "death", "(gone (A))"],
+          "values": [
+            [2, 2, 2],
+            [0, 0, 0],
+            [0, 0, 0]
+          ]
+        }
+      },
+      "check": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "cox": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      },
+      "prediction": {
+        "rows": ["(s0)", "ill", "death"],
+        "columns": ["ill", "death", "(gone (A))"],
+        "values": [
+          [2, 2, 2],
+          [0, 0, 0],
+          [0, 0, 0]
+        ]
+      }
+    }
+  ]
+}

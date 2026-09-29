@@ -435,36 +435,18 @@ attrassign <- function(object, tt) {
     if (is.null(states)) {
       stop("multi-state Surv response is missing its states", call. = FALSE)
     }
-    status <- as.integer(value[, ncol(value)])
-    event_values <- rep("(censored)", length(status))
-    event_values[is.na(status)] <- NA_character_
-    event_rows <- !is.na(status) & status > 0L
-    event_values[event_rows] <- states[status[event_rows]]
-    event <- factor(
-      event_values,
-      levels = c("(censored)", states)
+    if (!(ncol(value) %in% c(2L, 3L))) stop("unsupported Surv matrix shape", call. = FALSE)
+    # Already coded Surv columns need no per-row string/factor reconstruction.
+    # Preserve an absent censor label on legacy responses as well as named labels.
+    sequence <- function(column) as.list(.as_python_vector(column))
+    result <- .python_attr("Surv")$`_from_normalized`(
+      time = as.list(as.numeric(value[, ncol(value) - 1L])),
+      event = sequence(as.integer(value[, ncol(value)])),
+      start = if (ncol(value) == 3L) as.list(as.numeric(value[, 1L])) else NULL,
+      time2 = NULL, surv_type = surv_type, states = as.list(states),
+      clabel = attr(value, "clabel")
     )
-    if (ncol(value) == 2L) {
-      return(.wrap_python(
-        .python_attr("Surv")(
-          as.numeric(value[, 1L]),
-          .as_python_factor(event),
-          type = "mstate"
-        ),
-        c("survival_py_surv", "survival_py_object")
-      ))
-    }
-    if (ncol(value) == 3L) {
-      return(.wrap_python(
-        .python_attr("Surv")(
-          as.numeric(value[, 1L]),
-          as.numeric(value[, 2L]),
-          .as_python_factor(event),
-          type = "mstate"
-        ),
-        c("survival_py_surv", "survival_py_object")
-      ))
-    }
+    return(.wrap_python(result, c("survival_py_surv", "survival_py_object")))
   }
   if (ncol(value) == 2L) {
     return(.wrap_python(
@@ -2524,6 +2506,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
     attr(out, "type") <- "mcounting"
   }
   attr(out, "states") <- states
+  attr(out, "clabel") <- levels(event)[1L]
   attr(out, "inputAttributes") <- input_attributes
   class(out) <- "Surv"
   out
@@ -2661,19 +2644,9 @@ Surv2 <- function(time, event, repeated = FALSE) {
       is.na(repeated)) {
     stop("invalid value for repeated option", call. = FALSE)
   }
-  if (any(is.na(event) & !is.na(time))) {
-    fill <- if (is.numeric(event) && any(event == 0, na.rm = TRUE)) {
-      0
-    } else if (is.logical(event) && any(!event, na.rm = TRUE)) {
-      FALSE
-    } else if (is.factor(event)) {
-      levels(event)[1L]
-    } else {
-      NA
-    }
-    event[is.na(event) & !is.na(time)] <- fill
+  if (!(is.logical(event) || is.numeric(event) || is.factor(event) || all(is.na(event)))) {
+    stop("invalid status", call. = FALSE)
   }
-  event <- as.factor(event)
   input_attributes <- list()
   if (!is.null(attributes(time))) {
     input_attributes$time <- attributes(time)
@@ -2689,18 +2662,22 @@ Surv2 <- function(time, event, repeated = FALSE) {
   if (!is.factor(event) && !is.list(event_values)) {
     event_values <- as.list(event_values)
   }
-  result <- .call_r_api(
-    "Surv2",
-    time_values,
-    event_values,
-    repeated = repeated
+  captured <- .pybridge_attr("_call_fit_with_warnings")(
+    .python_attr("Surv2"),
+    list(time = time_values, event = event_values, repeated = repeated)
   )
+  result <- captured$result
+  for (message in captured$warnings) warning(message, call. = FALSE)
   status <- as.integer(.as_nullable_numeric_vector(.result_field(result, "status")))
   out <- cbind(time = as.numeric(time), status = status)
   if (length(input_attributes) > 0L) {
     attr(out, "inputAttributes") <- input_attributes
   }
-  attr(out, "states") <- as.character(.result_field(result, "states"))
+  clabel <- .result_field(result, "clabel")
+  if (!is.null(clabel)) {
+    attr(out, "states") <- as.character(.result_field(result, "states"))
+    attr(out, "clabel") <- clabel
+  }
   attr(out, "repeated") <- .result_field(result, "repeated")
   class(out) <- "Surv2"
   out
@@ -5184,6 +5161,7 @@ totimeline <- function(formula, data, id, istate) {
   attr(y, "type") <- paste0(if (length(states)) "m" else "", if (counting) "counting" else "right")
   if (length(states)) {
     attr(y, "states") <- states
+    attr(y, "clabel") <- attr(response, "clabel")
   }
   class(y) <- "Surv"
   converted[[1L]] <- y
@@ -8008,6 +7986,7 @@ model.frame.formula <- function(formula, ...) {
   }
   if (surv_type %in% c("mright", "mcounting")) {
     attr(out, "states") <- as.character(.result_field(x, "states"))
+    attr(out, "clabel") <- .result_field(x, "clabel")
   }
   class(out) <- "Surv"
   out
@@ -8033,6 +8012,7 @@ model.frame.formula <- function(formula, ...) {
     xattr <- attributes(x)
     out <- unclass(x)[i, , drop = FALSE]
     attr(out, "type") <- xattr$type
+    attr(out, "clabel") <- xattr$clabel
     if (!is.null(xattr$states)) {
       attr(out, "states") <- xattr$states
     }
@@ -8112,13 +8092,13 @@ as.character.Surv <- function(x, ...) {
     },
     mright = {
       temp <- x[, 2L]
-      end <- c("+", paste(":", attr(x, "states"), sep = ""))
+      end <- .surv_state_suffixes(x)
       temp <- ifelse(is.na(temp), "?", end[temp + 1L])
       paste0(format(x[, 1L]), temp)
     },
     mcounting = {
       temp <- x[, 3L]
-      end <- c("+", paste(":", attr(x, "states"), sep = ""))
+      end <- .surv_state_suffixes(x)
       temp <- ifelse(is.na(temp), "?", end[temp + 1L])
       paste0("(", format(x[, 1L]), ",", format(x[, 2L]), temp, "]")
     },
@@ -8142,13 +8122,19 @@ is.na.Surv <- function(x) {
   as.vector(rowSums(is.na(unclass(x))) > 0)
 }
 
+.surv_state_suffixes <- function(x) {
+  clabel <- attr(x, "clabel")
+  if (is.null(clabel)) c("+", paste0(":", attr(x, "states")))
+  else paste0(":", c(clabel, attr(x, "states")))
+}
+
 as.character.Surv2 <- function(x, ...) {
   states <- attr(x, "states")
   status <- x[, 2L]
   suffixes <- if (is.null(states)) {
     ifelse(is.na(status), "?", ifelse(status == 0, "+", ""))
   } else {
-    endings <- c("+", paste0(":", states))
+    endings <- .surv_state_suffixes(x)
     ifelse(is.na(status), "?", endings[status + 1L])
   }
   result <- paste0(format(x[, 1L]), suffixes)
@@ -9065,10 +9051,12 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = NULL,
     terminal[tail(ordered, 1L)] <- TRUE
   }
   keep <- !is.na(targets) | terminal
-  targets[is.na(targets) & terminal] <- "(censored)"
+  clabel <- attr(response, "clabel")
+  censor <- if (is.null(clabel)) "(censor)" else paste0("(", clabel, ")")
+  targets[is.na(targets) & terminal] <- censor
   transitions <- table(
     from = factor(current_states[keep], levels = states),
-    to = factor(targets[keep], levels = c(states, "(censored)"))
+    to = factor(targets[keep], levels = c(states, censor))
   )
   incoming <- numeric(length(states))
   names(incoming) <- states

@@ -333,9 +333,8 @@ jobs:
       - name: Install Python extension
         run: .venv/bin/maturin develop --release --features extension-module,ml
 
-      # The bridge's tests compare against R's survival, pinned to the version the
-      # recorded fixtures use (survival 3.8-12 already changed Surv2 and the
-      # multi-state labels).
+      # The bridge follows current response/status and multi-state label semantics.
+      # Historical numerical fixtures are regenerated separately with their own pin.
       - name: Install R bridge dependencies
         run: |
           rspm <- Sys.getenv("RSPM", unset = "")
@@ -352,7 +351,7 @@ jobs:
           }
         shell: Rscript {0}
         env:
-          R_SURVIVAL_VERSION: '3.8-11'
+          R_SURVIVAL_VERSION: '3.8-12'
 
       - name: Check R bridge package
         run: R CMD check --no-manual --no-build-vignettes r/survivalr

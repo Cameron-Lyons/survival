@@ -723,6 +723,7 @@ def survcheck(
         else [istate_levels.index(value) + 1 for value in istate_values],
         istate_levels=None if istate_levels is None else [str(v) for v in istate_levels],
         istate0=istate0,
+        censor_label=response.clabel if response.clabel is not None else "censor",
         timefix=timefix,
     )
     # R reports rows of the data before missing values were removed.

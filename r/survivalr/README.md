@@ -12,6 +12,15 @@ Bridged models support standard R generics including `coef`, `vcov`, `confint`,
 Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 `cox.zph`, `coxph.detail`, and `anova` outputs can also be converted with
 `as.data.frame`.
+
+Response semantics and the bridge's CI reference follow survival 3.8-12.
+`Surv2` accepts binary numeric/logical statuses or explicit factors and keeps
+missing statuses missing. Multistate responses and transition tables preserve
+the factor's censoring label. Conversion to Python uses the existing numeric
+status codes directly. Legacy responses without a censor label retain their
+`+` display marker. See [R compatibility](../../docs/r-compatibility.md) for
+documented numerical corrections and historical fixture versions.
+
 Multi-state `survfit` objects with retained model frames support native-shaped
 influence residuals and pseudo-values for state probabilities, cumulative
 transition hazards, and integrated state occupancy.

@@ -156,7 +156,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(factor_response_frame[[1L]], factor_response)
   expect_s3_class(factor_response[1:2], "Surv")
   expect_equal(attr(factor_response[1:2], "states"), attr(factor_response, "states"))
-  surv2_frame_response <- Surv2(c(1, 2, NA), c("a", "b", NA))
+  surv2_frame_response <- Surv2(c(1, 2, NA), factor(c("a", "b", NA)))
   surv2_response_matrix <- as.matrix(surv2_frame_response)
   expect_false(inherits(surv2_response_matrix, "Surv2"))
   expect_equal(dim(surv2_response_matrix), c(3L, 2L))
@@ -169,7 +169,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(rep_len(surv2_frame_response, 4), surv2_frame_response[c(1L, 2L, 3L, 1L)])
   expect_equal(t(surv2_frame_response), t(surv2_response_matrix))
   expect_equal(tail(surv2_frame_response, 2), surv2_frame_response[2:3])
-  duplicate_surv2_response <- Surv2(c(1, 2, 1, NA), c("a", "b", "a", NA))
+  duplicate_surv2_response <- Surv2(c(1, 2, 1, NA), factor(c("a", "b", "a", NA)))
   expect_equal(as.vector(duplicated(duplicate_surv2_response)), c(FALSE, FALSE, TRUE, FALSE))
   expect_equal(anyDuplicated(duplicate_surv2_response), 3L)
   expect_error(sum(surv2_frame_response), "Invalid operation on a survival time")
@@ -190,7 +190,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
       fixed = TRUE
     )
   }
-  expect_equal(capture.output(print(surv2_frame_response)), "[1]  1+   2:b NA? ")
+  expect_equal(capture.output(print(surv2_frame_response)), "[1]  1:a  2:b NA? ")
   surv2_response_frame <- as.data.frame(surv2_frame_response)
   expect_s3_class(surv2_response_frame, "data.frame")
   expect_equal(names(surv2_response_frame), "x")
@@ -340,7 +340,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_equal(
     capture.output(print(surv2_frame_response)),
-    capture.output(print(survival::Surv2(c(1, 2, NA), c("a", "b", NA))))
+    capture.output(print(survival::Surv2(c(1, 2, NA), factor(c("a", "b", NA)))))
   )
   expect_s3_class(response[1:2], "Surv")
   expect_equal(response[1:2], survival::Surv(data$time, data$status)[1:2])
@@ -374,19 +374,19 @@ test_that("R formula wrappers delegate to the Python survival package", {
     expect_equal(format.Surv(native_surv), survival::format.Surv(native_surv))
     expect_equal(is.na.Surv(native_surv), survival::is.na.Surv(native_surv))
   }
-  surv2_response <- Surv2(c(1, 2, 3), c("a", "b", "c"))
-  reference_surv2 <- survival::Surv2(c(1, 2, 3), c("a", "b", "c"))
+  surv2_response <- Surv2(c(1, 2, 3), factor(c("a", "b", "c")))
+  reference_surv2 <- survival::Surv2(c(1, 2, 3), factor(c("a", "b", "c")))
   expect_equal(unclass(surv2_response), unclass(reference_surv2))
   expect_equal(attr(surv2_response, "states"), attr(reference_surv2, "states"))
   expect_equal(attr(surv2_response, "repeated"), attr(reference_surv2, "repeated"))
   expect_equal(format(surv2_response), format(reference_surv2))
-  missing_surv2 <- Surv2(c(1, NA, 3), c(NA, "b", "c"), repeated = TRUE)
+  missing_surv2 <- Surv2(c(1, NA, 3), factor(c(NA, "b", "c")), repeated = TRUE)
   expect_equal(is.na(missing_surv2), c(TRUE, TRUE, FALSE))
   expect_true(attr(missing_surv2, "repeated"))
   expect_error(Surv2(c(1, 2), c("a")), "different lengths")
   expect_error(Surv2(c(1, 2), c("a", "b"), repeated = c(TRUE, FALSE)), "repeated")
   expect_identical(
-    attr(Surv2(c(1, 2), c("a", "a"), repeated = "first"), "repeated"),
+    attr(Surv2(c(1, 2), factor(c("a", "a")), repeated = "first"), "repeated"),
     "first"
   )
 
@@ -2390,13 +2390,14 @@ test_that("R formula wrappers delegate to the Python survival package", {
     model = TRUE
   )
   reference_grouped_counting_pseudo_fit <- eval(bquote(
-    getFromNamespace("survfit.formula", "survival")(
+    reference_survfit_complete_event_grid(
       survival::Surv(start, stop, status) ~ group,
       data = .(grouped_counting_pseudo_data),
       id = id,
       model = TRUE
     )
   ))
+  expect_equal(sum(reference_grouped_counting_pseudo_fit$n.event), 4)
   for (pseudo_type in c("survival", "cumhaz", "rmst")) {
     expect_equal(
       pseudo(grouped_counting_pseudo_fit, times = c(3, 5), type = pseudo_type),
