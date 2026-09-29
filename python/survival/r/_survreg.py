@@ -60,6 +60,7 @@ from ._formula import (
     _design_term_name,
     _design_term_output_names,
     _fit_formula_design,
+    _formula_cluster_values,
     _formula_model_frame,
     _formula_model_term_degree,
     _formula_response_spec,
@@ -576,8 +577,6 @@ def _formula_frame(
             raise ValueError("use only one of formula offset(...) or offset")
         offset = _offset_vector(data, terms.offsets, n)
     if terms.clusters:
-        if len(terms.clusters) > 1:
-            raise ValueError("a formula cannot have multiple cluster terms")
         if cluster is not None:
             warnings.warn(
                 "cluster appears both in a formula and as an argument, formula term ignored",
@@ -585,7 +584,7 @@ def _formula_frame(
                 stacklevel=3,
             )
         else:
-            cluster = _column(data, terms.clusters[0])
+            cluster = _formula_cluster_values(data, terms, n)
     strata_terms = _strata_specs(terms)
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()

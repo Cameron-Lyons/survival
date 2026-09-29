@@ -844,8 +844,6 @@ def survobrien(
     n = len(response)
     if response.type not in {"right", "counting"}:
         raise ValueError("Response must be right censored or (start, stop] data")
-    if len(terms.clusters) > 1:
-        raise ValueError("Can have only 1 cluster term")
     keepers, continuous = _survobrien_columns(data, terms.covariates, n)
     strata_codes = None
     if terms.strata:

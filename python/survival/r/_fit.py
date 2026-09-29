@@ -29,12 +29,12 @@ from ._formula import (
     _apply_formula_na_action,
     _column_or_values,
     _column_source,
-    _combined_columns,
     _covariate_term_name,
     _data_rows,
     _design_rows_from_spec,
     _design_term_name,
     _fit_formula_design,
+    _formula_cluster_values,
     _formula_data_rows,
     _formula_design_columns,
     _formula_design_row_count,
@@ -326,7 +326,7 @@ def _model_frame(
                 stacklevel=3,
             )
         else:
-            cluster_values = _combined_columns(data, terms.clusters, n)
+            cluster_values = _formula_cluster_values(data, terms, n)
     if cluster_values is not None:
         cluster_values = _materialize_labels(cluster_values, "cluster")
         if len(cluster_values) != n:

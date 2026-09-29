@@ -96,7 +96,7 @@ class _ModelOffsetTerm:
 
 @dataclass(frozen=True)
 class _ModelClusterTerm:
-    column: str
+    term: _CovariateTerm
 
 
 _FormulaModelTerm = _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | _ModelClusterTerm

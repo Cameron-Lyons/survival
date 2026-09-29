@@ -1495,6 +1495,7 @@ def _apply_formula_na_action(
     variables = [
         *_response_variables(response_spec),
         *terms.variables,
+        *(item.term for item in terms.model_terms if isinstance(item, _ModelClusterTerm)),
         *(factor for term in terms.covariates for factor in _covariate_factors(term)),
         *terms.offsets,
     ]
@@ -1668,15 +1669,22 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
         return replace(_parse_offset_term(term[7:-1]), special="offset")
 
     if term.startswith("cluster(") and term.endswith(")"):
-        items = _formula_name_items(term[8:-1])
+        items = _formula_response_parts(term[8:-1])
         if not items:
             raise ValueError("cluster() requires at least one column")
         if len(items) != 1:
             raise ValueError("cluster() requires exactly one column")
-        column, quoted = items[0]
-        if _unsupported_formula_name(column, quoted):
+        expression = _strip_outer_formula_parentheses(items[0])
+        if _is_formula_arithmetic_expression(expression):
+            _expression_columns(expression)
+            variable = _CovariateTerm(expression, arithmetic=expression)
+        else:
+            variable = _parse_covariate_atom(expression)
+        if variable.special or variable.strata or variable.call or variable.transform == "tt":
             raise ValueError(f"unsupported formula term(s): {term}")
-        return _CovariateTerm(column, special="cluster")
+        if not _covariate_term_columns(variable):
+            raise ValueError("cluster() requires a data column")
+        return replace(variable, special="cluster")
 
     if term.startswith("strata(") and term.endswith(")"):
         return _strata_covariate(_parse_strata(term))
@@ -1947,7 +1955,7 @@ def _split_terms_cached(
     model_terms: list[_FormulaModelTerm] = [
         _ModelStrataTerm(item.strata)
         if isinstance(item, _CovariateTerm) and item.strata
-        else _ModelClusterTerm(item.column)
+        else _ModelClusterTerm(item)
         if isinstance(item, _CovariateTerm) and item.special == "cluster"
         else _ModelCovariateTerm(item)
         for item in parsed_terms
@@ -1960,7 +1968,7 @@ def _split_terms_cached(
     cluster_terms = [term for term in variables if term.special == "cluster"]
     if len(cluster_terms) > 1:
         raise ValueError("a formula cannot have multiple cluster terms")
-    clusters = [term.column for term in cluster_terms]
+    clusters = _covariate_columns(cluster_terms)
     if cluster_terms:
         cluster_term = cluster_terms[0]
         covered: set[frozenset[_CovariateTerm]] = {frozenset()}
@@ -1971,7 +1979,7 @@ def _split_terms_cached(
             ):
                 raise ValueError("cluster() cannot be in an interaction")
             covered.add(factors)
-        if _ModelClusterTerm(cluster_term.column) not in model_terms:
+        if _ModelClusterTerm(cluster_term) not in model_terms:
             raise ValueError("invalid model formula in ExtractVars")
         # coxph/survreg remove the cluster main term and rebuild the formula.
         # This also resets variable order and discards unused frame variables.
@@ -2009,6 +2017,15 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
         )
     dot_key = None if dot_terms is None else tuple(dot_terms)
     return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
+
+
+def _formula_cluster_values(data: Any, terms: _FormulaTerms, n: int) -> list[Any] | None:
+    """Evaluate the cluster argument after the model frame's row selection."""
+
+    for item in terms.model_terms:
+        if isinstance(item, _ModelClusterTerm):
+            return _term_values(data, replace(item.term, special=None), n)
+    return None
 
 
 def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
@@ -2147,7 +2164,9 @@ def _fit_single_design_term(
         return fit_penalty(term, columns, values, options, levels)
     values = _term_raw_values(data, term, n)
     if not term.categorical and (
-        term.transform is not None or _mstate_categories(_column_source(data, term.column)) is None
+        term.transform is not None
+        or term.arithmetic is not None
+        or _mstate_categories(_column_source(data, term.column)) is None
     ):
         if term.transform is not None:
             _numeric_term_values(values, term)

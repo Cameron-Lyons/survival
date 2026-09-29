@@ -86,6 +86,12 @@ nesting, and powers. Each distinct offset contributes once even if it appears
 in a removed term, matching R's `terms()` behavior. Cluster main terms supply
 robust-variance groups; their interaction columns remain in the design. R's
 checks for multiple clusters and missing interaction margins are preserved.
+Cluster IDs may also be arithmetic expressions, comparisons, numeric
+transforms, or factor conversions, such as `cluster(site + id)` and
+`cluster(group > 5)`. Their evaluated values determine robust-variance groups
+in Cox/AFT fits and clustered survival curves. Source missing values and NaNs
+created by these expressions take part in model-frame row omission, including
+when the cluster main effect has been removed from the coefficient design.
 
 Variables removed by formula subtraction remain in the model frame and take
 part in training-row omission. For new-data predictions, `na.pass` allows a
@@ -455,6 +461,12 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 
 ### Survival curves
 
+- Formula `cluster()` terms select robust-variance groups and warn about the
+  deprecated syntax, following the intended `survfit.formula` branch. R 3.8-12
+  reuses model-frame terms that have no special-term metadata, so the branch
+  is bypassed and cluster values become extra curve groups. The supplemental
+  formula-special reference retains those raw results and compares the port
+  with R's explicit `cluster=` argument.
 - `summary(fit, times)` of a multi-state curve with a time before its first
   time reports `p0` there. R's `findInterval` index is 0 for that time, so its
   `pstate` has one row fewer than its `time`.

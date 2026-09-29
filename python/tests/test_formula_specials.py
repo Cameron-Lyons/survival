@@ -12,7 +12,7 @@ from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
-pytestmark = pytest.mark.filterwarnings(r"ignore:NaNs produced in log\(transformed\):UserWarning")
+pytestmark = pytest.mark.filterwarnings(r"ignore:NaNs produced in log\(transformed:UserWarning")
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/formula_special_reference.json").read_text()
 )
@@ -56,7 +56,10 @@ def test_formula_specials_match_r(case):
         assert_close(fit.scale, case["scale"])
     # The Python model frame keeps source columns rather than R call labels.
     for column in ("unused", "transformed"):
-        expected = any(column in name for name in case["retained_columns"])
+        expected = (
+            any(column in name for name in case["retained_columns"])
+            or column in case["cluster_variables"]
+        )
         assert (column in r.model_frame(fit)) == expected
 
 
@@ -65,6 +68,20 @@ def test_formula_specials_match_r(case):
 def test_cluster_interactions_reject_the_same_invalid_formulas(case, fitter):
     with pytest.raises(ValueError, match=re.escape(case["error"])):
         fitter(case["formula"], frame("data"))
+
+
+@pytest.mark.parametrize("case", REFERENCE["curves"], ids=lambda case: case["formula"])
+def test_computed_cluster_curves_match_r(case):
+    with pytest.warns(DeprecationWarning, match=r"use of cluster\(\)"):
+        fit = r.survfit(case["formula"], frame("data"))
+    for name in ("time", "surv", "cumhaz", "std_err", "n_risk", "n_event", "n_censor"):
+        assert_close(getattr(fit, name), case[name])
+    assert fit.strata == case["strata"]
+
+
+def test_computed_cluster_requires_a_data_column():
+    with pytest.raises(ValueError, match="cluster.*requires a data column"):
+        r.coxph("Surv(time,status) ~ age + cluster(1 + 1)", frame("data"))
 
 
 @pytest.mark.parametrize("fitter", [r.coxph, r.survreg])
