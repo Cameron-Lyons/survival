@@ -1058,11 +1058,14 @@ error; none silently falls back to other behaviour.
   `survreg_fit`, `survival.surv_analysis.survfitkm`,
   `survival.population.match_ratetable`, ...); the R bridge provides R-named
   wrappers for several of them.
-- **Other graphics**: diagnostic and other plotting methods remain unfinished.
+- **Other graphics**: Aalen additive-model and other plotting methods remain unfinished.
   Survival-curve `plot`, `lines`, and `points` are available as
   `survival.plotting.plot_survfit`, `lines_survfit`, and `points_survfit`, with
   an optional Matplotlib renderer. See [plotting](survival-plotting.md) for the
   supported curves, arguments, R coordinate checks, and deliberate graphics fixes.
+  Cox proportional-hazards diagnostic plots are available as
+  `survival.plotting.plot_cox_zph`, with a Rust natural-spline smoother and
+  32 R graphics reference cases; see [Cox diagnostic plotting](cox-diagnostic-plotting.md).
 
 Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and

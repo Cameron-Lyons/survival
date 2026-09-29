@@ -1429,6 +1429,20 @@ mod surv2counting_bench {
     }
 }
 
+mod cox_diagnostic_bench {
+    use super::*;
+    use survival::regression::cox_zph_smooth;
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn smooth_twenty_terms(bencher: divan::Bencher, n: usize) {
+        let x: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+        let y = Array2::from_shape_fn((n, 20), |(i, j)| (x[i] * (j + 1) as f64).sin());
+        bencher.bench_local(|| {
+            black_box(cox_zph_smooth(&x, y.view(), &[1.0; 20], 4, 40, true).unwrap())
+        });
+    }
+}
+
 fn main() {
     divan::main();
 }

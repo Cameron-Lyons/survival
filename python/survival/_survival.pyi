@@ -2519,6 +2519,16 @@ class CoxZph:
     @property
     def y(self) -> list[list[float]]: ...
 
+class CoxZphSmooth:
+    @property
+    def skipped(self) -> list[int]: ...
+    @property
+    def std_err(self) -> list[list[float]] | None: ...
+    @property
+    def x(self) -> list[float]: ...
+    @property
+    def y(self) -> list[list[float]]: ...
+
 class CoxZphTest:
     @property
     def chisq(self) -> float: ...
@@ -11695,6 +11705,14 @@ def cox_zph(
     global_test: bool = True,
     assign: Sequence[Sequence[int]] | None = None,
 ) -> CoxZph: ...
+def cox_zph_smooth(
+    x: ArrayLike,
+    y: ArrayLike,
+    variance: ArrayLike,
+    df: int = 4,
+    nsmo: int = 40,
+    se: bool = True,
+) -> CoxZphSmooth: ...
 def coxcount1(survival: SurvivalData, strata: Sequence[int] | None = None) -> CoxCountOutput: ...
 def coxcount2(
     counting: CountingProcessData,

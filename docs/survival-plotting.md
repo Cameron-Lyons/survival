@@ -86,8 +86,9 @@ without updating the plotting call for `fun="log"` and `"logpct"`; the port
 uses the requested log probability axis and avoids applying a second logarithm
 to log state probabilities. R's multistate point method can index a time vector
 with a flattened event matrix; the port marks event times across states.
-Out-of-range NA censor marks left by R after `xmax` are omitted. Other graphical
-methods, including diagnostic plots, remain unfinished.
+Out-of-range NA censor marks left by R after `xmax` are omitted.
+[Cox diagnostic plots](cox-diagnostic-plotting.md) are also supported; other
+graphical methods remain unfinished.
 
 ## Validation and performance
 

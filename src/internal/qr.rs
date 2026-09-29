@@ -130,6 +130,24 @@ pub(crate) struct LinpackLeastSquares {
 }
 
 impl LinpackLeastSquares {
+    pub(crate) fn rank(&self) -> usize {
+        self.qr.rank
+    }
+
+    /// Diagonal of `P (X'X)^-1 P'`, using triangular solves rather than
+    /// forming normal equations. Only defined for a full-rank design.
+    pub(crate) fn prediction_variance(&self, row: &[f64]) -> Option<f64> {
+        if self.qr.rank != self.pivot.len() || row.len() != self.pivot.len() {
+            return None;
+        }
+        let mut solved = vec![0.0; row.len()];
+        for j in 0..row.len() {
+            let previous = dot_product(&self.upper[j][..j], &solved[..j]);
+            solved[j] = (row[self.pivot[j]] - previous) / self.upper[j][j];
+        }
+        Some(sum_of_squares(&solved))
+    }
+
     pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
         let (qr, factor, pivot) = LinpackQr::decompose(x, n);
         let upper = factor

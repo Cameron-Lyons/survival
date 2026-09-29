@@ -120,6 +120,7 @@ def test_heavy_kernels_release_the_gil():
         "CoxPHFit.survfit": lambda: fit.survfit(x[:5]),
         "CoxPHFit.predict_survival_at": lambda: fit.predict_survival_at(np.linspace(0.0, 3.0, 128)),
         "cox_zph": lambda: regression.cox_zph(fit),
+        "cox_zph_smooth": lambda: regression.cox_zph_smooth(time_, x, [1.0, 1.0]),
         "survreg_fit": lambda: regression.survreg_fit(survreg_data, weibull),
         "SurvregFit.predict": lambda: survreg.predict(design, "quantile", se_fit=True),
         "SurvregFit.residuals": lambda: survreg.residuals("dfbeta"),
