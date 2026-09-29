@@ -1154,26 +1154,33 @@ conventions. Its lightweight native result shares the full solver without
 retaining training rows or callbacks. See [bare AFT fitting](aft-low-level-fitting.md)
 for prepared response codes, custom densities and R reference tests.
 
+`survpenal_fit` exposes the corresponding compact penalized AFT interface,
+including ridge, spline, dense/sparse frailty and callback penalties.
+`print_survreg_penal` accepts this result and prints the sparse frailty
+branch. See [bare penalized AFT fitting](penalized-aft-low-level-fitting.md)
+for zero-based column assignments, result shapes and R reference checks.
+
+`survival.r` returns data objects and `as_data_frame` tables for most model
+and summary reports.
+Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
+reports, expected-survival reports, case-cohort, conditional-logistic,
+proportional-hazards, concordance, survival-difference reports and
+`print_survreg_penal` are available. `format_surv` formats a `Surv`, and
+`str(summary_ratetable(...))` exposes the native rate-table text. Raw response
+and rate-array reports are available through `print_surv`, `print_surv2` and
+`print_ratetable`. Dense and sparse frailty reports are available through
+`print_survreg_penal`.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit
 error; none silently falls back to other behaviour.
 
-- **Remaining R-style print and format methods**: `survival.r` returns data
-  objects and `as_data_frame` tables for most model and summary reports.
-  Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
-  reports, expected-survival reports, case-cohort, conditional-logistic,
-  proportional-hazards, concordance, survival-difference reports and
-  `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
-  `str(summary_ratetable(...))` exposes the native rate-table text. Raw response
-  and rate-array reports are available through `print_surv`, `print_surv2` and
-  `print_ratetable`. The sparse (frailty) branch of `print.survreg.penal` is
-  not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
 - **Low-level R exports** that `survival.r` does not re-export:
-  `survpenal.fit`, `survfitKM`,
+  `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,
   `yates_setup`. Their computations are reachable through the formula functions
   and domain modules such as `survival.regression.coxph_fit`,

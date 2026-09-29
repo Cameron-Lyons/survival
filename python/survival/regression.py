@@ -56,6 +56,8 @@ __all__ = bind_names(
         "survreg_fit_raw",
         "SurvpenalFit",
         "survpenal_fit",
+        "SurvpenalFitResult",
+        "survpenal_fit_raw",
         "survreg_dtest",
         "dsurvreg",
         "psurvreg",

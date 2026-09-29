@@ -140,7 +140,10 @@ pub use spline_hazard::{
 };
 #[cfg(feature = "python")]
 pub use survpenal::survpenal_fit_from_state;
-pub use survpenal::{SurvpenalData, SurvpenalFit, SurvpenalOptions, survpenal_fit};
+pub use survpenal::{
+    SurvpenalData, SurvpenalFit, SurvpenalFitResult, SurvpenalOptions, survpenal_fit,
+    survpenal_fit_raw,
+};
 pub use survreg_distributions::{
     SurvregDensity, SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg,
     qsurvreg, rsurvreg, survreg_dtest,

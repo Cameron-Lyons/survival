@@ -19,6 +19,8 @@
 #[cfg(test)]
 mod density_tests;
 mod kernel;
+mod lowlevel;
+pub use lowlevel::{SurvpenalFitResult, survpenal_fit_raw};
 #[cfg(test)]
 mod tests;
 
@@ -29,8 +31,8 @@ use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::validation::validate_finite;
 use crate::regression::coxpenal::CoxPenalty;
 use crate::regression::parametric_survival::{
-    SurvregControl, SurvregData, SurvregFit, fitting_response, intercept_only_fit, mark_singular,
-    robust_variance,
+    FittingResponse, SurvregControl, SurvregData, SurvregFit, fitting_response, intercept_only_fit,
+    mark_singular, robust_variance,
 };
 use crate::regression::penalized::df::{DfInput, TermDf, coxpenal_df};
 use crate::regression::penalized::terms::{
@@ -172,22 +174,107 @@ fn term_df(
     })
 }
 
+struct SurvpenalEngineResult {
+    fit: SurvpenalFitResult,
+    response: FittingResponse,
+    covariates: Array2<f64>,
+    strata: Vec<usize>,
+    offset: Vec<f64>,
+    frail_index: Option<Vec<usize>>,
+}
+
 impl SurvpenalFit {
-    /// `survpenal.fit` followed by the `survreg()` post-processing.
+    /// Full model construction after the shared penalized fitting engine.
     pub fn fit(
         data: &SurvpenalData,
         distribution: &SurvregDistribution,
         options: &SurvpenalOptions,
     ) -> SurvivalResult<Self> {
+        let result = Self::fit_engine(&data.survreg, &data.terms, distribution, options, None)?;
+        let raw = result.fit;
+        let nfrail = raw.frail.as_ref().map_or(0, Vec::len);
+        let df_total: f64 = raw.df.iter().sum();
+        let means = result
+            .covariates
+            .columns()
+            .into_iter()
+            .map(|column| column.sum() / raw.n as f64)
+            .collect();
+        let mut survreg = SurvregFit {
+            coefficients: raw.coefficients,
+            icoef: raw.icoef,
+            variance_matrix: matrix_rows(&raw.var),
+            naive_variance_matrix: None,
+            log_likelihood: raw.loglik[1],
+            intercept_only_log_likelihood: raw.loglik[0],
+            iterations: raw.iter[1],
+            converged: raw.converged,
+            linear_predictors: raw.linear_predictors,
+            scale: raw.scale,
+            df: df_total,
+            df_residual: raw.n as f64 - df_total,
+            means,
+            n: raw.n,
+            distribution: distribution.clone(),
+            time: result.response.time,
+            time2: result.response.time2,
+            status: result.response.status,
+            covariates: result.covariates,
+            strata: result.strata,
+            weights: data.survreg.weights.clone(),
+            offset: result.offset,
+            cluster: data.survreg.cluster.clone(),
+            score: raw.score[nfrail..].to_vec(),
+        };
+        if options.robust || data.survreg.cluster.is_some() {
+            if raw.frail.is_some() {
+                return Err(SurvivalError::invalid_input(
+                    "robust variance is not available with a sparse frailty term",
+                ));
+            }
+            let sandwich = robust_variance(&survreg, data.survreg.cluster.as_deref())?;
+            survreg.naive_variance_matrix =
+                Some(std::mem::replace(&mut survreg.variance_matrix, sandwich));
+        }
+        mark_singular(&mut survreg);
+        Ok(Self {
+            survreg,
+            var2: raw.var2,
+            iter: raw.iter,
+            inner_failures: raw.inner_failures,
+            df: raw.df,
+            penalty: raw.penalty,
+            pterms: raw.pterms,
+            assign2: raw.assign2,
+            history: raw.history,
+            frail: raw.frail,
+            fvar: raw.fvar,
+            frail_index: result.frail_index,
+            n_eff: raw.n_eff,
+            score: raw.score,
+        })
+    }
+
+    fn fit_engine(
+        survreg_data: &SurvregData,
+        model_terms: &[ModelTerm],
+        distribution: &SurvregDistribution,
+        options: &SurvpenalOptions,
+        nstrata: Option<usize>,
+    ) -> SurvivalResult<SurvpenalEngineResult> {
+        validate_terms(survreg_data.nvar(), model_terms)?;
         let control = &options.control;
         distribution.validate()?;
         control.validate()?;
         if control.outer_max == 0 {
             return Err(SurvivalError::invalid_input("invalid value for outer.max"));
         }
-        let survreg_data = &data.survreg;
         let n = survreg_data.n();
-        let nstrata = survreg_data.nstrata();
+        let observed_strata = survreg_data.nstrata();
+        let nstrata = nstrata.unwrap_or(observed_strata);
+        if nstrata == 0 || observed_strata > nstrata {
+            return Err(SurvivalError::invalid_input("Invalid strata variable"));
+        }
         let eps = control.rel_tolerance;
         let tol_chol = control.toler_chol;
         let scale = distribution.scale.unwrap_or(options.scale);
@@ -206,10 +293,10 @@ impl SurvpenalFit {
         // The number of scales to estimate.
         let nstrat2 = if scale > 0.0 { 0 } else { nstrata };
 
-        let (pterms, sparse_term, shape) = penalty_shape(&data.terms);
+        let (pterms, sparse_term, shape) = penalty_shape(model_terms);
         // Remove the sparse term's column from the design.
         let (xx, mut assign2, frailx, nfrail) =
-            drop_sparse_column(survreg_data.design().view(), &data.terms);
+            drop_sparse_column(survreg_data.design().view(), model_terms);
         let nvar = xx.ncols();
         let nvar2 = nvar + nstrat2;
         let nvar3 = nvar2 + nfrail;
@@ -220,7 +307,7 @@ impl SurvpenalFit {
         }
         let eps2 = eps.sqrt();
         let terms = build_term_states(
-            &data.terms,
+            model_terms,
             &assign2,
             &xx,
             frailx.as_deref(),
@@ -411,66 +498,38 @@ impl SurvpenalFit {
         } else {
             coefficients[nvar..].iter().map(|v| v.exp()).collect()
         };
-        let means: Vec<f64> = xx
-            .columns()
-            .into_iter()
-            .map(|column| column.sum() / n as f64)
-            .collect();
-        let df_total: f64 = dftemp.df.iter().sum();
-
-        let mut survreg = SurvregFit {
-            coefficients,
-            icoef: fit0.beta,
-            variance_matrix: matrix_rows(&dftemp.var),
-            naive_variance_matrix: None,
-            log_likelihood: fit.loglik - fit.penalty + response.logcorrect,
-            intercept_only_log_likelihood: fit0.loglik + response.logcorrect,
-            iterations: iter2,
-            converged: fit.converged,
-            linear_predictors,
-            scale: scales,
-            df: df_total,
-            df_residual: n as f64 - df_total,
-            means,
-            n,
-            distribution: distribution.clone(),
-            time: response.time,
-            time2: response.time2,
-            status: response.status,
+        Ok(SurvpenalEngineResult {
+            fit: SurvpenalFitResult {
+                coefficients,
+                icoef: fit0.beta,
+                var: dftemp.var,
+                var2: dftemp.var2,
+                loglik: [
+                    fit0.loglik + response.logcorrect,
+                    fit.loglik - fit.penalty + response.logcorrect,
+                ],
+                iter: [iter, iter2],
+                inner_failures,
+                converged: fit.converged,
+                linear_predictors,
+                df: dftemp.df,
+                penalty: [0.0, -fit.penalty],
+                pterms,
+                assign2,
+                history: histories(&composer.terms),
+                frail,
+                fvar: dftemp.fvar,
+                n_eff,
+                score: fit.u,
+                n,
+                nvar,
+                scale: scales,
+            },
+            response,
             covariates: xx,
             strata,
-            weights: survreg_data.weights.clone(),
             offset,
-            cluster: survreg_data.cluster.clone(),
-            score: fit.u[nfrail..].to_vec(),
-        };
-        if options.robust || survreg_data.cluster.is_some() {
-            if frail.is_some() {
-                return Err(SurvivalError::invalid_input(
-                    "robust variance is not available with a sparse frailty term",
-                ));
-            }
-            let sandwich = robust_variance(&survreg, survreg_data.cluster.as_deref())?;
-            survreg.naive_variance_matrix =
-                Some(std::mem::replace(&mut survreg.variance_matrix, sandwich));
-        }
-        mark_singular(&mut survreg);
-
-        Ok(Self {
-            survreg,
-            var2: dftemp.var2,
-            iter: [iter, iter2],
-            inner_failures,
-            df: dftemp.df,
-            penalty: [0.0, -fit.penalty],
-            pterms,
-            assign2,
-            history: histories(&composer.terms),
-            frail,
-            fvar: dftemp.fvar,
             frail_index: frailx,
-            n_eff,
-            score: fit.u,
         })
     }
 
