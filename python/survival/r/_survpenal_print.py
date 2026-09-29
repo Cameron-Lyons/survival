@@ -20,6 +20,7 @@ from ._coerce import (
 )
 from ._coxph import _block, _pspline_print, _wald_row, coxph_wtest
 from ._formula import _design_term_name
+from ._print import numeric_vector_lines, print_options
 from ._survreg import SurvregModelResult, survreg_df
 from ._types import NaAction, _PenaltyDesignTerm
 
@@ -173,7 +174,10 @@ def _format_column(values: Sequence[float], digits: int) -> list[str]:
 
 
 def _character_matrix_lines(
-    rownames: Sequence[str], header: Sequence[str], columns: Sequence[Sequence[str]]
+    rownames: Sequence[str],
+    header: Sequence[str],
+    columns: Sequence[Sequence[str]],
+    width: int = _WIDTH,
 ) -> list[str]:
     """``print(<character matrix>, quote = FALSE)``: left-justified row names and
     columns, one space apart.  The columns go into blocks that fit ``options(width)``;
@@ -188,7 +192,7 @@ def _character_matrix_lines(
     start = 0
     while start < len(columns):
         end, used = start + 1, name_width + 1 + widths[start]
-        while end < len(columns) and used + 1 + widths[end] < _WIDTH:
+        while end < len(columns) and used + 1 + widths[end] < width:
             used += 1 + widths[end]
             end += 1
         block = range(start, end)
@@ -198,20 +202,6 @@ def _character_matrix_lines(
             for row, name in enumerate(rownames)
         )
         start = end
-    return lines
-
-
-def _named_vector_lines(names: Sequence[str], values: Sequence[float], digits: int) -> list[str]:
-    """``print(<named numeric>)``: right-justified names over their values, as many
-    per line as ``options(width)`` holds."""
-
-    cells = _r_format_numbers(values, digits)
-    width = max(*map(len, names), *map(len, cells))
-    per_line = max(1, _WIDTH // (width + 1))
-    lines: list[str] = []
-    for start in range(0, len(cells), per_line):
-        lines.append(" ".join(name.rjust(width) for name in names[start : start + per_line]))
-        lines.append(" ".join(cell.rjust(width) for cell in cells[start : start + per_line]))
     return lines
 
 
@@ -235,7 +225,12 @@ def _naprint(na_action: NaAction) -> str:
 
 
 def print_survreg_penal(
-    fit: SurvregModelResult, terms: Any = False, maxlabel: Any = 25, digits: Any | None = None
+    fit: SurvregModelResult,
+    terms: Any = False,
+    maxlabel: Any = 25,
+    digits: Any | None = None,
+    *,
+    width: Any = 80,
 ) -> SurvregPenalPrint:
     """R's ``print.survreg.penal``: a row per coefficient (coef, se from ``var``, se2 from
     ``var2``, a Wald chi-square on 1 df), pspline()'s linear and nonlinear parts, and with
@@ -248,7 +243,9 @@ def print_survreg_penal(
         raise TypeError("Invalid object")
     term_rows = _normalize_bool_option(terms, "terms")
     label_width = _integer_scalar(maxlabel, "maxlabel")
-    digits = 3 if digits is None else _integer_scalar(digits, "digits")
+    _, digits, width = print_options(1, digits, width, 3)
+    if label_width < 1:
+        raise ValueError("maxlabel must be positive")
     if not fit.coefficients:
         raise ValueError("Penalized fits must have an intercept!")
 
@@ -263,7 +260,7 @@ def print_survreg_penal(
         _format_column([round(value, 2) for value in df_column], digits),
         _format_column([_signif(value, 2) for value in p], digits),
     ]
-    lines = _character_matrix_lines(rownames, _COLUMNS, cells)
+    lines = _character_matrix_lines(rownames, _COLUMNS, cells, width)
 
     scale = list(fit.scale)
     scale_names = list(fit.strata_levels) if len(scale) > 1 else []
@@ -273,7 +270,7 @@ def print_survreg_penal(
     elif len(scale) == 1:
         lines += ["", "Scale= " + _r_format_number(scale[0], digits)]
     else:
-        lines += ["", "Scale:", *_named_vector_lines(scale_names, scale, digits)]
+        lines += ["", "Scale:", *numeric_vector_lines(scale_names, scale, digits, width)]
 
     outer, inner = penalized.iter
     lines += ["", f"Iterations: {outer} outer, {inner} Newton-Raphson"]

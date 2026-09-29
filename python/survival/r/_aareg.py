@@ -7,6 +7,8 @@ import math
 from numbers import Real
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
@@ -134,6 +136,7 @@ def aareg(
         x=frame.x if _normalize_bool_option(x, "x") else None,
         y=response if _normalize_bool_option(y, "y") else None,
         term_labels=tuple(frame.assign),
+        na_action=frame.na_action,
     )
 
 
@@ -146,6 +149,42 @@ def _cumsum(values: list[float]) -> list[float]:
     return out
 
 
+def _summary_influence_covariance(
+    fit: AaregModelResult, times: list[float], weights: list[list[float]]
+) -> list[list[float]]:
+    """Reweight stored group influences with a bounded conversion buffer.
+
+    Influences already aggregate observations within clusters. Use the weights
+    at the first event at each distinct time, as in R's summary.aareg.
+    """
+    indices = [i for i, time in enumerate(times) if i == 0 or time != times[i - 1]]
+    twt = np.asarray([weights[i] for i in indices], dtype=float).T
+    width, count = twt.shape
+    covariance = np.zeros((width, width))
+    influences = fit.dfbeta
+    if influences is None:
+        raise ValueError("robust summaries require stored influences")
+    # At most about 1 MiB of floating-point input, except for a single group
+    # whose coefficient-by-time matrix itself exceeds the budget.
+    block_size = max(1, 131072 // max(1, width * count))
+    for start in range(0, len(influences), block_size):
+        if isinstance(influences, np.ndarray):
+            block = np.asarray(influences[start : start + block_size, :, :count], dtype=float)
+        else:
+            block = np.asarray(
+                [
+                    [column if len(column) == count else column[:count] for column in group]
+                    for group in influences[start : start + block_size]
+                ],
+                dtype=float,
+            )
+        weighted = np.einsum("gpt,pt->gp", block, twt)
+        covariance += weighted.T @ weighted
+        # Release this block before converting the next one.
+        del block, weighted
+    return covariance.tolist()
+
+
 def summary_aareg(
     fit: AaregModelResult,
     maxtime: Any | None = None,
@@ -155,17 +194,19 @@ def summary_aareg(
     """R's ``summary.aareg``: the slope of each coefficient curve, the test statistic
     per covariate and the overall chi-square (which excludes the intercept)."""
 
-    test_name = (
-        fit.test
-        if test is None
-        else _match_string_arg(test, "test", ("aalen", "nrisk"), "test must be aalen or nrisk")
+    test_name = _match_string_arg(
+        fit.test if test is None else test,
+        "test",
+        ("aalen", "nrisk"),
+        "test must be aalen or nrisk",
     )
     scale_value = _finite_float(scale, "scale")
-    ntime = (
-        len(fit.times)
-        if maxtime is None
-        else sum(1 for t in fit.times if t <= _finite_float(maxtime, "maxtime"))
-    )
+    if scale_value == 0:
+        raise ValueError("scale must be nonzero")
+    cutoff = None if maxtime is None else _finite_float(maxtime, "maxtime")
+    ntime = len(fit.times) if cutoff is None else sum(1 for t in fit.times if t <= cutoff)
+    if ntime == 0:
+        raise ValueError("maxtime must include at least one event")
     times = fit.times[:ntime]
     nvar = len(fit.coefficient_names)
     if test_name == "aalen":
@@ -183,7 +224,7 @@ def summary_aareg(
     if maxtime is not None or fit.test != test_name:
         test_stat = [sum(row[k] for row in tx) for k in range(nvar)]
         test_var = [[sum(row[j] * row[k] for row in tx) for k in range(nvar)] for j in range(nvar)]
-        test_var2 = None
+        test_var2 = None if fit.dfbeta is None else _summary_influence_covariance(fit, times, twt)
     else:
         test_stat = list(fit.test_statistic)
         test_var = fit.test_variance

@@ -569,6 +569,12 @@ this does not show.
   `summary.survfit`. `brier(fit, newdata)` on the fit's own data equals
   `brier(fit)` (lung reversed, `~ age + strata(sex)`: 0.2078394407,
   0.2325654809).
+- Clustered `aareg` covariance uses event-sorted cluster identifiers. R 3.8-12
+  groups sorted test influences with the original cluster order, so its result
+  changes when input rows are reordered. Native results match R on event-sorted
+  input; the AFT/Aalen report fixtures retain both raw and aligned R outputs.
+  Truncated or reweighted summaries also retain robust covariance, computed
+  from stored group influences with bounded temporary conversion memory.
 - `aareg` on a design with an unused factor level raises "the nmin threshold is
   too high; no Aalen model can be fit"; R 3.8-12 does not return (still running
   after 90 s on lung).
@@ -1047,6 +1053,16 @@ intervals. Reports reuse the existing native fit and summary calculations.
 See [Cox model reports](cox-model-reports.md) for defaults, numerical fields,
 reference checks and intentional differences.
 
+## AFT and Aalen model reports
+
+`print_survreg`, `print_summary_survreg`, `print_aareg` and
+`print_summary_aareg` provide formatted text and full-precision model tables.
+AFT summaries retain fixed/stratified scale metadata and optional correlations;
+Aalen fits retain omission records and their robust summaries preserve stored
+influence information across cutoffs and test-weight changes. Penalized AFT
+reports also support explicit width and data-frame conversion. See
+[AFT and Aalen reports](aft-aalen-reports.md) for R comparisons and memory measurements.
+
 ## Compact curve reports
 
 `print_survfit` and `print_survfitms` return R's compact curve tables and formatted
@@ -1091,9 +1107,8 @@ error; none silently falls back to other behaviour.
 
 - **Remaining R-style print and format methods**: `survival.r` returns data
   objects and `as_data_frame` tables for most model and summary reports.
-  Cox model and summary reports, compact and detailed survival-curve reports,
-  expected-survival reports, and
-  `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
+  Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
+  reports, expected-survival reports, and `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
   `str(summary_ratetable(...))` exposes the native rate-table text. Other model
   and test-statistic reports and the sparse (frailty) branch of
   `print.survreg.penal` are not ported.

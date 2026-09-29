@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from .. import _survival as _core
@@ -20,25 +19,7 @@ from ._print import (
     print_options,
 )
 from ._survpenal_print import _naprint, _signif
-from ._types import NamedMatrix
-
-
-@dataclass(frozen=True)
-class ModelPrint:
-    """Full-precision model tables, statistics and independently formatted text.
-
-    ``tables`` contains ``coefficients`` and, for summaries, optional ``conf_int``.
-    ``statistics`` holds the numerical footer fields. Neither constructing a report
-    nor converting it to a string writes to stdout. Original R calls are omitted.
-    """
-
-    tables: dict[str, NamedMatrix]
-    statistics: dict[str, Any]
-    digits: int
-    lines: list[str]
-
-    def __str__(self) -> str:
-        return "\n".join(self.lines) + "\n"
+from ._types import ModelPrint, NamedMatrix
 
 
 def _table(summary: Mapping[str, Any], *, direct: bool = False) -> NamedMatrix:
