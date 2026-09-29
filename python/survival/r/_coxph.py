@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import chain
 from statistics import NormalDist
-from typing import Any
+from typing import Any, Protocol
 
 from .. import _survival as _core
 from ._coerce import (
@@ -1234,8 +1234,8 @@ def _wald_row(name: str, coef: float, var: float, var2: float) -> dict[str, Any]
     return _penal_row(
         name,
         coef,
-        math.sqrt(var),
-        math.sqrt(var2),
+        math.sqrt(var) if var >= 0 else math.nan,
+        math.sqrt(var2) if var2 >= 0 else math.nan,
         chisq,
         1.0,
         _core.pchisq(chisq, 1.0, lower_tail=False),
@@ -1250,9 +1250,20 @@ def _quadratic_form(x: Sequence[float], matrix: list[list[float]]) -> float:
     return sum(a * row[j] * x[j] for a, row in zip(x, matrix, strict=True) for j in range(len(x)))
 
 
+class _SplinePrintInfo(Protocol):
+    @property
+    def nterm(self) -> int: ...
+    @property
+    def degree(self) -> int: ...
+    @property
+    def boundary(self) -> tuple[float, float] | None: ...
+    @property
+    def intercept(self) -> bool: ...
+
+
 def _pspline_print(
     label: str,
-    term: _PenaltyDesignTerm,
+    term: _SplinePrintInfo,
     coef: list[float],
     var: list[list[float]],
     var2: list[list[float]],
@@ -1268,6 +1279,8 @@ def _pspline_print(
     check."""
 
     nvar = len(coef) + (0 if term.intercept else 1)
+    if term.boundary is None:
+        raise ValueError("spline reporting requires basis boundaries")
     cbase = _pspline_cbase(term.nterm, term.degree, term.boundary, nvar)
     test1 = coxph_wtest(var, coef).test[0]
     # xmat = cbind(1, cbase) and xsig = V X, for V a g-inverse of var
@@ -1306,15 +1319,23 @@ def _pspline_print(
     return rows, f"Theta= {_r_format_number(history.theta, digits)}"
 
 
+def _frailty_wald(coef: Sequence[float], variance: Sequence[float]) -> float:
+    """Diagonal frailty test with R's NaN/Inf behavior at zero variance."""
+    return sum(
+        b * b / v if v else (math.nan if b == 0 else math.inf)
+        for b, v in zip(coef, variance, strict=True)
+    )
+
+
 def _frailty_print(
-    label: str, term: _PenaltyDesignTerm, test: float, df: float, history: Any, digits: int = 7
+    label: str, distribution: str | None, test: float, df: float, history: Any, digits: int = 7
 ) -> tuple[dict[str, Any], str]:
     """The frailty distributions' ``printfun``: the Wald test of the random effects on
     the term's df, and the variance of the random effect."""
 
     theta = history.history[-1][0] if history.history else history.theta
     text = f"Variance of random effect= {_r_format_number(theta, digits)}"
-    if term.penalty.distribution == "gamma":
+    if distribution == "gamma":
         text += f"   I-likelihood = {_r_format_number(round(history.c_loglik, 1), 10)}"
     # max(df, .5) stops silly p-values
     p = _core.pchisq(test, max(df, 0.5), lower_tail=False)
@@ -1355,7 +1376,7 @@ def summary_coxph_penal(
         columns, df = penalized.assign2[i], penalized.df[i]
         penalty = term.kind if isinstance(term, _PenaltyDesignTerm) and term.penalized else None
         coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
-        if penalty == "pspline":
+        if penalty == "pspline" and isinstance(term, _PenaltyDesignTerm):
             spline_rows, text = _pspline_print(
                 label,
                 term,
@@ -1368,12 +1389,14 @@ def summary_coxph_penal(
             )
             rows.extend(spline_rows)
             print2.append(text)
-        elif penalty == "frailty":
+        elif penalty == "frailty" and isinstance(term, _PenaltyDesignTerm):
             if penalized.pterms[i] == 2:
-                test = sum(b * b / v for b, v in zip(penalized.frail, penalized.fvar, strict=True))
+                test = _frailty_wald(penalized.frail, penalized.fvar)
             else:
                 test = coxph_wtest(_block(var, columns), coef).test[0]
-            row, text = _frailty_print(label, term, test, df, histories[i], _print_digits)
+            row, text = _frailty_print(
+                label, term.penalty.distribution, test, df, histories[i], _print_digits
+            )
             rows.append(row)
             print2.append(text)
         elif term_tests and len(columns) > 1:

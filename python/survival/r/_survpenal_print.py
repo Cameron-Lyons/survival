@@ -18,9 +18,10 @@ from ._coerce import (
     _r_format_number,
     _r_format_numbers,
 )
-from ._coxph import _block, _pspline_print, _wald_row, coxph_wtest
+from ._coxph import _block, _frailty_print, _frailty_wald, _pspline_print, _wald_row, coxph_wtest
 from ._formula import _design_term_name
 from ._print import numeric_vector_lines, print_options
+from ._survpenal_lowlevel import SurvpenalFitResult, _PenaltyPrintInfo
 from ._survreg import SurvregModelResult, survreg_df
 from ._types import NaAction, _PenaltyDesignTerm
 
@@ -65,29 +66,38 @@ class SurvregPenalPrint:
 
 
 def _term_table(
-    fit: SurvregModelResult, penalized: Any, terms: bool, digits: int
+    fit: SurvregModelResult | SurvpenalFitResult, penalized: Any, terms: bool, digits: int
 ) -> tuple[list[str], list[list[float]], list[str]]:
     """print.survreg.penal's loop over ``pterms`` (lines 40-76) of the fit's
     ``SurvpenalFit``: the row names, the rows and the printfun history lines."""
 
     coef = fit.coefficients
     var, var2 = fit.var, penalized.var2
-    splines = {
-        _design_term_name(term): term
-        for term in (fit.design.covariates if fit.design is not None else ())
-        if isinstance(term, _PenaltyDesignTerm) and term.penalized and term.kind == "pspline"
-    }
+    penalties: dict[str, _PenaltyDesignTerm | _PenaltyPrintInfo] = {}
+    if isinstance(fit, SurvpenalFitResult):
+        penalties = {
+            label: spec
+            for label, spec in zip(fit.assign2_labels, fit._print_info, strict=False)
+            if spec is not None
+        }
+    else:
+        penalties = {
+            _design_term_name(term): term
+            for term in (fit.design.covariates if fit.design is not None else ())
+            if isinstance(term, _PenaltyDesignTerm) and term.penalized
+        }
     histories = {entry.term: entry for entry in penalized.history}
     names: list[str] = []
     rows: list[list[float]] = []
     history: list[str] = []
     for i, pterm in enumerate(penalized.pterms):
         label, columns, df = fit.assign2_labels[i], penalized.assign2[i], penalized.df[i]
-        term_coef = [coef[j] for j in columns]
-        if pterm and label in splines:
+        term_coef = [] if pterm == 2 else [coef[j] for j in columns]
+        spec = penalties.get(label)
+        if spec is not None and spec.kind == "pspline" and spec.boundary is not None:
             spline_rows, text = _pspline_print(
                 label,
-                splines[label],
+                spec,
                 term_coef,
                 _block(var, columns),
                 _block(var2, columns),
@@ -98,6 +108,36 @@ def _term_table(
             names.extend(row["name"] for row in spline_rows)
             rows.extend([row[key] for key in _ROW_KEYS] for row in spline_rows)
             history.append(text)
+        elif spec is not None and spec.kind == "frailty":
+            test = (
+                _frailty_wald(penalized.frail, penalized.fvar)
+                if pterm == 2
+                else coxph_wtest(_block(var, columns), term_coef).test[0]
+            )
+            distribution = (
+                spec.distribution
+                if isinstance(spec, _PenaltyPrintInfo)
+                else spec.penalty.distribution
+            )
+            row, text = _frailty_print(label, distribution, test, df, histories[i], digits)
+            names.append(row["name"])
+            rows.append([row[key] for key in _ROW_KEYS])
+            history.append(text)
+        elif pterm == 2:
+            # Callback penalties have no retained printfun. Keep the sparse
+            # term separate instead of indexing the unrelated dense column.
+            test = _frailty_wald(penalized.frail, penalized.fvar)
+            names.append(label)
+            rows.append(
+                [
+                    math.nan,
+                    math.nan,
+                    math.nan,
+                    test,
+                    df,
+                    _core.pchisq(test, max(df, 0.5), lower_tail=False),
+                ]
+            )
         elif terms and len(columns) > 1:
             # the p-value is on 1 df whatever the DF column says, as in R
             test = coxph_wtest(_block(var, columns), term_coef).test[0]
@@ -225,7 +265,7 @@ def _naprint(na_action: NaAction) -> str:
 
 
 def print_survreg_penal(
-    fit: SurvregModelResult,
+    fit: SurvregModelResult | SurvpenalFitResult,
     terms: Any = False,
     maxlabel: Any = 25,
     digits: Any | None = None,
@@ -238,7 +278,13 @@ def print_survreg_penal(
     ``maxlabel`` characters; ``digits`` defaults to R's ``max(options()$digits - 4, 3)``.
     """
 
-    penalized = fit.penalized if isinstance(fit, SurvregModelResult) else None
+    penalized = (
+        fit._fit
+        if isinstance(fit, SurvpenalFitResult)
+        else fit.penalized
+        if isinstance(fit, SurvregModelResult)
+        else None
+    )
     if penalized is None:
         raise TypeError("Invalid object")
     term_rows = _normalize_bool_option(terms, "terms")
@@ -263,8 +309,16 @@ def print_survreg_penal(
     lines = _character_matrix_lines(rownames, _COLUMNS, cells, width)
 
     scale = list(fit.scale)
-    scale_names = list(fit.strata_levels) if len(scale) > 1 else []
-    fixed_scale = len(fit.var) == len(fit.coefficients)
+    if isinstance(fit, SurvpenalFitResult):
+        scale_names = [str(i + 1) for i in range(len(scale))] if len(scale) > 1 else []
+        fixed_scale = len(fit.var) == fit.nvar
+        logtest_df = sum(fit.df) - (1 + len(fit.coefficients) - fit.nvar)
+        na_action, formula = None, None
+    else:
+        scale_names = list(fit.strata_levels) if len(scale) > 1 else []
+        fixed_scale = len(fit.var) == len(fit.coefficients)
+        logtest_df = survreg_df(fit) - fit.idf
+        na_action, formula = fit.na_action, fit.formula
     if fixed_scale:
         lines += ["", "Scale fixed at " + " ".join(_r_format_numbers(scale, digits))]
     elif len(scale) == 1:
@@ -276,28 +330,34 @@ def print_survreg_penal(
     lines += ["", f"Iterations: {outer} outer, {inner} Newton-Raphson"]
     lines += ["     " + text for text in history]
     df = list(penalized.df)
-    lines.append(
-        "Degrees of freedom for terms= "
-        + " ".join(_r_format_numbers([round(value, 1) for value in df], digits))
-    )
+    df_text = _r_format_numbers([round(value, 1) for value in df], digits)
+    if any(math.isnan(value) for value in df):
+        # These are computed NaNs, rather than R's missing-value sentinel.
+        df_text = [
+            "NaN" if math.isnan(value) else text.strip()
+            for value, text in zip(df, df_text, strict=True)
+        ]
+        df_width = max(map(len, df_text))
+        df_text = [text.rjust(df_width) for text in df_text]
+    lines.append("Degrees of freedom for terms= " + " ".join(df_text))
     loglik = fit.loglik
     logtest = -2.0 * (loglik[0] - loglik[1])
-    logtest_df = survreg_df(fit) - fit.idf
     logtest_p = _core.pchisq(logtest, logtest_df, lower_tail=False)
     # format.pval at pdig = max(1, digits - 4) (print.survreg.penal.R:114)
+    df_label = "NaN" if math.isnan(logtest_df) else _r_format_number(round(logtest_df, 1) + 0.0)
     test = (
-        f"Likelihood ratio test={_r_format_number(round(logtest, 2), digits)}"
-        f"  on {_r_format_number(round(logtest_df, 1))} df,"
+        f"Likelihood ratio test={_r_format_number(round(logtest, 2) + 0.0, digits)}"
+        f"  on {df_label} df,"
         f" p={_format_pval(logtest_p, max(1, digits - 4))}"
     )
     n = fit.n
-    if fit.na_action is not None and len(fit.na_action):
-        lines += [test, f"  n={n} ({_naprint(fit.na_action)})"]
+    if na_action is not None and len(na_action):
+        lines += [test, f"  n={n} ({_naprint(na_action)})"]
     else:
         lines.append(f"{test}  n= {n}")
 
     return SurvregPenalPrint(
-        formula=fit.formula,
+        formula=formula,
         rownames=rownames,
         columns=_COLUMNS,
         rows=rows,
@@ -311,7 +371,7 @@ def print_survreg_penal(
         logtest_df=logtest_df,
         logtest_p=logtest_p,
         n=n,
-        na_action=fit.na_action,
+        na_action=na_action,
         digits=digits,
         lines=[line.rstrip() for line in lines],
     )

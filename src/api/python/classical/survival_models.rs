@@ -20,6 +20,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survreg_fit_py, m)?)?;
     m.add_function(wrap_pyfunction!(crate::regression::survreg_fit_raw, m)?)?;
     m.add_function(wrap_pyfunction!(survpenal_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::regression::survpenal_fit_raw, m)?)?;
     m.add_function(wrap_pyfunction!(survpenal_fit_from_state, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_dtest, m)?)?;
     m.add_function(wrap_pyfunction!(dsurvreg, m)?)?;
@@ -113,6 +114,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         SurvregFit,
         crate::regression::SurvregFitResult,
         SurvpenalFit,
+        crate::regression::SurvpenalFitResult,
         SurvregData,
         SurvregControl,
         SurvregDistribution,

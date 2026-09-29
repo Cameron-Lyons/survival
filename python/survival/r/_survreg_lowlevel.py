@@ -131,30 +131,17 @@ def _response(y: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     return time, status.astype(np.int32), time2
 
 
-def survreg_fit(
+def _prepared_data(
     x: Any,
     y: Any,
-    weights: Any = None,
-    offset: Any = None,
-    init: Any = None,
-    controlvals: Any = None,
-    dist: Any = "extreme",
-    scale: Any = 0,
-    nstrat: Any = 1,
-    strata: Any = None,
-    parms: Any = None,
-    assign: Any = None,
-    *,
-    column_names: Sequence[str] | None = None,
-) -> SurvregFitResult:
-    """R's bare AFT matrix fitter, including estimated log-scales in coefficients.
-
-    Supply the response on its fitting scale and a base density (``extreme``,
-    ``logistic``, ``gaussian`` or ``t``). Numeric response codes are 0 right,
-    1 exact, 2 left and 3 interval censored. No response transform, status
-    recoding, missing-row omission or robust variance is applied. ``assign``
-    is accepted and unused, as in R. Stratum codes are one-based.
-    """
+    weights: Any,
+    offset: Any,
+    scale: Any,
+    nstrat: Any,
+    strata: Any,
+    column_names: Sequence[str] | None,
+) -> tuple[np.ndarray, _core.SurvregData, float, int, tuple[str, ...]]:
+    """Validate the common prepared inputs without materializing Python rows."""
     time, status, time2 = _response(y)
     n = len(time)
     matrix = _numeric_design_matrix(x, n)
@@ -191,8 +178,6 @@ def survreg_fit(
     names = (
         tuple(names) if names is not None else tuple(f"x {i + 1}" for i in range(matrix.shape[1]))
     )
-    if scale_value == 0:
-        names += ("Log(scale)",) * count
     weight_values = None if weights is None else _float_vector(weights, "weights")
     if weight_values is not None and any(value <= 0 for value in weight_values):
         raise ValueError("Invalid weights, must be >0")
@@ -205,6 +190,38 @@ def survreg_fit(
         offset=None if offset is None else _float_vector(offset, "offset"),
         strata=codes,
     )
+    return matrix, data, scale_value, count, names
+
+
+def survreg_fit(
+    x: Any,
+    y: Any,
+    weights: Any = None,
+    offset: Any = None,
+    init: Any = None,
+    controlvals: Any = None,
+    dist: Any = "extreme",
+    scale: Any = 0,
+    nstrat: Any = 1,
+    strata: Any = None,
+    parms: Any = None,
+    assign: Any = None,
+    *,
+    column_names: Sequence[str] | None = None,
+) -> SurvregFitResult:
+    """R's bare AFT matrix fitter, including estimated log-scales in coefficients.
+
+    Supply the response on its fitting scale and a base density (``extreme``,
+    ``logistic``, ``gaussian`` or ``t``). Numeric response codes are 0 right,
+    1 exact, 2 left and 3 interval censored. No response transform, status
+    recoding, missing-row omission or robust variance is applied. ``assign``
+    is accepted and unused, as in R. Stratum codes are one-based.
+    """
+    matrix, data, scale_value, count, names = _prepared_data(
+        x, y, weights, offset, scale, nstrat, strata, column_names
+    )
+    if scale_value == 0:
+        names += ("Log(scale)",) * count
     control = _resolve_control(controlvals, {})
     result = _core.survreg_fit_raw(
         data,

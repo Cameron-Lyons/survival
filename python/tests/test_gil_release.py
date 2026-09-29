@@ -126,6 +126,12 @@ def test_heavy_kernels_release_the_gil():
         "survreg_fit_raw": lambda: regression.survreg_fit_raw(
             survreg_data, regression.SurvregDistribution("gaussian")
         ),
+        "survpenal_fit_raw": lambda: regression.survpenal_fit_raw(
+            survreg_data,
+            regression.SurvregDistribution("gaussian"),
+            [regression.CoxPenalty.ridge(theta=1)],
+            [[1, 2]],
+        ),
         "SurvregFit.predict": lambda: survreg.predict(design, "quantile", se_fit=True),
         "SurvregFit.residuals": lambda: survreg.residuals("dfbeta"),
         "concordancefit": lambda: core.concordancefit(right, predictor),
