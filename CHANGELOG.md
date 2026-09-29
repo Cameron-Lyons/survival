@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add raw-response plots, expected-survival overlays, and model-specific
+  `plot`, `lines`, and `points` dispatch in `survival.plotting`. Expected curves
+  preserve group names and R's straight-line overlay default without inferring
+  confidence bands or censor counts.
 - Add Aalen cumulative-coefficient plots and overlays, with tied-event handling,
   ordinary or influence-based confidence bands, and bounded temporary memory
   when reducing stored influences. Numerical plot data works without Matplotlib.

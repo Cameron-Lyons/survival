@@ -871,6 +871,11 @@ The [plotting guide](docs/survival-plotting.md) covers transformations, confiden
 bars, overlays, scaling, R compatibility and benchmarks. Numerical plot data
 remain available without Matplotlib through `plotting.survfit_plot_data`.
 
+The generic `plotting.plot` also fits and plots raw `r.Surv` responses.
+`plotting.lines(expected_fit, ax=plot.axes)` overlays `r.survexp` results with
+R's straight-line default. The same generic functions select the Cox diagnostic
+and Aalen methods below.
+
 For proportional-hazards diagnostics, use
 `plotting.plot_cox_zph(r.cox_zph(cox_fit))`. This draws natural-spline curves
 and two-standard-error bands over the scaled Schoenfeld residuals. Set

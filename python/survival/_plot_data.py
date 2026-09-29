@@ -13,13 +13,18 @@ from . import _survival as _core
 from .r._types import (
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
+    SurvExpResult,
     SurvfitMultiStateResult,
     SurvfitResult,
 )
 
 FloatArray = NDArray[np.float64]
 SurvivalFit = (
-    SurvfitResult | CoxSurvfitResult | SurvfitMultiStateResult | CoxSurvfitMultiStateResult
+    SurvfitResult
+    | CoxSurvfitResult
+    | SurvfitMultiStateResult
+    | CoxSurvfitMultiStateResult
+    | SurvExpResult
 )
 Transform = str | Callable[[FloatArray], Any] | None
 _MULTISTATE = (SurvfitMultiStateResult, CoxSurvfitMultiStateResult)
@@ -172,7 +177,7 @@ def survfit_plot_data(
 ) -> SurvivalPlotData:
     """Prepare R-style survival graphics without Matplotlib or model refitting.
 
-    Accept Kaplan-Meier, Turnbull, Cox and multistate ``survfit`` results.
+    Accept Kaplan-Meier, Turnbull, Cox, multistate and expected-survival results.
     Curves are ordered with strata varying fastest, then prediction rows, then
     states or transitions. ``cumhaz``/``cumprob`` numeric selections are one-based,
     as in R. ``mark_time=True`` marks censored times; a sequence requests specific
@@ -181,12 +186,17 @@ def survfit_plot_data(
     ``conf_int`` requests a confidence level; ``"only"`` suppresses the estimate.
     """
 
-    if not isinstance(fit, (SurvfitResult, CoxSurvfitResult, *_MULTISTATE)):
+    if not isinstance(fit, (SurvfitResult, CoxSurvfitResult, SurvExpResult, *_MULTISTATE)):
         raise TypeError("plotting requires a fitted survfit result")
     time = np.asarray(fit.time, dtype=float)
     if time.ndim != 1 or not len(time) or not np.isfinite(time).all():
         raise ValueError("survival curves must contain finite fitted times")
-    groups = list(fit.strata.items()) if fit.strata else [("", len(time))]
+    expected_fit = fit if isinstance(fit, SurvExpResult) else None
+    groups = (
+        list(fit.strata.items())
+        if not isinstance(fit, SurvExpResult) and fit.strata
+        else [("", len(time))]
+    )
     if any(size < 1 for _, size in groups) or sum(size for _, size in groups) != len(time):
         raise ValueError("strata must partition the fitted times into nonempty curves")
     multi_fit = fit if isinstance(fit, _MULTISTATE) else None
@@ -196,10 +206,15 @@ def survfit_plot_data(
     cumulative = not isinstance(cumprob, bool | np.bool_) or bool(cumprob)
     if cumulative and not multi:
         raise ValueError("cumprob requires multistate curves")
-    source = getattr(fit, "cumhaz" if hazard else "pstate" if multi else "surv")
+    source = getattr(
+        fit, "cumhaz" if hazard and expected_fit is None else "pstate" if multi else "surv"
+    )
     if source is None:
         raise ValueError("survfit object does not contain a cumulative hazard")
     estimate = _array(source, len(time), "estimate")
+    if expected_fit is not None and hazard:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            estimate = -np.log(estimate)
     if estimate.shape[1] == 0:
         raise ValueError("no fitted curves to plot")
     raw_std = getattr(fit, "std_chaz" if hazard else "std_err", None)
@@ -210,6 +225,8 @@ def survfit_plot_data(
         if hazard and multi
         else states
         if multi
+        else list(expected_fit.strata or [])
+        if expected_fit is not None
         else list(getattr(fit, "colnames", None) or [])
     )
     if multi:
@@ -315,10 +332,20 @@ def survfit_plot_data(
     )
     if requested_marks is not None and requested_marks.ndim != 1:
         raise ValueError("mark_time must be a boolean or vector of times")
-    event_counts = _array(fit.n_event, len(time), "n_event")
+    event_counts = (
+        np.zeros((len(time), 1))
+        if isinstance(fit, SurvExpResult)
+        else _array(fit.n_event, len(time), "n_event")
+    )
     events = event_counts[:, 0]
     censored = (
-        events == 0 if fit.n_censor is None else _array(fit.n_censor, len(time), "n_censor")[:, 0]
+        np.zeros(len(time))
+        if isinstance(fit, SurvExpResult)
+        else (
+            events == 0
+            if fit.n_censor is None
+            else _array(fit.n_censor, len(time), "n_censor")[:, 0]
+        )
     )
     origin = getattr(fit, "t0", min(0.0, float(time.min())))
     if not np.isfinite(origin):
