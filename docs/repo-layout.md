@@ -70,9 +70,10 @@ defines the argument types for `#[pyfunction]` signatures:
 | `IntVec`      | integer/bool arrays, integral floats, sequences (checked `i32` narrowing) | `Vec<i32>`    |
 | `BoolVec`     | bool arrays, `0`/`1` numerics, sequences                                 | `Vec<bool>`   |
 | `FloatMatrix` | 2-D array of any layout, list of rows, 1-D input (as one column)        | `Array2<f64>` (row-major) |
+| `FloatRows`   | Same matrix inputs, for kernels that consume nested rows                | `Vec<Vec<f64>>` |
 
-Each also implements `IntoPyObject`, so returning one (or exposing it through a
-`#[pyo3(get)]` field) hands Python a NumPy array without a `.tolist()` round
+The vector types and `FloatMatrix` also implement `IntoPyObject`, so returning
+one (or exposing it through a `#[pyo3(get)]` field) hands Python a NumPy array without a `.tolist()` round
 trip; `FloatMatrix::from_flat(values, ncol)` covers flat buffers with an
 explicit column count.
 
@@ -87,7 +88,8 @@ keep working. For new bindings:
    matrices, and move `.into_inner()` into the core data type (an `Array2`
    goes straight into, for example, `CoxphData`). `extract_vec_f64`/
    `extract_vec_i32` remain only for `&Bound<PyAny>` arguments of beyond-R
-   code.
+   code. For a kernel that takes nested rows, use the input-only `FloatRows`
+   to avoid flattening and rebuilding list inputs; its kernel checks row widths.
 2. Keep getters that Python consumers iterate by row (`CoxPHFit.x`,
    `SurvregData.covariates`) returning lists; return `FloatVec`/`FloatMatrix`
    where the consumer wants NumPy.
@@ -169,8 +171,10 @@ imports from the ones above it):
 - `_survreg`: `survreg` fitting, prediction/residual helpers, d/p/q/rsurvreg
 - `_models`: generics (`predict`, `residuals`, `coef`, `vcov`, `confint`,
   `model_summary`, `as_data_frame`, ...)
-- `_misc`: statefig, brier, royston, yates, cipoisson, bounded links,
+- `_misc`: statefig, brier, royston, cipoisson, bounded links,
   survobrien, survcheck, nsk, pspline; `_aareg`; `_cch`
+- `_yates`: population marginal means, joint-variable contrasts, and SAS type
+  III tests; `_yates_model`: adapter for externally fitted linear models
 
 `survival.r` has no stub: the inline annotations of its modules are the typed
 surface (the package ships `py.typed`), so a signature is changed in one place.

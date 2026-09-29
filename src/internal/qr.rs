@@ -17,9 +17,14 @@ impl LinpackQr {
     /// `dqrdc2`: Householder QR with LINPACK's limited pivoting, which moves
     /// a column whose norm has fallen below `tol` times its original norm to
     /// the end; `rank` counts the columns left in front.
-    pub(crate) fn new(mut x: Vec<Vec<f64>>, n: usize) -> Self {
+    pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
+        Self::decompose(x, n).0
+    }
+
+    fn decompose(mut x: Vec<Vec<f64>>, n: usize) -> (Self, Vec<Vec<f64>>, Vec<usize>) {
         const TOL: f64 = 1e-7;
         let p = x.len();
+        let mut pivot: Vec<usize> = (0..p).collect();
         let mut qraux: Vec<f64> = x.iter().map(|column| norm(column)).collect();
         let mut original: Vec<f64> = qraux
             .iter()
@@ -36,6 +41,7 @@ impl LinpackQr {
                 .take_while(|&j| qraux[j] < original[j] * TOL)
                 .count();
             x[l..].rotate_left(run);
+            pivot[l..].rotate_left(run);
             qraux[l..].rotate_left(run);
             original[l..].rotate_left(run);
             k -= run;
@@ -82,7 +88,7 @@ impl LinpackQr {
                 vector
             })
             .collect();
-        Self { householder, rank }
+        (Self { householder, rank }, x, pivot)
     }
 
     /// `qr.qty()`: overwrites `y` with `t(Q) %*% y` (`dqrsl` applying the
@@ -115,6 +121,42 @@ impl LinpackQr {
     }
 }
 
+/// A coefficient-solving QR. Residual-only callers retain no triangular
+/// factor; least-squares callers reuse it across all response columns.
+pub(crate) struct LinpackLeastSquares {
+    qr: LinpackQr,
+    upper: Vec<Vec<f64>>,
+    pivot: Vec<usize>,
+}
+
+impl LinpackLeastSquares {
+    pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
+        let (qr, factor, pivot) = LinpackQr::decompose(x, n);
+        let upper = factor
+            .iter()
+            .take(qr.rank)
+            .enumerate()
+            .map(|(j, column)| column[..=j].to_vec())
+            .collect();
+        Self { qr, upper, pivot }
+    }
+
+    /// R's `qr.coef`, in original column order, with NaN for aliased columns.
+    pub(crate) fn coefficients(&self, y: &[f64]) -> Vec<f64> {
+        let mut qty = y.to_vec();
+        self.qr.qty(&mut qty);
+        let mut result = vec![f64::NAN; self.pivot.len()];
+        for j in (0..self.qr.rank).rev() {
+            let coefficient = qty[j] / self.upper[j][j];
+            result[self.pivot[j]] = coefficient;
+            for (i, value) in qty[..j].iter_mut().enumerate() {
+                *value -= coefficient * self.upper[j][i];
+            }
+        }
+        result
+    }
+}
+
 /// Applies one Householder reflection of `dqrsl` (skipped when its
 /// `qraux` is zero) to `y`.
 fn reflect(vector: &[f64], y: &mut [f64]) {
@@ -140,6 +182,24 @@ mod tests {
         for (value, want) in actual.iter().zip(expected) {
             assert!((value - want).abs() < 1e-12, "{actual:?} != {expected:?}");
         }
+    }
+
+    #[test]
+    fn least_squares_unpivots_coefficients_and_marks_aliases() {
+        let fit = LinpackLeastSquares::new(
+            vec![
+                vec![0.0; 4],
+                vec![1.0; 4],
+                vec![1.0, 2.0, 3.0, 4.0],
+                vec![2.0, 4.0, 6.0, 8.0],
+            ],
+            4,
+        );
+        let coef = fit.coefficients(&[1.0, 3.0, 2.0, 5.0]);
+        assert!(coef[0].is_nan() && coef[3].is_nan());
+        assert_close(&coef[1..3], &[0.0, 1.1]);
+        let coef = fit.coefficients(&[5.0, 7.0, 9.0, 11.0]);
+        assert_close(&coef[1..3], &[3.0, 2.0]);
     }
 
     #[test]

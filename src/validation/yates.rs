@@ -22,12 +22,15 @@ use std::collections::HashSet;
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
+use crate::internal::numpy_utils::{FloatRows, FloatVec};
 use crate::internal::qr::LinpackQr;
 use crate::internal::simd::dot_product;
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 mod rng;
+mod sgtt;
+pub use sgtt::{YatesSgttInput, YatesSgttResult, yates_sgtt, yates_sgtt_py};
 
 /// Which contrasts of the population marginal means to test (R `test`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -791,16 +794,18 @@ fn survival_curves(mean: &[Vec<f64>], variance: &[Vec<f64>], conf_int: f64) -> Y
 /// estimable=None, test="global")`.
 #[pyfunction(name = "yates")]
 #[pyo3(signature = (cmat, beta, vmat, offset=0.0, sigma2=None, estimable=None, test="global"))]
+#[allow(clippy::too_many_arguments)]
 pub fn yates_py(
-    cmat: Vec<Vec<f64>>,
-    beta: Vec<f64>,
-    vmat: Vec<Vec<f64>>,
+    py: Python<'_>,
+    cmat: FloatRows,
+    beta: FloatVec,
+    vmat: FloatRows,
     offset: f64,
     sigma2: Option<f64>,
     estimable: Option<Vec<bool>>,
     test: &str,
 ) -> PyResult<YatesResult> {
-    Ok(yates(&YatesInput {
+    let input = YatesInput {
         cmat: &cmat,
         beta: &beta,
         vmat: &vmat,
@@ -808,7 +813,8 @@ pub fn yates_py(
         sigma2,
         estimable: estimable.as_deref(),
         test: YatesTest::parse(test)?,
-    })?)
+    };
+    Ok(py.detach(|| yates(&input))?)
 }
 
 /// Runs [`yates_simulate`] without the GIL; R names the tests of a
@@ -835,16 +841,17 @@ fn simulate_py(
 #[allow(clippy::too_many_arguments)]
 pub fn yates_risk_py(
     py: Python<'_>,
-    xmatlist: Vec<Vec<Vec<f64>>>,
-    beta: Vec<f64>,
-    vmat: Vec<Vec<f64>>,
-    means: Vec<f64>,
+    xmatlist: Vec<FloatRows>,
+    beta: FloatVec,
+    vmat: FloatRows,
+    means: FloatVec,
     estimable: Option<Vec<bool>>,
     nsim: usize,
     seed: u32,
     test: &str,
     term: Option<&str>,
 ) -> PyResult<YatesResult> {
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
     let input = YatesSimulation {
         xmatlist: &xmatlist,
         beta: &beta,
@@ -866,12 +873,12 @@ pub fn yates_risk_py(
 #[allow(clippy::too_many_arguments)]
 pub fn yates_survival_py(
     py: Python<'_>,
-    xmatlist: Vec<Vec<Vec<f64>>>,
-    beta: Vec<f64>,
-    vmat: Vec<Vec<f64>>,
-    means: Vec<f64>,
-    time: Vec<f64>,
-    cumhaz: Vec<f64>,
+    xmatlist: Vec<FloatRows>,
+    beta: FloatVec,
+    vmat: FloatRows,
+    means: FloatVec,
+    time: FloatVec,
+    cumhaz: FloatVec,
     rmean: f64,
     conf_int: f64,
     estimable: Option<Vec<bool>>,
@@ -880,6 +887,7 @@ pub fn yates_survival_py(
     test: &str,
     term: Option<&str>,
 ) -> PyResult<YatesResult> {
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
     let input = YatesSimulation {
         xmatlist: &xmatlist,
         beta: &beta,
@@ -904,21 +912,25 @@ pub fn yates_survival_py(
 #[pyfunction(name = "yates_population_means")]
 #[pyo3(signature = (xmatlist, weights=None))]
 pub fn population_means_py(
-    xmatlist: Vec<Vec<Vec<f64>>>,
-    weights: Option<Vec<f64>>,
+    py: Python<'_>,
+    xmatlist: Vec<FloatRows>,
+    weights: Option<FloatVec>,
 ) -> PyResult<Vec<Vec<f64>>> {
-    Ok(population_means(&xmatlist, weights.as_deref())?)
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
+    Ok(py.detach(|| population_means(&xmatlist, weights.as_deref()))?)
 }
 
 /// Python entry point for [`yates_estimable`]: `x` is the fit's model matrix.
 #[pyfunction(name = "yates_estimable")]
 #[pyo3(signature = (xmatlist, x, intercept=false))]
 pub fn yates_estimable_py(
-    xmatlist: Vec<Vec<Vec<f64>>>,
-    x: Vec<Vec<f64>>,
+    py: Python<'_>,
+    xmatlist: Vec<FloatRows>,
+    x: FloatRows,
     intercept: bool,
 ) -> PyResult<Vec<bool>> {
-    Ok(yates_estimable(&xmatlist, &x, intercept)?)
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
+    Ok(py.detach(|| yates_estimable(&xmatlist, &x, intercept))?)
 }
 
 #[cfg(test)]

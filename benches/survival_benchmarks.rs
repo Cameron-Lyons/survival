@@ -278,6 +278,47 @@ mod expected_survival_summary_bench {
     }
 }
 
+mod yates_sgtt_bench {
+    use super::*;
+    use survival::validation::{YatesSgttInput, yates_sgtt};
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn factorial(bencher: divan::Bencher, n: usize) {
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                let a = (i % 2) as f64;
+                let b = ((i / 2) % 2) as f64;
+                vec![
+                    1.,
+                    a,
+                    1. - a,
+                    b,
+                    1. - b,
+                    a * b,
+                    (1. - a) * b,
+                    a * (1. - b),
+                    (1. - a) * (1. - b),
+                ]
+            })
+            .collect();
+        let variance: Vec<Vec<f64>> = (0..4)
+            .map(|i| (0..4).map(|j| f64::from(i == j)).collect())
+            .collect();
+        let input = YatesSgttInput {
+            x: &x,
+            assign: &[0, 1, 1, 2, 2, 3, 3, 3, 3],
+            adjustment_terms: &[vec![3], vec![3], vec![]],
+            beta: &[2., 3., 4., 5.],
+            vmat: &variance,
+            coefficient_assign: &[0, 1, 2, 3],
+            test_terms: &[(1, "a".into()), (2, "b".into())],
+            sigma2: Some(2.),
+            include_intercept: true,
+        };
+        bencher.bench_local(|| black_box(yates_sgtt(&input).expect("valid factorial design")));
+    }
+}
+
 mod aareg_bench {
     use super::*;
 

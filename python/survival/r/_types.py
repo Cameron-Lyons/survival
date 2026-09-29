@@ -1222,6 +1222,8 @@ class YatesResult:
     ``summary`` holds the simulated curves of ``predict="survival"``: the baseline
     ``survfit`` object with one column of ``surv``, ``cumhaz``, ``std_err``, ``lower`` and
     ``upper`` per level.
+    With ``method="sgtt"``, ``sas`` holds the estimable SAS hypothesis matrix,
+    with column names in ``sas_names`` and row names in ``sas_row_names``.
     """
 
     estimate: dict[str, list[Any]]
@@ -1230,6 +1232,9 @@ class YatesResult:
     cmat: list[list[float]]
     cmat_names: list[str]
     summary: CoxSurvfitResult | None = None
+    sas: list[list[float]] | None = None
+    sas_names: list[str] = field(default_factory=list)
+    sas_row_names: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

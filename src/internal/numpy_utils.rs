@@ -23,6 +23,12 @@ use crate::internal::validation::{ValidationError, validate_matrix_shape};
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FloatVec(pub Vec<f64>);
 
+/// Matrix input for kernels that consume nested rows. Unlike [`FloatMatrix`],
+/// list inputs keep their row buffers instead of flattening and rebuilding
+/// them. The receiving kernel validates rectangular shape and dimensions.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FloatRows(pub Vec<Vec<f64>>);
+
 /// One-dimensional `int32` input. Integer and boolean dtypes convert directly;
 /// floating values are accepted only when integral and within `i32` range.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -64,6 +70,7 @@ macro_rules! vector_newtype {
 }
 
 vector_newtype!(FloatVec, f64);
+vector_newtype!(FloatRows, Vec<f64>);
 vector_newtype!(IntVec, i32);
 vector_newtype!(BoolVec, bool);
 
@@ -197,7 +204,7 @@ mod python {
     use pyo3::types::{PyDict, PyList, PyTuple};
     use std::convert::Infallible;
 
-    use super::{BoolVec, FloatMatrix, FloatVec, IntVec};
+    use super::{BoolVec, FloatMatrix, FloatRows, FloatVec, IntVec};
 
     fn type_error(obj: &Bound<'_, PyAny>, expected: &str, detail: Option<PyErr>) -> PyErr {
         let type_name = obj
@@ -378,6 +385,37 @@ mod python {
         }
     }
 
+    fn read_rows(array: &Bound<'_, PyArray2<f64>>) -> FloatRows {
+        let view = array.readonly();
+        FloatRows(
+            view.as_array()
+                .rows()
+                .into_iter()
+                .map(|row| row.to_vec())
+                .collect(),
+        )
+    }
+
+    fn row_values(obj: &Bound<'_, PyAny>) -> PyResult<FloatRows> {
+        if let Ok(array) = obj.cast::<PyArray2<f64>>() {
+            return Ok(read_rows(array));
+        }
+        let column = |values: Vec<f64>| FloatRows(values.into_iter().map(|x| vec![x]).collect());
+        if is_plain_sequence(obj) {
+            if let Ok(rows) = obj.extract::<Vec<Vec<f64>>>() {
+                return Ok(FloatRows(rows));
+            }
+            return float_values(obj, "a float matrix").map(column);
+        }
+        let converted =
+            asarray::<f64>(obj).map_err(|err| type_error(obj, "a float matrix", Some(err)))?;
+        match converted.cast::<PyUntypedArray>()?.ndim() {
+            2 => Ok(read_rows(converted.cast::<PyArray2<f64>>()?)),
+            1 => Ok(column(read_1d(converted.cast::<PyArray1<f64>>()?))),
+            ndim => Err(wrong_ndim(obj, "a float matrix", ndim)),
+        }
+    }
+
     /// A vector is a single-column matrix, as `as.matrix()` treats it in R.
     fn column_matrix(values: Vec<f64>) -> FloatMatrix {
         let n = values.len();
@@ -413,6 +451,14 @@ mod python {
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
             matrix_values(&obj)
+        }
+    }
+
+    impl<'py> FromPyObject<'_, 'py> for FloatRows {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+            row_values(&obj)
         }
     }
 
@@ -719,6 +765,40 @@ mod python_tests {
             let err = matrix(py, "[[1.0, 2.0], [3.0]]").unwrap_err();
             assert!(err.to_string().contains("row 1 length mismatch"), "{err}");
             let err = matrix(py, "np.zeros((2, 2, 2))").unwrap_err();
+            assert!(err.to_string().contains("3 dimension"), "{err}");
+        });
+    }
+
+    #[test]
+    fn float_rows_preserves_layout_without_flattening_list_buffers() {
+        Python::initialize();
+        Python::attach(|py| {
+            for expr in [
+                "[[1.0, 2.0], [3.0, 4.0]]",
+                "((1, 2), (3, 4))",
+                "np.array([[1.0, 2.0], [3.0, 4.0]])",
+                "np.asfortranarray([[1.0, 2.0], [3.0, 4.0]])",
+                "np.array([[1., 99., 2.], [3., 99., 4.]])[:, ::2]",
+                "np.array([[1, 2], [3, 4]], dtype='int32')",
+                "np.array([[1, 2], [3, 4]], dtype='float32')",
+            ] {
+                let rows = eval(py, expr).extract::<FloatRows>().unwrap();
+                assert_eq!(*rows, vec![vec![1., 2.], vec![3., 4.]], "{expr}");
+            }
+            for expr in ["[1, 2]", "np.array([1, 2])"] {
+                let rows = eval(py, expr).extract::<FloatRows>().unwrap();
+                assert_eq!(*rows, vec![vec![1.], vec![2.]]);
+            }
+            for expr in ["[]", "np.empty((0, 3))"] {
+                assert!(eval(py, expr).extract::<FloatRows>().unwrap().is_empty());
+            }
+            assert_eq!(
+                *eval(py, "np.empty((2, 0))").extract::<FloatRows>().unwrap(),
+                vec![Vec::<f64>::new(), vec![]]
+            );
+            let err = eval(py, "np.zeros((2, 2, 2))")
+                .extract::<FloatRows>()
+                .unwrap_err();
             assert!(err.to_string().contains("3 dimension"), "{err}");
         });
     }

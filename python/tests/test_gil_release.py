@@ -148,6 +148,35 @@ def test_numpy_and_list_inputs_give_identical_cox_fits():
     assert from_numpy.x == x.tolist()
 
 
+def test_yates_sgtt_releases_the_gil():
+    index = np.arange(200_000)
+    a, b = index % 2, (index // 2) % 2
+    x = np.column_stack(
+        [
+            np.ones(len(index)),
+            a,
+            1 - a,
+            b,
+            1 - b,
+            a * b,
+            (1 - a) * b,
+            a * (1 - b),
+            (1 - a) * (1 - b),
+        ]
+    )
+    _assert_detaches(
+        lambda: survival.validation.yates_sgtt(
+            x,
+            [0, 1, 1, 2, 2, 3, 3, 3, 3],
+            [[3], [3], []],
+            [2, 3, 4, 5],
+            np.eye(4),
+            [0, 1, 2, 3],
+            [(1, "a")],
+        )
+    )
+
+
 @pytest.mark.parametrize("layout", ["fortran", "strided"])
 def test_numpy_and_list_inputs_give_identical_survreg_fits(layout):
     time_, status, x = _cox_data(200)
