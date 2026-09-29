@@ -2822,6 +2822,21 @@ class UtilitiesHandler(TopicHandler):
                 "interval2": lambda: r.Surv([1, None, 3], [2, 3, None], type="interval2"),
                 "mstate": lambda: r.Surv([1, 2], RFactor(["a", "censor"], ["censor", "a"])),
             }[kind]()
+            version = tuple(
+                map(int, load_topic("utilities")["metadata"]["survival_version"].split("."))
+            )
+            if kind == "mstate" and version < (3, 8, 12):
+                # These fixtures describe a legacy Surv object without clabel.
+                # Current constructors and their labels are checked separately
+                # against 3.8-12 by test_surv_vector_methods.py.
+                surv = r.Surv._from_normalized(
+                    time=surv.time,
+                    event=surv.event,
+                    start=surv.start,
+                    time2=surv.time2,
+                    surv_type=surv.type,
+                    states=surv.states,
+                )
             assert_exact(list(r.format_surv(surv)), expected, path=aspect)
             return
         if aspect == "is_na":

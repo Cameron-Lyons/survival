@@ -89,6 +89,9 @@ from .r import (
     anova as anova,
 )
 from .r import (
+    as_character_surv as as_character_surv,
+)
+from .r import (
     as_data_frame as as_data_frame,
 )
 from .r import (
@@ -125,6 +128,9 @@ from .r import (
     coef_names as coef_names,
 )
 from .r import (
+    concat_surv as concat_surv,
+)
+from .r import (
     concordance as concordance,
 )
 from .r import (
@@ -158,6 +164,9 @@ from .r import (
     dsurvreg as dsurvreg,
 )
 from .r import (
+    duplicated_surv as duplicated_surv,
+)
+from .r import (
     event as event,
 )
 from .r import (
@@ -176,6 +185,9 @@ from .r import (
     fromtimeline as fromtimeline,
 )
 from .r import (
+    head_surv as head_surv,
+)
+from .r import (
     is_na_surv as is_na_surv,
 )
 from .r import (
@@ -183,6 +195,9 @@ from .r import (
 )
 from .r import (
     is_surv as is_surv,
+)
+from .r import (
+    levels_surv as levels_surv,
 )
 from .r import (
     loglik as loglik,
@@ -244,6 +259,12 @@ from .r import (
     ratetableDate as ratetableDate,
 )
 from .r import (
+    rep_surv as rep_surv,
+)
+from .r import (
+    rev_surv as rev_surv,
+)
+from .r import (
     rsurvreg as rsurvreg,
 )
 from .r import (
@@ -301,6 +322,9 @@ from .r import (
     survSplit as survSplit,
 )
 from .r import (
+    tail_surv as tail_surv,
+)
+from .r import (
     tcut as tcut,
 )
 from .r import (
@@ -311,6 +335,12 @@ from .r import (
 )
 from .r import (
     totimeline as totimeline,
+)
+from .r import (
+    transpose_surv as transpose_surv,
+)
+from .r import (
+    unique_surv as unique_surv,
 )
 from .r import (
     vcov as vcov,

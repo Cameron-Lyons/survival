@@ -155,14 +155,14 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
     return status
 
 
-def _mstate_status(values: Any) -> tuple[list[int | None], tuple[str, ...]]:
+def _mstate_status(values: Any) -> tuple[list[int | None], tuple[str, ...], str | None]:
     """``as.numeric(as.factor(event)) - 1`` and the states (every level but the first)."""
 
     codes, labels = _factor(values, "event")
     states = tuple(labels[1:])
     if any(state == "" or state == "NA" for state in states):
         raise ValueError("each state must have a non-blank name")
-    return codes, states
+    return codes, states, labels[0] if labels else None
 
 
 def _interval_status(values: Any) -> list[int | None]:
@@ -197,6 +197,7 @@ class Surv:
     where the status is not 3).  ``type`` is one of R's ``right``, ``left``,
     ``interval``, ``counting``, ``mright`` and ``mcounting``; ``states`` lists the
     multi-state levels after the censoring level.
+    ``clabel`` preserves the censoring factor level used by R 3.8-12's labels.
     """
 
     time: tuple[float, ...]
@@ -205,6 +206,7 @@ class Surv:
     time2: tuple[float, ...] | None
     type: str
     states: tuple[str, ...]
+    clabel: str | None
 
     def __init__(
         self,
@@ -250,6 +252,7 @@ class Surv:
         start: list[float] | None = None
         time2: list[float] | None = None
         states: tuple[str, ...] = ()
+        clabel: str | None = None
         if len(args) == 1:
             status: list[int | None] = [1] * nn
             surv_type = "right"
@@ -258,7 +261,7 @@ class Surv:
             if len(_materialize_1d(event, "event")) != nn:
                 raise ValueError("Time and status are different lengths")
             if mstate or _is_factor_like(event):
-                status, states = _mstate_status(event)
+                status, states, clabel = _mstate_status(event)
                 surv_type = "mright"
             else:
                 status = _binary_status(event, "event")
@@ -279,7 +282,7 @@ class Surv:
                 ]
                 warnings.warn("Stop time must be > start time, NA created", stacklevel=4)
             if mstate or _is_factor_like(args[2]):
-                status, states = _mstate_status(args[2])
+                status, states, clabel = _mstate_status(args[2])
                 surv_type = "mcounting"
             else:
                 status = _binary_status(args[2], "event")
@@ -307,6 +310,7 @@ class Surv:
             "time2": None if time2 is None else tuple(time2),
             "type": surv_type,
             "states": states,
+            "clabel": clabel,
         }
 
     def __len__(self) -> int:
@@ -347,6 +351,7 @@ class Surv:
             time2=self.time2 if time2 is None else time2,
             surv_type=self.type,
             states=self.states,
+            clabel=self.clabel,
         )
 
     def subset(self, indices: Sequence[int]) -> Surv:
@@ -360,6 +365,7 @@ class Surv:
             time2=None if self.time2 is None else [self.time2[idx] for idx in rows],
             surv_type=self.type,
             states=self.states,
+            clabel=self.clabel,
         )
 
     @classmethod
@@ -372,6 +378,7 @@ class Surv:
         time2: Sequence[float] | None,
         surv_type: str,
         states: Sequence[str] = (),
+        clabel: str | None = None,
     ) -> Surv:
         if surv_type not in _SURV_RESPONSE_TYPES:
             raise ValueError(f"unsupported Surv type {surv_type!r}")
@@ -382,6 +389,7 @@ class Surv:
         object.__setattr__(result, "time2", None if time2 is None else tuple(time2))
         object.__setattr__(result, "type", surv_type)
         object.__setattr__(result, "states", tuple(states))
+        object.__setattr__(result, "clabel", clabel)
         return result
 
 
@@ -479,22 +487,30 @@ def _format_times(values: Sequence[float]) -> list[str]:
 
 
 def _event_suffixes(x: Surv | Surv2, censor: str) -> list[str]:
-    if x.states:
-        return ["+", *(f":{state}" for state in x.states)]
+    if x.states or x.clabel is not None:
+        return ["+" if x.clabel is None else f":{x.clabel}", *(f":{state}" for state in x.states)]
     return [censor, ""]
 
 
 def format_surv(x: Any) -> list[str]:
-    """R's ``format(Surv)`` / ``as.character.Surv``."""
+    """R's ``format(Surv)``: character labels padded to a common width."""
+
+    return _pad(as_character_surv(x))
+
+
+def as_character_surv(x: Any) -> list[str]:
+    """R's ``as.character.Surv`` / ``as.character.Surv2``.
+
+    Numeric time columns use R's common precision and width, but the resulting
+    labels have no extra right padding (unlike :func:`format_surv`).
+    """
 
     if isinstance(x, Surv2):
         suffixes = _event_suffixes(x, "+")
-        return _pad(
-            [
-                f"{time}{'?' if status is None else suffixes[status]}"
-                for time, status in zip(_format_times(x.time), x.status, strict=True)
-            ]
-        )
+        return [
+            f"{time}{'?' if status is None else suffixes[status]}"
+            for time, status in zip(_format_times(x.time), x.status, strict=True)
+        ]
     if not isinstance(x, Surv):
         raise TypeError("argument is not a Surv object")
     if x.type == "interval":
@@ -508,21 +524,17 @@ def format_surv(x: Any) -> list[str]:
                 labels.append(f"[{left}, {right}]")
             else:
                 labels.append(f"{left}{['+', '', '-'][status]}")
-        return _pad(labels)
+        return labels
     suffixes = _event_suffixes(x, "-" if x.type == "left" else "+")
     marks = ["?" if status is None else suffixes[status] for status in x.event]
     if x.start is None:
-        return _pad(
-            [f"{time}{mark}" for time, mark in zip(_format_times(x.time), marks, strict=True)]
+        return [f"{time}{mark}" for time, mark in zip(_format_times(x.time), marks, strict=True)]
+    return [
+        f"({start},{stop}{mark}]"
+        for start, stop, mark in zip(
+            _format_times(x.start), _format_times(x.time), marks, strict=True
         )
-    return _pad(
-        [
-            f"({start},{stop}{mark}]"
-            for start, stop, mark in zip(
-                _format_times(x.start), _format_times(x.time), marks, strict=True
-            )
-        ]
-    )
+    ]
 
 
 def _subset_surv(response: Surv, indices: list[int]) -> Surv:
@@ -733,6 +745,7 @@ class Surv2:
     status: tuple[int | None, ...]
     states: tuple[str, ...]
     repeated: bool | str
+    clabel: str | None
 
     def __init__(self, time: Any, event: Any, repeated: Any = False) -> None:
         time_values = _time_column(time, "time", "Time variable is not numeric")
@@ -747,14 +760,16 @@ class Surv2:
         if len(_materialize_1d(event, "event")) != len(time_values):
             raise ValueError("Time and event are different lengths")
         states: tuple[str, ...] = ()
+        clabel: str | None = None
         if _is_factor_like(event):
-            status, states = _mstate_status(event)
+            status, states, clabel = _mstate_status(event)
         else:
             status = _binary_status(event, "event")
         object.__setattr__(self, "time", tuple(time_values))
         object.__setattr__(self, "status", tuple(status))
         object.__setattr__(self, "states", states)
         object.__setattr__(self, "repeated", repeated_value)
+        object.__setattr__(self, "clabel", clabel)
 
     def __len__(self) -> int:
         return len(self.time)
