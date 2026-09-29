@@ -60,6 +60,7 @@ from ._formula import (
     _design_term_name,
     _design_term_output_names,
     _fit_formula_design,
+    _formula_cluster_values,
     _formula_model_frame,
     _formula_model_term_degree,
     _formula_response_spec,
@@ -68,7 +69,7 @@ from ._formula import (
     _offset_vector,
     _parse_formula,
     _strata_keep,
-    _strata_term_columns,
+    _strata_specs,
     _subset_formula_inputs,
 )
 from ._surv import Surv, _complete_codes, _survreg_response_arrays, is_na_surv
@@ -79,6 +80,7 @@ from ._types import (
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
+    _StrataSpec,
 )
 
 SurvregDistribution = _core.SurvregDistribution
@@ -142,7 +144,7 @@ class SurvregModelResult:
     assign: tuple[int, ...] = field(default=(), repr=False)
     term_labels: tuple[str, ...] = ()
     strata_term: int = field(default=0, repr=False)
-    strata_terms: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
+    strata_terms: tuple[_StrataSpec, ...] = field(default=(), repr=False)
     strata_levels: tuple[str, ...] = ()
     na_action: NaAction | None = field(default=None, repr=False)
     penalized: Any | None = field(default=None, repr=False)
@@ -492,7 +494,7 @@ class _SurvregFrame:
     assign: tuple[int, ...] = ()
     term_labels: tuple[str, ...] = ()
     strata_term: int = 0
-    strata_terms: tuple[tuple[str, ...], ...] = ()
+    strata_terms: tuple[_StrataSpec, ...] = ()
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     weights: list[float] | None = None
@@ -520,7 +522,7 @@ def _term_structure(
     strata_term = 0
     for term_index, model_term in enumerate(ordered, start=1):
         if isinstance(model_term, _ModelStrataTerm):
-            labels[term_index - 1] = f"strata({', '.join(model_term.columns)})"
+            labels[term_index - 1] = model_term.spec.call
             strata_term = term_index
     assign = [0] * int(design.intercept)
     for term, term_index in zip(design.covariates, assignments, strict=True):
@@ -575,8 +577,6 @@ def _formula_frame(
             raise ValueError("use only one of formula offset(...) or offset")
         offset = _offset_vector(data, terms.offsets, n)
     if terms.clusters:
-        if len(terms.clusters) > 1:
-            raise ValueError("a formula cannot have multiple cluster terms")
         if cluster is not None:
             warnings.warn(
                 "cluster appears both in a formula and as an argument, formula term ignored",
@@ -584,8 +584,8 @@ def _formula_frame(
                 stacklevel=3,
             )
         else:
-            cluster = _column(data, terms.clusters[0])
-    strata_terms = _strata_term_columns(terms)
+            cluster = _formula_cluster_values(data, terms, n)
+    strata_terms = _strata_specs(terms)
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     if strata_terms:
@@ -920,7 +920,14 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
 # --- predict.survreg -------------------------------------------------------------------------
 
 
-def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _NewData:
+def _newdata_inputs(
+    fit: SurvregModelResult,
+    newdata: Any,
+    na_action: str,
+    *,
+    allow_missing_predictors: bool = False,
+    allow_missing_strata: bool = False,
+) -> _NewData:
     """``model.frame(Terms, newdata, na.action)`` and ``model.matrix(object, newframe)``:
     the rows, strata and offset of the complete ``newdata`` rows."""
 
@@ -939,6 +946,9 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
         if missing and na_action == "fail":
             raise ValueError("missing values in newdata")
         gaps = set(missing)
+        if na_action == "pass" and allow_missing_predictors:
+            gaps = set()
+            missing = []
         return _NewData(
             data=None,
             x=[values for row, values in enumerate(rows) if row not in gaps],
@@ -951,7 +961,7 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
         raise TypeError("newdata must be a data frame with the model's columns")
     # Terms keeps the strata() term, so its variables are required
     for term in fit.strata_terms:
-        for name in term:
+        for name in term.columns:
             _column_source(newdata, name)
     return _newdata_frame(
         design,
@@ -961,6 +971,8 @@ def _newdata_inputs(fit: SurvregModelResult, newdata: Any, na_action: str) -> _N
         need_strata=bool(fit.strata_levels),
         need_response=False,
         na_action=na_action,
+        allow_missing_predictors=allow_missing_predictors,
+        allow_missing_strata=allow_missing_strata,
     )
 
 
@@ -1019,12 +1031,18 @@ def predict_survreg(
     )
     include_se = _normalize_bool_option(se_fit, "se.fit")
     action = _normalize_na_action(na_action)
-    new = None if newdata is None else _newdata_inputs(fit, newdata, action)
-    term_names = [
-        label
-        for position, label in enumerate(fit.term_labels, start=1)
-        if position != fit.strata_term
-    ]
+    new = (
+        None
+        if newdata is None
+        else _newdata_inputs(
+            fit,
+            newdata,
+            action,
+            allow_missing_predictors=True,
+            allow_missing_strata=predict_type not in {"quantile", "uquantile"},
+        )
+    )
+    term_names = [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
     quantiles = _quantile_vector(p, "p")
     selection = _term_selection(terms, term_names)
     predictions: list[list[float]] = []
@@ -1041,8 +1059,8 @@ def predict_survreg(
             terms=selection,
         )
         predictions, se_values = result.fit, result.se_fit
-    # naresid: NaN at the rows na.exclude removed from the fit, or at the incomplete
-    # newdata rows, which na.pass carries through to NA predictions
+    # naresid restores omitted rows; na.pass predictor NaNs have already
+    # propagated through just the outputs that use them.
     if new is None:
         gaps = _excluded_rows(fit.na_action)
     else:
@@ -1422,13 +1440,17 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
     return names if selection is None else [names[idx] for idx in selection]
 
 
-def model_matrix_survreg(fit: SurvregModelResult) -> dict[str, Any]:
+def model_matrix_survreg(fit: SurvregModelResult, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
 
+    strata_names = {spec.call for spec in fit.strata_terms}
+    removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
     return {
-        "data": [[float(value) for value in row] for row in fit.fit.covariates],
+        "data": [[float(value) for value in row] for row in fit.fit.covariates]
+        if data is None
+        else _newdata_inputs(fit, data, "na.omit").x,
         "columns": list(fit.coefficient_names),
-        "assign": list(fit.assign),
+        "assign": [code - sum(index < code for index in removed) for code in fit.assign],
     }
 
 

@@ -37,9 +37,11 @@ _MISSING = _MissingArgument()
 class _CovariateTerm:
     """One factor of a formula term.
 
-    ``call`` carries the text of an opaque categorising call (``tcut(...)``,
-    ``cut(...)``) that only ``pyears`` evaluates; ``column`` is then the data
-    column it reads (or the first column of its ``arithmetic`` argument).
+    ``call`` keeps a categorising or penalty expression; ``column`` is its
+    first data column (or the first column of its ``arithmetic`` argument).
+    ``strata`` describes a grouping expression used alone or in an interaction;
+    its call label, arguments and underlying data columns stay distinct.
+    ``special`` wraps an offset or cluster variable during formula expansion.
     """
 
     column: str
@@ -48,11 +50,30 @@ class _CovariateTerm:
     transform: str | None = None
     arithmetic: str | None = None
     call: str | None = None
+    strata: _StrataSpec | None = None
+    special: str | None = None
+
+
+@dataclass(frozen=True)
+class _StrataSpec:
+    """A parsed strata call, including named expressions and literal options."""
+
+    call: str
+    arguments: tuple[tuple[str, _CovariateTerm], ...]
+    columns: tuple[str, ...]
+    shortlabel: bool | None = None
+    na_group: bool = False
+    sep: str = ", "
 
 
 @dataclass(frozen=True)
 class _InteractionTerm:
-    factors: tuple[_CovariateTerm, ...]
+    # Factor order controls labels; term identity is independent of that order.
+    factors: tuple[_CovariateTerm, ...] = field(compare=False)
+    _identity: frozenset[_CovariateTerm] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_identity", frozenset(self.factors))
 
 
 _CovariateSpec = _CovariateTerm | _InteractionTerm
@@ -65,7 +86,7 @@ class _ModelCovariateTerm:
 
 @dataclass(frozen=True)
 class _ModelStrataTerm:
-    columns: tuple[str, ...]
+    spec: _StrataSpec
 
 
 @dataclass(frozen=True)
@@ -75,7 +96,7 @@ class _ModelOffsetTerm:
 
 @dataclass(frozen=True)
 class _ModelClusterTerm:
-    column: str
+    term: _CovariateTerm
 
 
 _FormulaModelTerm = _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | _ModelClusterTerm
@@ -83,12 +104,15 @@ _FormulaModelTerm = _ModelCovariateTerm | _ModelStrataTerm | _ModelOffsetTerm | 
 
 @dataclass(frozen=True)
 class _FormulaTerms:
+    """Fitted terms plus all model-frame variables, including removed terms."""
+
     covariates: list[_CovariateSpec]
     strata: list[str]
     offsets: list[_CovariateTerm]
     clusters: list[str]
     model_terms: list[_FormulaModelTerm] = field(default_factory=list)
     intercept: bool = True
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -99,6 +123,7 @@ class _CachedFormulaTerms:
     clusters: tuple[str, ...]
     model_terms: tuple[_FormulaModelTerm, ...] = ()
     intercept: bool = True
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +188,7 @@ class _FormulaDesign:
     term_assignments: tuple[int, ...] = ()
     strata: tuple[str, ...] = ()
     intercept: bool = False
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 @dataclass(frozen=True)

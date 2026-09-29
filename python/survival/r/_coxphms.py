@@ -59,8 +59,8 @@ from ._formula import (
     _formula_tokens,
     _scan,
     _split_terms,
+    _strata_specs,
     _strata_term,
-    _strata_term_columns,
     _top_level,
 )
 from ._surv import Surv, _missing_rows
@@ -379,7 +379,7 @@ def _term_key(term: _FormulaModelTerm) -> Any:
     ``b:a``), or a strata term's variables."""
 
     if isinstance(term, _ModelStrataTerm):
-        return ("strata", term.columns)
+        return ("strata", term.spec)
     if isinstance(term, _ModelCovariateTerm):
         return frozenset(_covariate_factors(term.term))
     return term
@@ -831,9 +831,7 @@ def fit_multistate(
         dtype=np.int32,
     )
     strata_columns = {
-        t: term.columns
-        for t, term in enumerate(allterm_terms)
-        if isinstance(term, _ModelStrataTerm)
+        t: term.spec for t, term in enumerate(allterm_terms) if isinstance(term, _ModelStrataTerm)
     }
     strata_positions = list(strata_columns)
     dformula_rhs = frame.formula.partition("~")[2] if formulas is None else formulas.dformula_rhs
@@ -961,7 +959,7 @@ def fit_multistate(
         strata_levels=tuple(frame.strata_levels),
         row_labels=tuple(row_labels),
     )
-    strata_labels = [f"strata({', '.join(columns)})" for columns in strata_columns.values()]
+    strata_labels = [spec.call for spec in strata_columns.values()]
     return CoxphmsModel(
         fit=engine,
         formula=frame.formula,
@@ -1359,15 +1357,15 @@ def _check_newdata_strata(fit: CoxphmsModel, newdata: dict[str, list[Any]]) -> N
     """Strata variables in ``newdata`` must take levels of the fit (``model.frame``'s
     ``xlev`` check); they select no curves."""
 
-    terms = _strata_term_columns(fit.terms)
-    if not terms or not all(column in newdata for columns in terms for column in columns):
+    terms = _strata_specs(fit.terms)
+    if not terms or not all(column in newdata for spec in terms for column in spec.columns):
         return
     data = _fit_frame(fit).data
     for columns in terms:
         fitted = set(_strata_term(data, columns).levels)
         for level in _strata_term(newdata, columns).levels:
             if level not in fitted:
-                raise ValueError(f"factor strata({', '.join(columns)}) has new level {level}")
+                raise ValueError(f"factor {columns.call} has new level {level}")
 
 
 def _coxms_newdata(

@@ -37,6 +37,84 @@ pickle retain these callbacks. Native Rust callers implement
 `regression::SurvregCallbacks`. See [AFT distribution callbacks](survreg-density.md)
 for the batch contract, examples, and serialization requirements.
 
+Cox and AFT formulas support stratum-specific effects such as
+`age * strata(sex)`, `age:strata(sex)`, and interactions with compound strata
+or categorical covariates. The strata still determine the Cox baseline hazards
+or AFT scales. Cox constructs the full model matrix before dropping the strata
+main effects; AFT removes those main effects before assigning contrasts. The
+port preserves this difference, including factor order and column labels.
+Cox survival curves for these models require `newdata`, as in R.
+
+Strata arguments may be comparisons, arithmetic, numeric transforms, factors,
+`cut()` calls, or nested strata. Named arguments set grouping labels;
+`shortlabel`, `sep`, and `na.group` accept literal options. For example,
+`strata(sex == 1)` groups by a comparison and
+`strata(g, na.group = TRUE)` retains missing values as a group. Arithmetic-created
+NaN forms a distinct `NaN` level, following R's factor conversion; input NaN
+continues to represent R's NA. Evaluated strata are reused within a model frame
+and subsetted with its rows, so data-dependent cut points are determined before
+subsetting. `scripts/generate_strata_expression_reference.R` checks model fits,
+predictions, missing-value actions, survival curves, and log-rank tests.
+On the local 100,000-row NumPy benchmark, constructing the model frame for
+`age * strata(sex)` fell from 97.1 ms to 71.5 ms; ordinary additive strata stayed
+near 24 ms. `scripts/bench_strata.py` measures this independently of model fitting.
+
+`scripts/generate_strata_interaction_reference.R` checks coefficients,
+covariances, design matrices, predictions, residuals, curves, and proportional
+hazards diagnostics. Its cases include delayed entry, Breslow ties, case
+weights, combined strata, and AFT scale strata. R's `predict.coxph` can remove
+the wrong columns when a strata interaction follows a multi-column factor:
+linear prediction errors and term prediction can silently use different
+columns. The fixture retains those R results and separately calculates the
+intended predictions from R's correct `model.matrix.coxph` output; the port
+uses that model matrix consistently.
+
+R's curve prediction fails for the same factor models, so the reference
+generator verifies their curves against equivalent separate fits within each
+stratum. R's proportional-hazards test also fails for redundant full factor
+indicators; the port's global test agrees with the equivalent treatment-coded
+model. The fixture records these R errors alongside the working references.
+
+`model_matrix(survreg_fit, data)` builds prediction rows with the fitted
+contrasts and drops incomplete rows. R's method can fail while rebuilding
+the terms of a model with strata interactions. Yates factorial and SAS
+populations retain compound strata as evaluated factors; their labels are
+not parsed back into the original source columns.
+
+Formula expansion also handles `offset()` and `cluster()` inside products,
+nesting, and powers. Each distinct offset contributes once even if it appears
+in a removed term, matching R's `terms()` behavior. Cluster main terms supply
+robust-variance groups; their interaction columns remain in the design. R's
+checks for multiple clusters and missing interaction margins are preserved.
+Cluster IDs may also be arithmetic expressions, comparisons, numeric
+transforms, or factor conversions, such as `cluster(site + id)` and
+`cluster(group > 5)`. Their evaluated values determine robust-variance groups
+in Cox/AFT fits and clustered survival curves. Source missing values and NaNs
+created by these expressions take part in model-frame row omission, including
+when the cluster main effect has been removed from the coefficient design.
+
+Variables removed by formula subtraction remain in the model frame and take
+part in training-row omission. For new-data predictions, `na.pass` allows a
+missing unused variable without losing the prediction; `na.omit`,
+`na.exclude`, and `na.fail` still check it. Cox and AFT cluster extraction
+rebuilds the formula and drops such unused variables, as R does.
+
+`scripts/generate_formula_special_reference.R` checks these cases against R,
+including numeric and categorical clusters and transformed missing values.
+It retains R's raw offset predictions alongside the intended values: the port
+includes AFT new-data offsets and consistently centers Cox offsets even for
+models without coefficients. For models without covariate terms, term
+prediction returns an empty-column matrix where R's method errors.
+
+Interaction identity ignores factor order: `age:sex` and `sex:age` name the
+same term, so subtraction and duplicate removal follow R. Grouped nesting
+such as `(a + b)/c` produces `a + b + a:b:c`; powers bind before interactions
+and products, and intercept changes inside parentheses are retained.
+Categorical contrasts account for margins contained in earlier interactions,
+even when those margins are not explicit main effects.
+`scripts/generate_formula_algebra_reference.R` records independent R design
+matrices, column names, assignments, and frame variables for these cases.
+
 ```python
 from survival import datasets, r
 
@@ -383,6 +461,12 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 
 ### Survival curves
 
+- Formula `cluster()` terms select robust-variance groups and warn about the
+  deprecated syntax, following the intended `survfit.formula` branch. R 3.8-12
+  reuses model-frame terms that have no special-term metadata, so the branch
+  is bypassed and cluster values become extra curve groups. The supplemental
+  formula-special reference retains those raw results and compares the port
+  with R's explicit `cluster=` argument.
 - `summary(fit, times)` of a multi-state curve with a time before its first
   time reports `p0` there. R's `findInterval` index is 0 for that time, so its
   `pstate` has one row fewer than its `time`.
@@ -544,15 +628,24 @@ this does not show.
 
 ### Missing values and newdata
 
-- Under na.pass (predict's default) and na.exclude, a newdata row with a
-  missing value in any variable the prediction reads predicts NaN in every
-  column, where R lets the NA reach only what uses it: `predict(type =
-  "terms")` keeps the terms whose variables are present in R (lung, age = NA,
-  sex = 2: R's sex term is -0.3106); `predict.survreg` computes lp, response and
-  terms for a row with a missing stratum (R: 6.215335, 6.090643);
-  `predict.coxph(type = "expected")` gives 0 for a missing stratum and ignores
-  a missing status of a right-censored response (R: 0.140304, 0.372894 for
-  status c(1, NA); here 0.1403, NaN). Under na.omit both drop such rows.
+- For ordinary Cox and AFT models under `na.pass` (predict's default), a missing
+  covariate affects only the predictions that use it. Term predictions retain
+  unaffected contributions and standard errors; an unknown offset leaves the linear-predictor standard
+  error available. This includes ridge and P-spline terms. AFT location and
+  term predictions do not require a known scale stratum.
+  Expected-count predictions use follow-up times regardless of a missing
+  event indicator. `na.omit` drops incomplete rows, `na.exclude` restores them
+  as all-NaN rows, and `na.fail` rejects them. The supplemental generator
+  `scripts/generate_partial_prediction_reference.R` checks these outputs.
+- A Cox expected-count prediction with an unknown stratum remains NaN here;
+  R leaves its initial value at zero and reports survival 1 for that row.
+- Empty strata after subset or missing-row removal are omitted. R retains
+  their factor levels; `survreg(~ age + g + strata(g, na.group = TRUE))` can
+  fail while assigning scale names after `g` removes the missing-value group.
+  The strata-expression reference records that error and checks the equivalent
+  complete-case R fit. For the same redundant Cox model, expected counts use
+  the estimable coefficients; R propagates its aliased coefficient's NA. The
+  reference checks expected counts against the equivalent model without `g`.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)

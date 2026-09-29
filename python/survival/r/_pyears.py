@@ -751,7 +751,7 @@ def _population_term_labels(mf: ModelFrame) -> list[str]:
         if isinstance(term, _ModelCovariateTerm):
             labels.append(_covariate_term_name(term.term))
         elif isinstance(term, _ModelStrataTerm):
-            labels.append(f"strata({', '.join(term.columns)})")
+            labels.append(term.spec.call)
     return labels
 
 

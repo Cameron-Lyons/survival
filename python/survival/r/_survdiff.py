@@ -19,7 +19,7 @@ from ._formula import (
     _offset_vector,
     _parse_formula,
     _strata_keep,
-    _strata_term_columns,
+    _strata_specs,
     _subset_formula_inputs,
     _term_values,
 )
@@ -58,7 +58,7 @@ def _formula_inputs(
             plain = term.transform is None and term.arithmetic is None
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
-    strata_terms = _strata_term_columns(terms)
+    strata_terms = _strata_specs(terms)
     strata = _strata_keep(data, strata_terms) if strata_terms else None
     offset = _offset_vector(data, terms.offsets, n) if terms.offsets else None
     if offset is not None and (columns or strata is not None):

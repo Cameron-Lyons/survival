@@ -37,11 +37,11 @@ from ._formula import (
     _formula_name,
     _response_arg_columns,
     _response_arg_values,
-    _strata_term_columns,
+    _strata_specs,
 )
 from ._surv import Surv
 from ._survreg import SurvregModelResult, predict_survreg
-from ._types import ConcordanceResult, SurvConcordanceResult
+from ._types import ConcordanceResult, SurvConcordanceResult, _StrataSpec
 
 _TIMEWT_CHOICES = ("n", "S", "S/G", "n/G2", "I")
 _COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
@@ -388,9 +388,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
         if fit.tt:
             raise ValueError("cannot yet handle models with tt terms")
         if newdata is not None:
-            return _newdata_fit_data(
-                fit, newdata, _strata_term_columns(fit.terms), predict_coxph, cluster
-            )
+            return _newdata_fit_data(fit, newdata, _strata_specs(fit.terms), predict_coxph, cluster)
         return _FitData(
             y=fit.y,
             x=fit.linear_predictors,
@@ -419,7 +417,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
 def _newdata_fit_data(
     fit: Any,
     newdata: Any,
-    strata_terms: Sequence[Sequence[str]],
+    strata_terms: Sequence[_StrataSpec],
     predict: Any,
     cluster: Any | None,
 ) -> _FitData:

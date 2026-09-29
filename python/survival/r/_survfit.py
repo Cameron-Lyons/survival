@@ -46,6 +46,7 @@ from ._formula import (
     _apply_formula_na_action,
     _column_source,
     _covariate_term_name,
+    _formula_cluster_values,
     _formula_columns,
     _formula_response_spec,
     _parse_formula,
@@ -266,7 +267,7 @@ def _formula_model_frame(
             DeprecationWarning,
             stacklevel=3,
         )
-        extras["cluster"] = _column_source(data, cluster_terms[0].column)
+        extras["cluster"] = _formula_cluster_values(data, terms, n)
     if terms.offsets:
         warnings.warn("Offset term ignored", stacklevel=3)
 
@@ -280,8 +281,8 @@ def _formula_model_frame(
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
         elif isinstance(model_term, _ModelStrataTerm):
-            name = f"strata({', '.join(model_term.columns)})"
-            columns[name] = _strata_term_values(data, model_term.columns)
+            name = model_term.spec.call
+            columns[name] = _strata_term_values(data, model_term.spec)
         elif not isinstance(model_term, _ModelOffsetTerm | _ModelClusterTerm):
             raise ValueError(f"unsupported survfit formula term {model_term!r}")
     return _survfit_data(response, response_name, columns, extras)
