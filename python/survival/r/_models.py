@@ -330,7 +330,14 @@ def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
 # formula, terms, weights, model matrix and frame
 # ---------------------------------------------------------------------------
 
-_FormulaFits = CoxphModel | CchModelResult | AaregModelResult | SurvregModelResult
+_FormulaFits = (
+    CoxphModel
+    | CchModelResult
+    | AaregModelResult
+    | SurvregModelResult
+    | PyearsResult
+    | SurvExpResult
+)
 
 
 @singledispatch
@@ -362,8 +369,10 @@ def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
-@model_term_names.register(AaregModelResult)
-def _model_term_names_aareg(fit: AaregModelResult, terms: Any | None = None) -> list[str]:
+@model_term_names.register(AaregModelResult | PyearsResult | SurvExpResult)
+def _model_term_names_stored(
+    fit: AaregModelResult | PyearsResult | SurvExpResult, terms: Any | None = None
+) -> list[str]:
     # labels.aareg
     names = list(fit.term_labels)
     return [names[idx] for idx in _terms_selection(terms, names)]
@@ -473,10 +482,20 @@ def _model_frame_cox(fit: CoxphModel) -> dict[str, list[Any]]:
 
 
 @model_frame.register(
-    AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult
+    AaregModelResult
+    | SurvregModelResult
+    | SurvfitResult
+    | SurvfitMultiStateResult
+    | PyearsResult
+    | SurvExpResult
 )
 def _model_frame_stored(
-    fit: AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult,
+    fit: AaregModelResult
+    | SurvregModelResult
+    | SurvfitResult
+    | SurvfitMultiStateResult
+    | PyearsResult
+    | SurvExpResult,
 ) -> dict[str, list[Any]]:
     if fit.model is None:
         raise TypeError("model_frame requires a fit made with model=TRUE")

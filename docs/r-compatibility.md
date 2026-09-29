@@ -417,8 +417,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   `start.time > 1`.
 - `survexp` with a coxph rate table and an individual method returns values
   when `subset =` or the na.action removes rows (R errors), and a row whose Cox
-  response is missing is dropped with the others (R returns NA for it when no
-  other row is removed).
+  response is missing is dropped with the others under `na.omit` (R returns NA
+  for it when no other row is removed). `na.exclude` restores removed rows as
+  NaN at positions relative to the selected subset.
 
 Turnbull curves follow R's EM (`survfitTurnbull.R`: Aitken acceleration every
 fifth step, stopping at max |change| < 5e-5). That rule is sensitive to
@@ -701,7 +702,35 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
-## Population and merged-data summaries
+## Population model components and summaries
+
+`pyears` and cohort `survexp` honor `model`, `x`, and `y`. `model=True`
+retains the evaluated formula columns, original source columns referenced by
+`rmap` expressions, and supplied weights. Factors retain their level order
+and unused levels, and `tcut` columns retain cutpoints and labels. Subsetting
+and missing-row removal apply consistently to every retained component.
+`model=True` takes precedence over `x` and `y`, as in R.
+
+With `model=False`, `pyears(x=True)` keeps a row-major matrix of one-based
+category codes and raw scaled `tcut` times; `survexp(x=True)` keeps a
+`StrataFactor` with zero-based codes, labels, and counts. Without grouping
+terms, either function retains a vector of ones. `pyears(y=True)` keeps the
+`Surv` response or a one-column numeric matrix. `survexp(y=True)` keeps
+numeric follow-up times; without a response, a rate-table call uses the
+maximum requested time before output scaling, and a Cox-reference call
+keeps `None`.
+
+Both results support `model_formula` and `model_term_names`, plus
+`model_frame` when made with `model=True`. The latter returns plain columns
+and expands a `Surv` response into its time/status columns; `.model`
+preserves the richer column objects. The default flags retain no row data.
+Individual `survexp` methods return a plain vector and ignore the retention
+flags. With `na.exclude`, they restore excluded rows as NaN.
+
+`scripts/generate_population_retention_reference.R` records these components
+and numerical outputs against R, including repeated subset rows, missing
+values, expression mappings, factor order, and both rate-table and Cox
+references.
 
 `summary_survexp`, `summary_ratetable`, and `summary_tmerge` are available
 through `survival.r` and the `model_summary` generic.
@@ -825,9 +854,6 @@ error; none silently falls back to other behaviour.
   generics; R's `c`, `rep`, `rev`,
   `unique`, `duplicated`, `t`, `levels`, `head`/`tail`, `as.character` and the
   `Math`/`Ops`/`Summary` groups are not ported.
-- **Components accepted and ignored**: `pyears` and `survexp` accept `model`,
-  `x` and `y` for compatibility, but their results carry no model frame, design
-  or response.
 - **Low-level R exports** that `survival.r` does not re-export: `coxph.fit`,
   `agreg.fit`, `agexact.fit`, `survreg.fit`, `survpenal.fit`, `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,

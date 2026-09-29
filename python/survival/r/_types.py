@@ -450,6 +450,11 @@ class SurvExpResult:
     ``surv`` and ``n_risk`` are vectors for one curve and row-major
     ``ntime x ngroup`` matrices (``strata`` naming the columns) otherwise; the
     individual methods return a plain list instead.
+
+    ``model=True`` retains the evaluated model frame in ``model``. Otherwise,
+    ``x=True`` retains a ``StrataFactor`` (a vector of ones without groups), and
+    ``y=True`` retains the numeric follow-up times. ``formula`` and ``term_labels``
+    identify the original formula regardless of the retention flags.
     """
 
     time: list[float]
@@ -458,6 +463,11 @@ class SurvExpResult:
     method: str
     n: int
     strata: list[str] | None = None
+    formula: str | None = None
+    term_labels: list[str] = field(default_factory=list)
+    model: dict[str, Any] | None = None
+    x: StrataFactor | list[float] | None = None
+    y: list[float] | None = None
 
     @property
     def cumhaz(self) -> list[float] | list[list[float]]:
@@ -494,6 +504,12 @@ class PyearsResult:
     grouping); ``dimnames`` maps each term label to its level labels, in formula
     order.  ``data`` is the ``data.frame = TRUE`` layout instead.  ``na_action``
     records the rows the ``na.action`` removed (``None`` when it removed none).
+
+    ``model=True`` retains the evaluated model frame in ``model``. Otherwise,
+    ``x=True`` retains the one-based grouping codes and raw ``tcut`` times as a
+    row-major matrix (a vector of ones without groups), and ``y=True`` retains
+    the ``Surv`` response or a one-column numeric matrix. ``formula`` and
+    ``term_labels`` identify the formula regardless of the retention flags.
     """
 
     pyears: Any
@@ -507,6 +523,11 @@ class PyearsResult:
     expected: Any = None
     data: dict[str, list[Any]] | None = None
     na_action: NaAction | None = None
+    formula: str | None = None
+    term_labels: list[str] = field(default_factory=list)
+    model: dict[str, Any] | None = None
+    x: list[float] | list[list[float]] | None = None
+    y: Surv | list[list[float]] | None = None
 
     @property
     def group(self) -> list[str]:

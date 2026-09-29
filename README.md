@@ -560,6 +560,13 @@ expected = population.survexp(us, positions, times=[365.25, 1826.25])
 print(expected.method, expected.surv)
 ```
 
+The formula API (`survival.r.pyears` and `survival.r.survexp`) supports
+`model=True` to retain evaluated input columns, or `x=True` and `y=True`
+to retain grouping and response components. `model=True` takes precedence.
+Use `model_frame`, `model_formula`, and `model_term_names` to inspect them;
+see [population model components](docs/r-compatibility.md#population-model-components-and-summaries)
+for the retained representations and missing-row behavior.
+
 ### Kaplan-Meier Survival Curves
 
 ```python

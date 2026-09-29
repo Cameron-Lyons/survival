@@ -13,7 +13,7 @@ import math
 import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date as _Date
 from datetime import datetime as _DateTime
 from datetime import timedelta as _TimeDelta
@@ -35,8 +35,12 @@ from ._coerce import (
     _normalize_bool_option,
     _normalize_positive_scale,
     _pop_dotted_keyword,
+    _r_factor,
+    _rows_of,
     _scalar_or_vector,
+    _subset_sequence,
 )
+from ._fit import _excluded_rows, _pad_rows
 from ._formula import (
     _arithmetic_expression_values,
     _call_arguments,
@@ -52,6 +56,7 @@ from ._formula import (
     _formula_rhs_terms,
     _literal_vector,
     _model_strata,
+    _model_variables,
     _numeric_scalar,
     _numeric_vector,
     _r_literal,
@@ -67,11 +72,14 @@ from ._types import (
     NaAction,
     PyearsResult,
     RateTable,
+    StrataFactor,
     SurvExpResult,
     SurvExpSummary,
     TcutResult,
     _CovariateTerm,
     _InteractionTerm,
+    _ModelCovariateTerm,
+    _ModelStrataTerm,
 )
 
 # ---------------------------------------------------------------------------
@@ -717,6 +725,123 @@ def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[A
     return _cell_frame(tables, {term.label: term.levels for term in terms})
 
 
+def _population_retention_options(model: Any, x: Any, y: Any) -> tuple[bool, bool, bool]:
+    """R keeps either the complete frame or the requested X/Y components."""
+
+    if _normalize_bool_option(model, "model"):
+        return True, False, False
+    return False, _normalize_bool_option(x, "x"), _normalize_bool_option(y, "y")
+
+
+def _population_retention_rows(extra: dict[str, Any], n: int, keep: bool) -> str | None:
+    """Carry original row indices through the existing subset/NA path."""
+
+    if not keep:
+        return None
+    name = "_population_model_rows"
+    while name in extra:
+        name += "_"
+    extra[name] = list(range(n))
+    return name
+
+
+def _population_term_labels(mf: ModelFrame) -> list[str]:
+    labels = []
+    for term in mf.terms.model_terms:
+        if isinstance(term, _ModelCovariateTerm):
+            labels.append(_covariate_term_name(term.term))
+        elif isinstance(term, _ModelStrataTerm):
+            labels.append(f"strata({', '.join(term.columns)})")
+    return labels
+
+
+def _rmap_source_names(
+    rmap: Mapping[str, Any] | None, names: Sequence[str], data: Any
+) -> list[str]:
+    """The columns R adds to the model frame via ``all.vars(rcall)``."""
+
+    entries = dict(rmap or {})
+    for name in names:
+        entries.setdefault(name, name)
+    available = set(_data_column_names(data) or ())
+    sources: dict[str, None] = {}
+    for value in entries.values():
+        if not isinstance(value, str):
+            continue
+        if value in available:
+            sources[value] = None
+            continue
+        try:
+            used = _expression_columns(value)
+        except ValueError:
+            # A mapping may contain a literal category or date label.
+            continue
+        sources.update((name, None) for name in used if name in available)
+    return list(sources)
+
+
+def _population_variable_overrides(
+    mf: ModelFrame,
+    data: Any,
+    calls: Mapping[str, _CallTerm] | None = None,
+) -> dict[str, Any]:
+    """Preserve factor levels and tcut metadata in evaluated formula columns."""
+
+    overrides: dict[str, Any] = {}
+    for term in mf.terms.covariates:
+        if not isinstance(term, _CovariateTerm):
+            continue
+        label = _covariate_term_name(term)
+        if term.call is not None and calls is not None and term.call in calls:
+            call = calls[term.call]
+            values = mf.extra[term.call]
+            if call.cuts is not None:
+                overrides[label] = _core.tcut(values, call.cuts, call.levels, 1.0)
+            elif call.levels is not None:
+                overrides[label] = _r_factor(
+                    [None if _is_missing_value(v) else call.levels[int(v) - 1] for v in values],
+                    call.levels,
+                )
+            else:
+                overrides[label] = list(values)
+        elif term.categorical_wrapper is not None:
+            factor = _factor_call_term(mf, term, label, data)
+            overrides[label] = _r_factor(
+                [None if math.isnan(v) else factor.levels[int(v) - 1] for v in factor.values],
+                factor.levels,
+            )
+        elif term.transform is None and term.arithmetic is None:
+            source = _column_source(mf.data, term.column)
+            overrides[label] = _rows_of(source, _materialize_labels(source, label))
+    return overrides
+
+
+def _population_model_frame(
+    mf: ModelFrame,
+    data: Any,
+    row_key: str,
+    rmap: Mapping[str, Any] | None,
+    rate_names: Sequence[str],
+    calls: Mapping[str, _CallTerm] | None = None,
+) -> dict[str, Any]:
+    """Snapshot the evaluated formula columns and the original rmap source columns."""
+
+    overrides = _population_variable_overrides(mf, data, calls)
+    frame: dict[str, Any] = {}
+    if mf.response is not None:
+        frame[mf.response_name or "response"] = mf.response
+    elif mf.y is not None:
+        frame[mf.response_name or "response"] = list(mf.y)
+    frame.update(_model_variables(mf, overrides))
+    rows = [int(row) for row in mf.extra[row_key]]
+    for name in _rmap_source_names(rmap, rate_names, data):
+        if name not in frame:
+            frame[name] = _subset_sequence(_column_source(data, name), rows, name)
+    if mf.weights is not None:
+        frame["(weights)"] = list(mf.weights)
+    return frame
+
+
 def _pyears_result(
     result: Any, terms: Sequence[_PyearsTerm], data_frame: bool, na_action: NaAction | None
 ) -> PyearsResult:
@@ -763,6 +888,7 @@ def _pyears_direct(
     na_action: Any,
     scale: float,
     data_frame: bool,
+    retention: tuple[bool, bool, bool],
 ) -> PyearsResult:
     """``pyears`` on vectors (the reticulate bridge's entry): one ``group`` category."""
 
@@ -809,6 +935,9 @@ def _pyears_direct(
         na_action=na_action,
         scale=scale,
         data_frame=data_frame,
+        model=retention[0],
+        x=retention[1],
+        y=retention[2],
     )
 
 
@@ -840,6 +969,9 @@ def pyears(
     ``rmap`` maps rate-table dimensions to columns or vectors.  A ``Surv`` object or
     time vector as ``formula`` with ``group``/``time``/``start``/``stop``/``event``
     keywords tabulates plain vectors (the reticulate bridge's call).
+    ``model=True`` retains the evaluated model frame. Otherwise, ``x=True``
+    retains the grouping codes and raw ``tcut`` times (ones without groups),
+    and ``y=True`` retains the ``Surv`` response or a one-column numeric matrix.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
@@ -848,6 +980,7 @@ def pyears(
         raise TypeError(f"pyears got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     scale_value = _normalize_positive_scale(scale)
     data_frame_value = _normalize_bool_option(data_frame, "data.frame")
+    retention = _population_retention_options(model, x, y)
     expect_value = _match_string_arg(
         expect, "expect", ("event", "pyears"), "expect must be event or pyears"
     )
@@ -864,6 +997,7 @@ def pyears(
             na_action,
             scale_value,
             data_frame_value,
+            retention,
         )
     table = None if ratetable is None and rmap is None else _ratetable_argument(ratetable)
     if rmap is not None and ratetable is None:
@@ -873,6 +1007,7 @@ def pyears(
     # with the formula's variables, so a cut() value outside the breaks drops its row
     extra = {} if table is None else _rmap_columns(rmap, table, data)
     extra.update((call, term.values) for call, term in calls.items())
+    row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
     mf = model_frame(
         formula, data, subset=subset, na_action=na_action or "omit", weights=weights, extra=extra
     )
@@ -880,6 +1015,7 @@ def pyears(
         raise ValueError("Data set has 0 observations")
     stop_values, start_values, event_values = _pyears_followup(mf)
     terms = _pyears_terms(mf, data, calls)
+    categories = [[term.values[row] for term in terms] for row in range(mf.n)]
     result = _core.pyears(
         stop_values,
         start_values,
@@ -888,13 +1024,27 @@ def pyears(
         [term.factor for term in terms],
         [len(term.levels) for term in terms],
         [term.cuts for term in terms],
-        [[term.values[row] for term in terms] for row in range(mf.n)],
+        categories,
         table,
         None if table is None else _rate_positions(mf, table),
         expect_value,
         scale_value,
     )
-    return _pyears_result(result, terms, data_frame_value, mf.na_action)
+    output = _pyears_result(result, terms, data_frame_value, mf.na_action)
+    return replace(
+        output,
+        formula=formula,
+        term_labels=[term.label for term in terms],
+        model=None
+        if row_key is None
+        else _population_model_frame(
+            mf, data, row_key, rmap, [] if table is None else table.dimid, calls
+        ),
+        x=((categories if terms else [1.0] * mf.n) if retention[1] else None),
+        y=(mf.response if mf.response is not None else [[value] for value in mf.y])
+        if retention[2]
+        else None,
+    )
 
 
 def _pyears_result_frame(result: PyearsResult) -> dict[str, list[Any]]:
@@ -1118,14 +1268,14 @@ def _is_tcut(mf: ModelFrame, term: _CovariateTerm) -> bool:
     )
 
 
-def _survexp_groups(mf: ModelFrame) -> tuple[list[int] | None, list[str] | None]:
+def _survexp_groups(mf: ModelFrame, data: Any) -> tuple[list[int] | None, list[str] | None]:
     """R's ``strata(mf[ovars])``: zero-based curve of each row and the curve labels."""
 
     if any(isinstance(term, _InteractionTerm) for term in mf.terms.covariates):
         raise ValueError("Survexp cannot have interaction terms")
     if any(_is_tcut(mf, term) for term in mf.terms.covariates if isinstance(term, _CovariateTerm)):
         raise ValueError("Can't use tcut variables in expected survival")
-    groups = _model_strata(mf)
+    groups = _model_strata(mf, _population_variable_overrides(mf, data))
     if groups is None:
         return None, None
     if any(code is None for code in groups.codes):
@@ -1176,6 +1326,51 @@ def _survexp_result(result: Any, levels: list[str] | None, n: int) -> SurvExpRes
         method=str(result.method),
         n=n,
         strata=levels,
+    )
+
+
+def _survexp_retained(
+    output: SurvExpResult,
+    mf: ModelFrame,
+    data: Any,
+    rmap: Mapping[str, Any] | None,
+    rate_names: Sequence[str],
+    row_key: str | None,
+    retention: tuple[bool, bool, bool],
+    groups: list[int] | None,
+    levels: list[str] | None,
+    response: list[float] | None,
+    default_followup: float | None = None,
+) -> SurvExpResult:
+    categories: StrataFactor | list[float] | None = None
+    if retention[1]:
+        if groups is None or levels is None:
+            categories = [1.0] * mf.n
+        else:
+            counts = [0] * len(levels)
+            for code in groups:
+                counts[code] += 1
+            categories = StrataFactor(
+                codes=list(groups),
+                levels=list(levels),
+                labels=[levels[code] for code in groups],
+                counts=counts,
+            )
+    followup = None
+    if retention[2]:
+        if response is not None:
+            followup = list(response)
+        elif default_followup is not None:
+            followup = [default_followup] * mf.n
+    return replace(
+        output,
+        formula=mf.formula,
+        term_labels=_population_term_labels(mf),
+        model=None
+        if row_key is None
+        else _population_model_frame(mf, data, row_key, rmap, rate_names),
+        x=categories,
+        y=followup,
     )
 
 
@@ -1263,8 +1458,10 @@ def survexp(
     with ``rmap`` naming the rate-table variables.  The ``time``/``age``/``year``/
     ``sex`` keywords are the reticulate bridge's vector call (``survexp.us`` with
     ``rmap = list(age, sex, year)``).  The individual methods return one value per
-    subject.  ``model``, ``x`` and ``y`` are accepted for R compatibility; the
-    result carries no model frame.
+    subject. ``model=True`` retains the evaluated model frame. Otherwise
+    ``x=True`` retains the grouping factor (ones without groups), and ``y=True``
+    retains follow-up times. Individual methods return a vector and ignore
+    these retention flags, as in R.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
@@ -1279,12 +1476,15 @@ def survexp(
     from ._coxph import CoxphModel, _survfit_curves, predict_coxph
     from ._coxphms import CoxphmsModel
 
+    method_value = _survexp_method(method, cohort, conditional, _response_spec(formula) is not None)
+    retention = (
+        (False, False, False)
+        if method_value.startswith("individual")
+        else _population_retention_options(model, x, y)
+    )
     if isinstance(ratetable, CoxphmsModel):
         raise ValueError("Invalid rate table")
     if isinstance(ratetable, CoxphModel):
-        method_value = _survexp_method(
-            method, cohort, conditional, _response_spec(formula) is not None
-        )
         names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
         extra = _mapped_columns(rmap, names, data)
         if method_value.startswith("individual"):
@@ -1292,6 +1492,7 @@ def survexp(
             # survexp adds the data's remaining columns to the rate variables
             for name in _formula_columns(ratetable.formula, data):
                 extra.setdefault(name, name)
+        row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
         mf = model_frame(
             formula,
             data,
@@ -1311,9 +1512,10 @@ def survexp(
             if response is None:
                 raise ValueError("for individual survival an observation time must be given")
             hazard = predict_coxph(ratetable, mapped, type="expected")
-            return (
+            values = (
                 hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
             )
+            return _pad_rows(values, _excluded_rows(mf.na_action))
         # survexp.cfit needs a curve for every data row: a row whose rate variables
         # the Cox model's terms make missing (log(-1)) is an error, not left out
         curves, _, _ = _survfit_curves(
@@ -1327,7 +1529,7 @@ def survexp(
             censor=False,
             na_action="na.fail",
         )
-        groups, levels = _survexp_groups(mf)
+        groups, levels = _survexp_groups(mf, data)
         result = _core.survexp_cox(
             curves,
             groups or [0] * mf.n,
@@ -1338,22 +1540,20 @@ def survexp(
         )
         output = _survexp_result(result, levels, mf.n)
         divisor = _normalize_positive_scale(scale)
-        return SurvExpResult(
-            time=[value / divisor for value in output.time],
-            surv=output.surv,
-            n_risk=output.n_risk,
-            method=output.method,
-            n=output.n,
-            strata=output.strata,
+        output = replace(output, time=[value / divisor for value in output.time])
+        return _survexp_retained(
+            output, mf, data, rmap, names, row_key, retention, groups, levels, response
         )
     table = _ratetable_argument(ratetable)
+    extra = _rmap_columns(rmap, table, data)
+    row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
     mf = model_frame(
         formula,
         data,
         subset=subset,
         na_action=na_action or "omit",
         weights=weights,
-        extra=_rmap_columns(rmap, table, data),
+        extra=extra,
     )
     if mf.n == 0:
         raise ValueError("Data set has 0 rows")
@@ -1365,10 +1565,9 @@ def survexp(
     response = _survexp_response(mf)
     if response is None and requested is None:
         raise ValueError("either a times argument or a response is needed")
-    method_value = _survexp_method(method, cohort, conditional, response is not None)
     if response is None and method_value != "ederer":
         raise ValueError("a response is required in the formula unless method='ederer'")
-    groups, levels = _survexp_groups(mf)
+    groups, levels = _survexp_groups(mf, data)
     result = _core.survexp(
         table,
         _rate_positions(mf, table),
@@ -1381,5 +1580,17 @@ def survexp(
         _normalize_positive_scale(scale),
     )
     if method_value.startswith("individual"):
-        return [row[0] for row in result.surv]
-    return _survexp_result(result, levels, mf.n)
+        return _pad_rows([row[0] for row in result.surv], _excluded_rows(mf.na_action))
+    return _survexp_retained(
+        _survexp_result(result, levels, mf.n),
+        mf,
+        data,
+        rmap,
+        table.dimid,
+        row_key,
+        retention,
+        groups,
+        levels,
+        response,
+        max(requested) if requested else None,
+    )
