@@ -899,6 +899,8 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
         "location_coefficient_names": _location_names(fit),
         "scale": model.scale[0] if len(model.scale) == 1 else list(model.scale),
         "scales": list(model.scale),
+        "scale_names": list(fit.strata_levels) if len(model.scale) > 1 else [],
+        "fixed_scale": _estimated_scale_count(model) == 0,
         "distribution": distribution.name,
         "parms": (
             f"{distribution.name} distribution: parmameters= {' '.join(map(str, parms))}"

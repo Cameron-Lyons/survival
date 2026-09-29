@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from .._survival import AnovaCoxphResult
 from ._aareg import aareg
+from ._aareg_print import print_aareg, print_summary_aareg
 from ._cch import cch
 from ._concordance import concordance, concordancefit, survConcordance, survConcordance_fit
 from ._coxph import (
@@ -29,7 +30,6 @@ from ._coxph import (
     coxph_wtest,
 )
 from ._coxph_print import (
-    ModelPrint,
     print_coxph,
     print_coxph_null,
     print_coxph_penal,
@@ -166,6 +166,7 @@ from ._survreg import (
     survreg_distributions,
     survregDtest,
 )
+from ._survreg_print import print_summary_survreg, print_survreg
 from ._types import (
     AaregModelResult,
     BrierResult,
@@ -180,6 +181,7 @@ from ._types import (
     FineGrayFrame,
     FineGrayOutput,
     ModelFrame,
+    ModelPrint,
     NaAction,
     NamedMatrix,
     PredictResult,
@@ -340,6 +342,10 @@ __all__ = [
     "predict",
     "predict_pspline",
     "print_survreg_penal",
+    "print_survreg",
+    "print_summary_survreg",
+    "print_aareg",
+    "print_summary_aareg",
     "ModelPrint",
     "print_coxph",
     "print_coxph_null",

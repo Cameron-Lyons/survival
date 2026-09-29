@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add AFT and Aalen model/summary reports, including scales, coefficient
+  correlations, missing-row notices and full-precision tables. Preserve robust
+  Aalen covariance when changing summary cutoffs or test weights, with bounded
+  influence conversion memory. Add width and data-frame support to penalized
+  AFT reports.
+
 - Add Cox model and summary reports for ordinary, robust, null, penalized and
   multistate fits, with full-precision tables and statistics, R-style coefficient
   formatting, confidence intervals, term tests and transition grouping.

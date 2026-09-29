@@ -266,6 +266,7 @@ class AaregModelResult:
     y: Surv | None = None
     # attr(terms, "term.labels"): the formula's terms, which labels.aareg returns
     term_labels: tuple[str, ...] = ()
+    na_action: NaAction | None = None
 
     @property
     def nrisk(self) -> list[float]:
@@ -1093,6 +1094,25 @@ class NamedMatrix:
     rownames: list[str] | None
     colnames: list[str]
     values: list[list[float]] | list[list[int]]
+
+
+@dataclass(frozen=True)
+class ModelPrint:
+    """Full-precision model tables, statistics and independently formatted text.
+
+    ``tables`` contains ``coefficients`` and, for summaries, optional ``conf_int``
+    or ``correlation`` matrices, depending on the model.
+    ``statistics`` holds the numerical footer fields. Neither constructing a report
+    nor converting it to a string writes to stdout. Original R calls are omitted.
+    """
+
+    tables: dict[str, NamedMatrix]
+    statistics: dict[str, Any]
+    digits: int
+    lines: list[str]
+
+    def __str__(self) -> str:
+        return "\n".join(self.lines) + "\n"
 
 
 @dataclass(frozen=True)

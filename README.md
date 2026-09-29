@@ -864,6 +864,15 @@ model tests. Reports retain full-precision tables and statistics and support
 `as_data_frame`. See [Cox model reports](docs/cox-model-reports.md) for options
 and R compatibility.
 
+## AFT and Aalen model reports
+
+`r.print_survreg(fit)` and `r.print_aareg(fit)` provide model reports, with
+`r.print_summary_survreg` and `r.print_summary_aareg` for numerical summaries.
+AFT reports include scales and optional correlations; Aalen reports preserve
+robust uncertainty when changing event cutoffs or test weights. See
+[AFT and Aalen reports](docs/aft-aalen-reports.md) for options, R differences
+and influence-reduction memory measurements.
+
 ## Survival curve reports
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and

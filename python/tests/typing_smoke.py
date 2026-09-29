@@ -16,7 +16,10 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.print_coxph(cox), r.ModelPrint)
     assert_type(r.print_summary_coxph(r.model_summary(cox)), r.ModelPrint)
     assert_type(r.clogit("status ~ age + strata(inst)", data), r.ClogitModel)
-    assert_type(r.survreg("Surv(time, status) ~ age", data), r.SurvregModelResult)
+    aft = r.survreg("Surv(time, status) ~ age", data)
+    assert_type(aft, r.SurvregModelResult)
+    assert_type(r.print_survreg(aft), r.ModelPrint | r.SurvregPenalPrint)
+    assert_type(r.print_summary_survreg(r.model_summary(aft)), r.ModelPrint)
     assert_type(
         r.survfit("Surv(time, status) ~ sex", data),
         r.SurvfitResult
@@ -29,7 +32,10 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     y = r.Surv(data["time"], data["status"])
     assert_type(r.concordancefit(y, data["age"]), r.ConcordanceResult)
     assert_type(r.survConcordance("Surv(time, status) ~ age", data), r.SurvConcordanceResult)
-    assert_type(r.aareg("Surv(time, status) ~ age", data), r.AaregModelResult)
+    additive = r.aareg("Surv(time, status) ~ age", data)
+    assert_type(additive, r.AaregModelResult)
+    assert_type(r.print_aareg(additive), r.ModelPrint)
+    assert_type(r.print_summary_aareg(r.model_summary(additive)), r.ModelPrint)
     assert_type(r.aggregate_survfit(curves), r.CoxSurvfitResult)
     assert_type(r.print_survfit(curves), r.SurvfitPrint)
     assert_type(r.print_summary_survfit(r.summary_survfit(curves)), r.SurvivalTablePrint)
