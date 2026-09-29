@@ -1063,6 +1063,17 @@ influence information across cutoffs and test-weight changes. Penalized AFT
 reports also support explicit width and data-frame conversion. See
 [AFT and Aalen reports](aft-aalen-reports.md) for R comparisons and memory measurements.
 
+## Diagnostic and test reports
+
+Case-cohort model/summary, conditional-logistic, proportional-hazards,
+concordance (current and legacy), and survival-difference reports return
+`ModelPrint` objects with full-precision tables. `as_data_frame` selects the
+report's `primary_table` and labels rows using `row_label`. Formula-based
+concordance and survival-difference results now retain omission records;
+case-cohort fits retain stratum labels. The printers reuse existing numerical
+results. See [diagnostic and test reports](diagnostic-test-reports.md) for
+formatting rules, R quirks and reference coverage.
+
 ## Compact curve reports
 
 `print_survfit` and `print_survfitms` return R's compact curve tables and formatted
@@ -1108,10 +1119,13 @@ error; none silently falls back to other behaviour.
 - **Remaining R-style print and format methods**: `survival.r` returns data
   objects and `as_data_frame` tables for most model and summary reports.
   Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
-  reports, expected-survival reports, and `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
-  `str(summary_ratetable(...))` exposes the native rate-table text. Other model
-  and test-statistic reports and the sparse (frailty) branch of
-  `print.survreg.penal` are not ported.
+  reports, expected-survival reports, case-cohort, conditional-logistic,
+  proportional-hazards, concordance, survival-difference reports and
+  `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
+  `str(summary_ratetable(...))` exposes the native rate-table text. Dedicated
+  `print.Surv`, `print.Surv2`, `print.survcheck`, `print.yates`, `print.pyears`,
+  `print.ratetable` and the sparse (frailty) branch of `print.survreg.penal`
+  are not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.

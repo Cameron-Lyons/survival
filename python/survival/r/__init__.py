@@ -167,6 +167,15 @@ from ._survreg import (
     survregDtest,
 )
 from ._survreg_print import print_summary_survreg, print_survreg
+from ._test_print import (
+    print_cch,
+    print_clogit,
+    print_concordance,
+    print_cox_zph,
+    print_summary_cch,
+    print_survConcordance,
+    print_survdiff,
+)
 from ._types import (
     AaregModelResult,
     BrierResult,
@@ -346,6 +355,13 @@ __all__ = [
     "print_summary_survreg",
     "print_aareg",
     "print_summary_aareg",
+    "print_cch",
+    "print_summary_cch",
+    "print_clogit",
+    "print_cox_zph",
+    "print_concordance",
+    "print_survConcordance",
+    "print_survdiff",
     "ModelPrint",
     "print_coxph",
     "print_coxph_null",

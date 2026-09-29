@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add case-cohort, conditional-logistic, proportional-hazards diagnostic,
+  concordance and survival-difference reports with full-precision tables.
+  Retain formula omission records and case-cohort stratum labels, and avoid
+  repeated covariance copies in case-cohort summaries.
+
 - Add AFT and Aalen model/summary reports, including scales, coefficient
   correlations, missing-row notices and full-precision tables. Preserve robust
   Aalen covariance when changing summary cutoffs or test weights, with bounded

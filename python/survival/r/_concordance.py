@@ -8,7 +8,7 @@ import math
 import operator
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .. import _survival as _core
@@ -349,7 +349,7 @@ def _concordance_formula(
     frame = _concordance_frame(
         frame_formula, data, subset=subset, na_action=na_action, weights=weights, cluster=cluster
     )
-    return concordancefit(
+    result = concordancefit(
         frame.y,
         frame.x,
         strata=frame.strata_labels(),
@@ -360,6 +360,7 @@ def _concordance_formula(
         _formula=formula,
         **options,
     )
+    return replace(result, na_action=frame.na_action)
 
 
 @dataclass(frozen=True)
@@ -700,6 +701,7 @@ def survConcordance(
         stats=stats,
         n=frame.n,
         std_err=total["std(c-d)"] / (2.0 * npair),
+        na_action=frame.na_action,
     )
 
 

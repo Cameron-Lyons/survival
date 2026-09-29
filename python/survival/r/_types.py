@@ -210,6 +210,7 @@ class CchModelResult:
     cohort_size: tuple[int, ...]
     subcohort_size: tuple[int, ...]
     sc_ids: tuple[Any, ...] | None
+    stratum_names: tuple[str, ...] | None = None
 
     @property
     def coefficients(self) -> list[float]:
@@ -396,6 +397,7 @@ class ConcordanceResult:
     influence: list[list[float]] | list[list[list[float]]] | None = None
     ranks: dict[str, list[Any]] | list[dict[str, list[float]]] | None = None
     formula: str | None = None
+    na_action: NaAction | None = None
 
     @property
     def std(self) -> float | list[float] | None:
@@ -422,6 +424,7 @@ class SurvConcordanceResult:
     stats: dict[str, float] | dict[str, dict[str, float]]
     n: int
     std_err: float
+    na_action: NaAction | None = None
 
 
 @dataclass(frozen=True)
@@ -1098,10 +1101,12 @@ class NamedMatrix:
 
 @dataclass(frozen=True)
 class ModelPrint:
-    """Full-precision model tables, statistics and independently formatted text.
+    """Full-precision model/test tables, statistics and independently formatted text.
 
     ``tables`` contains ``coefficients`` and, for summaries, optional ``conf_int``
-    or ``correlation`` matrices, depending on the model.
+    or ``correlation`` matrices, depending on the model. Diagnostics instead use
+    ``tests``, ``test``, ``concordance`` or ``counts``; ``primary_table`` selects the
+    table converted by ``as_data_frame``, with its row names under ``row_label``.
     ``statistics`` holds the numerical footer fields. Neither constructing a report
     nor converting it to a string writes to stdout. Original R calls are omitted.
     """
@@ -1110,6 +1115,8 @@ class ModelPrint:
     statistics: dict[str, Any]
     digits: int
     lines: list[str]
+    primary_table: str = "coefficients"
+    row_label: str = "term"
 
     def __str__(self) -> str:
         return "\n".join(self.lines) + "\n"
@@ -1162,6 +1169,7 @@ class SurvDiffResult:
     df: int
     groups: list[str]
     strata: dict[str, int] | None = None
+    na_action: NaAction | None = None
 
 
 SurvfitConfidenceIntervalResult = _core.ConfidenceBands

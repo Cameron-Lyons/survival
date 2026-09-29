@@ -548,23 +548,23 @@ def _apply_surv_na_action(
     na_action: str | None,
     context: str,
     **row_aligned: Any,
-) -> tuple[Surv, dict[str, Any]]:
-    """Apply an ``na.action`` to a ``Surv`` response and its row-aligned vectors."""
+) -> tuple[Surv, dict[str, Any], list[int]]:
+    """Filter a response and aligned vectors; return omitted zero-based row indices."""
 
     action = _normalize_na_action(na_action)
     if action == "pass":
-        return response, row_aligned
+        return response, row_aligned, []
     columns = [(name, values) for name, values in row_aligned.items() if values is not None]
     missing = _missing_row_indices(columns, len(response))
     missing.update(np.flatnonzero(_missing_rows(response)).tolist())
     keep = _keep_rows_after_na_action(missing, len(response), action, context)
     if keep is None:
-        return response, row_aligned
+        return response, row_aligned, []
     filtered = {
         name: _subset_sequence(values, keep, name) if values is not None else None
         for name, values in row_aligned.items()
     }
-    return response.subset(keep), filtered
+    return response.subset(keep), filtered, sorted(missing)
 
 
 # --- helpers other modules build on ------------------------------------------

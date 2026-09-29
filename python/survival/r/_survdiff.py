@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from .. import _survival as _core
@@ -16,6 +17,7 @@ from ._formula import (
     _apply_formula_na_action,
     _column_source,
     _covariate_term_name,
+    _na_action_record,
     _offset_vector,
     _parse_formula,
     _strata_keep,
@@ -25,7 +27,7 @@ from ._formula import (
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._survfit import _curve_factor
-from ._types import StrataFactor, SurvDiffResult, _InteractionTerm, _ModelCovariateTerm
+from ._types import NaAction, StrataFactor, SurvDiffResult, _InteractionTerm, _ModelCovariateTerm
 
 
 def _response_check(y: Surv) -> None:
@@ -39,12 +41,12 @@ def _response_check(y: Surv) -> None:
 
 def _formula_inputs(
     formula: str, data: Any, subset: Any | None, na_action: str | None
-) -> tuple[Surv, dict[str, Any], StrataFactor | None, list[float] | None]:
+) -> tuple[Surv, dict[str, Any], StrataFactor | None, list[float] | None, NaAction | None]:
     """The model frame: the response, the group columns, the strata factor and the offset."""
 
     if subset is not None:
         data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned, _removed = _apply_formula_na_action(formula, data, na_action)
+    data, _aligned, removed = _apply_formula_na_action(formula, data, na_action)
     y, terms = _parse_formula(formula, data)
     n = len(y)
     if terms.clusters:
@@ -63,7 +65,7 @@ def _formula_inputs(
     offset = _offset_vector(data, terms.offsets, n) if terms.offsets else None
     if offset is not None and (columns or strata is not None):
         raise ValueError("Cannot have both an offset and groups")
-    return y, columns, strata, offset
+    return y, columns, strata, offset, _na_action_record(na_action, removed)
 
 
 def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvDiffResult:
@@ -149,12 +151,12 @@ def survdiff(
         raise ValueError("invalid value for timefix option")
     rho = _finite_float(rho, "rho")
     if isinstance(response, str):
-        y, columns, strata, offset = _formula_inputs(response, data, subset, na_action)
+        y, columns, strata, offset, omitted = _formula_inputs(response, data, subset, na_action)
         if group is not None:
             raise ValueError("group is only used with a Surv response")
         _response_check(y)
         if offset is not None:
-            return _one_sample(y, offset, rho)
+            return replace(_one_sample(y, offset, rho), na_action=omitted)
         if not columns:
             raise ValueError("No groups to test")
         codes, levels = _curve_factor(columns, len(y))
@@ -163,7 +165,10 @@ def survdiff(
             indices = _subset_indices(subset, len(response))
             response = _subset_surv(response, indices)
             group = _subset_optional_sequence(group, indices, "group")
-        y, aligned = _apply_surv_na_action(response, na_action, "survdiff inputs", group=group)
+        y, aligned, removed = _apply_surv_na_action(
+            response, na_action, "survdiff inputs", group=group
+        )
+        omitted = _na_action_record(na_action, removed)
         _response_check(y)
         if aligned["group"] is None:
             raise ValueError("No groups to test")
@@ -172,4 +177,4 @@ def survdiff(
         strata = None
     else:
         raise TypeError("The 'formula' argument is not a formula")
-    return _k_sample(y, codes, levels, strata, rho, bool(timefix))
+    return replace(_k_sample(y, codes, levels, strata, rho, bool(timefix)), na_action=omitted)

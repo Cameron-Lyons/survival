@@ -43,18 +43,29 @@ def numeric_vector_lines(
 
 
 def numeric_matrix_lines(
-    table: NamedMatrix, digits: int, width: int, *, row_title: str | None = None
+    table: NamedMatrix,
+    digits: int,
+    width: int,
+    *,
+    row_title: str | None = None,
+    nan_print: str = "NA",
 ) -> list[str]:
     """R's numeric matrix layout: right-aligned columns and wrapped column blocks.
 
     Each numeric column chooses its own fixed/scientific precision. Explicit row
     names align left; implicit ``[i,]`` names align right. Trailing spaces are removed.
+    ``nan_print`` distinguishes undefined arithmetic from unavailable estimates.
     """
 
     columns = [
         _r_format_numbers([row[j] for row in table.values], digits)
         for j in range(len(table.colnames))
     ]
+    if nan_print != "NA":
+        for j, column in enumerate(columns):
+            for i in range(len(table.values)):
+                if math.isnan(table.values[i][j]):
+                    column[i] = nan_print
     return character_matrix_lines(table, columns, width, row_title=row_title)
 
 

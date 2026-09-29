@@ -1302,10 +1302,12 @@ def _survfit_print_frame(result: SurvfitPrint) -> dict[str, list[Any]]:
 
 @as_data_frame.register(ModelPrint)
 def _model_print_frame(result: ModelPrint) -> dict[str, list[Any]]:
-    table = result.tables.get("coefficients")
+    table = result.tables.get(result.primary_table)
     if table is None:
         return {}
-    frame: dict[str, list[Any]] = {"term": list(table.rownames or [])}
+    frame: dict[str, list[Any]] = {}
+    if table.rownames is not None:
+        frame[result.row_label] = list(table.rownames)
     frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
     return frame
 
