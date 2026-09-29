@@ -1,0 +1,1371 @@
+{
+  "metadata": {
+    "R": "R version 4.5.3 (2026-03-11)",
+    "survival": "3.8.12"
+  },
+  "data": {
+    "small": {
+      "time": [1, 2, 2, 3, 4, 5, 6, 6, 8],
+      "status": [1, 1, 0, 1, 0, 1, 0, 1, 0],
+      "group": {
+        "values": ["a", "a", "a", "b", "a", "b", "b", "b", "a"],
+        "levels": ["a", "b"]
+      },
+      "start": [0, 0, 1, 0, 1, 2, 0, 3, 1],
+      "weights": [1, 2, 0.5, 1, 2, 1, 0.5, 1, 1],
+      "endpoint": {
+        "values": ["disease", "death", "censor", "disease", "censor", "death", "censor", "disease", "censor"],
+        "levels": ["censor", "disease", "death"]
+      }
+    },
+    "cox": {
+      "time": [8, 15, 22, 29, 7, 14, 21, 28, 6, 13, 20, 27, 5, 12, 19, 26, 4, 11, 18, 25, 3, 10, 17, 24, 2, 9, 16, 23, 1, 8, 15, 22, 29, 7, 14, 21, 28, 6, 13, 20],
+      "status": [1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1],
+      "age": [3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 0, 3, 6, 9, 1, 4, 7, 10],
+      "group": {
+        "values": ["1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0", "1", "0"],
+        "levels": ["0", "1"]
+      },
+      "endpoint": {
+        "values": ["b", "b", "censor", "a", "b", "censor", "b", "a", "censor", "b", "b", "censor", "b", "b", "censor", "a", "b", "censor", "b", "a", "censor", "b", "b", "censor", "b", "b", "censor", "a", "b", "censor", "b", "a", "censor", "b", "b", "censor", "b", "b", "censor", "a"],
+        "levels": ["censor", "a", "b"]
+      }
+    },
+    "interval": {
+      "time": [1, 2, 3, 4, 5],
+      "time2": [1, 3, null, 6, 5]
+    },
+    "complete": {
+      "time": [1, 2, 3, 4],
+      "status": [1, 1, 1, 1]
+    },
+    "censored": {
+      "time": [1, 2, 3, 4],
+      "status": [0, 0, 0, 0]
+    }
+  },
+  "fits": {
+    "km": {
+      "formula": "Surv(time,status)~1",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "groups": {
+      "formula": "Surv(time,status)~group",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "weighted": {
+      "formula": "Surv(time,status)~group",
+      "data": "small",
+      "arguments": {
+        "weights": [1, 2, 0.5, 1, 2, 1, 0.5, 1, 1]
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "delayed": {
+      "formula": "Surv(start,time,status)~group",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "ids": {
+      "formula": "Surv(start,time,status)~group",
+      "data": "small",
+      "arguments": {
+        "id": [1, 2, 3, 4, 5, 6, 7, 8, 9]
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "conditional": {
+      "formula": "Surv(time,status)~1",
+      "data": "small",
+      "arguments": {
+        "start.time": 2
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "no_se": {
+      "formula": "Surv(time,status)~1",
+      "data": "small",
+      "arguments": {
+        "se.fit": false
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "ci90": {
+      "formula": "Surv(time,status)~group",
+      "data": "small",
+      "arguments": {
+        "conf.int": 0.90000000000000002,
+        "conf.type": "plain"
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "interval": {
+      "formula": "Surv(time,time2,type='interval2')~1",
+      "data": "interval",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "complete": {
+      "formula": "Surv(time,status)~1",
+      "data": "complete",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "censored": {
+      "formula": "Surv(time,status)~1",
+      "data": "censored",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "cox": {
+      "formula": "Surv(time,status)~age",
+      "data": "cox",
+      "arguments": [],
+      "kind": "cox",
+      "curve": {
+        "newdata": {
+          "age": [2, 7]
+        }
+      },
+      "origin": false
+    },
+    "cox_groups": {
+      "formula": "Surv(time,status)~age+strata(group)",
+      "data": "cox",
+      "arguments": [],
+      "kind": "cox",
+      "curve": {
+        "newdata": {
+          "age": [2, 7]
+        }
+      },
+      "origin": false
+    },
+    "cox_conditional": {
+      "formula": "Surv(time,status)~age",
+      "data": "cox",
+      "arguments": [],
+      "kind": "cox",
+      "curve": {
+        "newdata": {
+          "age": [2, 7]
+        },
+        "start.time": 5.5
+      },
+      "origin": false
+    },
+    "aj": {
+      "formula": "Surv(time,endpoint)~1",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "aj_groups": {
+      "formula": "Surv(time,endpoint)~group",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "aj_nose": {
+      "formula": "Surv(time,endpoint)~group",
+      "data": "small",
+      "arguments": {
+        "se.fit": false
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "aj_conditional": {
+      "formula": "Surv(time,endpoint)~1",
+      "data": "small",
+      "arguments": {
+        "start.time": 2
+      },
+      "kind": "km",
+      "curve": [],
+      "origin": false
+    },
+    "coxms": {
+      "formula": "Surv(time,endpoint)~age",
+      "data": "cox",
+      "arguments": {
+        "id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+      },
+      "kind": "cox",
+      "curve": {
+        "newdata": {
+          "age": [2, 7]
+        },
+        "se.fit": false
+      },
+      "origin": false
+    },
+    "km_origin": {
+      "formula": "Surv(time,status)~1",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": true
+    },
+    "aj_origin": {
+      "formula": "Surv(time,endpoint)~group",
+      "data": "small",
+      "arguments": [],
+      "kind": "km",
+      "curve": [],
+      "origin": true
+    }
+  },
+  "cases": [
+    {
+      "name": "km",
+      "fit": "km",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 9      5      5       3      NA"]
+      }
+    },
+    {
+      "name": "groups",
+      "fit": "groups",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, null, 2, null],
+            [4, 3, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events median 0.95LCL 0.95UCL", "group=a 5      2     NA       2      NA", "group=b 4      3    5.5       3      NA"]
+      }
+    },
+    {
+      "name": "weighted",
+      "fit": "weighted",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 6.5, 3, null, 2, null],
+            [4, 3.5, 3, 5, 3, null]
+          ],
+          "columns": ["records", "n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records   n events median 0.95LCL 0.95UCL", "group=a       5 6.5      3     NA       2      NA", "group=b       4 3.5      3      5       3      NA"]
+      }
+    },
+    {
+      "name": "delayed",
+      "fit": "delayed",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 2, 2, 1.5, 1, null],
+            [4, 3, 3, 3, 5, 3, null]
+          ],
+          "columns": ["records", "n.max", "n.start", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n.max n.start events median 0.95LCL 0.95UCL", "group=a       5     4       2      2    1.5       1      NA", "group=b       4     3       3      3    5.0       3      NA"]
+      }
+    },
+    {
+      "name": "ids",
+      "fit": "ids",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 5, 2, 1.5, 1, null],
+            [4, 4, 3, 5, 3, null]
+          ],
+          "columns": ["records", "n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n events median 0.95LCL 0.95UCL", "group=a       5 5      2    1.5       1      NA", "group=b       4 4      3    5.0       3      NA"]
+      }
+    },
+    {
+      "name": "conditional",
+      "fit": "conditional",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [8, 4, 6, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 8      4      6       3      NA"]
+      }
+    },
+    {
+      "name": "no_se",
+      "fit": "no_se",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5]
+          ],
+          "columns": ["n", "events", "median"],
+          "rows": null
+        },
+        "lines": ["     n events median", "[1,] 9      5      5"]
+      }
+    },
+    {
+      "name": "ci90",
+      "fit": "ci90",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, null, 2, null],
+            [4, 3, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.9LCL", "0.9UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events median 0.9LCL 0.9UCL", "group=a 5      2     NA      2     NA", "group=b 4      3    5.5      3     NA"]
+      }
+    },
+    {
+      "name": "interval",
+      "fit": "interval",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 5, 2.5, 5]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 5      4      5     2.5       5"]
+      }
+    },
+    {
+      "name": "complete",
+      "fit": "complete",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [4, 4, 2.5, 1, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 4      4    2.5       1      NA"]
+      }
+    },
+    {
+      "name": "censored",
+      "fit": "censored",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [4, 0, null, null, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 4      0     NA      NA      NA"]
+      }
+    },
+    {
+      "name": "cox",
+      "fit": "cox",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 27, 23, 17, 29],
+            [40, 27, 18, 13, 26]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events median 0.95LCL 0.95UCL", "1 40     27     23      17      29", "2 40     27     18      13      26"]
+      }
+    },
+    {
+      "name": "cox_groups",
+      "fit": "cox_groups",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [20, 14, 25, 20, null],
+            [20, 13, 20, 15, null],
+            [20, 14, 22, 13, null],
+            [20, 13, 15, 7, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["0, 1", "1, 1", "0, 2", "1, 2"]
+        },
+        "lines": ["      n events median 0.95LCL 0.95UCL", "0, 1 20     14     25      20      NA", "1, 1 20     13     20      15      NA", "0, 2 20     14     22      13      NA", "1, 2 20     13     15       7      NA"]
+      }
+    },
+    {
+      "name": "cox_conditional",
+      "fit": "cox_conditional",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [35, 23, 25, 20, null],
+            [35, 23, 20, 15, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events median 0.95LCL 0.95UCL", "1 35     23     25      20      NA", "2 35     23     20      15      NA"]
+      }
+    },
+    {
+      "name": "aj",
+      "fit": "aj",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 0, 5.0972222222222223, 0.88944631923522921],
+            [9, 3, 1.7499999999999998, 0.87293996182711919],
+            [9, 2, 1.1527777777777777, 0.71808898601645077]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["(s0)", "disease", "death"]
+        },
+        "lines": ["        n nevent    rmean se(rmean)*", "(s0)    9      0 5.097222  0.8894463", "disease 9      3 1.750000  0.8729400", "death   9      2 1.152778  0.7180890", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "aj_groups",
+      "fit": "aj_groups",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 5.4000000000000004, 1.4310835055998654],
+            [4, 0, 5.5, 0.61237243569579447],
+            [5, 1, 1.4000000000000001, 1.2521980673998823],
+            [4, 2, 1.75, 0.649519052838329],
+            [5, 1, 1.2000000000000002, 1.0733126291998993],
+            [4, 1, 0.75, 0.21650635094610965]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean se(rmean)*", "group=a, (s0)    5      0  5.40  1.4310835", "group=b, (s0)    4      0  5.50  0.6123724", "group=a, disease 5      1  1.40  1.2521981", "group=b, disease 4      2  1.75  0.6495191", "group=a, death   5      1  1.20  1.0733126", "group=b, death   4      1  0.75  0.2165064", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "aj_nose",
+      "fit": "aj_nose",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 5.4000000000000004],
+            [4, 0, 5.5],
+            [5, 1, 1.4000000000000001],
+            [4, 2, 1.75],
+            [5, 1, 1.2000000000000002],
+            [4, 1, 0.75]
+          ],
+          "columns": ["n", "nevent", "rmean*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean*", "group=a, (s0)    5      0   5.40", "group=b, (s0)    4      0   5.50", "group=a, disease 5      1   1.40", "group=b, disease 4      2   1.75", "group=a, death   5      1   1.20", "group=b, death   4      1   0.75", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "aj_conditional",
+      "fit": "aj_conditional",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [8, 0, 3.609375, 0.84033718547167624],
+            [8, 2, 1.09375, 0.69277686064549915],
+            [8, 2, 1.296875, 0.79326054257819878]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["(s0)", "disease", "death"]
+        },
+        "lines": ["        n nevent    rmean se(rmean)*", "(s0)    8      0 3.609375  0.8403372", "disease 8      2 1.093750  0.6927769", "death   8      2 1.296875  0.7932605", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "coxms",
+      "fit": "coxms",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 0, 19.628814725538646],
+            [40, 0, 16.911789357488573],
+            [40, 7, 0.25641470751917084],
+            [40, 7, 2.320031719446296],
+            [40, 20, 9.1147705669421839],
+            [40, 20, 9.7681789230651326]
+          ],
+          "columns": ["n", "nevent", "rmean*"],
+          "rows": ["1, (s0)", "2, (s0)", "1, a", "2, a", "1, b", "2, b"]
+        },
+        "lines": ["         n nevent     rmean*", "1, (s0) 40      0 19.6288147", "2, (s0) 40      0 16.9117894", "1, a    40      7  0.2564147", "2, a    40      7  2.3200317", "1, b    40     20  9.1147706", "2, b    40     20  9.7681789", "   *restricted mean time in state (max time = 29 )"]
+      }
+    },
+    {
+      "name": "km_origin",
+      "fit": "km_origin",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 9      5      5       3      NA"]
+      }
+    },
+    {
+      "name": "aj_origin",
+      "fit": "aj_origin",
+      "arguments": [],
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 5.4000000000000004, 1.4310835055998654],
+            [4, 0, 5.5, 0.61237243569579447],
+            [5, 1, 1.4000000000000001, 1.2521980673998823],
+            [4, 2, 1.75, 0.649519052838329],
+            [5, 1, 1.2000000000000002, 1.0733126291998993],
+            [4, 1, 0.75, 0.21650635094610965]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean se(rmean)*", "group=a, (s0)    5      0  5.40  1.4310835", "group=b, (s0)    4      0  5.50  0.6123724", "group=a, disease 5      1  1.40  1.2521981", "group=b, disease 4      2  1.75  0.6495191", "group=a, death   5      1  1.20  1.0733126", "group=b, death   4      1  0.75  0.2165064", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "km_mean",
+      "fit": "km",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5.0972222222222223, 0.88944631923522921, 5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events rmean* se(rmean) median 0.95LCL 0.95UCL", "[1,] 9      5    5.1     0.889      5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "groups_mean",
+      "fit": "groups",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4     1.431     NA       2      NA", "group=b 4      3    5.5     0.901    5.5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "weighted_mean",
+      "fit": "weighted",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 6.5, 3, 5.0769230769230766, 1.2447431565254283, null, 2, null],
+            [4, 3.5, 3, 5.1428571428571432, 0.87731368408998678, 5, 3, null]
+          ],
+          "columns": ["records", "n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records   n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a       5 6.5      3   5.08     1.245     NA       2      NA", "group=b       4 3.5      3   5.14     0.877      5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "delayed_mean",
+      "fit": "delayed",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 2, 2, 3.75, 2.0501524333570909, 1.5, 1, null],
+            [4, 3, 3, 3, 5.2222222222222223, 1.0264004785593348, 5, 3, null]
+          ],
+          "columns": ["records", "n.max", "n.start", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n.max n.start events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a       5     4       2      2   3.75      2.05    1.5       1      NA", "group=b       4     3       3      3   5.22      1.03    5.0       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "ids_mean",
+      "fit": "ids",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 5, 2, 3.75, 2.0501524333570909, 1.5, 1, null],
+            [4, 4, 3, 5.2222222222222223, 1.0264004785593348, 5, 3, null]
+          ],
+          "columns": ["records", "n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a       5 5      2   3.75      2.05    1.5       1      NA", "group=b       4 4      3   5.22      1.03    5.0       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "interval_mean",
+      "fit": "interval",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 3.7000177388836333, 0.74297502309072005, 5, 2.5, 5]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events rmean* se(rmean) median 0.95LCL 0.95UCL", "[1,] 5      4    3.7     0.743      5     2.5       5", "    * restricted mean with upper limit =  5.5"]
+      }
+    },
+    {
+      "name": "cox_mean",
+      "fit": "cox",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 27, 20.320632829649661, 1.7838238609290109, 23, 17, 29],
+            [40, 27, 16.948554940392928, 1.2986888011485904, 18, 13, 26]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events rmean* se(rmean) median 0.95LCL 0.95UCL", "1 40     27   20.3      1.78     23      17      29", "2 40     27   16.9      1.30     18      13      26", "    * restricted mean with upper limit =  29"]
+      }
+    },
+    {
+      "name": "cox_groups_mean",
+      "fit": "cox_groups",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [20, 14, 22.011353714625471, 2.2779538543939948, 25, 20, null],
+            [20, 13, 18.627625479378196, 2.8090865640634832, 20, 15, null],
+            [20, 14, 19.250911693525474, 1.7409581652968875, 22, 13, null],
+            [20, 13, 14.923092971628462, 1.93693183367424, 15, 7, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["0, 1", "1, 1", "0, 2", "1, 2"]
+        },
+        "lines": ["      n events rmean* se(rmean) median 0.95LCL 0.95UCL", "0, 1 20     14   22.0      2.28     25      20      NA", "1, 1 20     13   18.6      2.81     20      15      NA", "0, 2 20     14   19.3      1.74     22      13      NA", "1, 2 20     13   14.9      1.94     15       7      NA", "    * restricted mean with upper limit =  29"]
+      }
+    },
+    {
+      "name": "censored_mean",
+      "fit": "censored",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [4, 0, 4, 0, null, null, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events rmean* se(rmean) median 0.95LCL 0.95UCL", "[1,] 4      0      4         0     NA      NA      NA", "    * restricted mean with upper limit =  4"]
+      }
+    },
+    {
+      "name": "groups_individual",
+      "fit": "groups",
+      "arguments": {
+        "rmean": "individual"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5, 0.61237243569579447, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4     1.431     NA       2      NA", "group=b 4      3    5.0     0.612    5.5       3      NA", "   * restricted mean with variable upper limit"]
+      }
+    },
+    {
+      "name": "groups_cutoff",
+      "fit": "groups",
+      "arguments": {
+        "rmean": 5,
+        "scale": 2
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 1.8000000000000003, 0.3898717737923586, null, 1, null],
+            [4, 3, 2.25, 0.21650635094610965, 2.75, 1.5, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2   1.80     0.390     NA     1.0      NA", "group=b 4      3   2.25     0.217   2.75     1.5      NA", "    * restricted mean with upper limit =  2.5"]
+      }
+    },
+    {
+      "name": "delayed_individual",
+      "fit": "delayed",
+      "arguments": {
+        "rmean": "individual"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 2, 2, 3.75, 2.0501524333570909, 1.5, 1, null],
+            [4, 3, 3, 3, 4.7777777777777777, 0.74811147691570945, 5, 3, null]
+          ],
+          "columns": ["records", "n.max", "n.start", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n.max n.start events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a       5     4       2      2   3.75     2.050    1.5       1      NA", "group=b       4     3       3      3   4.78     0.748    5.0       3      NA", "   * restricted mean with variable upper limit"]
+      }
+    },
+    {
+      "name": "delayed_cutoff",
+      "fit": "delayed",
+      "arguments": {
+        "rmean": 5,
+        "scale": 2
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 4, 2, 2, 1.3125, 0.59703041170446247, 0.75, 0.5, null],
+            [4, 3, 3, 3, 2.1666666666666665, 0.27216552697590868, 2.5, 1.5, null]
+          ],
+          "columns": ["records", "n.max", "n.start", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        records n.max n.start events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a       5     4       2      2   1.31     0.597   0.75     0.5      NA", "group=b       4     3       3      3   2.17     0.272   2.50     1.5      NA", "    * restricted mean with upper limit =  2.5"]
+      }
+    },
+    {
+      "name": "aj_groups_individual",
+      "fit": "aj_groups",
+      "arguments": {
+        "rmean": "individual"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 5.4000000000000004, 1.4310835055998654],
+            [4, 0, 5, 0.61237243569579447],
+            [5, 1, 1.4000000000000001, 1.2521980673998823],
+            [4, 2, 0.75, 0.649519052838329],
+            [5, 1, 1.2000000000000002, 1.0733126291998993],
+            [4, 1, 0.25, 0.21650635094610965]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean se(rmean)*", "group=a, (s0)    5      0  5.40  1.4310835", "group=b, (s0)    4      0  5.00  0.6123724", "group=a, disease 5      1  1.40  1.2521981", "group=b, disease 4      2  0.75  0.6495191", "group=a, death   5      1  1.20  1.0733126", "group=b, death   4      1  0.25  0.2165064", "   *restricted mean time in state (per curve cutoff)"]
+      }
+    },
+    {
+      "name": "aj_groups_cutoff",
+      "fit": "aj_groups",
+      "arguments": {
+        "rmean": 5,
+        "scale": 2
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 1.8000000000000003, 0.39101747255594749],
+            [4, 0, 2.25, 0.21650635094610965],
+            [5, 1, 0.40000000000000002, 0.35777087639996635],
+            [4, 2, 0.25, 0.21650635094610965],
+            [5, 1, 0.30000000000000004, 0.26832815729997483],
+            [4, 1, 0, 0]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean se(rmean)*", "group=a, (s0)    5      0  1.80  0.3910175", "group=b, (s0)    4      0  2.25  0.2165064", "group=a, disease 5      1  0.40  0.3577709", "group=b, disease 4      2  0.25  0.2165064", "group=a, death   5      1  0.30  0.2683282", "group=b, death   4      1  0.00  0.0000000", "   *restricted mean time in state (max time = 2.5 )"]
+      }
+    },
+    {
+      "name": "cox_individual",
+      "fit": "cox",
+      "arguments": {
+        "rmean": "individual"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 27, 20.320632829649661, 1.7838238609290109, 23, 17, 29],
+            [40, 27, 16.948554940392928, 1.2986888011485904, 18, 13, 26]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events rmean* se(rmean) median 0.95LCL 0.95UCL", "1 40     27   20.3      1.78     23      17      29", "2 40     27   16.9      1.30     18      13      26", "   * restricted mean with variable upper limit"]
+      }
+    },
+    {
+      "name": "cox_cutoff",
+      "fit": "cox",
+      "arguments": {
+        "rmean": 5,
+        "scale": 2
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 27, 2.4300752716507379, 0.062871013103759046, 11.5, 8.5, 14.5],
+            [40, 27, 2.3854380080195945, 0.061294989216089973, 9, 6.5, 13]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events rmean* se(rmean) median 0.95LCL 0.95UCL", "1 40     27   2.43    0.0629   11.5     8.5    14.5", "2 40     27   2.39    0.0613    9.0     6.5    13.0", "    * restricted mean with upper limit =  2.5"]
+      }
+    },
+    {
+      "name": "coxms_individual",
+      "fit": "coxms",
+      "arguments": {
+        "rmean": "individual"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 0, 19.628814725538646],
+            [40, 0, 16.911789357488573],
+            [40, 7, 0.25641470751917084],
+            [40, 7, 2.320031719446296],
+            [40, 20, 9.1147705669421839],
+            [40, 20, 9.7681789230651326]
+          ],
+          "columns": ["n", "nevent", "rmean*"],
+          "rows": ["1, (s0)", "2, (s0)", "1, a", "2, a", "1, b", "2, b"]
+        },
+        "lines": ["         n nevent     rmean*", "1, (s0) 40      0 19.6288147", "2, (s0) 40      0 16.9117894", "1, a    40      7  0.2564147", "2, a    40      7  2.3200317", "1, b    40     20  9.1147706", "2, b    40     20  9.7681789", "   *restricted mean time in state (max time = 29 )"]
+      }
+    },
+    {
+      "name": "coxms_cutoff",
+      "fit": "coxms",
+      "arguments": {
+        "rmean": 5,
+        "scale": 2
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 0, 2.4070654211193858],
+            [40, 0, 2.3970761716292319],
+            [40, 7, 0],
+            [40, 7, 0],
+            [40, 20, 0.092934578880614349],
+            [40, 20, 0.10292382837076804]
+          ],
+          "columns": ["n", "nevent", "rmean*"],
+          "rows": ["1, (s0)", "2, (s0)", "1, a", "2, a", "1, b", "2, b"]
+        },
+        "lines": ["         n nevent     rmean*", "1, (s0) 40      0 2.40706542", "2, (s0) 40      0 2.39707617", "1, a    40      7 0.00000000", "2, a    40      7 0.00000000", "1, b    40     20 0.09293458", "2, b    40     20 0.10292383", "   *restricted mean time in state (max time = 2.5 )"]
+      }
+    },
+    {
+      "name": "legacy_mean",
+      "fit": "km",
+      "arguments": {
+        "print.rmean": true
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5.0972222222222223, 0.88944631923522921, 5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events rmean* se(rmean) median 0.95LCL 0.95UCL", "[1,] 9      5    5.1     0.889      5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "explicit_none",
+      "fit": "km",
+      "arguments": {
+        "print.rmean": true,
+        "rmean": "none"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 5, 5, 3, null]
+          ],
+          "columns": ["n", "events", "median", "0.95LCL", "0.95UCL"],
+          "rows": null
+        },
+        "lines": ["     n events median 0.95LCL 0.95UCL", "[1,] 9      5      5       3      NA"]
+      }
+    },
+    {
+      "name": "aj_none",
+      "fit": "aj",
+      "arguments": {
+        "rmean": "none"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 0],
+            [9, 3],
+            [9, 2]
+          ],
+          "columns": ["n", "nevent"],
+          "rows": ["(s0)", "disease", "death"]
+        },
+        "lines": ["        n nevent", "(s0)    9      0", "disease 9      3", "death   9      2"]
+      }
+    },
+    {
+      "name": "coxms_none",
+      "fit": "coxms",
+      "arguments": {
+        "rmean": "none"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 0],
+            [40, 0],
+            [40, 7],
+            [40, 7],
+            [40, 20],
+            [40, 20]
+          ],
+          "columns": ["n", "nevent"],
+          "rows": ["1, (s0)", "2, (s0)", "1, a", "2, a", "1, b", "2, b"]
+        },
+        "lines": ["         n nevent", "1, (s0) 40      0", "2, (s0) 40      0", "1, a    40      7", "2, a    40      7", "1, b    40     20", "2, b    40     20"]
+      }
+    },
+    {
+      "name": "partial_mean",
+      "fit": "groups",
+      "arguments": {
+        "rmean": "ind"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5, 0.61237243569579447, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4     1.431     NA       2      NA", "group=b 4      3    5.0     0.612    5.5       3      NA", "   * restricted mean with variable upper limit"]
+      }
+    },
+    {
+      "name": "precision1",
+      "fit": "groups",
+      "arguments": {
+        "digits": 1,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2      5       1.4     NA       2      NA", "group=b 4      3      6       0.9      6       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "precision2",
+      "fit": "groups",
+      "arguments": {
+        "digits": 2,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4       1.4     NA       2      NA", "group=b 4      3    5.5       0.9    5.5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "precision5",
+      "fit": "groups",
+      "arguments": {
+        "digits": 5,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4   1.43108     NA       2      NA", "group=b 4      3    5.5   0.90139    5.5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "precision10",
+      "fit": "groups",
+      "arguments": {
+        "digits": 10,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean*    se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2    5.4 1.4310835056     NA       2      NA", "group=b 4      3    5.5 0.9013878189    5.5       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "narrow",
+      "fit": "groups",
+      "arguments": {
+        "rmean": "common"
+      },
+      "width": 30,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean*", "group=a 5      2    5.4", "group=b 4      3    5.5", "        se(rmean) median", "group=a     1.431     NA", "group=b     0.901    5.5", "        0.95LCL 0.95UCL", "group=a       2      NA", "group=b       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "aj_narrow",
+      "fit": "aj_groups",
+      "arguments": {
+        "digits": 3
+      },
+      "width": 22,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 5.4000000000000004, 1.4310835055998654],
+            [4, 0, 5.5, 0.61237243569579447],
+            [5, 1, 1.4000000000000001, 1.2521980673998823],
+            [4, 2, 1.75, 0.649519052838329],
+            [5, 1, 1.2000000000000002, 1.0733126291998993],
+            [4, 1, 0.75, 0.21650635094610965]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n", "group=a, (s0)    5", "group=b, (s0)    4", "group=a, disease 5", "group=b, disease 4", "group=a, death   5", "group=b, death   4", "                 nevent", "group=a, (s0)         0", "group=b, (s0)         0", "group=a, disease      1", "group=b, disease      2", "group=a, death        1", "group=b, death        1", "                 rmean", "group=a, (s0)     5.40", "group=b, (s0)     5.50", "group=a, disease  1.40", "group=b, disease  1.75", "group=a, death    1.20", "group=b, death    0.75", "                 se(rmean)*", "group=a, (s0)         1.431", "group=b, (s0)         0.612", "group=a, disease      1.252", "group=b, disease      0.650", "group=a, death        1.073", "group=b, death        0.217", "   *restricted mean time in state (max time = 8 )"]
+      }
+    },
+    {
+      "name": "time_scale",
+      "fit": "groups",
+      "arguments": {
+        "scale": 365.25,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 0.014784394250513349, 0.003918093102258359, null, 0.0054757015742642025, null],
+            [4, 3, 0.015058179329226557, 0.0024678653493935584, 0.015058179329226557, 0.0082135523613963042, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean* se(rmean) median 0.95LCL 0.95UCL", "group=a 5      2 0.0148   0.00392     NA 0.00548      NA", "group=b 4      3 0.0151   0.00247 0.0151 0.00821      NA", "    * restricted mean with upper limit =  0.0219"]
+      }
+    },
+    {
+      "name": "scientific_scale",
+      "fit": "groups",
+      "arguments": {
+        "scale": 10000000000,
+        "rmean": "common"
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.400000000000001e-10, 1.4310835055998657e-10, null, 2.0000000000000001e-10, null],
+            [4, 3, 5.4999999999999996e-10, 9.0138781886599735e-11, 5.4999999999999996e-10, 3e-10, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events  rmean* se(rmean)  median 0.95LCL 0.95UCL", "group=a 5      2 5.4e-10  1.43e-10      NA   2e-10      NA", "group=b 4      3 5.5e-10  9.01e-11 5.5e-10   3e-10      NA", "    * restricted mean with upper limit =  8e-10"]
+      }
+    },
+    {
+      "name": "wide_precision",
+      "fit": "groups",
+      "arguments": {
+        "digits": 10,
+        "rmean": "common"
+      },
+      "width": 45,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 2, 5.4000000000000004, 1.4310835055998656, null, 2, null],
+            [4, 3, 5.5, 0.90138781886599728, 5.5, 3, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["group=a", "group=b"]
+        },
+        "lines": ["        n events rmean*    se(rmean) median", "group=a 5      2    5.4 1.4310835056     NA", "group=b 4      3    5.5 0.9013878189    5.5", "        0.95LCL 0.95UCL", "group=a       2      NA", "group=b       3      NA", "    * restricted mean with upper limit =  8"]
+      }
+    },
+    {
+      "name": "aj_zero_cutoff",
+      "fit": "aj",
+      "arguments": {
+        "rmean": 0
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [9, 0, 0, 0],
+            [9, 3, 0, 0],
+            [9, 2, 0, 0]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["(s0)", "disease", "death"]
+        },
+        "lines": ["        n nevent rmean se(rmean)*", "(s0)    9      0     0          0", "disease 9      3     0          0", "death   9      2     0          0", "   *restricted mean time in state (max time = 0 )"]
+      }
+    },
+    {
+      "name": "aj_early_cutoff",
+      "fit": "aj_groups",
+      "arguments": {
+        "rmean": 0.5
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [5, 0, 0.5, 0],
+            [4, 0, 0.5, 0],
+            [5, 1, 0, 0],
+            [4, 2, 0, 0],
+            [5, 1, 0, 0],
+            [4, 1, 0, 0]
+          ],
+          "columns": ["n", "nevent", "rmean", "se(rmean)*"],
+          "rows": ["group=a, (s0)", "group=b, (s0)", "group=a, disease", "group=b, disease", "group=a, death", "group=b, death"]
+        },
+        "lines": ["                 n nevent rmean se(rmean)*", "group=a, (s0)    5      0   0.5          0", "group=b, (s0)    4      0   0.5          0", "group=a, disease 5      1   0.0          0", "group=b, disease 4      2   0.0          0", "group=a, death   5      1   0.0          0", "group=b, death   4      1   0.0          0", "   *restricted mean time in state (max time = 0.5 )"]
+      }
+    },
+    {
+      "name": "coxms_early_cutoff",
+      "fit": "coxms",
+      "arguments": {
+        "rmean": 0.5
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [40, 0, 0.5],
+            [40, 0, 0.5],
+            [40, 7, 0],
+            [40, 7, 0],
+            [40, 20, 0],
+            [40, 20, 0]
+          ],
+          "columns": ["n", "nevent", "rmean*"],
+          "rows": ["1, (s0)", "2, (s0)", "1, a", "2, a", "1, b", "2, b"]
+        },
+        "lines": ["         n nevent rmean*", "1, (s0) 40      0    0.5", "2, (s0) 40      0    0.5", "1, a    40      7    0.0", "2, a    40      7    0.0", "1, b    40     20    0.0", "2, b    40     20    0.0", "   *restricted mean time in state (max time = 0.5 )"]
+      }
+    },
+    {
+      "name": "cox_conditional_early_cutoff",
+      "fit": "cox_conditional",
+      "arguments": {
+        "rmean": 5.5
+      },
+      "width": 80,
+      "expected": {
+        "table": {
+          "values": [
+            [35, 23, 5.5, 0, 25, 20, null],
+            [35, 23, 5.5, 0, 20, 15, null]
+          ],
+          "columns": ["n", "events", "rmean*", "se(rmean)", "median", "0.95LCL", "0.95UCL"],
+          "rows": ["1", "2"]
+        },
+        "lines": ["   n events rmean* se(rmean) median 0.95LCL 0.95UCL", "1 35     23    5.5         0     25      20      NA", "2 35     23    5.5         0     20      15      NA", "    * restricted mean with upper limit =  5.5"]
+      }
+    }
+  ]
+}

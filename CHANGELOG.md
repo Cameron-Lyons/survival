@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add compact survival reports for Kaplan–Meier, Turnbull, Cox and multistate
+  curves, including counts, medians, restricted means and R-style text formatting.
+  Reports use the Rust summary kernels without expanding event-time arrays and
+  expose full-precision columns through `as_data_frame`.
 - Add raw-response plots, expected-survival overlays, and model-specific
   `plot`, `lines`, and `points` dispatch in `survival.plotting`. Expected curves
   preserve group names and R's straight-line overlay default without inferring

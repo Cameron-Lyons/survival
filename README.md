@@ -855,6 +855,15 @@ The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
 
+## Survival curve reports
+
+`r.print_survfit(fit)` returns a compact report of sample sizes, events and
+median survival. Add `rmean="common"` for restricted means. Multistate fits
+report time in each state through the same function or `r.print_survfitms`.
+Use `print(report)` for formatted text and `r.as_data_frame(report)` for
+full-precision columns. See [survival reports](docs/survival-reports.md) for
+cutoffs, units, formatting and allocation measurements.
+
 ## Survival curve plots
 
 Install `survival[plot]` to render Kaplan–Meier, Cox and multistate curves:
