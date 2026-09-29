@@ -171,6 +171,7 @@ from ._survreg import (
     survreg_distributions,
     survregDtest,
 )
+from ._survreg_lowlevel import SurvregFitResult, survreg_fit
 from ._survreg_print import print_summary_survreg, print_survreg
 from ._test_print import (
     print_cch,
@@ -232,6 +233,8 @@ from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "SurvregFitResult",
+    "survreg_fit",
     "CoxFitResult",
     "coxph_fit",
     "agreg_fit",

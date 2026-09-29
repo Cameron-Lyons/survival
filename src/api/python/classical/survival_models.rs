@@ -18,6 +18,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(finegray_regression, m)?)?;
     m.add_function(wrap_pyfunction!(competing_risks_cif, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_fit_py, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::regression::survreg_fit_raw, m)?)?;
     m.add_function(wrap_pyfunction!(survpenal_fit, m)?)?;
     m.add_function(wrap_pyfunction!(survpenal_fit_from_state, m)?)?;
     m.add_function(wrap_pyfunction!(survreg_dtest, m)?)?;
@@ -110,6 +111,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         FineGrayResult,
         CompetingRisksCIF,
         SurvregFit,
+        crate::regression::SurvregFitResult,
         SurvpenalFit,
         SurvregData,
         SurvregControl,

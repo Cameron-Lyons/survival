@@ -123,6 +123,9 @@ def test_heavy_kernels_release_the_gil():
         "cox_zph": lambda: regression.cox_zph(fit),
         "cox_zph_smooth": lambda: regression.cox_zph_smooth(time_, x, [1.0, 1.0]),
         "survreg_fit": lambda: regression.survreg_fit(survreg_data, weibull),
+        "survreg_fit_raw": lambda: regression.survreg_fit_raw(
+            survreg_data, regression.SurvregDistribution("gaussian")
+        ),
         "SurvregFit.predict": lambda: survreg.predict(design, "quantile", se_fit=True),
         "SurvregFit.residuals": lambda: survreg.residuals("dfbeta"),
         "concordancefit": lambda: core.concordancefit(right, predictor),

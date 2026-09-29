@@ -21,6 +21,7 @@ use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_positive,
 };
 use crate::regression::survreg_distributions::{SurvregDistribution, SurvregTransform};
+use crate::regression::survreg_lowlevel::SurvregFitResult;
 use crate::regression::survreg_predict::{
     SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg,
 };
@@ -933,11 +934,71 @@ pub fn survreg_fit(
     control: &SurvregControl,
     robust: bool,
 ) -> SurvivalResult<SurvregFit> {
+    let result = fit_survreg_engine(data, distribution, init, scale, control, None)?;
+    let raw = result.fit;
+    let n = data.n();
+    let mut fit = SurvregFit {
+        coefficients: raw.coefficients,
+        icoef: raw.icoef,
+        variance_matrix: raw.var,
+        naive_variance_matrix: None,
+        log_likelihood: raw.loglik[1],
+        intercept_only_log_likelihood: raw.loglik[0],
+        iterations: raw.iter,
+        converged: raw.converged,
+        linear_predictors: raw.linear_predictors,
+        scale: result.scales,
+        df: raw.df as f64,
+        df_residual: n as f64 - raw.df as f64,
+        means: result.means,
+        n,
+        distribution: distribution.clone(),
+        time: result.response.time,
+        time2: result.response.time2,
+        status: result.response.status,
+        covariates: data.covariates.clone(),
+        strata: result.strata,
+        weights: data.weights.clone(),
+        offset: result.offset,
+        cluster: data.cluster.clone(),
+        score: raw.score,
+    };
+    if robust || data.cluster.is_some() {
+        let sandwich = robust_variance(&fit, data.cluster.as_deref())?;
+        fit.naive_variance_matrix = Some(std::mem::replace(&mut fit.variance_matrix, sandwich));
+    }
+    mark_singular(&mut fit);
+    Ok(fit)
+}
+
+pub(crate) struct SurvregEngineResult {
+    pub fit: SurvregFitResult,
+    pub response: FittingResponse,
+    pub means: Vec<f64>,
+    pub scales: Vec<f64>,
+    pub strata: Vec<usize>,
+    pub offset: Vec<f64>,
+}
+
+/// Shared numerical fit; only the full-model caller retains inputs and applies
+/// robust variance and aliased-coefficient marking.
+pub(crate) fn fit_survreg_engine(
+    data: &SurvregData,
+    distribution: &SurvregDistribution,
+    init: Option<&[f64]>,
+    scale: f64,
+    control: &SurvregControl,
+    nstrata: Option<usize>,
+) -> SurvivalResult<SurvregEngineResult> {
     distribution.validate()?;
     control.validate()?;
     let n = data.n();
     let nvar = data.nvar();
-    let nstrata = data.nstrata();
+    let observed_strata = data.nstrata();
+    let nstrata = nstrata.unwrap_or(observed_strata);
+    if nstrata == 0 || observed_strata > nstrata {
+        return Err(SurvivalError::invalid_input("Invalid strata variable"));
+    }
     let eps = control.rel_tolerance;
     let tol_chol = control.toler_chol;
 
@@ -1099,6 +1160,7 @@ pub fn survreg_fit(
         .collect();
 
     let mut var = fit.var;
+    let was_rescaled = rescaled.is_some();
     if let Some((center, stdev)) = rescaled {
         // Undo the rescaling: coef <- vtemp %*% coef, var <- vtemp var vtemp'.
         let mut vtemp = Array2::<f64>::eye(nvar2);
@@ -1120,41 +1182,28 @@ pub fn survreg_fit(
     } else {
         coefficients[nvar..].iter().map(|v| v.exp()).collect()
     };
-    let robust = robust || data.cluster.is_some();
-    let mut fit = SurvregFit {
-        coefficients,
-        icoef,
-        variance_matrix,
-        naive_variance_matrix: None,
-        log_likelihood: fit.loglik + response.logcorrect,
-        intercept_only_log_likelihood: loglik0 + response.logcorrect,
-        iterations: fit.iter,
-        converged: fit.converged,
-        linear_predictors,
-        scale: scales,
-        df: nvar2 as f64,
-        df_residual: n as f64 - nvar2 as f64,
+    Ok(SurvregEngineResult {
+        fit: SurvregFitResult {
+            coefficients,
+            icoef,
+            var: variance_matrix,
+            loglik: [
+                loglik0 + response.logcorrect,
+                fit.loglik + response.logcorrect,
+            ],
+            iter: fit.iter,
+            converged: fit.converged,
+            linear_predictors,
+            df: nvar2,
+            score: fit.u,
+            rescaled: was_rescaled,
+        },
         means,
-        n,
-        distribution: distribution.clone(),
-        time: response.time,
-        time2: response.time2,
-        status: response.status,
-        covariates: x_original.to_owned(),
+        scales,
+        response,
         strata,
-        weights: data.weights.clone(),
         offset,
-        cluster: data.cluster.clone(),
-        score: fit.u,
-    };
-
-    if robust {
-        let sandwich = robust_variance(&fit, data.cluster.as_deref())?;
-        fit.naive_variance_matrix = Some(std::mem::replace(&mut fit.variance_matrix, sandwich));
-    }
-
-    mark_singular(&mut fit);
-    Ok(fit)
+    })
 }
 
 /// Sets the location coefficients with a zero variance to `NaN` (R's `NA`);

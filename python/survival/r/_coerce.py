@@ -20,6 +20,28 @@ _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
 _PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
 
 
+def _numeric_design_matrix(
+    x: Any, n: int, *, vector: bool = False, empty: bool = False, invalid: str = "Invalid X matrix"
+) -> np.ndarray:
+    """Prepared numeric columns without per-row lists at the native boundary."""
+    if isinstance(x, Mapping):
+        values = np.column_stack(list(x.values())) if x else np.empty((n, 0))
+    else:
+        values = x.to_numpy() if hasattr(x, "to_numpy") else x
+    matrix = np.asarray(values)
+    if matrix.ndim == 1 and matrix.size == 0 and empty:
+        matrix = np.empty((n, 0))
+    elif matrix.ndim == 1 and vector:
+        matrix = matrix.reshape(-1, 1)
+    if matrix.ndim != 2:
+        raise ValueError(invalid)
+    if matrix.shape[0] != n:
+        raise ValueError("x and y have different numbers of rows")
+    if matrix.dtype.kind not in "biuf":
+        raise TypeError("x must be a numeric matrix")
+    return matrix.astype(np.float64, copy=False)
+
+
 def _coerce_mapping_rows(values: Mapping[Any, Any], name: str) -> list[list[Any]]:
     keys = tuple(values)
     if not keys:
