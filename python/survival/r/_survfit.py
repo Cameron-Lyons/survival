@@ -1356,11 +1356,15 @@ def survfit0(
 def _rmean_option(
     rmean: Any,
     fit: SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | CoxSurvfitMultiStateResult,
+    *,
+    include_origin: bool = False,
 ) -> str:
     """``rmean``: ``"none"``, ``"common"``, ``"individual"`` or a truncation time."""
 
     if rmean is None:
         return "common"
+    if _is_bool_like(rmean):
+        raise ValueError("Invalid value for rmean option")
     if isinstance(rmean, str):
         return _match_string_arg(
             rmean, "rmean", ("none", "common", "individual"), "Invalid value for rmean option"
@@ -1368,7 +1372,10 @@ def _rmean_option(
     value = _finite_float(rmean, "rmean")
     # survfitms and survfitcox objects record their start.time, survfitKM ones do not
     start_time = None if isinstance(fit, SurvfitResult) else fit.start_time
-    if value < (min(fit.time) if start_time is None else start_time):
+    first = min(fit.time)
+    if include_origin:
+        first = min(first, getattr(fit, "t0", 0.0))
+    if value < (first if start_time is None else start_time):
         raise ValueError("Truncation point for the mean time in state is < smallest survival")
     return repr(value)
 

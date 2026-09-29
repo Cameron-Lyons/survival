@@ -136,6 +136,7 @@ from ._survfit import (
     survfit0,
     survfit_confint,
 )
+from ._survfit_print import SurvfitPrint, print_survfit, print_survfitms
 from ._survfit_residuals import pseudo, survfit_residuals
 from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
 from ._survreg import (
@@ -324,6 +325,9 @@ __all__ = [
     "predict",
     "predict_pspline",
     "print_survreg_penal",
+    "SurvfitPrint",
+    "print_survfit",
+    "print_survfitms",
     "predict_terms_constant",
     "median",
     "median_surv",

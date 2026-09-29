@@ -69,6 +69,7 @@ from ._survfit import (
     quantile_survfit,
     summary_survfit,
 )
+from ._survfit_print import SurvfitPrint
 from ._survfit_residuals import survfit_residuals
 from ._survreg import (
     SurvregAnovaResult,
@@ -1284,6 +1285,16 @@ as_data_frame.register(SurvExpResult | SurvExpSummary, _survexp_frame)
 as_data_frame.register(_core.FineGrayOutput, _finegray_frame)
 as_data_frame.register(SurvDiffResult, _survdiff_frame)
 as_data_frame.register(_core.AnovaCoxphResult, _anova_frame)
+
+
+@as_data_frame.register(SurvfitPrint)
+def _survfit_print_frame(result: SurvfitPrint) -> dict[str, list[Any]]:
+    table = result.table
+    frame: dict[str, list[Any]] = {}
+    if table.rownames is not None:
+        frame["curve"] = list(table.rownames)
+    frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
+    return frame
 
 
 @as_data_frame.register(RateTableSummary)

@@ -1037,6 +1037,16 @@ were 1.6–3.4 times faster. On 1,000-point curves, requesting 1,001
 probabilities was 4–16% slower (about 3–12 microseconds): the shared buffer
 trades additional arithmetic during searches for less allocation and copying.
 
+## Compact curve reports
+
+`print_survfit` and `print_survfitms` return R's compact curve tables and formatted
+text without expanding the full event-time summary. They support ordinary,
+Cox and multistate fits, count-column reduction, medians and confidence limits,
+restricted means, scaling and column-block wrapping. `SurvfitPrint.table` and
+`as_data_frame(report)` retain full precision; `str(report)` renders the report.
+See [survival reports](survival-reports.md) for defaults, R reference tests,
+allocation measurements and differences in output metadata.
+
 ## Graphics
 
 `survival.plotting` provides optional Matplotlib rendering through the generic
@@ -1059,11 +1069,12 @@ the interface does not emulate base R graphics parameters.
 These R entry points have no port. Calls that reach them raise an explicit
 error; none silently falls back to other behaviour.
 
-- **R-style print and format methods**: `survival.r` returns data objects and
-  `as_data_frame` tables instead of printed output. Only
-  `print_survreg_penal` ports R's printed table, and `format_surv` formats a
-  `Surv`; `str(summary_ratetable(...))` exposes the native rate-table text.
-  The sparse (frailty) branch of `print.survreg.penal` is not ported.
+- **Remaining R-style print and format methods**: `survival.r` returns data
+  objects and `as_data_frame` tables for most model and summary reports.
+  `print_survfit`, `print_survfitms`, and `print_survreg_penal` provide compact
+  formatted reports; `format_surv` formats a `Surv`, and
+  `str(summary_ratetable(...))` exposes the native rate-table text. Other printed
+  summaries and the sparse (frailty) branch of `print.survreg.penal` are not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
