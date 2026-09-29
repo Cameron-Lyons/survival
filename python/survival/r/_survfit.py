@@ -306,7 +306,7 @@ def _surv_model_frame(
             name: _subset_optional_sequence(values, indices, name)
             for name, values in extras.items()
         }
-    response, aligned = _apply_surv_na_action(
+    response, aligned, _removed = _apply_surv_na_action(
         response, na_action, "survfit inputs", group=group, **extras
     )
     group = aligned.pop("group")

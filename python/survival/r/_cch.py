@@ -216,6 +216,7 @@ def cch(
         cohort_size=cohort_sizes,
         subcohort_size=subcohort_size,
         sc_ids=sorted_ids if stratified else None,
+        stratum_names=tuple(levels) if stratified else None,
     )
 
 
@@ -223,8 +224,9 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
     """R's ``summary.cch``: ``Value``/``SE``/``Z``/``p`` per coefficient."""
 
     rows = []
+    variance = fit.var
     for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
-        se = math.sqrt(fit.var[idx][idx])
+        se = math.sqrt(variance[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
         p = 2.0 * (1.0 - 0.5 * math.erfc(-z / math.sqrt(2.0)))  # R: 2*(1-pnorm(Z))
         rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})
@@ -234,6 +236,7 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
         "cohort_size": list(fit.cohort_size),
         "subcohort_size": list(fit.subcohort_size),
         "stratified": fit.stratified,
+        "stratum_names": list(fit.stratum_names) if fit.stratum_names is not None else None,
         "coefficient_names": list(fit.coef_names),
         "coefficient_columns": ["Value", "SE", "Z", "p"],
         "coefficients": rows,

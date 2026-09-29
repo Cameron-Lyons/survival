@@ -873,6 +873,15 @@ robust uncertainty when changing event cutoffs or test weights. See
 [AFT and Aalen reports](docs/aft-aalen-reports.md) for options, R differences
 and influence-reduction memory measurements.
 
+## Diagnostic and test reports
+
+`r.print_cch`, `r.print_summary_cch`, `r.print_clogit`, `r.print_cox_zph`,
+`r.print_concordance`, `r.print_survConcordance` and `r.print_survdiff`
+return formatted text and full-precision tables. Formula reports retain
+missing-row notices; stratified case-cohort and concordance tables retain
+their labels. See [diagnostic and test reports](docs/diagnostic-test-reports.md)
+for defaults, data-frame conversion and R comparisons.
+
 ## Survival curve reports
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and

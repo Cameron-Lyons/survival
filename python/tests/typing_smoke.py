@@ -16,6 +16,18 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.print_coxph(cox), r.ModelPrint)
     assert_type(r.print_summary_coxph(r.model_summary(cox)), r.ModelPrint)
     assert_type(r.clogit("status ~ age + strata(inst)", data), r.ClogitModel)
+    conditional = r.clogit("status ~ age + strata(inst)", data)
+    assert_type(r.print_clogit(conditional), r.ModelPrint)
+    case_cohort = r.cch(
+        "Surv(time, status) ~ age", data, subcoh="subcoh", id="id", cohort_size=1000
+    )
+    assert_type(r.print_cch(case_cohort), r.ModelPrint)
+    assert_type(r.print_summary_cch(r.model_summary(case_cohort)), r.ModelPrint)
+    assert_type(r.print_cox_zph(r.cox_zph(cox)), r.ModelPrint)
+    assert_type(r.print_concordance(r.concordance(cox)), r.ModelPrint)
+    legacy_concordance = r.survConcordance("Surv(time, status) ~ age", data)
+    assert_type(r.print_survConcordance(legacy_concordance), r.ModelPrint)
+    assert_type(r.print_survdiff(r.survdiff("Surv(time, status) ~ sex", data)), r.ModelPrint)
     aft = r.survreg("Surv(time, status) ~ age", data)
     assert_type(aft, r.SurvregModelResult)
     assert_type(r.print_survreg(aft), r.ModelPrint | r.SurvregPenalPrint)
