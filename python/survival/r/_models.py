@@ -105,6 +105,7 @@ from ._types import (
     SurvfitQuantileResult,
     SurvfitResult,
     TMergeFrame,
+    YatesPrint,
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
@@ -1310,6 +1311,11 @@ def _model_print_frame(result: ModelPrint) -> dict[str, list[Any]]:
         frame[result.row_label] = list(table.rownames)
     frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
     return frame
+
+
+@as_data_frame.register(YatesPrint)
+def _yates_print_frame(result: YatesPrint) -> dict[str, list[Any]]:
+    return {name: list(values) for name, values in result.estimates.items()}
 
 
 @as_data_frame.register(SurvregPenalPrint)

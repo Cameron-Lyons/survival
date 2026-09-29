@@ -36,6 +36,7 @@ from ._coerce import (
     _normalize_positive_scale,
     _pop_dotted_keyword,
     _r_factor,
+    _r_format_number,
     _rows_of,
     _scalar_or_vector,
     _subset_sequence,
@@ -876,6 +877,36 @@ def _pyears_result(
     )
 
 
+def _population_match_summary(table: RateTable, positions: list[list[float]]) -> str | None:
+    """The built-in table's summary of matched data, before US birthday adjustment."""
+    source = table.source
+    if source not in {"survexp.us", "survexp.usr", "survexp.mn"}:
+        return None
+    age_low = year_low = math.inf
+    age_high = year_high = -math.inf
+    male = female = white = black = 0
+    for row in positions:
+        age_low, age_high = min(age_low, row[0]), max(age_high, row[0])
+        year_low, year_high = min(year_low, row[-1]), max(year_high, row[-1])
+        male += row[1] == 1
+        female += row[1] == 2
+        if source == "survexp.usr":
+            white += row[2] == 1
+            black += row[2] == 2
+    dates = [_core.days_to_date(math.floor(value)) for value in (year_low, year_high)]
+    first, last = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]
+    low, high = [_r_format_number(round(value / 365.25, 1), 7) for value in (age_low, age_high)]
+    indent = "  " if source == "survexp.mn" else "    "
+    text = (
+        f" age ranges from {low} to {high} years\n"
+        f"{indent}male: {male}  female: {female} \n"
+        f"{indent}date of entry from {first} to {last} \n"
+    )
+    if source == "survexp.usr":
+        text += f"    white: {white}  black: {black} \n"
+    return text
+
+
 def _pyears_direct(
     response: Any,
     time: Any,
@@ -1016,6 +1047,7 @@ def pyears(
     stop_values, start_values, event_values = _pyears_followup(mf)
     terms = _pyears_terms(mf, data, calls)
     categories = [[term.values[row] for term in terms] for row in range(mf.n)]
+    positions = None if table is None else _rate_positions(mf, table)
     result = _core.pyears(
         stop_values,
         start_values,
@@ -1026,7 +1058,7 @@ def pyears(
         [term.cuts for term in terms],
         categories,
         table,
-        None if table is None else _rate_positions(mf, table),
+        positions,
         expect_value,
         scale_value,
     )
@@ -1035,6 +1067,9 @@ def pyears(
         output,
         formula=formula,
         term_labels=[term.label for term in terms],
+        summary=None
+        if table is None or positions is None
+        else _population_match_summary(table, positions),
         model=None
         if row_key is None
         else _population_model_frame(

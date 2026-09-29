@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add person-years, survival-data consistency and marginal-means reports.
+  Retain built-in rate-table origins and matched-population summaries, and
+  preserve categorical status metadata in `factor()`/`as.factor()` survival
+  responses. Person-years totals traverse grouped cells without flattening them.
+
 - Add case-cohort, conditional-logistic, proportional-hazards diagnostic,
   concordance and survival-difference reports with full-precision tables.
   Retain formula omission records and case-cohort stratum labels, and avoid

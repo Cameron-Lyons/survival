@@ -28,6 +28,11 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     legacy_concordance = r.survConcordance("Surv(time, status) ~ age", data)
     assert_type(r.print_survConcordance(legacy_concordance), r.ModelPrint)
     assert_type(r.print_survdiff(r.survdiff("Surv(time, status) ~ sex", data)), r.ModelPrint)
+    assert_type(r.print_pyears(r.pyears("time ~ sex", data)), r.ModelPrint)
+    assert_type(
+        r.print_survcheck(r.survcheck("Surv(time, status) ~ 1", data, id="id")), r.ModelPrint
+    )
+    assert_type(r.print_yates(r.yates(cox, "age", levels=[40, 60, 80])), r.YatesPrint)
     aft = r.survreg("Surv(time, status) ~ age", data)
     assert_type(aft, r.SurvregModelResult)
     assert_type(r.print_survreg(aft), r.ModelPrint | r.SurvregPenalPrint)
