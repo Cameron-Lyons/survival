@@ -417,8 +417,36 @@ impl SurvregFit {
 impl SurvregFit {
     /// Pickle and copy support (see `internal::pickle`).
     #[cfg(feature = "python")]
-    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
-        crate::internal::pickle::reduce(py, self)
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        if self.distribution.callbacks.is_none() && self.distribution.transform_callbacks.is_none()
+        {
+            return crate::internal::pickle::reduce(py, self)?.into_pyobject(py);
+        }
+        let mut metadata = self.clone();
+        metadata.distribution = self.distribution.detached_callbacks();
+        let state = bincode::serde::encode_to_vec(metadata, bincode::config::standard())
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        (
+            py.get_type::<Self>().getattr("_from_callback_state")?,
+            (
+                pyo3::types::PyBytes::new(py, &state),
+                self.distribution.clone(),
+            ),
+        )
+            .into_pyobject(py)
+    }
+
+    #[cfg(feature = "python")]
+    #[staticmethod]
+    fn _from_callback_state(
+        py: Python<'_>,
+        state: &[u8],
+        distribution: &SurvregDistribution,
+    ) -> PyResult<Self> {
+        distribution.validate()?;
+        let mut result: Self = crate::internal::pickle::decode(py, state)?;
+        result.distribution = distribution.clone();
+        Ok(result)
     }
 
     /// `predict(object, newdata, type, se.fit, p, terms)`.  `offset` and
@@ -531,7 +559,9 @@ pub(crate) fn fitting_response(
     // Interval censored with a lower bound of zero: convert to left censored
     // (R does this for the log-transformed distributions; its name list
     // misspells "Log logistic", which is corrected here).
-    if transforms && let Some(time2) = time2.as_mut() {
+    if transform == SurvregTransform::Log
+        && let Some(time2) = time2.as_mut()
+    {
         for i in 0..n {
             if status[i] == 3 && time[i] == 0.0 {
                 time[i] = time2[i];
@@ -542,17 +572,16 @@ pub(crate) fn fitting_response(
     }
     let mut logcorrect = 0.0;
     if transforms {
-        for i in (0..n).filter(|&i| status[i] == 1) {
-            logcorrect += weights[i] * transform.derivative(time[i]).ln();
+        let exact: Vec<_> = (0..n).filter(|&i| status[i] == 1).collect();
+        if !exact.is_empty() {
+            let times: Vec<_> = exact.iter().map(|&i| time[i]).collect();
+            let derivatives = distribution.transform_derivatives(&times)?;
+            for (&i, d) in exact.iter().zip(derivatives) {
+                logcorrect += weights[i] * d.ln();
+            }
         }
     }
-    let y1: Vec<f64> = time.iter().map(|&t| transform.apply(t)).collect();
-    let y2: Vec<f64> = (0..n)
-        .map(|i| match &time2 {
-            Some(time2) if status[i] == 3 => transform.apply(time2[i]),
-            _ => y1[i],
-        })
-        .collect();
+    let (y1, y2) = distribution.transformed_endpoints(&time, time2.as_deref(), &status)?;
     if y1.iter().chain(&y2).any(|v| !v.is_finite()) || !logcorrect.is_finite() {
         return Err(SurvivalError::invalid_input(
             "Invalid survival times for this distribution",
@@ -577,20 +606,32 @@ pub(crate) fn derfun(
     response: &FittingResponse,
     eta: &[f64],
     sigma: impl Fn(usize) -> f64,
-) -> (Vec<f64>, Vec<f64>) {
-    (0..response.y1.len())
-        .map(|i| {
-            let d = survreg_deriv(
-                distribution,
-                response.y1[i],
-                response.y2[i],
-                response.status[i],
-                eta[i],
-                sigma(i),
-            );
-            (d[1], d[2])
-        })
-        .unzip()
+) -> SurvivalResult<(Vec<f64>, Vec<f64>)> {
+    if distribution.family != crate::regression::survreg_distributions::SurvregFamily::Custom {
+        return Ok((0..response.y1.len())
+            .map(|i| {
+                let d = survreg_deriv(
+                    distribution,
+                    response.y1[i],
+                    response.y2[i],
+                    response.status[i],
+                    eta[i],
+                    sigma(i),
+                );
+                (d[1], d[2])
+            })
+            .unzip());
+    }
+    let scale: Vec<_> = (0..response.y1.len()).map(sigma).collect();
+    let deriv = crate::residuals::survreg_resid::survreg_derivatives(
+        distribution,
+        &response.y1,
+        &response.y2,
+        &response.status,
+        eta,
+        &scale,
+    )?;
+    Ok(deriv.into_iter().map(|d| (d[1], d[2])).unzip())
 }
 
 /// The value of `survreg6`.
@@ -614,16 +655,19 @@ fn newton_step(
     beta: &[f64],
     lik: &SurvregLikelihood,
     tol_chol: f64,
-) -> (Vec<f64>, bool) {
+) -> SurvivalResult<(Vec<f64>, bool)> {
     let mut chol = lik.imat.clone();
     let use_jj = cholesky2(&mut chol, tol_chol) < 0;
     if use_jj {
-        chol = lik.jj.clone().unwrap_or_else(|| kernel.jj(beta));
+        chol = match &lik.jj {
+            Some(jj) => jj.clone(),
+            None => kernel.jj(beta)?,
+        };
         cholesky2(&mut chol, tol_chol);
     }
     let mut step = lik.u.clone();
     chsolve2(&chol, &mut step);
-    (step, use_jj)
+    Ok((step, use_jj))
 }
 
 /// `cholesky2` + `chinv2` of the information matrix, symmetrised, as the C
@@ -656,10 +700,10 @@ pub(crate) fn survreg6(
     // The initial iteration step.  Once a step has used JJ, the evaluations
     // accumulate it next to imat until a step does not, so a fit that keeps
     // stepping with JJ still makes one sweep per evaluation.
-    let lik = kernel.evaluate(&beta, false);
+    let lik = kernel.evaluate(&beta, false)?;
     let mut loglik = lik.loglik;
     let mut usave = lik.u.clone();
-    let (step, mut with_jj) = newton_step(kernel, &beta, &lik, tol_chol);
+    let (step, mut with_jj) = newton_step(kernel, &beta, &lik, tol_chol)?;
     for i in 0..nvar2 {
         newbeta[i] = beta[i] + step[i];
     }
@@ -677,7 +721,7 @@ pub(crate) fn survreg6(
     }
 
     let mut halving = 0;
-    let mut newlik = kernel.evaluate(&newbeta, with_jj);
+    let mut newlik = kernel.evaluate(&newbeta, with_jj)?;
     usave.clone_from(&newlik.u);
     for iter in 1..=maxiter {
         // A Newton-Raphson step gone seriously awry leaves an infinite or
@@ -725,14 +769,14 @@ pub(crate) fn survreg6(
             // A standard Newton-Raphson step.
             halving = 0;
             loglik = newlk;
-            let (step, used_jj) = newton_step(kernel, &newbeta, &newlik, tol_chol);
+            let (step, used_jj) = newton_step(kernel, &newbeta, &newlik, tol_chol)?;
             with_jj = used_jj;
             beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
             for (value, delta) in newbeta.iter_mut().zip(&step) {
                 *value += delta;
             }
         }
-        newlik = kernel.evaluate(&newbeta, with_jj);
+        newlik = kernel.evaluate(&newbeta, with_jj)?;
         usave.clone_from(&newlik.u);
     }
 
@@ -743,7 +787,7 @@ pub(crate) fn survreg6(
         beta[..nvar2].copy_from_slice(&newbeta[..nvar2]);
         newlik.imat
     } else {
-        kernel.evaluate(&beta, false).imat
+        kernel.evaluate(&beta, false)?.imat
     };
     Ok(Survreg6Fit {
         var: invert_information(&information, tol_chol)?,
@@ -834,7 +878,7 @@ pub(crate) fn intercept_only_fit(
     let mut coef0 = vec![coef[0]];
     coef0.extend(std::iter::repeat_n(vars, nstrata));
     // A better initial value for the mean using the "glim" trick.
-    let (dg, ddg) = derfun(distribution, response, &yy, |_| vars.exp());
+    let (dg, ddg) = derfun(distribution, response, &yy, |_| vars.exp())?;
     let wt: Vec<f64> = ddg.iter().zip(weights).map(|(d, w)| -d * w).collect();
     coef0[0] = (0..n)
         .map(|i| weights[i] * dg[i] + wt[i] * (yy[i] - offset[i]))
@@ -1012,7 +1056,7 @@ pub fn survreg_fit(
                 }
             };
             let eta: Vec<f64> = yy.iter().zip(&offset).map(|(y, o)| y - o).collect();
-            let (dg, ddg) = derfun(distribution, &response, &yy, |i| vars[strata[i]].exp());
+            let (dg, ddg) = derfun(distribution, &response, &yy, |i| vars[strata[i]].exp())?;
             let wt: Vec<f64> = ddg.iter().zip(&weights).map(|(d, w)| -d * w).collect();
             let rhs_weight: Vec<f64> = (0..n)
                 .map(|i| wt[i] * eta[i] + weights[i] * dg[i])

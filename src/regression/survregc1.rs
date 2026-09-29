@@ -6,9 +6,10 @@
 //!
 //! `survregc2.c`, the variant that evaluates a user-written density through
 //! an R callback, differs from `survregc1.c` only in where the density
-//! summary comes from; [`SurvregDistribution::kernel`] hides that difference
-//! (the `t` family evaluates the columns of its R `density` that the callback
-//! would read), so one sweep serves every distribution.  (survregc2.c also
+//! summary comes from. [`SurvregDensitySource`] supplies one batch of densities
+//! for custom implementations; built-ins keep their direct scalar kernels.
+//! Errors propagate through Newton steps, Fisher fallbacks and penalized line
+//! searches. (survregc2.c also
 //! indexes the linear predictor and the stratum scales of a model with a
 //! sparse term without the `nf` frailty offset; the shared sweep indexes
 //! them as survregc1.c does.)
@@ -19,6 +20,8 @@
 //! and keeps the C code's layout of the information, and
 //! [`SurvregKernel::loglik_at`], its log-likelihood-only `whichcase = 1`.
 
+use crate::error::SurvivalResult;
+use crate::regression::survreg_density::{SurvregDensitySource, check_density_batch};
 use crate::regression::survreg_distributions::{KernelCase, SurvregDistribution};
 use ndarray::{Array2, ArrayView2};
 
@@ -46,7 +49,7 @@ pub(crate) struct SurvregKernel<'a> {
     /// Number of `log(scale)` parameters being estimated: 0 for a fixed
     /// scale, 1 without strata, the number of strata otherwise.
     pub nstrat: usize,
-    pub distribution: &'a SurvregDistribution,
+    pub distribution: &'a dyn SurvregDensitySource,
 }
 
 /// The kernel output for one parameter vector.
@@ -89,6 +92,10 @@ impl Contribution {
     /// `case 1` of `survregc1.c`: an exact observation.
     fn exact(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Density);
+        Self::exact_from(funs, z, sz, sigma)
+    }
+
+    fn exact_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
         if funs[1] <= 0.0 {
             return Self::small(-z / sigma, -1.0 / sigma);
         }
@@ -110,6 +117,10 @@ impl Contribution {
     /// `case 0`: right censored.
     fn right_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
+        Self::right_from(funs, z, sz, sigma)
+    }
+
+    fn right_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
         if funs[1] <= 0.0 {
             return Self::small(z / sigma, 0.0);
         }
@@ -121,6 +132,10 @@ impl Contribution {
     /// `case 2`: left censored.
     fn left_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
+        Self::left_from(funs, z, sz, sigma)
+    }
+
+    fn left_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
         if funs[0] <= 0.0 {
             return Self::small(-z / sigma, 0.0);
         }
@@ -147,6 +162,10 @@ impl Contribution {
     fn interval_censored(distribution: &SurvregDistribution, z: f64, zu: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
         let ufun = distribution.kernel(zu, KernelCase::Distribution);
+        Self::interval_from(funs, ufun, z, zu, sigma)
+    }
+
+    fn interval_from(funs: [f64; 4], ufun: [f64; 4], z: f64, zu: f64, sigma: f64) -> Self {
         // Differencing the tail that is small on both ends stops round-off.
         let temp = if z > 0.0 {
             funs[1] - ufun[1]
@@ -265,6 +284,13 @@ impl BlockLikelihood {
     }
 }
 
+/// Density callbacks are evaluated once, before accumulation. Built-ins keep
+/// their allocation-free, case-specific scalar evaluation.
+enum Contributions<'a> {
+    Builtin(&'a SurvregDistribution),
+    Batch(Vec<Contribution>),
+}
+
 impl SurvregKernel<'_> {
     pub(crate) fn n(&self) -> usize {
         self.y1.len()
@@ -287,12 +313,17 @@ impl SurvregKernel<'_> {
     /// `beta` holds `nvar` coefficients followed by the `log(scale)` values:
     /// one per stratum when they are estimated, or the fixed `log(scale)`
     /// tacked on at position `nvar` when `nstrat == 0`.
-    pub(crate) fn evaluate(&self, beta: &[f64], with_jj: bool) -> SurvregLikelihood {
+    pub(crate) fn evaluate(
+        &self,
+        beta: &[f64],
+        with_jj: bool,
+    ) -> SurvivalResult<SurvregLikelihood> {
         let nvar = self.nvar();
         let nvar2 = self.nvar2();
         debug_assert!(beta.len() > nvar, "beta must carry a log(scale)");
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
+        let contributions = self.prepare_contributions(beta, None, design)?;
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![0.0; nvar2 * nvar2];
@@ -306,37 +337,104 @@ impl SurvregKernel<'_> {
             };
             let sigma = beta[nvar + stratum].exp();
             let x = &design[person * nvar..(person + 1) * nvar];
-            let eta =
-                self.offset[person] + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
-            let contribution = self.contribution(person, eta, sigma);
+            let contribution = match &contributions {
+                Contributions::Builtin(distribution) => {
+                    let eta = self.offset[person]
+                        + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
+                    self.contribution(distribution, person, eta, sigma)
+                }
+                Contributions::Batch(rows) => rows[person],
+            };
             let w = self.weights[person];
             loglik += contribution.g * w;
             let scale = (self.nstrat != 0).then_some(nvar + stratum);
             contribution.accumulate(x, scale, w, &mut u, &mut imat, jj.as_deref_mut());
         }
 
-        SurvregLikelihood {
+        Ok(SurvregLikelihood {
             loglik,
             u,
             imat: symmetric_from_lower(nvar2, imat),
             jj: jj.map(|jj| symmetric_from_lower(nvar2, jj)),
-        }
+        })
     }
 
     /// Row `person`'s log-likelihood and derivatives at the linear
     /// predictor `eta` and scale `sigma`: the four censoring cases.
-    fn contribution(&self, person: usize, eta: f64, sigma: f64) -> Contribution {
+    fn contribution(
+        &self,
+        distribution: &SurvregDistribution,
+        person: usize,
+        eta: f64,
+        sigma: f64,
+    ) -> Contribution {
         let sz = self.y1[person] - eta;
         let z = sz / sigma;
         match self.status[person] {
-            1 => Contribution::exact(self.distribution, z, sz, sigma),
-            0 => Contribution::right_censored(self.distribution, z, sz, sigma),
-            2 => Contribution::left_censored(self.distribution, z, sz, sigma),
+            1 => Contribution::exact(distribution, z, sz, sigma),
+            0 => Contribution::right_censored(distribution, z, sz, sigma),
+            2 => Contribution::left_censored(distribution, z, sz, sigma),
             _ => {
                 let zu = (self.y2[person] - eta) / sigma;
-                Contribution::interval_censored(self.distribution, z, zu, sigma)
+                Contribution::interval_censored(distribution, z, zu, sigma)
             }
         }
+    }
+
+    /// `survregc2` packs all lower endpoints first, then the interval upper
+    /// endpoints. Offset, scale stratum and sparse effects are applied before
+    /// the one callback invocation. Its errors stop the optimizer immediately.
+    fn prepare_contributions(
+        &self,
+        beta: &[f64],
+        frailty: Option<&SparseFrailty<'_>>,
+        design: &[f64],
+    ) -> SurvivalResult<Contributions<'_>> {
+        if let Some(distribution) = self.distribution.builtin() {
+            return Ok(Contributions::Builtin(distribution));
+        }
+        let n = self.n();
+        let nvar = self.nvar();
+        let mut z = vec![0.0; n + self.status.iter().filter(|&&s| s == 3).count()];
+        let mut upper_index = n;
+        let mut scales = Vec::with_capacity(n);
+        for person in 0..n {
+            let x = &design[person * nvar..(person + 1) * nvar];
+            let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
+            z[person] = (self.y1[person] - eta) / sigma;
+            scales.push(sigma);
+            if self.status[person] == 3 {
+                z[upper_index] = (self.y2[person] - eta) / sigma;
+                upper_index += 1;
+            }
+        }
+        let values = self.distribution.density_batch(&z)?;
+        check_density_batch(&values, z.len())?;
+        let mut upper_index = n;
+        let mut rows = Vec::with_capacity(n);
+        for person in 0..n {
+            let d = values[person];
+            let sigma = scales[person];
+            let sz = z[person] * sigma;
+            let row = match self.status[person] {
+                1 => Contribution::exact_from(d.density_kernel(), z[person], sz, sigma),
+                0 => Contribution::right_from(d.distribution_kernel(), z[person], sz, sigma),
+                2 => Contribution::left_from(d.distribution_kernel(), z[person], sz, sigma),
+                _ => {
+                    let row = Contribution::interval_from(
+                        d.distribution_kernel(),
+                        values[upper_index].distribution_kernel(),
+                        z[person],
+                        z[upper_index],
+                        sigma,
+                    );
+                    upper_index += 1;
+                    row
+                }
+            };
+            rows.push(row);
+        }
+        Ok(Contributions::Batch(rows))
     }
 
     /// The linear predictor and scale of row `person` for survreg7's
@@ -371,19 +469,21 @@ impl SurvregKernel<'_> {
     /// score and information at `beta` (`nf` frailties, `nvar`
     /// coefficients, then the `log(scale)`s, or the fixed `log(scale)` when
     /// `nstrat == 0`) into `out`, and `JJ` when `with_jj` (it costs about
-    /// 40% of the sweep).  `O(n nvar2^2)` time, no allocation.
+    /// 40% of the sweep). `O(n nvar2^2)` time; built-ins allocate no workspace,
+    /// while callbacks use linear endpoint, density and contribution buffers.
     pub(crate) fn evaluate_blocks(
         &self,
         beta: &[f64],
         frailty: Option<&SparseFrailty<'_>>,
         with_jj: bool,
         out: &mut BlockLikelihood,
-    ) {
+    ) -> SurvivalResult<()> {
         let nvar = self.nvar();
         let nf = frailty.map_or(0, |f| f.nf);
         let width = nf + self.nvar2();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
+        let contributions = self.prepare_contributions(beta, frailty, design)?;
         out.at.clear();
         out.at.extend_from_slice(beta);
         out.u.fill(0.0);
@@ -402,8 +502,13 @@ impl SurvregKernel<'_> {
         let mut loglik = 0.0;
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
-            let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
-            let c = self.contribution(person, eta, sigma);
+            let c = match &contributions {
+                Contributions::Builtin(distribution) => {
+                    let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
+                    self.contribution(distribution, person, eta, sigma)
+                }
+                Contributions::Batch(rows) => rows[person],
+            };
             let w = self.weights[person];
             loglik += c.g * w;
             let group = frailty.map(|f| f.group[person]);
@@ -459,22 +564,34 @@ impl SurvregKernel<'_> {
             }
         }
         out.loglik = loglik;
+        Ok(())
     }
 
     /// survregc1.c with `whichcase = 1`: the log-likelihood alone at
     /// `beta`, bit for bit the one [`Self::evaluate_blocks`] returns there.
     /// `O(n nvar)`.
-    pub(crate) fn loglik_at(&self, beta: &[f64], frailty: Option<&SparseFrailty<'_>>) -> f64 {
+    pub(crate) fn loglik_at(
+        &self,
+        beta: &[f64],
+        frailty: Option<&SparseFrailty<'_>>,
+    ) -> SurvivalResult<f64> {
         let nvar = self.nvar();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
+        let contributions = self.prepare_contributions(beta, frailty, design)?;
         let mut loglik = 0.0;
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
-            let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
-            loglik += self.contribution(person, eta, sigma).g * self.weights[person];
+            let c = match &contributions {
+                Contributions::Builtin(distribution) => {
+                    let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
+                    self.contribution(distribution, person, eta, sigma)
+                }
+                Contributions::Batch(rows) => rows[person],
+            };
+            loglik += c.g * self.weights[person];
         }
-        loglik
+        Ok(loglik)
     }
 
     /// `JJ` at `beta`: the sum of the squared score contributions, the
@@ -482,8 +599,8 @@ impl SurvregKernel<'_> {
     /// positive definite.  `survregc1.c` accumulates it in every call, about
     /// 40% of the `O(n p^2)` work, so the fit asks for it only while it
     /// steps with it and otherwise evaluates `beta` again to get it.
-    pub(crate) fn jj(&self, beta: &[f64]) -> Array2<f64> {
-        self.evaluate(beta, true).jj.expect("evaluated with JJ")
+    pub(crate) fn jj(&self, beta: &[f64]) -> SurvivalResult<Array2<f64>> {
+        Ok(self.evaluate(beta, true)?.jj.expect("evaluated with JJ"))
     }
 }
 
@@ -498,6 +615,9 @@ fn symmetric_from_lower(n: usize, lower: Vec<f64>) -> Array2<f64> {
     }
     matrix
 }
+
+#[cfg(test)]
+mod callback_tests;
 
 #[cfg(test)]
 mod tests {
@@ -631,8 +751,8 @@ mod tests {
             distribution: &weibull,
         };
         let beta = [0.5, 0.2, -0.1];
-        let lik = kernel.evaluate(&beta, false);
-        let jj = kernel.jj(&beta);
+        let lik = kernel.evaluate(&beta, false).unwrap();
+        let jj = kernel.jj(&beta).unwrap();
         assert_eq!(lik.u.len(), 3);
         assert_eq!(lik.imat.shape(), &[3, 3]);
         assert_eq!(jj.shape(), &[3, 3]);
@@ -651,8 +771,9 @@ mod tests {
         up[2] += h;
         let mut down = beta;
         down[2] -= h;
-        let fd =
-            (kernel.evaluate(&up, false).loglik - kernel.evaluate(&down, false).loglik) / (2.0 * h);
+        let fd = (kernel.evaluate(&up, false).unwrap().loglik
+            - kernel.evaluate(&down, false).unwrap().loglik)
+            / (2.0 * h);
         assert_close(lik.u[2], fd, 1e-6);
     }
 
@@ -682,10 +803,10 @@ mod tests {
             distribution: &t,
         };
         let beta = [0.4, -0.3, 0.1, -0.2];
-        let jj = kernel(0..5).jj(&beta);
+        let jj = kernel(0..5).jj(&beta).unwrap();
         let mut expected = Array2::<f64>::zeros((4, 4));
         for person in 0..5 {
-            let u = kernel(person..person + 1).evaluate(&beta, false).u;
+            let u = kernel(person..person + 1).evaluate(&beta, false).unwrap().u;
             for i in 0..4 {
                 for j in 0..4 {
                     expected[[i, j]] += u[i] * u[j];
@@ -699,8 +820,8 @@ mod tests {
         }
         // Accumulating JJ leaves the log-likelihood, score and information
         // as they are without it.
-        let without = kernel(0..5).evaluate(&beta, false);
-        let with = kernel(0..5).evaluate(&beta, true);
+        let without = kernel(0..5).evaluate(&beta, false).unwrap();
+        let with = kernel(0..5).evaluate(&beta, true).unwrap();
         assert!(without.jj.is_none());
         assert_eq!(with.loglik, without.loglik);
         assert_eq!(with.u, without.u);
@@ -730,8 +851,8 @@ mod tests {
             distribution: &weibull,
         };
         let beta = [0.3, 0.2, -0.1];
-        let expected = kernel(row_major.view()).evaluate(&beta, true);
-        let got = kernel(column_major.t()).evaluate(&beta, true);
+        let expected = kernel(row_major.view()).evaluate(&beta, true).unwrap();
+        let got = kernel(column_major.t()).evaluate(&beta, true).unwrap();
         assert_eq!(got.loglik, expected.loglik);
         assert_eq!(got.u, expected.u);
         assert_eq!(got.imat, expected.imat);
@@ -795,9 +916,11 @@ mod tests {
         let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
         let kernel = block_kernel(&data, data.x.view(), 2, &weibull);
         let beta = [0.4, 0.3, -0.2, 0.1];
-        let full = kernel.evaluate(&beta, true);
+        let full = kernel.evaluate(&beta, true).unwrap();
         let mut blocks = BlockLikelihood::new(0, 4);
-        kernel.evaluate_blocks(&beta, None, true, &mut blocks);
+        kernel
+            .evaluate_blocks(&beta, None, true, &mut blocks)
+            .unwrap();
         assert_eq!(blocks.loglik, full.loglik);
         assert_eq!(blocks.u, full.u);
         assert_eq!(blocks.at, beta);
@@ -826,8 +949,10 @@ mod tests {
                 let mut beta = vec![0.05, -0.1, 0.08][..nf].to_vec();
                 beta.extend([0.4, 0.3, -0.2, 0.1][..2 + nstrat.max(1)].iter());
                 let mut blocks = BlockLikelihood::new(nf, 2 + nstrat);
-                kernel.evaluate_blocks(&beta, frailty, false, &mut blocks);
-                let loglik = kernel.loglik_at(&beta, frailty);
+                kernel
+                    .evaluate_blocks(&beta, frailty, false, &mut blocks)
+                    .unwrap();
+                let loglik = kernel.loglik_at(&beta, frailty).unwrap();
                 assert_eq!(loglik.to_bits(), blocks.loglik.to_bits(), "{name} {nstrat}");
             }
         }
@@ -846,7 +971,9 @@ mod tests {
         let sparse_kernel = block_kernel(&data, data.x.view(), 2, &lognormal);
         let beta = [0.05, -0.1, 0.08, 0.4, 0.3, -0.2, 0.1];
         let mut sparse = BlockLikelihood::new(3, 4);
-        sparse_kernel.evaluate_blocks(&beta, Some(&frailty), true, &mut sparse);
+        sparse_kernel
+            .evaluate_blocks(&beta, Some(&frailty), true, &mut sparse)
+            .unwrap();
 
         let dense_x = Array2::from_shape_fn((12, 5), |(i, j)| {
             if j < 3 {
@@ -856,7 +983,7 @@ mod tests {
             }
         });
         let dense_kernel = block_kernel(&data, dense_x.view(), 2, &lognormal);
-        let dense = dense_kernel.evaluate(&beta, true);
+        let dense = dense_kernel.evaluate(&beta, true).unwrap();
         let dense_jj = dense.jj.unwrap();
         let close = |a: f64, b: f64| assert_close(a, b, 1e-12 * b.abs().max(1.0));
         close(sparse.loglik, dense.loglik);
@@ -895,7 +1022,7 @@ mod tests {
             nstrat: 0,
             distribution: &weibull,
         };
-        let lik = kernel.evaluate(&[0.3, 0.0], false);
+        let lik = kernel.evaluate(&[0.3, 0.0], false).unwrap();
         assert_eq!(lik.u.len(), 1);
         assert_eq!(lik.imat.shape(), &[1, 1]);
         assert!(lik.loglik.is_finite());

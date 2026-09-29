@@ -45,6 +45,9 @@ pub(crate) mod penalized;
 pub(crate) mod recurrent_events;
 pub(crate) mod spline_hazard;
 pub(crate) mod survpenal;
+mod survreg_callbacks;
+pub(crate) mod survreg_density;
+pub use survreg_callbacks::{SurvregCallbacks, SurvregTransformCallbacks};
 pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
@@ -132,7 +135,7 @@ pub use spline_hazard::{
 pub use survpenal::survpenal_fit_from_state;
 pub use survpenal::{SurvpenalData, SurvpenalFit, SurvpenalOptions, survpenal_fit};
 pub use survreg_distributions::{
-    SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg, qsurvreg, rsurvreg,
-    survreg_dtest,
+    SurvregDensity, SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg,
+    qsurvreg, rsurvreg, survreg_dtest,
 };
 pub use survreg_predict::{SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg};

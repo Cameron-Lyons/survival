@@ -16,6 +16,8 @@
 //! and `residuals()` of a `survreg.penal` object come from the same code as
 //! for an unpenalised one (R's `NextMethod()`).
 
+#[cfg(test)]
+mod density_tests;
 mod kernel;
 #[cfg(test)]
 mod tests;
@@ -126,9 +128,9 @@ pub struct SurvpenalFit {
 /// R's `sd$variance(temp^2)` for `n.eff`: the variance of the standard
 /// distribution, where the `t` family's `variance(df)` receives the squared
 /// mean scale as its degrees of freedom (survpenal.fit.R:402, kept).
-fn neff_variance(distribution: &SurvregDistribution, scale2: f64) -> f64 {
+fn neff_variance(distribution: &SurvregDistribution, scale2: f64) -> SurvivalResult<f64> {
     match distribution.family {
-        SurvregFamily::T => scale2 / (scale2 - 2.0),
+        SurvregFamily::T => Ok(scale2 / (scale2 - 2.0)),
         _ => distribution.variance(),
     }
 }
@@ -247,7 +249,7 @@ impl SurvpenalFit {
         let mean_scale =
             fit0.beta[1..].iter().map(|v| v.exp()).sum::<f64>() / (fit0.beta.len() - 1) as f64;
         let n_eff =
-            neff_variance(distribution, mean_scale * mean_scale) * lu_inverse(&fit0.var)?[(0, 0)];
+            neff_variance(distribution, mean_scale * mean_scale)? * lu_inverse(&fit0.var)?[(0, 0)];
 
         // Starting values: frailties, dense coefficients, log(scale)s.
         let mut init = match &options.init {
@@ -489,18 +491,32 @@ impl SurvpenalFit {
 
 #[pymethods]
 impl SurvpenalFit {
-    /// Pickle and copy support: `(_survpenal_fit_from_state, (state,))`.
+    /// Pickle metadata and, for custom distributions, their callable state.
     #[cfg(feature = "python")]
-    fn __reduce__<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyAny>, (Bound<'py, pyo3::types::PyBytes>,))> {
-        let state = bincode::serde::encode_to_vec(self, bincode::config::standard())
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let distribution = &self.survreg.distribution;
+        let custom = distribution.callbacks.is_some() || distribution.transform_callbacks.is_some();
+        let mut metadata;
+        let state_value = if custom {
+            metadata = self.clone();
+            metadata.survreg.distribution = distribution.detached_callbacks();
+            &metadata
+        } else {
+            self
+        };
+        let state = bincode::serde::encode_to_vec(state_value, bincode::config::standard())
             .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
         let rebuild = py
             .import("survival._survival")?
             .getattr("_survpenal_fit_from_state")?;
-        Ok((rebuild, (pyo3::types::PyBytes::new(py, &state),)))
+        (
+            rebuild,
+            (
+                pyo3::types::PyBytes::new(py, &state),
+                custom.then(|| distribution.clone()),
+            ),
+        )
+            .into_pyobject(py)
     }
 
     /// The fit as a `SurvregFit` (a copy: a formula-level fit holds this
@@ -665,6 +681,16 @@ pub fn survpenal_fit(
 /// Rebuilds a pickled [`SurvpenalFit`] from its `__reduce__` state.
 #[cfg(feature = "python")]
 #[pyfunction(name = "_survpenal_fit_from_state")]
-pub fn survpenal_fit_from_state(py: Python<'_>, state: &[u8]) -> PyResult<SurvpenalFit> {
-    crate::internal::pickle::decode(py, state)
+#[pyo3(signature = (state, distribution=None))]
+pub fn survpenal_fit_from_state(
+    py: Python<'_>,
+    state: &[u8],
+    distribution: Option<&SurvregDistribution>,
+) -> PyResult<SurvpenalFit> {
+    let mut result: SurvpenalFit = crate::internal::pickle::decode(py, state)?;
+    if let Some(distribution) = distribution {
+        distribution.validate()?;
+        result.survreg.distribution = distribution.clone();
+    }
+    Ok(result)
 }

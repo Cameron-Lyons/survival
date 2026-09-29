@@ -206,7 +206,10 @@ def test_survreg_custom_distributions(lung, lung_weibull):
     assert _survreg.survregDtest(_survreg.survreg_distributions["lognormal"]) is True
     assert _survreg.survregDtest({"name": "x"}) is False
     assert _survreg.survregDtest({"name": "x"}, verbose=True) == [
-        "custom densities are not supported; give 'dist' (a built-in name)"
+        "Missing or invalid init function",
+        "Missing or invalid deviance function",
+        "Missing or invalid density function",
+        "Missing or invalid quantile function",
     ]
     with pytest.raises(ValueError, match="trans must be 'log' or 'identity'"):
         r.survreg("Surv(time, status) ~ age", data=lung, dist={**as_list, "trans": 1})

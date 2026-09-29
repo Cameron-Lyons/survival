@@ -85,7 +85,7 @@ SurvregDistribution = _core.SurvregDistribution
 SurvregControl = _core.SurvregControl
 
 # R's ``survreg.distributions``: the built-in location-scale families keyed by the names
-# ``survreg(dist=)`` matches against.  Users may add entries (a ``SurvregDistribution``).
+# ``survreg(dist=)`` matches against. Users may add objects or distribution dictionaries.
 _BUILTIN_DISTRIBUTIONS = (
     "extreme",
     "logistic",
@@ -337,57 +337,92 @@ def _parms_vector(parms: Any | None) -> list[float] | None:
     return _quantile_vector(values, "parms")
 
 
-def _distribution_from_list(dlist: Mapping[str, Any]) -> Any:
-    """A user distribution given as R's list: a transform of a built-in family."""
-
+def _distribution_issues(dlist: Mapping[str, Any]) -> list[str]:
+    """Structural checks before constructing a native distribution."""
+    issues = []
     name = dlist.get("name")
     if not isinstance(name, str):
-        raise ValueError("Invalid distribution object: Missing a name")
-    base = dlist.get("dist")
-    if not isinstance(base, str):
-        raise ValueError("custom densities are not supported; give 'dist' (a built-in name)")
-    reference = _resolve_distribution(base, None)
+        issues.append("Missing a name")
+    if dlist.get("dist") is None:
+        for key in ("init", "deviance", "density", "quantile"):
+            if not callable(dlist.get(key)):
+                issues.append(f"Missing or invalid {key} function")
     trans = dlist.get("trans", "identity")
-    if not isinstance(trans, str) or trans not in _TRANSFORMS:
-        raise ValueError("trans must be 'log' or 'identity'")
+    if callable(trans):
+        for key in ("dtrans", "itrans"):
+            if not callable(dlist.get(key)):
+                issues.append(f"Missing or invalid {key} component")
+    elif not isinstance(trans, str) or trans not in _TRANSFORMS:
+        issues.append("trans must be 'log' or 'identity', or a callable with dtrans and itrans")
+    return issues
+
+
+def _distribution_from_list(dlist: Mapping[str, Any]) -> Any:
+    """A callback-defined family or a response transform of another distribution."""
+
+    issues = _distribution_issues(dlist)
+    if issues:
+        raise ValueError("Invalid distribution object: " + "; ".join(issues))
+    name = dlist["name"]
+    base = dlist.get("dist")
+    trans = dlist.get("trans", "identity")
     scale = dlist.get("scale")
-    return _core.SurvregDistribution.custom(
-        name,
-        reference.family,
-        _TRANSFORMS[trans],
-        None if scale is None else _finite_float(scale, "scale"),
-        _parms_vector(dlist.get("parms")),
-    )
+    scale = None if scale is None else _finite_float(scale, "scale")
+    transform = _TRANSFORMS["identity"] if callable(trans) else _TRANSFORMS[trans]
+    parms = dlist.get("parms")
+    if base is None:
+        reference = _core.SurvregDistribution.from_callbacks(
+            name,
+            dlist["init"],
+            dlist["density"],
+            dlist["deviance"],
+            dlist["quantile"],
+            variance=dlist.get("variance"),
+            transform=transform,
+            scale=scale,
+            parms=_parms_vector(parms),
+            parm_names=list(parms) if isinstance(parms, Mapping) else None,
+        )
+    else:
+        reference = _resolve_distribution(base, parms, probe=False).derived(name, transform, scale)
+    if callable(trans):
+        reference = reference.with_transform(trans, dlist["dtrans"], dlist["itrans"])
+    return reference
 
 
-def _resolve_distribution(dist: Any, parms: Any | None) -> Any:
+def _resolve_distribution(dist: Any, parms: Any | None, *, probe: bool = True) -> Any:
     """``survreg``'s distribution lookup: name (``match.arg``), list, or object; then parms."""
 
     if isinstance(dist, str):
         key = _match_arg(dist, "dist", tuple(survreg_distributions))
         dist = survreg_distributions[key]
-        if parms is not None and key in _BUILTIN_DISTRIBUTIONS:
-            return _core.SurvregDistribution(key, _parms_vector(parms))
-    elif isinstance(dist, Mapping):
+    if isinstance(dist, Mapping):
         dist = _distribution_from_list(dist)
     elif not isinstance(dist, _core.SurvregDistribution):
         raise TypeError("Invalid distribution object")
-    errors = dist.dtest()
+    errors = dist.dtest() if probe else []
     if errors:
         raise ValueError("Invalid distribution object: " + "; ".join(errors))
     if parms is None:
         return dist
     if not dist.parms:
         raise ValueError(f"{dist.name} distribution has no optional parameters")
-    return _core.SurvregDistribution.custom(
-        dist.name, dist.family, dist.transform, dist.scale, _parms_vector(parms)
-    )
+    if isinstance(parms, Mapping):
+        names = dist.parm_names
+        if not names or any(name not in names for name in parms):
+            raise ValueError("Invalid parameter names")
+        values = dict(zip(names, dist.parms, strict=True))
+        values.update(parms)
+        parms = [values[name] for name in names]
+    return dist.with_parms(_parms_vector(parms))
 
 
 def survregDtest(dlist: Any, verbose: bool = False) -> bool | list[str]:
     """Check a distribution object; ``True``, or the problems when ``verbose``."""
 
     try:
+        if isinstance(dlist, Mapping) and (issues := _distribution_issues(dlist)):
+            return issues if verbose else False
         distribution = _distribution_from_list(dlist) if isinstance(dlist, Mapping) else dlist
         errors = list(_core.survreg_dtest(distribution))
     except (TypeError, ValueError) as exc:
@@ -1240,53 +1275,58 @@ def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
 # --- dsurvreg / psurvreg / qsurvreg / rsurvreg -----------------------------------------------
 
 
-def _dpqr_parms(distribution: Any, parms: Any | None) -> list[float] | None:
-    """R's density functions take ``parms`` and only the t distribution reads it."""
+def _dpqr_distribution(distribution: Any, parms: Any | None) -> Any:
+    """Density functions use a case-folded exact registry lookup, without prefixes."""
 
-    if parms is None or not isinstance(distribution, str) or distribution != "t":
-        return None
-    return _parms_vector(parms)
+    if isinstance(distribution, str):
+        key = distribution.lower()
+        if key not in survreg_distributions:
+            raise ValueError("Distribution not found")
+        distribution = survreg_distributions[key]
+        # As R does, families with no parameters ignore the supplied parms.
+        if (
+            key in _BUILTIN_DISTRIBUTIONS
+            and key != "t"
+            and isinstance(distribution, SurvregDistribution)
+            and not distribution.parms
+        ):
+            parms = None
+    return _resolve_distribution(distribution, parms, probe=False)
 
 
 def dsurvreg(
-    x: Any, mean: Any, scale: Any = 1, distribution: str = "weibull", parms: Any | None = None
+    x: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
 ) -> list[float]:
     """Density of the ``survreg`` location-scale distributions (R's ``dsurvreg``)."""
 
-    return _core.dsurvreg(
+    return _dpqr_distribution(distribution, parms).pdf_values(
         _quantile_vector(x, "x"),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
-        distribution,
-        _dpqr_parms(distribution, parms),
     )
 
 
 def psurvreg(
-    q: Any, mean: Any, scale: Any = 1, distribution: str = "weibull", parms: Any | None = None
+    q: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
 ) -> list[float]:
     """Distribution function of the ``survreg`` distributions (R's ``psurvreg``)."""
 
-    return _core.psurvreg(
+    return _dpqr_distribution(distribution, parms).cdf_values(
         _quantile_vector(q, "q"),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
-        distribution,
-        _dpqr_parms(distribution, parms),
     )
 
 
 def qsurvreg(
-    p: Any, mean: Any, scale: Any = 1, distribution: str = "weibull", parms: Any | None = None
+    p: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
 ) -> list[float]:
     """Quantiles of the ``survreg`` distributions (R's ``qsurvreg``)."""
 
-    return _core.qsurvreg(
+    return _dpqr_distribution(distribution, parms).quantile_values(
         _quantile_vector(p, "p"),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
-        distribution,
-        _dpqr_parms(distribution, parms),
     )
 
 
@@ -1294,7 +1334,7 @@ def rsurvreg(
     n: Any,
     mean: Any,
     scale: Any = 1,
-    distribution: str = "weibull",
+    distribution: Any = "weibull",
     parms: Any | None = None,
     seed: int | None = None,
 ) -> list[float]:
@@ -1309,12 +1349,10 @@ def rsurvreg(
     count = _integer_scalar(n, "n")
     if count < 0:
         raise ValueError("n must be non-negative")
-    return _core.rsurvreg(
+    return _dpqr_distribution(distribution, parms).sample(
         count,
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
-        distribution,
-        _dpqr_parms(distribution, parms),
         None if seed is None else _integer_scalar(seed, "seed"),
     )
 

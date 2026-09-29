@@ -30,6 +30,13 @@ port). Basis construction and penalty optimization run in Rust. Prediction
 reuses training knots and factor levels. Formula options are parsed as
 literals; Python or R code is never evaluated.
 
+Custom `survreg` distribution dictionaries can supply density, initialization,
+quantile, deviance, variance, and response-transform callbacks. Ordinary and
+penalized fitting, prediction, residuals, distribution functions, and Python
+pickle retain these callbacks. Native Rust callers implement
+`regression::SurvregCallbacks`. See [AFT distribution callbacks](survreg-density.md)
+for the batch contract, examples, and serialization requirements.
+
 ```python
 from survival import datasets, r
 
@@ -696,10 +703,6 @@ this does not show.
 These R entry points have no port. Calls that reach them raise an explicit
 error; none silently falls back to other behaviour.
 
-- **User-written survreg distributions**: a distribution list that supplies its
-  own density, init, deviance and quantile functions (R's `survregc2`
-  callback path) raises "custom densities are not supported"; the built-in
-  families, including `t` with `parms`, are supported.
 - **R-style print and format methods**: `survival.r` returns data objects and
   `as_data_frame` tables instead of printed output. Only
   `print_survreg_penal` ports R's printed table, and `format_surv` formats a
