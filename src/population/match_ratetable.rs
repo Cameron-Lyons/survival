@@ -7,6 +7,7 @@ use super::ratetable::{DimType, RateTable, start_of_year};
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::Array2;
 use pyo3::prelude::*;
+use std::collections::{HashMap, HashSet};
 
 /// One variable of the `rmap` list: either numeric (a continuous value, a
 /// date already converted with `ratetableDate`, or an integer factor code)
@@ -45,23 +46,117 @@ pub struct MatchRatetableResult {
 /// R's `charmatch(casefold(x), casefold(table))`: an exact match wins, a
 /// unique prefix match is accepted, several prefix matches give `Some(0)`
 /// (R's 0) and none gives `None` (R's `NA`).  Returns one-based positions.
-fn charmatch_fold(value: &str, table: &[String]) -> Option<usize> {
-    let value = value.to_lowercase();
-    let mut partial = Vec::new();
-    for (i, candidate) in table.iter().enumerate() {
-        let candidate = candidate.to_lowercase();
-        if candidate == value {
-            return Some(i + 1);
+struct LevelMatcher {
+    exact: HashMap<String, usize>,
+    folded: Vec<String>,
+}
+
+impl LevelMatcher {
+    fn new(levels: &[String]) -> Self {
+        let folded: Vec<String> = levels.iter().map(|s| s.to_lowercase()).collect();
+        let mut exact = HashMap::with_capacity(levels.len());
+        for (i, label) in folded.iter().enumerate() {
+            // R's charmatch rejects duplicate exact matches, including case folding.
+            exact
+                .entry(label.clone())
+                .and_modify(|code| *code = 0)
+                .or_insert(i + 1);
         }
-        if candidate.starts_with(&value) {
-            partial.push(i + 1);
+        Self { exact, folded }
+    }
+
+    fn find(&self, value: &str) -> Option<usize> {
+        let value = value.to_lowercase();
+        if let Some(&code) = self.exact.get(&value) {
+            return Some(code);
         }
+        let mut found = None;
+        for (i, candidate) in self.folded.iter().enumerate() {
+            if candidate.starts_with(&value) {
+                if found.is_some() {
+                    return Some(0);
+                }
+                found = Some(i + 1);
+            }
+        }
+        found
     }
-    match partial.as_slice() {
-        [] => None,
-        [single] => Some(*single),
-        _ => Some(0),
+}
+
+fn visit_labels(
+    dimid: &str,
+    levels: &[String],
+    labels: &[String],
+    mut emit: impl FnMut(usize, usize),
+) -> SurvivalResult<()> {
+    let matcher = LevelMatcher::new(levels);
+    // Sex/race dimensions usually have two labels: a tiny linear cache avoids
+    // hashing every observation. Promote once there are more distinct labels.
+    let mut small: Vec<(&str, usize)> = Vec::new();
+    let mut codes: HashMap<&str, usize> = HashMap::new();
+    for (row, label) in labels.iter().enumerate() {
+        let cached = if codes.is_empty() {
+            small
+                .iter()
+                .find_map(|&(seen, code)| (seen == label).then_some(code))
+        } else {
+            codes.get(label.as_str()).copied()
+        };
+        let code = match cached {
+            Some(code) => code,
+            None => {
+                let code = match matcher.find(label) {
+                    None => {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "Levels do not match for ratetable() variable {dimid}"
+                        )));
+                    }
+                    Some(0) => {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "Non-unique ratetable match for variable {dimid}"
+                        )));
+                    }
+                    Some(code) => code,
+                };
+                if codes.is_empty() && small.len() < 4 {
+                    small.push((label.as_str(), code));
+                } else {
+                    if codes.is_empty() {
+                        codes.extend(small.drain(..));
+                    }
+                    codes.insert(label.as_str(), code);
+                }
+                code
+            }
+        };
+        emit(row, code);
     }
+    Ok(())
+}
+
+/// Match all declared factor levels, including levels absent from observations.
+/// The dimension is zero-based; returned level positions are one-based, as in R.
+pub fn match_levels(
+    table: &RateTable,
+    dimension: usize,
+    labels: &[String],
+) -> SurvivalResult<Vec<usize>> {
+    if dimension >= table.ndim() {
+        return Err(SurvivalError::invalid_input(
+            "rate-table dimension out of range",
+        ));
+    }
+    let name = &table.dimid[dimension];
+    if table.types[dimension] != DimType::Factor {
+        return Err(SurvivalError::invalid_input(format!(
+            "for this ratetable, {name} must be a continuous variable"
+        )));
+    }
+    let mut codes = Vec::with_capacity(labels.len());
+    visit_labels(name, &table.dimnames[dimension], labels, |_, code| {
+        codes.push(code)
+    })?;
+    Ok(codes)
 }
 
 /// Match user variables onto a rate table's dimensions.
@@ -106,6 +201,11 @@ pub fn match_ratetable(
             }
         }
     }
+    if ord.iter().collect::<HashSet<_>>().len() != ord.len() {
+        return Err(SurvivalError::invalid_input(
+            "A ratetable argument appears twice in the data",
+        ));
+    }
 
     let mut r = Array2::<f64>::zeros((n, table.ndim()));
     for (dim, &column) in ord.iter().enumerate() {
@@ -119,31 +219,9 @@ pub fn match_ratetable(
                         "for this ratetable, {dimid} must be a continuous variable"
                     )));
                 }
-                // R matches the factor levels once and indexes by level.
-                let mut codes: Vec<(String, usize)> = Vec::new();
-                for (row, label) in labels.iter().enumerate() {
-                    let code = match codes.iter().find(|(seen, _)| seen == label) {
-                        Some((_, code)) => *code,
-                        None => {
-                            let code = match charmatch_fold(label, levels) {
-                                None => {
-                                    return Err(SurvivalError::invalid_input(format!(
-                                        "Levels do not match for ratetable() variable {dimid}"
-                                    )));
-                                }
-                                Some(0) => {
-                                    return Err(SurvivalError::invalid_input(format!(
-                                        "Non-unique ratetable match for variable {dimid}"
-                                    )));
-                                }
-                                Some(code) => code,
-                            };
-                            codes.push((label.clone(), code));
-                            code
-                        }
-                    };
+                visit_labels(dimid, levels, labels, |row, code| {
                     r[[row, dim]] = code as f64;
-                }
+                })?;
             }
             RatetableColumn::Numeric(values) => {
                 for (row, &value) in values.iter().enumerate() {
@@ -188,11 +266,12 @@ pub fn align_us_year_axis(table: &RateTable, r: &mut Array2<f64>) -> SurvivalRes
 #[pyfunction(name = "match_ratetable")]
 #[pyo3(signature = (ratetable, names, columns))]
 pub fn match_ratetable_py(
+    py: Python<'_>,
     ratetable: &RateTable,
     names: Vec<String>,
     columns: Vec<RatetableColumn>,
 ) -> PyResult<MatchRatetableResult> {
-    let r = match_ratetable(ratetable, &names, &columns)?;
+    let r = py.detach(|| match_ratetable(ratetable, &names, &columns))?;
     Ok(MatchRatetableResult {
         r: r.rows().into_iter().map(|row| row.to_vec()).collect(),
         cutpoints: ratetable.cutpoints.clone(),
@@ -225,9 +304,73 @@ mod tests {
         assert_eq!(r.shape(), [2, 4]);
         assert_eq!(r.row(0).to_vec(), vec![27028.5, 1.0, 1.0, 9496.0]);
         assert_eq!(r.row(1).to_vec(), vec![24837.0, 2.0, 2.0, 9526.0]);
-        assert_eq!(charmatch_fold("m", &strings(&["male", "female"])), Some(1));
-        assert_eq!(charmatch_fold("e", &strings(&["male", "female"])), None);
-        assert_eq!(charmatch_fold("a", &strings(&["ab", "ac"])), Some(0));
+        assert_eq!(
+            LevelMatcher::new(&strings(&["male", "female"])).find("m"),
+            Some(1)
+        );
+        assert_eq!(
+            LevelMatcher::new(&strings(&["male", "female"])).find("e"),
+            None
+        );
+        assert_eq!(
+            LevelMatcher::new(&strings(&["ab", "ac"])).find("a"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn exact_matches_win_but_duplicates_are_ambiguous() {
+        let matcher = LevelMatcher::new(&strings(&["a", "ab", "Male", "MALE", "女性"]));
+        assert_eq!(matcher.find("a"), Some(1));
+        assert_eq!(matcher.find("ma"), Some(0));
+        assert_eq!(matcher.find("male"), Some(0));
+        assert_eq!(matcher.find("女"), Some(5));
+        assert_eq!(matcher.find(""), Some(0));
+    }
+
+    #[test]
+    fn declared_levels_are_validated_independently_of_observations() {
+        let table = survexp_usr_table();
+        assert_eq!(
+            table.match_levels(1, &strings(&["F", "m"])).unwrap(),
+            vec![2, 1]
+        );
+        assert!(
+            table
+                .match_levels(1, &strings(&["male", "unknown"]))
+                .unwrap_err()
+                .to_string()
+                .contains("Levels do not match")
+        );
+        assert!(
+            table
+                .match_levels(0, &strings(&["1"]))
+                .unwrap_err()
+                .to_string()
+                .contains("continuous variable")
+        );
+        assert!(table.match_levels(4, &[]).is_err());
+        assert_eq!(table.match_levels(1, &[]).unwrap(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn duplicate_dimension_identifiers_cannot_reuse_the_same_input() {
+        let table = RateTable::try_new(
+            vec![1, 1],
+            strings(&["group", "group"]),
+            vec![strings(&["a"]); 2],
+            vec![None; 2],
+            vec![DimType::Factor; 2],
+            vec![0.1],
+        )
+        .unwrap();
+        let error = match_ratetable(
+            &table,
+            &strings(&["group"]),
+            &[RatetableColumn::Numeric(vec![1.0])],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("appears twice"));
     }
 
     #[test]

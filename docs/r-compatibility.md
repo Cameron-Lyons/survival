@@ -1088,6 +1088,13 @@ categorical status and state labels. Previously the response parser stripped
 those wrappers without evaluating the conversion. Existing factor levels are
 retained by `as.factor` and unused levels dropped by `factor`, as in R.
 
+`match_ratetable(data, table)` exposes matched population positions,
+cutpoints and built-in summaries as a `RateTableMatch`. It validates unused
+categorical levels and uses the same native matcher as `pyears` and
+`survexp`; model-frame extra columns now preserve those levels. The matcher
+rejects duplicate exact labels and repeated table dimensions, and caches
+categorical lookups for large tables. See [rate-table matching](rate-table-matching.md).
+
 ## Compact curve reports
 
 Raw responses and rate arrays have `print_surv`, `print_surv2` and
@@ -1153,11 +1160,10 @@ error; none silently falls back to other behaviour.
 - **Low-level R exports** that `survival.r` does not re-export: `coxph.fit`,
   `agreg.fit`, `agexact.fit`, `survreg.fit`, `survpenal.fit`, `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,
-  `yates_setup` and `match.ratetable`. Their computations are reachable through
-  the formula functions and the domain modules (`survival.regression.coxph_fit`,
-  `survreg_fit`, `survival.surv_analysis.survfitkm`,
-  `survival.population.match_ratetable`, ...); the R bridge provides R-named
-  wrappers for several of them.
+  `yates_setup`. Their computations are reachable through the formula functions
+  and domain modules such as `survival.regression.coxph_fit`,
+  `survival.regression.survreg_fit` and `survival.surv_analysis.survfitkm`.
+  The R bridge provides R-named wrappers for several of them.
 
 Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and

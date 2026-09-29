@@ -14,6 +14,7 @@ import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC
 from datetime import date as _Date
 from datetime import datetime as _DateTime
 from datetime import timedelta as _TimeDelta
@@ -23,6 +24,7 @@ from typing import Any
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
+    _categories,
     _factor,
     _factor_levels,
     _finite_float,
@@ -100,6 +102,39 @@ class RateTableSummary:
 
     def __str__(self) -> str:
         return self.text
+
+
+@dataclass(frozen=True)
+class RateTableMatch:
+    """Matched rows in rate-table dimension order, cutpoints and a built-in summary.
+
+    Categorical positions are one-based; continuous positions keep their units
+    and dates count days since 1970-01-01. US calendar positions are unadjusted.
+    """
+
+    r: list[list[float]]
+    dimid: list[str]
+    cutpoints: list[list[float] | None]
+    summary: str | None
+
+
+def match_ratetable(data: Any, ratetable: RateTable) -> RateTableMatch:
+    """Match named data columns to a rate table, validating declared factor levels.
+
+    Accept a mapping or data frame. Required columns may be numeric, categorical,
+    labels or dates; unrelated columns are ignored. Missing values must be removed
+    before matching, as required by the numerical population kernels.
+    """
+    if not isinstance(ratetable, RateTable):
+        raise TypeError("Invalid rate table")
+    matched = _match_rate_columns(data, ratetable)
+    positions = matched.r
+    return RateTableMatch(
+        positions,
+        ratetable.dimid,
+        matched.cutpoints,
+        _population_match_summary(ratetable, positions),
+    )
 
 
 def summary_ratetable(object: RateTable, **_kwargs: Any) -> RateTableSummary:
@@ -202,6 +237,9 @@ def _ratetable_day(value: Any) -> float:
         return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_missing_value(value):
         return math.nan
+    if isinstance(value, _DateTime) and value.utcoffset() is not None:
+        # R's as.Date.POSIXct uses the UTC calendar date by default.
+        value = value.astimezone(UTC)
     if isinstance(value, _Date):
         return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_numpy_scalar(value, "datetime64"):
@@ -269,8 +307,12 @@ def _mapped_columns(
             raise ValueError(f"Variable not found in the ratetable:{name}")
         if isinstance(value, str) and value not in available:
             value = _rmap_value(str(name), value, data, n)
-        elif not isinstance(value, str) and not hasattr(value, "__iter__"):
-            value = [value] * n
+        elif not isinstance(value, str):
+            if not hasattr(value, "__iter__"):
+                value = [value] * n
+            else:
+                raw = _materialize_1d(value, str(name))
+                value = _rows_of(value, raw * n if len(raw) == 1 else raw)
         columns[str(name)] = value
     for dimid in names:
         columns.setdefault(dimid, dimid)
@@ -322,9 +364,23 @@ def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
     dimension (type 3 or 4); time differences (R's ``difftime``) count days.
     """
 
-    names = list(ratetable.dimid)
+    return _match_rate_columns(mf.extra, ratetable).r
+
+
+def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetableResult:
+    """Shared date/factor coercion for public matching and population model frames."""
+    names = ratetable.dimid
+    available = _data_column_names(data)
+    if available is None:
+        raise TypeError("data must be a mapping or data frame with named columns")
+    for name in names:
+        if name not in available:
+            raise ValueError(f"Argument '{name}' needed by the ratetable was not found in the data")
+        if available.count(name) > 1 or names.count(name) > 1:
+            raise ValueError("A ratetable argument appears twice in the data")
     types = ratetable.type_codes()
-    values = [mf.extra[name] for name in names]
+    sources = [_column_source(data, name) for name in names]
+    values = [_materialize_1d(source, name) for name, source in zip(names, sources, strict=True)]
     misplaced = [
         name
         for name, code, column in zip(names, types, values, strict=True)
@@ -336,16 +392,26 @@ def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
             "variable: " + " ".join(misplaced)
         )
     columns: list[list[str] | list[float]] = []
-    for code, column in zip(types, values, strict=True):
-        if all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
+    for dimension, (name, code, source, column) in enumerate(
+        zip(names, types, sources, values, strict=True)
+    ):
+        if _categories(source) is not None:
+            codes, labels = _factor(source, name)
+            matched = ratetable.match_levels(dimension, labels)
+            columns.append(
+                [math.nan if index is None else float(matched[index]) for index in codes]
+            )
+        elif all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
             isinstance(value, str) for value in column
         ):
+            if any(_is_missing_value(value) for value in column):
+                raise ValueError(f"The variable {name} contains missing values")
             columns.append([str(value) for value in column])
         elif code > 2:
             columns.append([_ratetable_day(value) for value in column])
         else:
             columns.append([_day_count(value) for value in column])
-    return _core.match_ratetable(ratetable, names, columns).r
+    return _core.match_ratetable(ratetable, names, columns)
 
 
 def _ratetable_argument(ratetable: Any) -> RateTable:
@@ -893,8 +959,11 @@ def _population_match_summary(table: RateTable, positions: list[list[float]]) ->
         if source == "survexp.usr":
             white += row[2] == 1
             black += row[2] == 2
-    dates = [_core.days_to_date(math.floor(value)) for value in (year_low, year_high)]
-    first, last = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]
+    if positions:
+        dates = [_core.days_to_date(math.floor(value)) for value in (year_low, year_high)]
+        first, last = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]
+    else:
+        first, last = "Inf", "-Inf"
     low, high = [_r_format_number(round(value / 365.25, 1), 7) for value in (age_low, age_high)]
     indent = "  " if source == "survexp.mn" else "    "
     text = (
@@ -1539,7 +1608,9 @@ def survexp(
         if mf.n == 0:
             raise ValueError("Data set has 0 rows")
         response = _survexp_response(mf)
-        mapped = {name: _column(mf.data, name) for name in _data_column_names(mf.data) or []}
+        mapped: dict[str, Any] = {
+            name: _column(mf.data, name) for name in _data_column_names(mf.data) or []
+        }
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
             warnings.warn("se.fit value ignored", stacklevel=2)

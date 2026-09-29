@@ -100,8 +100,10 @@ from ._models import (
 from ._population_print import print_pyears, print_survcheck, print_yates
 from ._pyears import (
     PyearsSummary,
+    RateTableMatch,
     RateTableSummary,
     is_ratetable,
+    match_ratetable,
     pyears,
     ratetableDate,
     summary_pyears,
@@ -229,6 +231,8 @@ from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "RateTableMatch",
+    "match_ratetable",
     "print_ratetable",
     "print_surv",
     "print_surv2",

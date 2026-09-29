@@ -1443,6 +1443,32 @@ mod cox_diagnostic_bench {
     }
 }
 
+mod rate_matching_bench {
+    use super::*;
+    use survival::population::{DimType, RateTable, RatetableColumn, match_ratetable};
+
+    #[divan::bench(args = [2, 64, 1024])]
+    fn repeated_labels(bencher: divan::Bencher, levels: usize) {
+        let labels: Vec<String> = (0..levels).map(|i| format!("level{i:04}")).collect();
+        let table = RateTable::try_new(
+            vec![levels],
+            vec!["group".into()],
+            vec![labels.clone()],
+            vec![None],
+            vec![DimType::Factor],
+            vec![0.01; levels],
+        )
+        .unwrap();
+        let columns = [RatetableColumn::Labels(
+            (0..100_000)
+                .map(|i| labels[i % levels].to_uppercase())
+                .collect(),
+        )];
+        let names = ["group".to_string()];
+        bencher.bench_local(|| black_box(match_ratetable(&table, &names, &columns).unwrap()));
+    }
+}
+
 fn main() {
     divan::main();
 }

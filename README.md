@@ -888,6 +888,12 @@ Person-years results retain match summaries for built-in population rate
 tables. See [population and validation reports](docs/population-validation-reports.md)
 for examples, metadata and reference comparisons.
 
+`r.match_ratetable(data, table)` exposes population starting positions,
+cutpoints and built-in summaries. It validates categorical levels before
+population calculations and accepts date and duration columns. See
+[rate-table matching](docs/rate-table-matching.md) for units, validation and
+the shared Rust lookup implementation.
+
 ## Survival curve reports
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and

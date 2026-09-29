@@ -50,6 +50,8 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.print_surv(y), r.ResponsePrint)
     assert_type(r.print_surv2(r.Surv2(data["time"], data["status"])), r.ResponsePrint)
     assert_type(r.print_ratetable(r.survexp_us()), r.RateTablePrint)
+    assert_type(r.match_ratetable(data, r.survexp_us()), r.RateTableMatch)
+    assert_type(r.survexp_us().match_levels(1, ["m", "f"]), list[int])
     assert_type(r.concordancefit(y, data["age"]), r.ConcordanceResult)
     assert_type(r.survConcordance("Surv(time, status) ~ age", data), r.SurvConcordanceResult)
     additive = r.aareg("Surv(time, status) ~ age", data)
