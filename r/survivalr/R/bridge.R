@@ -6409,306 +6409,136 @@ summary.tmerge <- function(object, ...) {
   print(attr(object, "tcount"))
 }
 
-.coxsurv_baseline <- function(y, x, wt, risk, survtype, vartype) {
-  y <- as.matrix(y)
-  x <- as.matrix(x)
-  if (!ncol(y) %in% c(2L, 3L)) {
-    stop("y must have 2 or 3 columns", call. = FALSE)
+.coxsurv_result <- function(result, details = FALSE, rownames = NULL, risknames = NULL,
+                            value_names = NULL) {
+  read <- function(name) .result_field(result, name)
+  curve_values <- function(name) {
+    values <- read(name)
+    if (is.null(values) || is.matrix(values)) values else .as_numeric_vector(values)
   }
-  if (nrow(x) != nrow(y)) {
-    stop("x and y have different numbers of rows", call. = FALSE)
-  }
-  result <- .call_survival_analysis(
-    "cox_survfit_baseline",
-    y = y,
-    x = x,
-    weights = .as_python_vector(as.numeric(wt)),
-    risk = .as_python_vector(as.numeric(risk)),
-    survtype = as.integer(survtype),
-    vartype = as.integer(vartype)
-  )
-  out <- list(
-    n = as.integer(.result_field(result, "n")),
-    time = .as_numeric_vector(.result_field(result, "time")),
-    n.event = .as_numeric_vector(.result_field(result, "n_event")),
-    n.risk = .as_numeric_vector(.result_field(result, "n_risk")),
-    n.censor = .as_numeric_vector(.result_field(result, "n_censor")),
-    hazard = .as_numeric_vector(.result_field(result, "hazard")),
-    cumhaz = .as_numeric_vector(.result_field(result, "cumhaz")),
-    varhaz = .as_numeric_vector(.result_field(result, "varhaz")),
-    ndeath = matrix(
-      .as_numeric_vector(.result_field(result, "ndeath")),
-      ncol = 1L
-    ),
-    xbar = .as_numeric_matrix(.result_field(result, "xbar"))
-  )
-  survival_steps <- .result_field(result, "surv")
-  if (!is.null(survival_steps)) {
-    out$surv <- .as_numeric_vector(survival_steps)
-  }
-  dimnames(out$ndeath) <- list(as.character(out$time), NULL)
-  out
-}
-
-.coxsurv_coefficient_variance <- function(hazard, xbar, xrow, varmat) {
-  ntime <- length(hazard)
-  if (length(xrow) == 0L) {
-    return(rep(0, ntime))
-  }
-  delta <- outer(hazard, as.numeric(xrow), "*") - xbar
-  delta <- apply(delta, 2L, cumsum)
-  if (ntime == 1L) {
-    delta <- matrix(delta, nrow = 1L)
-  }
-  rowSums((delta %*% varmat) * delta)
-}
-
-.coxsurv_expand <- function(fit, x2, risk2, varmat, se.fit, survtype) {
-  baseline_survival <- if (survtype == 1L) {
-    cumprod(fit$surv)
+  count <- as.integer(read("n"))
+  time <- .as_numeric_vector(read("time"))
+  if (details) {
+    output <- list(
+      n = count, time = time,
+      n.event = .as_numeric_vector(read("n_event")),
+      n.risk = .as_numeric_vector(read("n_risk")),
+      n.censor = .as_numeric_vector(read("n_censor")),
+      hazard = .as_numeric_vector(read("hazard")),
+      cumhaz = curve_values("cumhaz"),
+      varhaz = .as_numeric_vector(read("varhaz")),
+      ndeath = matrix(.as_numeric_vector(read("ndeath")), ncol = 1L,
+                      dimnames = list(as.character(time), NULL)),
+      xbar = .as_numeric_matrix(read("xbar")),
+      surv = curve_values("surv")
+    )
   } else {
-    exp(-fit$cumhaz)
+    output <- list(
+      n = count, time = time,
+      n.risk = .as_numeric_vector(read("n_risk")),
+      n.event = .as_numeric_vector(read("n_event")),
+      n.censor = .as_numeric_vector(read("n_censor"))
+    )
+    strata <- read("strata")
+    if (!is.null(strata)) {
+      output$strata <- setNames(as.integer(unlist(strata)), names(strata))
+    }
+    output$surv <- curve_values("surv")
+    output$cumhaz <- curve_values("cumhaz")
   }
-  if (is.matrix(x2) && nrow(x2) > 1L) {
-    fit$surv <- outer(baseline_survival, risk2, "^")
-    dimnames(fit$surv) <- list(NULL, row.names(x2))
-    if (se.fit) {
-      variance <- vapply(seq_len(nrow(x2)), function(index) {
-        coefficient_variance <- .coxsurv_coefficient_variance(
-          fit$hazard,
-          fit$xbar,
-          x2[index, ],
-          varmat
-        )
-        (cumsum(fit$varhaz) + coefficient_variance) * risk2[index]^2
-      }, numeric(length(fit$varhaz)))
-      if (length(fit$varhaz) == 1L) {
-        variance <- matrix(variance, nrow = 1L)
-      }
-      fit$std.err <- sqrt(variance)
+  if (is.matrix(output$surv)) {
+    dimnames(output$surv) <- list(NULL, rownames)
+    if (!is.null(risknames) && (details || length(count) == 1L)) {
+      dimnames(output$cumhaz) <- list(NULL, risknames)
     }
-    fit$cumhaz <- outer(fit$cumhaz, risk2, "*")
-  } else {
-    fit$surv <- baseline_survival^risk2
-    if (se.fit) {
-      coefficient_variance <- .coxsurv_coefficient_variance(
-        fit$hazard,
-        fit$xbar,
-        c(x2),
-        varmat
-      )
-      fit$std.err <- sqrt(
-        (cumsum(fit$varhaz) + coefficient_variance) * risk2^2
-      )
-    }
-    fit$cumhaz <- fit$cumhaz * risk2
   }
-  fit
-}
-
-.coxsurv_one_curve <- function(survlist, x2, y2, strata2, risk2, se.fit,
-                               survtype, varmat, strata) {
-  ntarget <- nrow(x2)
-  time <- hazard <- survival_step <- n.event <- n.risk <- n.censor <-
-    variance_step <- delta <- vector("list", ntarget)
-  stratum_index <- as.integer(strata2)
-  time_offset <- 0
-  for (index in seq_len(ntarget)) {
-    if (index > 1L) {
-      time_offset <- time_offset + y2[index - 1L, 2L] - y2[index, 1L]
-    }
-    baseline <- survlist[[stratum_index[index]]]
-    keep <- which(baseline$time > y2[index, 1L] & baseline$time <= y2[index, 2L])
-    if (length(keep) == 0L) {
-      next
-    }
-    time[[index]] <- time_offset + baseline$time[keep]
-    hazard[[index]] <- baseline$hazard[keep] * risk2[index]
-    if (survtype == 1L) {
-      survival_step[[index]] <- baseline$surv[keep]^risk2[index]
-    }
-    n.event[[index]] <- baseline$n.event[keep]
-    n.risk[[index]] <- baseline$n.risk[keep]
-    n.censor[[index]] <- baseline$n.censor[keep]
-    delta[[index]] <- (
-      outer(baseline$hazard[keep], x2[index, ], "*") -
-        baseline$xbar[keep, , drop = FALSE]
-    ) * risk2[index]
-    variance_step[[index]] <- baseline$varhaz[keep] * risk2[index]^2
-  }
-  cumulative_hazard <- cumsum(unlist(hazard, use.names = FALSE))
-  curve <- if (survtype == 1L) {
-    cumprod(unlist(survival_step, use.names = FALSE))
-  } else {
-    exp(-cumulative_hazard)
-  }
-  output <- list(
-    n = as.vector(table(strata)[stratum_index[1L]]),
-    time = unlist(time, use.names = FALSE),
-    n.risk = unlist(n.risk, use.names = FALSE),
-    n.event = unlist(n.event, use.names = FALSE),
-    n.censor = unlist(n.censor, use.names = FALSE),
-    surv = curve,
-    cumhaz = cumulative_hazard
-  )
-  if (se.fit) {
-    delta_matrix <- do.call(rbind, delta)
-    if (is.null(delta_matrix) || nrow(delta_matrix) == 0L) {
-      output$std.err <- numeric()
-    } else if (ncol(delta_matrix) == 0L) {
-      output$std.err <- sqrt(cumsum(unlist(variance_step, use.names = FALSE)))
-    } else {
-      cumulative_delta <- apply(delta_matrix, 2L, cumsum)
-      if (nrow(delta_matrix) == 1L) {
-        cumulative_delta <- matrix(cumulative_delta, nrow = 1L)
-      }
-      coefficient_variance <- rowSums(
-        (cumulative_delta %*% varmat) * cumulative_delta
-      )
-      output$std.err <- sqrt(
-        cumsum(unlist(variance_step, use.names = FALSE)) + coefficient_variance
-      )
+  error <- curve_values("std_err")
+  if (!is.null(error)) output$std.err <- error
+  if (is.null(value_names) && !isTRUE(read("individual")) &&
+      !is.matrix(output$surv) && length(time) == 1L &&
+      (details || length(count) == 1L)) value_names <- risknames
+  if (!is.null(value_names)) {
+    for (name in intersect(c("surv", "cumhaz", "std.err"), names(output))) {
+      names(output[[name]]) <- value_names
     }
   }
   output
 }
 
-.coxsurv_unlist <- function(result, se.fit, x2, has_id) {
-  if (length(result) == 1L) {
-    fields <- c("n", "time", "n.risk", "n.event", "n.censor", "surv", "cumhaz")
-    if (se.fit) {
-      fields <- c(fields, "std.err")
-    }
-    return(result[[1L]][fields])
-  }
-  output <- list(
-    n = unlist(lapply(result, `[[`, "n"), use.names = FALSE),
-    time = unlist(lapply(result, `[[`, "time"), use.names = FALSE),
-    n.risk = unlist(lapply(result, `[[`, "n.risk"), use.names = FALSE),
-    n.event = unlist(lapply(result, `[[`, "n.event"), use.names = FALSE),
-    n.censor = unlist(lapply(result, `[[`, "n.censor"), use.names = FALSE),
-    strata = vapply(result, function(item) length(item$time), integer(1))
-  )
-  names(output$strata) <- names(result)
-  if (!has_id && is.matrix(x2) && nrow(x2) > 1L) {
-    ncurve <- nrow(x2)
-    output$surv <- t(matrix(
-      unlist(lapply(result, function(item) t(item$surv)), use.names = FALSE),
-      nrow = ncurve
-    ))
-    dimnames(output$surv) <- list(NULL, row.names(x2))
-    output$cumhaz <- t(matrix(
-      unlist(lapply(result, function(item) t(item$cumhaz)), use.names = FALSE),
-      nrow = ncurve
-    ))
-    if (se.fit) {
-      output$std.err <- t(matrix(
-        unlist(lapply(result, function(item) t(item$std.err)), use.names = FALSE),
-        nrow = ncurve
-      ))
-    }
-  } else {
-    output$surv <- unlist(lapply(result, `[[`, "surv"), use.names = FALSE)
-    output$cumhaz <- unlist(lapply(result, `[[`, "cumhaz"), use.names = FALSE)
-    if (se.fit) {
-      output$std.err <- unlist(lapply(result, `[[`, "std.err"), use.names = FALSE)
-    }
-  }
-  output
+.coxsurv_individual_names <- function(y, strata, y2, strata2, id2, risknames) {
+  if (is.null(risknames)) return(NULL)
+  if (is.null(strata) || length(strata) == 0L) strata <- rep(0L, nrow(y))
+  levels <- if (is.factor(strata)) levels(strata) else sort(unique(strata))
+  times <- lapply(split(y[, ncol(y) - 1L], factor(strata, levels = levels)),
+                   function(value) sort(unique(value)))
+  if (is.null(strata2)) strata2 <- rep(1L, nrow(y2))
+  code <- as.integer(strata2)
+  sizes <- vapply(seq_len(nrow(y2)), function(i) {
+    findInterval(y2[i, 2L], times[[code[i]]]) - findInterval(y2[i, 1L], times[[code[i]]])
+  }, integer(1))
+  groups <- split(seq_along(id2), factor(id2, levels = unique(id2)))
+  lapply(groups, function(rows) {
+    if (!any(sizes[rows] == 1L)) return(NULL)
+    unlist(lapply(rows, function(i) if (sizes[i] == 1L) risknames[i] else rep("", sizes[i])),
+           use.names = FALSE)
+  })
 }
 
 coxsurv.fit <- function(ctype, stype, se.fit, varmat, cluster, y, x, wt, risk,
                         position, strata, oldid, y2, x2, risk2, strata2,
                         id2, unlist = TRUE) {
-  if (missing(strata) || is.null(strata) || length(strata) == 0L) {
-    strata <- rep(0L, nrow(y))
-  }
-  stratum_levels <- if (is.factor(strata)) levels(strata) else sort(unique(strata))
-  survtype <- if (stype == 1L) 1L else as.integer(ctype) + 1L
-  vartype <- survtype
-  if (missing(wt) || is.null(wt)) {
-    wt <- rep(1, nrow(y))
-  }
-  survlist <- lapply(stratum_levels, function(level) {
-    keep <- which(strata == level)
-    .coxsurv_baseline(
-      y[keep, , drop = FALSE],
-      x[keep, , drop = FALSE],
-      wt[keep],
-      risk[keep],
-      survtype,
-      vartype
-    )
+  original_strata <- if (missing(strata)) NULL else strata
+  individual <- !missing(id2) && !is.null(id2)
+  result <- .call_r_api(
+    "coxsurv_fit", ctype = ctype, stype = stype, se_fit = se.fit,
+    varmat = if (se.fit) varmat else NULL,
+    y = as.matrix(y), x = as.matrix(x),
+    wt = if (missing(wt) || is.null(wt)) NULL else as.list(as.numeric(wt)),
+    risk = as.list(as.numeric(risk)),
+    strata = if (is.factor(original_strata)) .as_python_factor(original_strata) else
+      if (is.null(original_strata)) NULL else as.list(original_strata),
+    y2 = if (individual) as.matrix(y2) else NULL,
+    x2 = if (is.matrix(x2)) x2 else matrix(x2, nrow = 1L),
+    risk2 = as.list(as.numeric(risk2)),
+    strata2 = if (!individual || missing(strata2) || is.null(strata2)) NULL else
+      as.list(as.integer(strata2)),
+    id2 = if (individual) as.list(if (is.factor(id2)) as.character(id2) else id2) else NULL,
+    unlist = unlist,
+    rownames = if (is.matrix(x2) && !is.null(rownames(x2))) as.list(rownames(x2)) else NULL
+  )
+  value_names <- if (individual && (!unlist || length(unique(id2)) == 1L)) {
+    .coxsurv_individual_names(y, original_strata, y2,
+                              if (missing(strata2)) NULL else strata2, id2, names(risk2))
+  } else NULL
+  if (unlist) return(.coxsurv_result(result, rownames = rownames(x2), risknames = names(risk2),
+                                    value_names = if (length(value_names)) value_names[[1L]] else NULL))
+  curves <- .result_field(result, "curves")
+  output <- lapply(seq_along(curves), function(i) {
+    .coxsurv_result(curves[[i]], details = !individual, rownames = rownames(x2),
+                    risknames = names(risk2),
+                    value_names = if (length(value_names)) value_names[[i]] else NULL)
   })
-  names(survlist) <- stratum_levels
-
-  has_id <- !missing(id2) && !is.null(id2)
-  if (!has_id) {
-    result <- lapply(
-      survlist,
-      .coxsurv_expand,
-      x2 = x2,
-      risk2 = risk2,
-      varmat = varmat,
-      se.fit = se.fit,
-      survtype = survtype
-    )
-  } else if (all(id2 == id2[1L])) {
-    result <- list(.coxsurv_one_curve(
-      survlist, x2, y2, strata2, risk2, se.fit, survtype, varmat, strata
-    ))
-  } else {
-    unique_id <- unique(id2)
-    result <- lapply(unique_id, function(value) {
-      keep <- which(id2 == value)
-      .coxsurv_one_curve(
-        survlist,
-        x2[keep, , drop = FALSE],
-        y2[keep, , drop = FALSE],
-        strata2[keep],
-        risk2[keep],
-        se.fit,
-        survtype,
-        varmat,
-        strata
-      )
-    })
-    names(result) <- unique_id
-  }
-  if (unlist) {
-    .coxsurv_unlist(result, se.fit, x2, has_id)
-  } else {
-    names(result) <- stratum_levels
-    result
-  }
+  # R's historical list form assigns original stratum names even for IDs.
+  names(output) <- if (is.null(original_strata) || length(original_strata) == 0L) "0" else
+    if (is.factor(original_strata)) levels(original_strata) else sort(unique(original_strata))
+  output
 }
 
 survfitcoxph.fit <- function(y, x, wt, x2, risk, newrisk, strata, se.fit,
                              survtype, vartype, varmat, id, y2, strata2,
                              unlist = TRUE) {
-  if (missing(survtype)) {
-    stype <- 1L
-    ctype <- 1L
-  } else {
-    stype <- c(1L, 2L, 2L)[survtype]
-    ctype <- c(1L, 1L, 2L)[survtype]
+  survtype <- if (missing(survtype)) 1L else survtype
+  if (length(survtype) != 1L || is.na(survtype) || !survtype %in% 1:3) {
+    stop("survtype must be 1, 2, or 3", call. = FALSE)
   }
   coxsurv.fit(
-    ctype = ctype,
-    stype = stype,
-    se.fit = se.fit,
-    varmat = varmat,
-    y = y,
-    x = x,
-    wt = if (missing(wt)) NULL else wt,
-    risk = risk,
+    ctype = c(1L, 1L, 2L)[survtype], stype = c(1L, 2L, 2L)[survtype],
+    se.fit = se.fit, varmat = if (se.fit) varmat else NULL,
+    y = y, x = x, wt = if (missing(wt)) NULL else wt, risk = risk,
     strata = if (missing(strata)) NULL else strata,
-    y2 = if (missing(y2)) NULL else y2,
-    x2 = x2,
-    risk2 = if (missing(newrisk)) risk else newrisk,
+    y2 = if (missing(y2)) NULL else y2, x2 = x2, risk2 = newrisk,
     strata2 = if (missing(strata2)) NULL else strata2,
-    id2 = if (missing(id)) NULL else id,
-    unlist = unlist
+    id2 = if (missing(id)) NULL else id, unlist = unlist
   )
 }
 

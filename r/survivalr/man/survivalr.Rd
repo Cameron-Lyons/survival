@@ -1285,8 +1285,12 @@ on the returned data frame.
 
 \code{coxsurv.fit} and \code{survfitcoxph.fit} use a Rust risk-set sweep for
 weighted right-censored and counting-process baselines, including strata and
-tied events. R-side assembly retains compatible curve, cumulative-hazard,
-standard-error, and individual-trajectory output shapes.
+tied events. Curve expansion, coefficient uncertainty and individual trajectories
+are also computed by the shared Rust kernels. The bridge converts the native
+results to compatible R vector, matrix and list layouts, including names.
+The legacy wrapper requires \code{newrisk}; its \code{vartype} argument is unused.
+Terminal Kalbfleisch--Prentice increments are bounded to avoid a fractional
+power of a negative floating-point rounding residue.
 
 Built-in \code{survreg.fit} matrix calls use positive-definite
 observed-information steps with an outer-product fallback. Fixed and

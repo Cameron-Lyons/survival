@@ -138,6 +138,9 @@ Full Cox curves accumulate coefficient uncertainty with one vector per curve.
 Individual predictions find each interval's baseline times by binary search
 and group subject rows once. See [full-curve performance](docs/cox-curve-performance.md)
 for the scope, memory bounds and reproducible measurements.
+Prepared matrices and risks can use `r.coxsurv_fit` or `r.survfitcoxph_fit`
+directly; see [direct Cox curves](docs/cox-direct-curves.md) for inputs,
+read-only results and individual trajectories.
 
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:

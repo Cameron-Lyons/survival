@@ -5,6 +5,7 @@
 
 pub(crate) mod aggregate_survfit;
 pub(crate) mod agsurv;
+mod coxsurv;
 pub(crate) mod illness_death;
 pub(crate) mod logrank_components;
 pub(crate) mod multi_state;
@@ -79,4 +80,9 @@ pub use survfitaj_extended_module::{
 pub use survfitkm::{
     HazardType, InfluenceRequest, StackedCurves, SurvType, SurvfitCounts, SurvfitInfluence,
     SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, survfitkm, survfitkm_py,
+};
+
+pub use coxsurv::{
+    CoxSurvBaselineDetails, CoxSurvData, CoxSurvNewData, CoxSurvRawResult, coxsurv_fit,
+    coxsurv_fit_py,
 };

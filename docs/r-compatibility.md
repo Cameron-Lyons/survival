@@ -1195,6 +1195,13 @@ and rate-array reports are available through `print_surv`, `print_surv2` and
 `print_ratetable`. Dense and sparse frailty reports are available through
 `print_survreg_penal`.
 
+Direct Cox curves are available as `coxsurv_fit` and the legacy
+`survfitcoxph_fit`. Both use the shared Rust baseline, expansion and individual
+trajectory kernels; the R bridge now only converts their results. Results use
+read-only NumPy views and retain no original observations. See
+[direct Cox curves](cox-direct-curves.md) for prepared-input requirements,
+stratum indices, output layouts and the terminal-survival rounding guard.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit
@@ -1204,9 +1211,8 @@ error; none silently falls back to other behaviour.
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
 - **Low-level R exports** that `survival.r` does not re-export:
-  `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,
-  `yates_setup`. Their computations are reachable through the formula functions
-  and domain modules such as `survival.regression.coxph_fit`,
+  `attrassign`, `untangle.specials`, `yates_setup`. Their computations are reachable
+  through the formula functions and domain modules such as `survival.regression.coxph_fit`,
   `survival.regression.survreg_fit` and `survival.surv_analysis.survfitkm`.
   The R bridge provides R-named wrappers for several of them.
 
