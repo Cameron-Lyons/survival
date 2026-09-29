@@ -109,8 +109,8 @@ impl fmt::Display for RateTable {
                 DimType::Date | DimType::UsYear => writeln!(
                     f,
                     "\t{name} ranges from {} to {}; with {} categories",
-                    days_to_date(first),
-                    days_to_date(last),
+                    calendar_label(first),
+                    calendar_label(last),
                     self.dims[d]
                 )?,
             }
@@ -133,11 +133,16 @@ pub fn ratetable_problems(
 ) -> Vec<String> {
     let mut msg = Vec::new();
     let nd = dims.len();
-    let expected: usize = dims.iter().product();
+    let expected = dims.iter().try_fold(1usize, |size, &n| size.checked_mul(n));
     if nd == 0 {
         msg.push("missing attribute: dim".to_string());
     }
-    if n_rates != expected {
+    if dims.contains(&0) {
+        msg.push("ratetable dimensions must be positive".to_string());
+    }
+    if expected.is_none() {
+        msg.push("ratetable dimensions are too large".to_string());
+    } else if Some(n_rates) != expected {
         msg.push("length of the data does not match prod(dim)".to_string());
     }
     if dimnames.len() != nd {
@@ -180,6 +185,13 @@ pub fn ratetable_problems(
                         msg.push(format!("cutpoints {one_based} must be finite"));
                     } else if values.windows(2).any(|w| w[1] <= w[0]) {
                         msg.push(format!("unsorted cutpoints for dimension {one_based}"));
+                    }
+                    if matches!(dim_type, DimType::Date | DimType::UsYear)
+                        && values.iter().any(|&value| !calendar_days_in_range(value))
+                    {
+                        msg.push(format!(
+                            "cutpoints {one_based} are outside the supported calendar range"
+                        ));
                     }
                 }
                 _ => msg.push(format!("wrong length for cutpoints {one_based}")),
@@ -315,6 +327,12 @@ impl RateTable {
                         "The variable {dimid} is out of range"
                     )));
                 }
+            } else if matches!(self.types[dim], DimType::Date | DimType::UsYear)
+                && column.iter().any(|&value| !calendar_days_in_range(value))
+            {
+                return Err(SurvivalError::invalid_input(format!(
+                    "The variable {dimid} is outside the supported calendar range"
+                )));
             }
         }
         Ok(())
@@ -465,9 +483,15 @@ pub fn ratetable_date(year: i32, month: u32, day: u32) -> PyResult<f64> {
 
 /// The calendar date `days` after 1970-01-01 (`as.Date(days, origin =
 /// "1970-01-01")`); fractional days are truncated towards negative infinity
-/// as R's `Date` printing does.
+/// as R's `Date` printing does. Nonfinite days and dates whose year cannot
+/// be represented by [`CalendarDate`]'s `i32` field return an error.
 #[pyfunction]
-pub fn days_to_date(days: f64) -> CalendarDate {
+pub fn days_to_date(days: f64) -> SurvivalResult<CalendarDate> {
+    if !calendar_days_in_range(days) {
+        return Err(SurvivalError::invalid_input(
+            "days must be finite and within the supported calendar range (i32 years)",
+        ));
+    }
     // Howard Hinnant's civil-from-days algorithm on a March-based year.
     let z = days.floor() as i64 + EPOCH_DAY_NUMBER;
     let era = z.div_euclid(146_097);
@@ -478,13 +502,27 @@ pub fn days_to_date(days: f64) -> CalendarDate {
     let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
-    CalendarDate { year, month, day }
+    Ok(CalendarDate { year, month, day })
+}
+
+fn calendar_days_in_range(days: f64) -> bool {
+    // These integral bounds are exactly representable as f64 and leave ample
+    // room for the i64 arithmetic in civil-from-days, including its epoch shift.
+    days.is_finite()
+        && days.floor() >= day_number(i32::MIN, 1, 1) as f64
+        && days.floor() <= day_number(i32::MAX, 12, 31) as f64
+}
+
+fn calendar_label(days: f64) -> String {
+    // Validated tables always have representable cutpoints. Keep Display safe
+    // for a Rust caller that builds the public struct directly.
+    days_to_date(days).map_or_else(|_| "NA".into(), |date| date.to_string())
 }
 
 /// R's `as.Date(paste0(format(bdate, "%Y"), "-01-01"))`: January 1st of the
 /// year containing day `days`, as days since 1970-01-01.
-pub fn start_of_year(days: f64) -> f64 {
-    day_number(days_to_date(days).year, 1, 1) as f64
+pub fn start_of_year(days: f64) -> SurvivalResult<f64> {
+    Ok(day_number(days_to_date(days)?.year, 1, 1) as f64)
 }
 
 #[cfg(test)]
@@ -648,13 +686,84 @@ mod tests {
             (1900, 3, 1),
             (1899, 12, 31),
             (2100, 2, 28),
+            (0, 2, 29),
+            (-400, 2, 29),
+            (i32::MIN, 1, 1),
+            (i32::MIN, 12, 31),
+            (i32::MAX, 1, 1),
+            (i32::MAX, 12, 31),
         ] {
             let days = ratetable_date(year, month, day).unwrap();
-            assert_eq!(days_to_date(days), CalendarDate { year, month, day });
+            assert_eq!(
+                days_to_date(days).unwrap(),
+                CalendarDate { year, month, day }
+            );
         }
-        assert_eq!(days_to_date(7470.5).to_string(), "1990-06-15");
-        assert_eq!(days_to_date(-0.5).to_string(), "1969-12-31");
-        assert_eq!(start_of_year(7470.0), ratetable_date(1990, 1, 1).unwrap());
-        assert_eq!(start_of_year(-1.0), ratetable_date(1969, 1, 1).unwrap());
+        assert_eq!(days_to_date(7470.5).unwrap().to_string(), "1990-06-15");
+        assert_eq!(days_to_date(-0.5).unwrap().to_string(), "1969-12-31");
+        assert_eq!(
+            start_of_year(7470.0).unwrap(),
+            ratetable_date(1990, 1, 1).unwrap()
+        );
+        assert_eq!(
+            start_of_year(-1.0).unwrap(),
+            ratetable_date(1969, 1, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn calendar_conversion_rejects_unrepresentable_days() {
+        let first = day_number(i32::MIN, 1, 1) as f64;
+        let last = day_number(i32::MAX, 12, 31) as f64;
+        for days in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            -f64::MAX,
+            first - 0.5,
+            last + 1.0,
+        ] {
+            assert!(days_to_date(days).is_err(), "days={days}");
+            assert!(start_of_year(days).is_err(), "days={days}");
+        }
+        assert_eq!(days_to_date(last + 0.5).unwrap().year, i32::MAX);
+    }
+
+    #[test]
+    fn table_validation_rejects_invalid_calendar_bounds_and_shape_overflow() {
+        for kind in [DimType::Date, DimType::UsYear] {
+            for value in [f64::MAX, -f64::MAX, f64::NAN, f64::INFINITY] {
+                assert!(
+                    RateTable::try_new(
+                        vec![1],
+                        vec!["year".into()],
+                        vec![vec!["year".into()]],
+                        vec![Some(vec![value])],
+                        vec![kind],
+                        vec![0.1]
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let problems = ratetable_problems(&[usize::MAX, 2], &[], &[], &[], &[], 0);
+        assert!(problems.iter().any(|message| message.contains("too large")));
+        let problems =
+            ratetable_problems(&[0], &["age".into()], &[vec![]], &[Some(vec![])], &[2], 0);
+        assert!(
+            problems
+                .iter()
+                .any(|message| message.contains("must be positive"))
+        );
+        let mut table = toy_table();
+        table.types[0] = DimType::Date;
+        table.cutpoints[0] = Some(vec![0.0, f64::MAX]);
+        assert!(table.to_string().contains("to NA"));
+        assert!(
+            table
+                .validate_positions(&Array2::from_shape_vec((1, 2), vec![f64::MAX, 1.0]).unwrap())
+                .is_err()
+        );
     }
 }

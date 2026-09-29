@@ -704,6 +704,14 @@ this does not show.
 
 ## Population model components and summaries
 
+Native calendar conversion rejects nonfinite day counts and dates outside
+the `CalendarDate` range (years representable by `i32`). Calendar cutpoints,
+input dates, and derived birth dates receive the same checks; malformed
+table dimensions also reject zero lengths and size overflow. Rust
+`days_to_date` and `start_of_year` return `SurvivalResult`; Python raises
+`ValueError`. R can retain and print nonfinite or larger numeric `Date`
+values, which cannot be represented by the native calendar object.
+
 `pyears` and cohort `survexp` honor `model`, `x`, and `y`. `model=True`
 retains the evaluated formula columns, original source columns referenced by
 `rmap` expressions, and supplied weights. Factors retain their level order

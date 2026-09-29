@@ -178,7 +178,7 @@ pub fn align_us_year_axis(table: &RateTable, r: &mut Array2<f64>) -> SurvivalRes
     };
     for mut row in r.rows_mut() {
         let birth_date = row[year] - row[age];
-        let offset = birth_date - start_of_year(birth_date);
+        let offset = birth_date - start_of_year(birth_date)?;
         row[year] -= offset;
     }
     Ok(())
@@ -254,6 +254,15 @@ mod tests {
         assert!(align_us_year_axis(&plain, &mut r).is_err());
         plain.types[0] = DimType::Date;
         assert!(align_us_year_axis(&plain, &mut r).is_ok());
+    }
+
+    #[test]
+    fn us_year_axis_rejects_unrepresentable_birth_dates() {
+        let table = survexp_usr_table();
+        for age in [f64::MAX, -f64::MAX] {
+            let mut positions = ndarray::arr2(&[[age, 1.0, 1.0, 0.0]]);
+            assert!(align_us_year_axis(table, &mut positions).is_err());
+        }
     }
 
     #[test]
