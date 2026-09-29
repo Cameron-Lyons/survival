@@ -773,6 +773,8 @@ class CoxSurvfitResult:
 
     @property
     def ncurve(self) -> int:
+        if not self.surv and self.colnames is not None:
+            return len(self.colnames)
         return len(self.surv[0]) if self.surv and isinstance(self.surv[0], list) else 1
 
 

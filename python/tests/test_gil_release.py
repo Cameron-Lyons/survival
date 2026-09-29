@@ -113,8 +113,12 @@ def test_heavy_kernels_release_the_gil():
     aj_time, aj_status, aj_x = _cox_data(1_000)
     states = (aj_status * (1 + (aj_x[:, 1] > 0))).astype(np.int32)
     transition_curve = sa.survfitkm(time_, status, se_fit=False)
+    yates_prediction = survival.validation.YatesPrediction(
+        np.linspace(0, 2, 1024), np.linspace(0, 1, 1024), 2.0
+    )
 
     calls = {
+        "YatesPrediction.predict": lambda: yates_prediction.predict(np.linspace(-1, 1, 4096)),
         "coxph_fit": lambda: regression.coxph_fit(time_, status, x),
         "coxph_fit_raw": lambda: regression.coxph_fit_raw(time_, status, x, resid=False),
         "CoxPHFit.dfbeta": lambda: fit.dfbeta(),

@@ -122,6 +122,14 @@ if (getRversion() >= "2.15.1") {
   reticulate::py_get_attr(.survival_residuals_module(), name)
 }
 
+.validation_attr <- local({
+  module <- NULL
+  function(name) {
+    if (is.null(module)) module <<- reticulate::import("survival.validation", convert = TRUE)
+    reticulate::py_get_attr(module, name)
+  }
+})
+
 .compact_null <- function(values) {
   values[!vapply(values, is.null, logical(1))]
 }
@@ -5226,33 +5234,42 @@ yates_setup.glm <- function(fit, predict = c("link", "response", "terms", "linea
     return(function(eta, X) exp(eta))
   }
   if (type == "survival") {
-    suppressWarnings(baseline <- survfit(fit, censor = FALSE))
+    suppressWarnings(baseline <- if (inherits(fit, "survival_py_coxph")) {
+      survfit(fit, censor = FALSE)
+    } else {
+      survival::survfit(fit, censor = FALSE)
+    })
     rmean <- if (missing(options) || is.null(options$rmean)) {
-      max(baseline$time)
+      if (length(baseline$time)) max(baseline$time) else -Inf
     } else {
       options$rmean
     }
     if (!is.null(baseline$strata)) {
       stop("stratified models not yet supported", call. = FALSE)
     }
-    cumhaz <- c(0, baseline$cumhaz)
-    tt <- c(diff(c(0, pmin(rmean, baseline$time))), 0)
+    prediction <- .validation_attr("YatesPrediction")(
+      time = as.list(as.numeric(baseline$time)),
+      cumhaz = as.list(as.numeric(baseline$cumhaz)), rmean = rmean
+    )
     predict_fun <- function(eta, ...) {
-      c2 <- outer(exp(drop(eta)), cumhaz)
-      surv <- exp(-c2)
-      meansurv <- apply(rep(tt, each = nrow(c2)) * surv, 1L, sum)
-      cbind(meansurv, surv)
+      eta <- drop(eta)
+      if (length(dim(eta)) > 1L) stop("eta must be a vector or single-row/column matrix", call. = FALSE)
+      result <- .as_numeric_matrix(prediction$predict(as.list(as.numeric(eta))))
+      dimnames(result) <- list(names(eta), c("meansurv", rep("", ncol(result) - 1L)))
+      result
     }
     summary_fun <- function(surv, var) {
-      bsurv <- t(surv[, -1L])
-      std <- t(sqrt(var[, -1L]))
-      chaz <- -log(bsurv)
-      zstat <- -stats::qnorm((1 - baseline$conf.int) / 2)
-      baseline$lower <- exp(-(chaz + zstat * std))
-      baseline$upper <- exp(-(chaz - zstat * std))
-      baseline$surv <- bsurv
-      baseline$std.err <- std / bsurv
-      baselinecumhaz <- chaz
+      if (!is.matrix(surv) || ncol(surv) != length(baseline$time) + 2L) {
+        stop("surv columns must contain restricted mean, time zero, and baseline times", call. = FALSE)
+      }
+      curves <- .validation_attr("yates_survival_summary")(surv, var, baseline$conf.int)
+      for (name in c("surv", "cumhaz", "std_err", "lower", "upper")) {
+        value <- .as_numeric_matrix(.result_field(curves, name))
+        if (!length(baseline$time)) value <- matrix(numeric(), 0L, nrow(surv))
+        dimnames(value) <- list(colnames(surv)[-c(1L, 2L)], rownames(surv))
+        baseline[[if (name == "std_err") "std.err" else name]] <- value
+      }
+      baseline$std.chaz <- baseline$std.err
       baseline
     }
     return(list(predict = predict_fun, summary = summary_fun))

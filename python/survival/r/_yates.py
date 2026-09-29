@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from numbers import Real
@@ -15,7 +14,7 @@ from ._coerce import (
     _match_string_arg,
     _materialize_1d,
 )
-from ._coxph import _coxph_model_frame, survfit_coxph
+from ._coxph import _coxph_model_frame
 from ._coxphms import CoxphmsModel
 from ._fit import _formula_design_for_fit
 from ._formula import (
@@ -38,6 +37,7 @@ from ._types import (
     _InteractionTerm,
 )
 from ._yates_model import YatesModel
+from ._yates_setup import _COXPH_PREDICT, _cox_survival_baseline, _yates_survival_summary
 
 
 @dataclass(frozen=True)
@@ -318,9 +318,6 @@ class _YatesSetup:
     rmean: float = math.inf
 
 
-_COXPH_PREDICT = ["lp", "risk", "expected", "terms", "survival", "linear"]
-
-
 def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
     """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``
     for a ``YatesModel``, which gives the linear predictor whatever ``predict`` is (``yates``
@@ -355,16 +352,7 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
     seed = _integer_scalar(settings.get("seed", 0), "seed")
     if kind == "risk":
         return _YatesSetup("risk", seed)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        baseline = survfit_coxph(fit, censor=False)
-    rmean = settings.get("rmean")
-    try:
-        rmean = max(baseline.time) if rmean is None else float(rmean)
-    except (TypeError, ValueError) as exc:
-        raise TypeError("rmean must be numeric") from exc
-    if baseline.strata is not None:
-        raise ValueError("stratified models not yet supported")
+    baseline, rmean = _cox_survival_baseline(fit, settings)
     return _YatesSetup("survival", seed, baseline, rmean)
 
 
@@ -376,22 +364,6 @@ def _yates_estimable(fit: Any, design: _FormulaDesign, xmatlist: list[Any]) -> l
         n = len(next(iter(fit.model.values())))
         return _core.yates_estimable(xmatlist, _design_rows_from_spec(fit.model, design, n))
     return _core.yates_estimable(xmatlist, fit.x, intercept=design.intercept)
-
-
-def _yates_survival_summary(
-    baseline: CoxSurvfitResult, curves: _core.YatesCurves
-) -> CoxSurvfitResult:
-    """R's ``summary`` function of ``yates_setup.coxph``: the baseline curve carrying each
-    level's simulated mean survival, one column per level."""
-
-    return replace(
-        baseline,
-        surv=curves.surv,
-        cumhaz=curves.cumhaz,
-        std_err=curves.std_err,
-        lower=curves.lower,
-        upper=curves.upper,
-    )
 
 
 def yates(
@@ -542,7 +514,7 @@ def yates(
                 **simulation,
             )
             if result.summary is not None:
-                summary = _yates_survival_summary(baseline, result.summary)
+                summary = _yates_survival_summary(baseline, result.summary, len(result.estimate))
         names = []
     return YatesResult(
         estimate={

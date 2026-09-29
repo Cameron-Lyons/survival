@@ -516,6 +516,7 @@ BINDINGS = (
     "YatesContrast",
     "YatesCurves",
     "YatesEstimate",
+    "YatesPrediction",
     "YatesResult",
     "YatesSgttResult",
     "_survpenal_fit_from_state",
@@ -963,6 +964,7 @@ BINDINGS = (
     "yates_risk",
     "yates_sgtt",
     "yates_survival",
+    "yates_survival_summary",
 )
 
 BINDING_NAMES = frozenset(BINDINGS)
@@ -1966,6 +1968,7 @@ MODULE_BINDINGS = {
         "uno_c_index",
         "YatesContrast",
         "YatesCurves",
+        "YatesPrediction",
         "YatesEstimate",
         "YatesResult",
         "YatesSgttResult",
@@ -1974,6 +1977,7 @@ MODULE_BINDINGS = {
         "yates_estimable",
         "yates_risk",
         "yates_survival",
+        "yates_survival_summary",
         "yates_population_means",
     ),
 }

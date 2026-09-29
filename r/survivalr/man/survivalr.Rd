@@ -1292,6 +1292,14 @@ The legacy wrapper requires \code{newrisk}; its \code{vartype} argument is unuse
 Terminal Kalbfleisch--Prentice increments are bounded to avoid a fractional
 power of a negative floating-point rounding residue.
 
+\code{yates_setup} prepares Cox survival predictions once and evaluates them
+with the shared Rust Yates kernel. Survival summaries omit the extra time-zero
+row and recompute cumulative hazard and its uncertainty, keeping every result
+row aligned with the baseline times. Linear predictors must be vectors or
+single-row/column matrices. The GLM method calls the supplied family's inverse
+link. A native R Cox fit supplies its baseline through R's \code{survfit};
+Python-backed fits use the Rust baseline implementation.
+
 Built-in \code{survreg.fit} matrix calls use positive-definite
 observed-information steps with an outer-product fallback. Fixed and
 stratified scales, left and interval censoring, null likelihoods, covariance,

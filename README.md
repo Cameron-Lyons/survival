@@ -144,6 +144,8 @@ read-only results and individual trajectories.
 Prepared formula metadata is supported by `r.attrassign` and
 `r.untangle_specials`; see [term helpers](docs/term-helpers.md) for column
 grouping and special-term indices.
+`r.yates_setup` prepares reusable Cox risk/survival predictions and GLM inverse
+links; see [Yates setup](docs/yates-setup.md) for layouts and summary corrections.
 
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
