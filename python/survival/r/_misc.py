@@ -53,7 +53,7 @@ from ._formula import (
     _formula_columns,
     _parse_formula,
     _strata_keep,
-    _strata_term_columns,
+    _strata_specs,
     _subset_formula_inputs,
     _term_values,
     _timeline_counting,
@@ -850,7 +850,7 @@ def survobrien(
     strata_codes = None
     if terms.strata:
         strata_codes = _complete_codes(
-            _strata_keep(data, _strata_term_columns(terms)), "missing values in the strata"
+            _strata_keep(data, _strata_specs(terms)), "missing values in the strata"
         )
     expansion = _core.survobrien(
         list(response.time),

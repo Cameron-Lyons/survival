@@ -163,7 +163,7 @@ def _yates_population(
 
     adjusters = [spec for spec in _design_factors(design) if spec.term.column not in term.columns]
     categorical = {
-        (_covariate_term_name(spec.term) if spec.term.strata_columns else spec.term.column): list(
+        (_covariate_term_name(spec.term) if spec.term.strata else spec.term.column): list(
             spec.levels
         )
         for spec in adjusters
@@ -472,7 +472,7 @@ def yates(
         {
             spec.term: pdata[_covariate_term_name(spec.term)]
             for spec in _design_factors(design)
-            if spec.term.strata_columns and _covariate_term_name(spec.term) in pdata
+            if spec.term.strata and _covariate_term_name(spec.term) in pdata
         }
         if isinstance(population, str) and population != "data"
         else None

@@ -71,7 +71,7 @@ from ._formula import (
     _formula_data_rows,
     _formula_design_row_count,
     _response_arg_columns,
-    _strata_term_columns,
+    _strata_specs,
     _timeline_counting,
     _timeline_model_frame,
     _timeline_response,
@@ -1471,7 +1471,7 @@ def _prediction_newdata(
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
-        _strata_term_columns(fit.terms),
+        _strata_specs(fit.terms),
         fit.strata_levels,
         newdata,
         need_strata=need_strata,
@@ -1952,7 +1952,7 @@ def _check_interaction_margins(fit: CoxphModel) -> None:
         for term in fit.terms.model_terms
         if isinstance(term, _ModelCovariateTerm)
         and not any(
-            factor.strata_columns
+            factor.strata
             for factor in (
                 term.term.factors if isinstance(term.term, _InteractionTerm) else [term.term]
             )
@@ -2062,7 +2062,7 @@ def _survfit_curves(
     _check_interaction_margins(fit)
     if newdata is None and any(
         isinstance(term, _InteractionDesignTerm)
-        and any(factor.term.strata_columns for factor in term.factors)
+        and any(factor.term.strata for factor in term.factors)
         for term in fit.design.covariates
     ):
         raise ValueError("Models with strata by covariate interaction terms require newdata")

@@ -280,8 +280,8 @@ def _formula_model_frame(
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
         elif isinstance(model_term, _ModelStrataTerm):
-            name = f"strata({', '.join(model_term.columns)})"
-            columns[name] = _strata_term_values(data, model_term.columns)
+            name = model_term.spec.call
+            columns[name] = _strata_term_values(data, model_term.spec)
         elif not isinstance(model_term, _ModelOffsetTerm | _ModelClusterTerm):
             raise ValueError(f"unsupported survfit formula term {model_term!r}")
     return _survfit_data(response, response_name, columns, extras)

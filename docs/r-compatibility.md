@@ -45,6 +45,20 @@ main effects; AFT removes those main effects before assigning contrasts. The
 port preserves this difference, including factor order and column labels.
 Cox survival curves for these models require `newdata`, as in R.
 
+Strata arguments may be comparisons, arithmetic, numeric transforms, factors,
+`cut()` calls, or nested strata. Named arguments set grouping labels;
+`shortlabel`, `sep`, and `na.group` accept literal options. For example,
+`strata(sex == 1)` groups by a comparison and
+`strata(g, na.group = TRUE)` retains missing values as a group. Arithmetic-created
+NaN forms a distinct `NaN` level, following R's factor conversion; input NaN
+continues to represent R's NA. Evaluated strata are reused within a model frame
+and subsetted with its rows, so data-dependent cut points are determined before
+subsetting. `scripts/generate_strata_expression_reference.R` checks model fits,
+predictions, missing-value actions, survival curves, and log-rank tests.
+On the local 100,000-row NumPy benchmark, constructing the model frame for
+`age * strata(sex)` fell from 97.1 ms to 71.5 ms; ordinary additive strata stayed
+near 24 ms. `scripts/bench_strata.py` measures this independently of model fitting.
+
 `scripts/generate_strata_interaction_reference.R` checks coefficients,
 covariances, design matrices, predictions, residuals, curves, and proportional
 hazards diagnostics. Its cases include delayed entry, Breslow ties, case
@@ -613,6 +627,13 @@ this does not show.
   `scripts/generate_partial_prediction_reference.R` checks these outputs.
 - A Cox expected-count prediction with an unknown stratum remains NaN here;
   R leaves its initial value at zero and reports survival 1 for that row.
+- Empty strata after subset or missing-row removal are omitted. R retains
+  their factor levels; `survreg(~ age + g + strata(g, na.group = TRUE))` can
+  fail while assigning scale names after `g` removes the missing-value group.
+  The strata-expression reference records that error and checks the equivalent
+  complete-case R fit. For the same redundant Cox model, expected counts use
+  the estimable coefficients; R propagates its aliased coefficient's NA. The
+  reference checks expected counts against the equivalent model without `g`.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)

@@ -68,7 +68,7 @@ from ._formula import (
     _offset_vector,
     _parse_formula,
     _strata_keep,
-    _strata_term_columns,
+    _strata_specs,
     _subset_formula_inputs,
 )
 from ._surv import Surv, _complete_codes, _survreg_response_arrays, is_na_surv
@@ -79,6 +79,7 @@ from ._types import (
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
+    _StrataSpec,
 )
 
 SurvregDistribution = _core.SurvregDistribution
@@ -142,7 +143,7 @@ class SurvregModelResult:
     assign: tuple[int, ...] = field(default=(), repr=False)
     term_labels: tuple[str, ...] = ()
     strata_term: int = field(default=0, repr=False)
-    strata_terms: tuple[tuple[str, ...], ...] = field(default=(), repr=False)
+    strata_terms: tuple[_StrataSpec, ...] = field(default=(), repr=False)
     strata_levels: tuple[str, ...] = ()
     na_action: NaAction | None = field(default=None, repr=False)
     penalized: Any | None = field(default=None, repr=False)
@@ -492,7 +493,7 @@ class _SurvregFrame:
     assign: tuple[int, ...] = ()
     term_labels: tuple[str, ...] = ()
     strata_term: int = 0
-    strata_terms: tuple[tuple[str, ...], ...] = ()
+    strata_terms: tuple[_StrataSpec, ...] = ()
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     weights: list[float] | None = None
@@ -520,7 +521,7 @@ def _term_structure(
     strata_term = 0
     for term_index, model_term in enumerate(ordered, start=1):
         if isinstance(model_term, _ModelStrataTerm):
-            labels[term_index - 1] = f"strata({', '.join(model_term.columns)})"
+            labels[term_index - 1] = model_term.spec.call
             strata_term = term_index
     assign = [0] * int(design.intercept)
     for term, term_index in zip(design.covariates, assignments, strict=True):
@@ -585,7 +586,7 @@ def _formula_frame(
             )
         else:
             cluster = _column(data, terms.clusters[0])
-    strata_terms = _strata_term_columns(terms)
+    strata_terms = _strata_specs(terms)
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     if strata_terms:
@@ -961,7 +962,7 @@ def _newdata_inputs(
         raise TypeError("newdata must be a data frame with the model's columns")
     # Terms keeps the strata() term, so its variables are required
     for term in fit.strata_terms:
-        for name in term:
+        for name in term.columns:
             _column_source(newdata, name)
     return _newdata_frame(
         design,
@@ -1443,7 +1444,7 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
 def model_matrix_survreg(fit: SurvregModelResult, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
 
-    strata_names = {f"strata({', '.join(columns)})" for columns in fit.strata_terms}
+    strata_names = {spec.call for spec in fit.strata_terms}
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
     return {
         "data": [[float(value) for value in row] for row in fit.fit.covariates]

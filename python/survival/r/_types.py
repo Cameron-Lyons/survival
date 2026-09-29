@@ -39,8 +39,8 @@ class _CovariateTerm:
 
     ``call`` keeps a categorising or penalty expression; ``column`` is its
     first data column (or the first column of its ``arithmetic`` argument).
-    ``strata_columns`` identifies a strata factor used in an interaction;
-    its call label and underlying columns stay distinct.
+    ``strata`` describes a grouping expression used alone or in an interaction;
+    its call label, arguments and underlying data columns stay distinct.
     ``special`` wraps an offset or cluster variable during formula expansion.
     """
 
@@ -50,8 +50,20 @@ class _CovariateTerm:
     transform: str | None = None
     arithmetic: str | None = None
     call: str | None = None
-    strata_columns: tuple[str, ...] = ()
+    strata: _StrataSpec | None = None
     special: str | None = None
+
+
+@dataclass(frozen=True)
+class _StrataSpec:
+    """A parsed strata call, including named expressions and literal options."""
+
+    call: str
+    arguments: tuple[tuple[str, _CovariateTerm], ...]
+    columns: tuple[str, ...]
+    shortlabel: bool | None = None
+    na_group: bool = False
+    sep: str = ", "
 
 
 @dataclass(frozen=True)
@@ -74,7 +86,7 @@ class _ModelCovariateTerm:
 
 @dataclass(frozen=True)
 class _ModelStrataTerm:
-    columns: tuple[str, ...]
+    spec: _StrataSpec
 
 
 @dataclass(frozen=True)

@@ -38,6 +38,7 @@ from ._formula import (
     _formula_data_rows,
     _formula_design_columns,
     _formula_design_row_count,
+    _formula_missing_rows,
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
@@ -45,10 +46,12 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _strata_covariate,
     _strata_keep,
-    _strata_term_columns,
+    _strata_specs,
     _strata_term_values,
     _subset_formula_inputs,
+    _with_strata_cache,
 )
 from ._surv import Surv, _complete_codes, _strata
 from ._types import (
@@ -63,6 +66,7 @@ from ._types import (
     _NumericDesignTerm,
     _PenaltyDesignTerm,
     _SingleDesignTerm,
+    _StrataSpec,
     _SurvResponseSpec,
 )
 
@@ -194,8 +198,8 @@ def _r_factor_design(
         # a logical expression (I(sex == 2)) has no column to declare levels
         column = term.term.column
         source = (
-            _strata_term_values(data, term.term.strata_columns)
-            if term.term.strata_columns
+            _strata_term_values(data, term.term.strata)
+            if term.term.strata
             else None
             if term.term.arithmetic is not None
             else _column_source(data, column)
@@ -293,7 +297,7 @@ def _model_frame(
     if terms.strata:
         if aligned["strata"] is not None:
             raise ValueError("use only one of formula strata(...) or strata")
-        factor = _strata_keep(data, _strata_term_columns(terms))
+        factor = _strata_keep(data, _strata_specs(terms))
     elif aligned["strata"] is not None:
         factor = _strata([("strata", aligned["strata"])])
     if factor is not None:
@@ -443,7 +447,7 @@ def _newdata_response(newdata: Any, spec: _SurvResponseSpec) -> Surv | None:
 
 def _newdata_frame(
     design: _FormulaDesign,
-    strata_terms: Sequence[Sequence[str]],
+    strata_terms: Sequence[_StrataSpec],
     strata_levels: Sequence[str],
     newdata: Any,
     *,
@@ -471,7 +475,7 @@ def _newdata_frame(
     """
 
     present = set(_newdata_columns(newdata))
-    strata_columns = [column for term in strata_terms for column in term]
+    strata_columns = [column for term in strata_terms for column in term.columns]
     if not (need_strata and set(strata_columns) <= present):
         strata_columns = []
     response_columns = (
@@ -490,6 +494,16 @@ def _newdata_frame(
         )
     )
     n = _formula_design_row_count(newdata, design)
+    strata_specs = dict.fromkeys(
+        [spec for spec in strata_terms if strata_columns]
+        + [
+            part.term.strata
+            for term in design.covariates
+            for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+            if part.term.strata is not None
+        ]
+    )
+    newdata = _with_strata_cache(newdata, tuple(strata_specs), n)
     # na.pass leaves missing unused variables in the model frame without
     # propagating them into the design. They still have to exist and align.
     if pass_missing:
@@ -502,15 +516,29 @@ def _newdata_frame(
             ],
             n,
         )
-    missing = _missing_row_indices([(name, _column_source(newdata, name)) for name in columns], n)
+    variables = [
+        part.term
+        for term in design.covariates
+        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+    ]
+    if not pass_missing:
+        variables.extend(term for term in design.variables if term.strata is None)
+    variables.extend(_strata_covariate(spec) for spec in strata_terms if strata_columns)
+    missing = _formula_missing_rows(
+        newdata, columns, [*variables, *design.offsets], n, required=response_columns
+    )
     keep_missing = pass_missing and allow_missing_predictors
     response = None
     if keep_missing:
-        missing = _missing_row_indices(
-            [(name, _column_source(newdata, name)) for name in strata_columns]
+        missing = (
+            _formula_missing_rows(
+                newdata,
+                strata_columns,
+                [_strata_covariate(spec) for spec in strata_terms] if strata_columns else [],
+                n,
+            )
             if not allow_missing_strata
-            else [],
-            n,
+            else set()
         )
         if response_columns:
             # Expected counts use follow-up, not the event indicator.
@@ -518,13 +546,6 @@ def _newdata_frame(
             missing.update(i for i, value in enumerate(response.time) if math.isnan(value))
             if response.start is not None:
                 missing.update(i for i, value in enumerate(response.start) if math.isnan(value))
-    variables = [
-        part.term
-        for term in design.covariates
-        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
-    ]
-    if not pass_missing:
-        variables.extend(design.variables)
     made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
     if made and not keep_missing:
         # the design reads the evaluated variables at the rows that stay
