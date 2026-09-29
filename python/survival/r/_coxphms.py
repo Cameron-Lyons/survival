@@ -664,7 +664,7 @@ def _survcheck2(
         istate=codes,
         istate_levels=None if levels is None else [str(level) for level in levels],
         istate0="(s0)",
-        censor_label="censored",
+        censor_label=y.clabel if y.clabel is not None else "censored",
         timefix=False,
     )
     if any(getattr(check.flag, name) > 0 for name in SURVCHECK_FLAGS if name not in allow):

@@ -963,6 +963,7 @@ class SurvfitMultiStateResult:
     engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
     # the states before `fit[, states]` selected some (R's oldstate)
     oldstate: tuple[str, ...] | None = None
+    clabel: str | None = None
 
     @property
     def strata_names(self) -> list[str]:

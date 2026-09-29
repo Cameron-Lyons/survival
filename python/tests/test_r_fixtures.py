@@ -644,8 +644,14 @@ class SurvfitMultistateHandler(TopicHandler):
                 assert_close(fit.p0[0], p0, path="p0")
         elif aspect == "fit.transitions":
             table = expected["fit"]["transitions"]
+            # Numerical fixtures use 3.8-11's fixed censor-column name.
+            # Current names are independently checked against 3.8-12 references.
+            columns = [
+                f"({fit.clabel})" if name == "(censored)" and fit.clabel is not None else name
+                for name in table["colnames"]
+            ]
             assert_exact(fit.transitions.rownames, table["rownames"], path="transitions.rownames")
-            assert_exact(fit.transitions.colnames, table["colnames"], path="transitions.colnames")
+            assert_exact(fit.transitions.colnames, columns, path="transitions.colnames")
             assert_exact(fit.transitions.values, table["values"], path="transitions")
         elif aspect == "summary_times":
             _check_summary_times(fit, expected["summary_times"])
@@ -2159,11 +2165,20 @@ class SurvcheckHandler(TopicHandler):
             assert_exact(list(result.istate), expected["istate"], path="istate")
         elif aspect == "transitions":
             table = result.transitions
+            reference = expected["transitions"]
+            # Adapt only the 3.8-11 label; keep counts and all state names exact.
+            label = result.y.clabel if result.y.clabel is not None else "censor"
+            reference = {
+                **reference,
+                "colnames": [
+                    f"({label})" if name == "(censored)" else name for name in reference["colnames"]
+                ],
+            }
             _check_named_table(
                 table.from_states,
                 table.to_states,
                 table.counts,
-                expected["transitions"],
+                reference,
                 "transitions",
             )
         elif aspect == "events":

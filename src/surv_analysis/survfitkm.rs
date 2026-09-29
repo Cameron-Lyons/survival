@@ -749,12 +749,10 @@ struct CurveFit {
     influence_chaz: Option<Array2<f64>>,
 }
 
-/// The reporting times of one curve, as survival 3.8-11's `survfitkm.c`
-/// computes them (the version the reference fixtures were generated with;
-/// 3.8-12 moved the rule to R and dropped the unconditional first stop
-/// time): the smallest stop time, every stop time that is an event or the
-/// last interval of a subject and, with `entry`, every start time that is
-/// the first interval of a subject.
+/// The reporting times of one curve: events, final intervals of subjects
+/// and, with `entry`, their first entry times. This is the 3.8-12 rule for
+/// a single curve, applied consistently to every stratum. Its grouped R
+/// branch accidentally excludes events on internal intervals.
 fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> Vec<f64> {
     let sort2 = &rows.sort2;
     let mut dtime = Vec::new();
@@ -779,12 +777,11 @@ fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> 
             }
         }
         _ => {
-            let mut temp = data.time2[sort2[0]];
-            dtime.push(temp);
-            for &i2 in &sort2[1..] {
-                if (data.position[i2] > 1 || data.status[i2] > 0) && data.time2[i2] != temp {
-                    temp = data.time2[i2];
-                    dtime.push(temp);
+            for &i2 in sort2 {
+                if (data.position[i2] > 1 || data.status[i2] > 0)
+                    && dtime.last() != Some(&data.time2[i2])
+                {
+                    dtime.push(data.time2[i2]);
                 }
             }
         }
@@ -1797,14 +1794,10 @@ mod tests {
         .unwrap();
         let result = fit(data, SurvfitKMOptions::default());
         assert_eq!(result.type_, "counting");
-        assert_eq!(result.time, vec![2.0, 3.0, 5.0, 6.0, 7.0]);
-        assert_eq!(result.n_risk, vec![3.0, 3.0, 3.0, 2.0, 1.0]);
-        assert_eq!(result.n_censor, vec![0.0, 0.0, 0.0, 1.0, 0.0]);
-        assert_vec_approx(
-            &result.surv,
-            &[1.0, 2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0],
-            1e-12,
-        );
+        assert_eq!(result.time, vec![3.0, 5.0, 6.0, 7.0]);
+        assert_eq!(result.n_risk, vec![3.0, 3.0, 2.0, 1.0]);
+        assert_eq!(result.n_censor, vec![0.0, 0.0, 1.0, 0.0]);
+        assert_vec_approx(&result.surv, &[2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0], 1e-12);
         assert_eq!(result.n_id, Some(vec![3]));
         // id with one event per subject keeps the Greenwood variance
         assert!(result.logse);

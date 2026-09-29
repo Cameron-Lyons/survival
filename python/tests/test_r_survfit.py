@@ -397,7 +397,7 @@ def test_survfit_multistate_matches_r_aalen_johansen():
     assert fit.conf_type == "log"
     assert fit.transitions == r.NamedMatrix(
         rownames=["(s0)", "a", "b"],
-        colnames=["a", "b", "(censored)"],
+        colnames=["a", "b", "(censor)"],
         values=[[2.0, 2.0, 2.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
     )
     _close([row[0] for row in fit.pstate], [5 / 6, 2 / 3, 2 / 3, 4 / 9, 4 / 9, 0])

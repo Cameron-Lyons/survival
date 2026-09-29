@@ -246,7 +246,7 @@ def test_report_transition_labels_follow_the_response_censor_level():
         "state": pd.Categorical(["not yet", "event", "not yet"], categories=["not yet", "event"]),
     }
     result = r.survcheck("Surv(time,state)~1", data, id=[1, 2, 3])
-    assert result.transitions.to_states[-1] == "(censored)"
+    assert result.transitions.to_states[-1] == "(not yet)"
     assert r.print_survcheck(result).tables["transitions"].colnames[-1] == "(not yet)"
 
 

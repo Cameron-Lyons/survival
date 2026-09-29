@@ -217,7 +217,7 @@ def test_competing_risks_fit(mg_fit):
     assert fit.smap == r.NamedMatrix(["(Baseline)"], ["1:2", "1:3"], [[1, 2]])
     assert fit.transitions == r.NamedMatrix(
         ["(s0)", "pcm", "death"],
-        ["pcm", "death", "(censored)"],
+        ["pcm", "death", "(censor)"],
         [[115, 860, 409], [0, 0, 0], [0, 0, 0]],
     )
     assert fit.rmap.shape == (2768, 2)
@@ -699,7 +699,7 @@ def test_hand_checkable_data():
     assert fit.rmap[:5].tolist() == [[1, 1], [4, 1], [5, 1], [6, 1], [9, 1]]
     assert fit.transitions == r.NamedMatrix(
         ["(s0)", "a", "b", "c"],
-        ["a", "b", "c", "(censored)"],
+        ["a", "b", "c", "(censor)"],
         [[2, 2, 1, 0], [0, 1, 1, 0], [1, 0, 0, 1], [0, 0, 0, 1]],
     )
     with pytest.raises(ValueError, match="wrong length for init argument"):
@@ -1125,7 +1125,7 @@ def test_timeline_formula_list(pdata):
     assert fit.na_action is None
     assert fit.transitions == r.NamedMatrix(
         ["normal", "1-4", "4+", "death"],
-        ["normal", "1-4", "4+", "death", "(censored)"],
+        ["normal", "1-4", "4+", "death", "(censor)"],
         [[0, 91, 3, 9, 77], [63, 0, 109, 21, 60], [1, 31, 0, 110, 35], [0, 0, 0, 0, 0]],
     )
     frame = r.model_frame(fit)

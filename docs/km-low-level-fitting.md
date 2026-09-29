@@ -68,6 +68,12 @@ Two deliberate corrections avoid failures in R 3.8-12's bare interface:
 - Unused levels receive empty influence components. Some R combinations try
   to assign row names to a missing matrix and fail.
 
+Counting-process reporting times follow 3.8-12: an initial interval boundary
+without an event or terminal censoring is omitted. All internal event times
+are retained for every group. R 3.8-12's grouped fitter accidentally excludes
+such events from its time grid; the port uses the correct single-group rule
+consistently, including with `entry=True`.
+
 This is a bare numerical result, corresponding to R's unclassed fitter list.
 Use `r.survfit` when you need the formula result's summary, plotting, residual
 or prediction methods.

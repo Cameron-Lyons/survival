@@ -816,10 +816,12 @@ def _survfitAJ(
     )
     call = SurvfitCall(frame.terms, stype, ctype, timefix, start, p0=p0, id=id_name, type=type_)
     labels = _curve_labels(engine, frame.x_levels)
-    return _aj_result(engine, labels, call, frame.model, se_fit, time0=time0)
+    return _aj_result(engine, labels, call, frame.model, se_fit, time0=time0, clabel=frame.y.clabel)
 
 
-def _compact_transitions(table: Sequence[Sequence[float]], states: Sequence[str]) -> NamedMatrix:
+def _compact_transitions(
+    table: Sequence[Sequence[float]], states: Sequence[str], clabel: str | None = None
+) -> NamedMatrix:
     """``survcheck2``'s transitions table: drop empty columns and never-occurring states.
 
     The engine's table is ``states x (states + censored)``; R keeps the columns with a
@@ -827,7 +829,7 @@ def _compact_transitions(table: Sequence[Sequence[float]], states: Sequence[str]
     """
 
     n_states = len(states)
-    columns = [*states, "(censored)"]
+    columns = [*states, f"({clabel})" if clabel is not None else "(censored)"]
     keep_columns = [j for j in range(n_states + 1) if any(row[j] > 0 for row in table)]
     keep_rows = [i for i in range(n_states) if sum(table[i]) + sum(row[i] for row in table) > 0]
     return NamedMatrix(
@@ -845,6 +847,7 @@ def _aj_result(
     se_fit: bool,
     *,
     time0: bool,
+    clabel: str | None = None,
 ) -> SurvfitMultiStateResult:
     """A ``survfitms`` object from the engine output."""
 
@@ -865,9 +868,10 @@ def _aj_result(
             f"{source + 1}:{target + 1}"
             for source, target in zip(engine.hazard_from, engine.hazard_to, strict=True)
         ],
-        transitions=_compact_transitions(engine.transitions, states)
+        transitions=_compact_transitions(engine.transitions, states, clabel)
         if engine.transitions
         else None,
+        clabel=clabel,
         n_id=[int(value) for value in engine.n_id],
         type=engine.type,
         t0=engine.t0,
@@ -1329,7 +1333,9 @@ def _derived_survfit(
 
     se_fit = x.std_err is not None
     if isinstance(x, SurvfitMultiStateResult) and isinstance(engine, _core.SurvfitAJResult):
-        fit = _aj_result(engine, x.strata_names, x.call, x.model, se_fit, time0=time0)
+        fit = _aj_result(
+            engine, x.strata_names, x.call, x.model, se_fit, time0=time0, clabel=x.clabel
+        )
         return dataclasses.replace(
             fit, n_id=None if x.n_id is None else fit.n_id, oldstate=x.oldstate
         )
