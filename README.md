@@ -122,6 +122,13 @@ to measure the Python calls, or
 See [the algorithm and benchmark notes](docs/kaplan-meier-performance.md) for
 the scope of the optimization and a local before/after comparison.
 
+Cox survival predictions and R-style Brier scores evaluate only the requested
+times, avoiding full survival-curve matrices for every subject. The Rust and
+Python `CoxPHFit.predict_survival_at` method exposes the same calculation;
+NumPy inputs and results avoid list conversions. See
+[Cox prediction performance](docs/cox-prediction-performance.md) for the API,
+algorithm and reproducible benchmarks.
+
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
 

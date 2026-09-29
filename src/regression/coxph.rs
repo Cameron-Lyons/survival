@@ -22,7 +22,7 @@ use crate::core::strata_order::{order_within_strata, validate_intervals};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
-use crate::internal::step::step_at;
+use crate::internal::step::{find_interval, step_at};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
@@ -987,7 +987,15 @@ impl CoxPHFit {
     /// on the baseline curves' scale, `survfit.coxph`'s `risk2 = exp(x2 %*%
     /// beta + offset2 - xcenter)`.
     fn centered_newdata(&self, newdata: &CoxNewData) -> (Array2<f64>, Vec<f64>) {
-        let mut x2c = newdata.x.clone();
+        self.centered_rows(newdata.x.view(), newdata.offset.as_deref())
+    }
+
+    fn centered_rows(
+        &self,
+        x: ArrayView2<'_, f64>,
+        offset: Option<&[f64]>,
+    ) -> (Array2<f64>, Vec<f64>) {
+        let mut x2c = x.to_owned();
         for (col, &mean) in self.means.iter().enumerate() {
             x2c.column_mut(col).mapv_inplace(|value| value - mean);
         }
@@ -997,7 +1005,7 @@ impl CoxPHFit {
             .outer_iter()
             .enumerate()
             .map(|(i, row)| {
-                let offset2 = newdata.offset.as_ref().map_or(0.0, |o| o[i]);
+                let offset2 = offset.map_or(0.0, |o| o[i]);
                 (row.dot(&ArrayView1::from(&coef)) + offset2 - offset_mean).exp()
             })
             .collect();
@@ -1087,6 +1095,77 @@ impl CoxPHFit {
                     expanded,
                     options.censor,
                 ));
+            }
+        }
+        Ok(result)
+    }
+
+    /// Survival probabilities at `times`, with one column per observation.
+    /// Without `newdata`, predict for the training rows in their original order.
+    /// Fits with multiple strata require a stratum for each new observation.
+    ///
+    /// Uses the same default estimate as [`Self::survfit`] (`stype = 2`,
+    /// `ctype` matching the fitted tie method). Times may be unsorted or
+    /// repeated; survival is 1 before the first time and stays at the last
+    /// value beyond follow-up. Only the requested `times.len() * nrows`
+    /// probabilities are allocated, rather than the full curves and hazards.
+    pub fn predict_survival_at(
+        &self,
+        times: &[f64],
+        newdata: Option<&CoxNewData>,
+    ) -> SurvivalResult<Array2<f64>> {
+        validate_finite(times, "times")?;
+        let (x, strata, offset) = match newdata {
+            Some(newdata) => {
+                self.check_newdata(newdata)?;
+                if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
+                    return Err(SurvivalError::invalid_input(
+                        "newdata must carry the strata for survival predictions",
+                    ));
+                }
+                (
+                    newdata.x.view(),
+                    newdata.strata.as_deref(),
+                    newdata.offset.as_deref(),
+                )
+            }
+            None => (
+                self.x.view(),
+                self.strata.as_deref(),
+                Some(self.offset.as_slice()),
+            ),
+        };
+        let mut result = Array2::ones((times.len(), x.nrows()));
+        if times.is_empty() {
+            return Ok(result);
+        }
+        let (_, risk) = self.centered_rows(x, offset);
+        let curves = self.baseline_curves()?;
+        let mut rows_by_stratum = vec![Vec::new(); curves.len()];
+        for row in 0..x.nrows() {
+            let position = strata.map_or(0, |codes| {
+                self.sorted
+                    .position_of(codes[row])
+                    .expect("strata were checked against the fit")
+            });
+            rows_by_stratum[position].push(row);
+        }
+        for (curve, rows) in curves.iter().zip(rows_by_stratum) {
+            if rows.is_empty() {
+                continue;
+            }
+            for (i, &at) in times.iter().enumerate() {
+                let index = find_interval(&curve.time, at, false);
+                if index == 0 {
+                    continue;
+                }
+                // Match expand_curve's exp(-H).powf(risk), including its
+                // underflow behavior, rather than reassociating the exponent.
+                let baseline = (-curve.cumhaz[index - 1]).exp();
+                let mut output = result.row_mut(i);
+                for &row in &rows {
+                    output[row] = baseline.powf(risk[row]);
+                }
             }
         }
         Ok(result)
@@ -1729,6 +1808,23 @@ impl CoxPHFit {
         Ok(py.detach(|| self.survfit(newdata.as_ref(), options))?)
     }
 
+    /// Survival at requested times: a NumPy matrix of shape (n_times, n_rows).
+    /// Omit newdata to predict for the original training rows.
+    #[pyo3(name = "predict_survival_at", signature = (times, newdata = None, new_strata = None, new_offset = None))]
+    fn predict_survival_at_py(
+        &self,
+        py: Python<'_>,
+        times: FloatVec,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
+    ) -> PyResult<FloatMatrix> {
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
+        Ok(FloatMatrix::new(py.detach(|| {
+            self.predict_survival_at(&times, newdata.as_ref())
+        })?))
+    }
+
     /// `residuals(fit, type = "martingale", weighted, collapse)`.
     #[pyo3(name = "martingale_residuals", signature = (weighted = false, collapse = None))]
     fn martingale_residuals_py(
@@ -2051,6 +2147,82 @@ mod tests {
             .zip(fit.status.iter().zip(&fit.residuals))
         {
             assert!((e - (f64::from(s) - r)).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn survival_at_requested_times_matches_full_curves() {
+        let times = [8.0, 2.0, -1.0, 2.0, 3.5];
+        for method in [TieMethod::Breslow, TieMethod::Efron, TieMethod::Exact] {
+            for stratified in [false, true] {
+                let mut data = lung_like_data();
+                data.offset = Some(vec![0.1, 0.3, -0.2, 0.0, 0.4, 0.2, -0.1, 0.5]);
+                if stratified {
+                    data.strata = Some(vec![17, -3, 17, -3, 17, -3, 17, -3]);
+                }
+                let fit = CoxPHFit::fit(
+                    data,
+                    CoxphOptions {
+                        method,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let newdata = CoxNewData::try_new(
+                    fit.x.clone(),
+                    fit.strata.clone(),
+                    Some(fit.offset.clone()),
+                    None,
+                    None,
+                )
+                .unwrap();
+                let full = fit
+                    .survfit(
+                        Some(&newdata),
+                        SurvfitOptions {
+                            se_fit: false,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                let actual = fit.predict_survival_at(&times, None).unwrap();
+                assert_eq!(
+                    actual,
+                    fit.predict_survival_at(&times, Some(&newdata)).unwrap()
+                );
+                assert_eq!(actual.dim(), (times.len(), fit.n));
+                for (i, &time) in times.iter().enumerate() {
+                    for row in 0..fit.n {
+                        let (curve, column) = if stratified {
+                            (&full[row], 0)
+                        } else {
+                            (&full[0], row)
+                        };
+                        let index = find_interval(&curve.time, time, false);
+                        let expected = if index == 0 {
+                            1.0
+                        } else {
+                            curve.surv[index - 1][column]
+                        };
+                        assert_eq!(actual[(i, row)], expected);
+                    }
+                }
+                assert_eq!(
+                    fit.predict_survival_at(&[], None).unwrap().dim(),
+                    (0, fit.n)
+                );
+                assert!(fit.predict_survival_at(&[f64::NAN], None).is_err());
+                if stratified {
+                    let missing_strata = CoxNewData {
+                        strata: None,
+                        ..newdata
+                    };
+                    assert!(
+                        fit.predict_survival_at(&times, Some(&missing_strata))
+                            .is_err()
+                    );
+                }
+            }
         }
     }
 

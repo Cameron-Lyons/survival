@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Add `CoxPHFit::predict_survival_at` and its Python method to evaluate only
+  requested times, returning a time-by-observation matrix. Cox estimator
+  survival predictions and R-style Brier scores use this path to avoid full
+  curve expansion and Python list conversions.
+- Cache censoring-survival lookups in Brier scoring, removing binary searches
+  from the subject-by-time loop. Its Python binding accepts NumPy arrays and
+  matrices through the shared checked input types.
+
 ## 2.0.0
 
 2.0 turns `survival.r` into a faithful port of R's survival 3.8: the formula

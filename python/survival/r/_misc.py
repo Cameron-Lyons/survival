@@ -13,13 +13,14 @@ Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``
 
 from __future__ import annotations
 
-import bisect
 import math
 import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
+
+import numpy as np
 
 from .. import _survival as _core
 from . import _models
@@ -973,28 +974,22 @@ def _newdata_design(
 
 def _brier_model_predictions(
     fit: Any, engine: Any, newdata: Any | None, times: list[float]
-) -> list[list[float]]:
+) -> np.ndarray:
     """``1 - summary(survfit(fit, newdata), times, extend = TRUE)$surv``: one row per time.
 
-    ``survfit.coxph`` on the fit's own data (R: ``newdata = fit$call$data``) or on ``newdata``:
-    the design rows go through the Cox engine's ``survfit``."""
+    Evaluate the Cox baseline at the requested times before expanding the observations.
+    Training rows stay in Rust; new data use the fit's formula design and strata codes.
+    """
 
     if newdata is None:
-        rows, strata, offsets = [list(row) for row in engine.x], engine.strata, list(engine.offset)
+        probabilities = engine.predict_survival_at(times)
     else:
         rows, strata, offsets = _newdata_design(fit, newdata)
-    curves = engine.survfit(newdata=rows, new_strata=strata, new_offset=offsets, se_fit=False)
-    # one curve per stratum with the rows as columns, or one per row for stratified fits; each
-    # getter converts the whole curve, so it is read once
-    phat: list[list[float]] = [[] for _ in times]
-    for curve in curves:
-        curve_times, surv = list(curve.time), curve.surv
-        width = len(surv[0]) if surv else 0
-        for row, at in zip(phat, times, strict=True):
-            # the last step at or before `at`; the curves are 1 before their first time
-            index = bisect.bisect_right(curve_times, at)
-            row.extend([1.0 - value for value in surv[index - 1]] if index else [0.0] * width)
-    return phat
+        probabilities = engine.predict_survival_at(
+            times, newdata=rows, new_strata=strata, new_offset=offsets
+        )
+    np.subtract(1.0, probabilities, out=probabilities)
+    return probabilities
 
 
 def brier(
@@ -1069,7 +1064,7 @@ def brier(
         brier=result.brier,
         times=result.times,
         p0=result.p0,
-        phat=phat,
+        phat=phat.tolist(),
         eff_n=result.eff_n,
     )
 

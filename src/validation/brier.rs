@@ -171,8 +171,16 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
         survfit_curve(None, &shifted, &censor_status, &weights, false)?;
 
     let case_weight: Vec<f64> = weights.iter().map(|w| w / total_weight).collect();
+    // G(min(subject_time, evaluation_time)) only ever reads G at one of
+    // those two endpoints. Cache the subject values once; each evaluation
+    // needs one more lookup instead of a binary search for every subject.
+    let censor_at_subject: Vec<f64> = shifted
+        .iter()
+        .map(|&at| step_at(&censor_time, &censor_surv, at, 1.0))
+        .collect();
     let score_at = |i: usize| -> (f64, f64, f64) {
         let at = input.times[i];
+        let censor_at_time = step_at(&censor_time, &censor_surv, at, 1.0);
         let mut weight_sum = 0.0;
         let mut weight_square_sum = 0.0;
         let mut null_sum = 0.0;
@@ -182,7 +190,12 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
             let weight = if dtime < at && status[j] == 0.0 {
                 0.0
             } else {
-                case_weight[j] / step_at(&censor_time, &censor_surv, dtime.min(at), 1.0)
+                let censoring = if dtime <= at {
+                    censor_at_subject[j]
+                } else {
+                    censor_at_time
+                };
+                case_weight[j] / censoring
             };
             let (b0, b1) = if dtime > at {
                 (p0[i] * p0[i], input.phat[i][j] * input.phat[i][j])
@@ -230,6 +243,98 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_censoring_values_match_direct_ipcw() {
+        // Compute G independently from the risk sets, including tied events
+        // and censorings, zero weights, G=0, and times outside follow-up.
+        // Repetition exercises both the sequential and parallel score paths.
+        for copies in [1, 256] {
+            let time = [4.0, 1.0, 2.0, 2.0, 6.0, 5.0, 6.0, 3.0].repeat(copies);
+            let status = [1, 1, 0, 1, 0, 0, 1, 1].repeat(copies);
+            let weights = [0.5, 1.0, 0.0, 1.5, 0.5, 2.0, 1.0, 1.5].repeat(copies);
+            let times = [-1.0, 2.0, 2.5, 7.0, 4.0, 2.0, 6.0];
+            let phat: Vec<Vec<f64>> = times.iter().map(|_| vec![0.3; time.len()]).collect();
+            for ties in [false, true] {
+                let shifted: Vec<f64> = time
+                    .iter()
+                    .zip(&status)
+                    .map(|(&t, &s)| if ties && s == 0 { t + 0.5 } else { t })
+                    .collect();
+                let mut unique = shifted.clone();
+                unique.sort_by(f64::total_cmp);
+                unique.dedup();
+                let censoring: Vec<f64> = unique
+                    .iter()
+                    .scan(1.0, |survival, &t| {
+                        let risk: f64 = (0..time.len())
+                            .filter(|&j| shifted[j] >= t)
+                            .map(|j| weights[j])
+                            .sum();
+                        let censored: f64 = (0..time.len())
+                            .filter(|&j| shifted[j] == t && status[j] == 0)
+                            .map(|j| weights[j])
+                            .sum();
+                        *survival *= 1.0 - censored / risk;
+                        Some(*survival)
+                    })
+                    .collect();
+                let total: f64 = weights.iter().sum();
+                for efron in [false, true] {
+                    let result = brier(BrierInput {
+                        start: None,
+                        time: &time,
+                        status: &status,
+                        weights: Some(&weights),
+                        times: &times,
+                        phat: phat.clone(),
+                        ties,
+                        efron,
+                        timefix: false,
+                    })
+                    .unwrap();
+                    for (i, &at) in times.iter().enumerate() {
+                        let mut weight_sum = 0.0;
+                        let mut weight_square_sum = 0.0;
+                        let mut null_sum = 0.0;
+                        let mut model_sum = 0.0;
+                        for j in 0..time.len() {
+                            let weight = if shifted[j] < at && status[j] == 0 {
+                                0.0
+                            } else {
+                                weights[j]
+                                    / total
+                                    / step_at(&unique, &censoring, shifted[j].min(at), 1.0)
+                            };
+                            let outcome = if shifted[j] > at {
+                                0.0
+                            } else {
+                                f64::from(status[j])
+                            };
+                            weight_sum += weight;
+                            weight_square_sum += weight * weight;
+                            null_sum += weight * (outcome - result.p0[i]).powi(2);
+                            model_sum += weight * (outcome - phat[i][j]).powi(2);
+                        }
+                        let expected = [
+                            model_sum / weight_sum,
+                            1.0 - model_sum / null_sum,
+                            1.0 / weight_square_sum,
+                        ];
+                        let actual = [result.brier[i], result.rsquared[i], result.eff_n[i]];
+                        for (actual, expected) in actual.into_iter().zip(expected) {
+                            assert!(
+                                (actual.is_nan() && expected.is_nan())
+                                    || actual == expected
+                                    || (actual - expected).abs() <= 1e-11 * expected.abs().max(1.0),
+                                "{actual} != {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn matches_a_hand_calculation() {
