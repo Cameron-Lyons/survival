@@ -145,6 +145,54 @@ mod kaplan_meier {
     }
 }
 
+mod matrix_curves {
+    use super::*;
+    use survival::surv_analysis::{SurvfitMatrixMethod, SurvfitMatrixTransition, survfit_matrix};
+
+    fn run(bencher: divan::Bencher, n: usize, method: SurvfitMatrixMethod) {
+        let curves: Vec<_> = (0..3)
+            .map(|k| {
+                let data = SurvfitKMData::right_censored(
+                    (0..n).map(|i| 1.0 + i as f64 + k as f64 * 0.1).collect(),
+                    (0..n).map(|i| i32::from(i % 3 != k)).collect(),
+                )
+                .unwrap();
+                vec![
+                    surv_analysis::survfitkm(
+                        &data,
+                        &SurvfitKMOptions {
+                            se_fit: false,
+                            ..SurvfitKMOptions::default()
+                        },
+                    )
+                    .unwrap(),
+                ]
+            })
+            .collect();
+        let transitions = [(0, 1), (0, 2), (1, 2)]
+            .into_iter()
+            .enumerate()
+            .map(|(k, (from, to))| SurvfitMatrixTransition {
+                from,
+                to,
+                curves: &curves[k],
+            })
+            .collect::<Vec<_>>();
+        let states = ["healthy".into(), "ill".into(), "dead".into()];
+        bencher.bench_local(|| survfit_matrix(&transitions, &states, None, method, None).unwrap());
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn discrete(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, SurvfitMatrixMethod::Discrete);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn matrix_exponential(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, SurvfitMatrixMethod::MatrixExponential);
+    }
+}
+
 mod nelson_aalen_bench {
     use super::*;
 

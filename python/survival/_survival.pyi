@@ -13506,6 +13506,15 @@ def survfit_confint(
     selow: Sequence[float] | None = None,
     ulimit: bool = True,
 ) -> ConfidenceBands: ...
+def survfit_matrix(
+    curves: Sequence[Sequence[SurvfitKMResult]],
+    from_state: ArrayLike,
+    to_state: ArrayLike,
+    states: Sequence[str],
+    p0: ArrayLike | None = None,
+    method: str = "discrete",
+    start_time: float | None = None,
+) -> SurvfitAJResult: ...
 def survfitaj(
     time: ArrayLike,
     state: ArrayLike,

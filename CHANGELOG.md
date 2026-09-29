@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add R-style `survfit.matrix` through `survfit` on a square matrix of KM or
+  Cox curves, with discrete and matrix-exponential updates, stratified curves,
+  prediction columns, starting distributions and conditional start times.
+  The Rust kernel scans the transition curves once and releases the Python
+  GIL; its results support the existing multistate summaries and curve methods.
+- Preserve tiny transition probabilities in the matrix exponential's closed
+  forms using `expm1`, including the shared multistate Cox prediction path.
 - Add `CoxPHFit::predict_survival_at` and its Python method to evaluate only
   requested times, returning a time-by-observation matrix. Cox estimator
   survival predictions and R-style Brier scores use this path to avoid full

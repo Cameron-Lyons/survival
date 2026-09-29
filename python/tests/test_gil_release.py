@@ -103,6 +103,7 @@ def test_heavy_kernels_release_the_gil():
     group = (x[:, 0] > 0).astype(np.int32)
     aj_time, aj_status, aj_x = _cox_data(1_000)
     states = (aj_status * (1 + (aj_x[:, 1] > 0))).astype(np.int32)
+    transition_curve = sa.survfitkm(time_, status, se_fit=False)
 
     calls = {
         "coxph_fit": lambda: regression.coxph_fit(time_, status, x),
@@ -116,6 +117,9 @@ def test_heavy_kernels_release_the_gil():
         "concordancefit": lambda: core.concordancefit(right, predictor),
         "survdiff": lambda: sa.survdiff(time_, status, group),
         "survfitaj": lambda: sa.survfitaj(aj_time, states, ["censor", "a", "b"]),
+        "survfit_matrix": lambda: sa.survfit_matrix(
+            [[transition_curve], [transition_curve]], [0, 1], [1, 2], ["a", "b", "c"]
+        ),
     }
     for name, call in calls.items():
         try:

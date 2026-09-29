@@ -56,6 +56,15 @@ times are sorted and deduplicated; events and censors accumulate between them.
 restricted-mean options are supported. Rust callers can use
 `surv_analysis::{summary_survfit_aj, survmean_aj}`.
 
+`survfit` also accepts a square matrix of ordinary KM or Cox curves, with
+`None` for missing transitions (`survfit.matrix`). It supports both `discrete`
+and `matexp`, vector or per-curve `p0`, grouped curves, multiple Cox prediction
+columns, and `start_time`. The default is `discrete`, matching R's actual
+dispatch for both kinds of curve. The computation is available directly to
+Rust callers as `surv_analysis::survfit_matrix`. See
+[transition-curve matrices](survfit-matrix.md) for the representation and
+the additional R 3.8-12 differential fixtures.
+
 `blogit`, `bprobit`, `bcloglog` and `blog` accept `inverse=True` for the inverse
 link, with scalar or vector input.
 
@@ -607,6 +616,19 @@ this does not show.
 
 ### Results and labels
 
+- `survfit.matrix` supports omitted `p0`, unstratified curves and empty event
+  grids (R 3.8-12 errors on these inputs). A start parameter earlier than the
+  curves' shared `start_time` warns and uses the latter; R warns but still uses
+  the earlier parameter. Sample sizes are repeated for each Cox prediction
+  column to align with the output curves; R leaves `n` at its original length.
+  The result retains the input transition cumulative hazards and transition
+  event counts, supplies zero censor counts, and leaves Python `n_id` unset.
+  These extra fields make the ordinary multistate curve methods available;
+  no censoring histories or unique subject counts are reconstructed. State
+  names default to strings or come from a named `p0` mapping or `states=`.
+  The `p0` sum tolerance is `1e-8` instead of R's exact equality check; values
+  are not renormalized. Curves and state names are checked for finite numeric
+  inputs, nondecreasing hazards and unique, nonempty labels.
 - Character strata, ids and cluster labels are sorted by code point, with
   numeric-looking strings as numbers ("9" before "10", "B" before "a"); R's
   `as.factor` uses the locale's collation. Numeric, logical and factor values
@@ -674,12 +696,6 @@ this does not show.
 These R entry points have no port. Calls that reach them raise an explicit
 error; none silently falls back to other behaviour.
 
-- **`survfit.matrix`** (`S3method(survfit, matrix)`: Aalen-Johansen curves
-  from a square matrix of survfit curves). R marks it superseded by multi-state
-  Cox models; `survfit()` given curves raises "response must be a survival
-  object". R's documented matexp default for Cox curves is never selected (its
-  class test looks for "survfit.cox"), and it fails without `p0` or on an
-  unstratified curve.
 - **User-written survreg distributions**: a distribution list that supplies its
   own density, init, deviance and quantile functions (R's `survregc2`
   callback path) raises "custom densities are not supported"; the built-in
