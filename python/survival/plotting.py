@@ -1,7 +1,7 @@
-"""Survival-curve graphics with optional Matplotlib rendering.
+"""Survival curves and model diagnostics with optional Matplotlib rendering.
 
-Install ``survival[plot]`` to render. ``survfit_plot_data`` needs only NumPy
-and also supports other graphics libraries without creating a figure.
+Install ``survival[plot]`` to render. Numerical data helpers support other
+graphics libraries without importing Matplotlib or creating a figure.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from ._aalen_plot import AalenPlot, AalenPlotData, aareg_plot_data, lines_aareg, plot_aareg
 from ._cox_plot_data import CoxDiagnosticCurve, CoxDiagnosticData, cox_zph_plot_data
 from ._plot_data import (
     SurvivalCurve,
@@ -20,6 +21,9 @@ from ._plot_data import (
     step_at,
     survfit_plot_data,
 )
+from ._plot_helpers import axes as _axes
+from ._plot_helpers import panel_axes
+from ._plot_helpers import styles as _styles
 from .r._types import CoxZPHResult
 
 __all__ = [
@@ -35,6 +39,11 @@ __all__ = [
     "CoxDiagnosticPlot",
     "cox_zph_plot_data",
     "plot_cox_zph",
+    "AalenPlot",
+    "AalenPlotData",
+    "aareg_plot_data",
+    "plot_aareg",
+    "lines_aareg",
 ]
 
 
@@ -51,29 +60,6 @@ class SurvivalPlot:
     lines: tuple[Any, ...]
     confidence: tuple[Any, ...]
     marks: tuple[Any, ...]
-
-
-def _axes(ax: Any, overlay: bool) -> Any:
-    if ax is not None:
-        return ax
-    try:
-        from matplotlib import pyplot as plt
-    except ImportError as exc:
-        raise ImportError(
-            "Rendering survival curves requires 'pip install survival[plot]'"
-        ) from exc
-    return plt.gca() if overlay else plt.subplots()[1]
-
-
-def _styles(value: Any, default: Any) -> list[Any]:
-    if value is None:
-        return [default]
-    if isinstance(value, str) or np.isscalar(value):
-        return [value]
-    result = list(value)
-    if not result:
-        raise ValueError("style sequences must not be empty")
-    return result
 
 
 def _limits(values: Any, name: str) -> tuple[float, float] | None:
@@ -398,21 +384,7 @@ def plot_cox_zph(
     data = cox_zph_plot_data(result, df=df, nsmo=nsmo, var=var, se=se, hr=hr)
     if not data.curves:
         return CoxDiagnosticPlot((), data, (), (), ())
-    # This is the sole optional dependency boundary, shared with survival curves.
-    if ax is None:
-        first = _axes(None, False)
-        figure = first.figure
-        if len(data.curves) == 1:
-            axes = (first,)
-        else:
-            first.remove()
-            figure.set_size_inches(7, 3 * len(data.curves))
-            axes = tuple(figure.subplots(len(data.curves), 1, squeeze=False).ravel())
-            figure.set_layout_engine("constrained")
-    else:
-        axes = (ax,) if hasattr(ax, "plot") else tuple(np.asarray(ax, dtype=object).ravel())
-        if len(axes) != len(data.curves):
-            raise ValueError("ax must contain one axis per selected nonsingular term")
+    axes = panel_axes(ax, len(data.curves))
     from matplotlib.colors import is_color_like
 
     colors = [colors] if colors is not None and is_color_like(colors) else _styles(colors, "black")

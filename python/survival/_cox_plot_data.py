@@ -6,12 +6,12 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from operator import index
-from typing import Any
 
 import numpy as np
 
 from . import _survival as _core
 from ._plot_data import FloatArray
+from ._plot_helpers import variables
 from .r._types import CoxZPHResult
 
 
@@ -38,21 +38,6 @@ class CoxDiagnosticData:
     tick_positions: FloatArray | None
     tick_labels: tuple[str, ...] | None
     skipped: tuple[str, ...]
-
-
-def _variables(var: Any, names: list[str]) -> list[int]:
-    if var is None:
-        return list(range(len(names)))
-    values: list[Any] = [var] if isinstance(var, str) or np.isscalar(var) else list(var)
-    try:
-        selected = [
-            names.index(value) if isinstance(value, str) else index(value) - 1 for value in values
-        ]
-    except (ValueError, TypeError) as exc:
-        raise ValueError("var must contain term names or one-based column indices") from exc
-    if not selected or any(i < 0 or i >= len(names) for i in selected):
-        raise ValueError("invalid variable requested")
-    return selected
 
 
 def _interpolate(x: FloatArray, y: FloatArray, query: FloatArray) -> FloatArray:
@@ -88,7 +73,7 @@ def cox_zph_plot_data(
     df, nsmo = index(df), index(nsmo)
     if df < 2 or nsmo < 2:
         raise ValueError("df and nsmo must both be at least 2")
-    selected = _variables(var, result.names)
+    selected = variables(var, result.names)
     x, time = np.asarray(result.x, dtype=float), np.asarray(result.time, dtype=float)
     y, variance = np.asarray(result.y, dtype=float), np.asarray(result.var, dtype=float)
     if (

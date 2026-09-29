@@ -146,6 +146,8 @@ exactly one module):
 - `plotting`: optional Matplotlib rendering of fitted survival curves;
   `_plot_data` prepares typed NumPy curve coordinates without importing the renderer.
   `_cox_plot_data` prepares Cox diagnostic curves using the Rust smoother.
+  `_aalen_plot` accumulates and renders Aalen coefficient curves, with bounded
+  memory for influence reductions. `_plot_helpers` shares axes and styling controls.
 
 The `python/survival/r/` package exposes only the R-style API from
 `survival.r` itself: R's exported functions (under Python spellings such as

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add Aalen cumulative-coefficient plots and overlays, with tied-event handling,
+  ordinary or influence-based confidence bands, and bounded temporary memory
+  when reducing stored influences. Numerical plot data works without Matplotlib.
 - Add Cox proportional-hazards diagnostic plots with natural-spline curves,
   two-standard-error bands, scaled residuals, and hazard-ratio views. The Rust
   smoother shares factorizations across terms and releases the Python GIL.
