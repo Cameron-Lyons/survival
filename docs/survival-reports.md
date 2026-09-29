@@ -138,7 +138,8 @@ empty groups, data-frame conversion, copies and serialization. Report preparatio
 groups rows in one pass, sums multistate counts in NumPy, and filters expected
 curve missingness before creating Python output rows. It does not refit models.
 
-Other model coefficient and test-statistic reports remain separate work.
+[Cox coefficient and model-summary reports](cox-model-reports.md) are also
+available. Other model and test-statistic reports remain separate work.
 
 ## Validation and allocation cost
 

@@ -1037,6 +1037,16 @@ were 1.6–3.4 times faster. On 1,000-point curves, requesting 1,001
 probabilities was 4–16% slower (about 3–12 microseconds): the shared buffer
 trades additional arithmetic during searches for less allocation and copying.
 
+## Cox model reports
+
+`print_coxph` and `print_summary_coxph` expose R-style text and full-precision
+`ModelPrint` tables for ordinary, robust, null, penalized and multistate fits.
+Explicit penalized methods expose term grouping and label-length controls;
+expanded multistate summaries group shared transitions and retain confidence
+intervals. Reports reuse the existing native fit and summary calculations.
+See [Cox model reports](cox-model-reports.md) for defaults, numerical fields,
+reference checks and intentional differences.
+
 ## Compact curve reports
 
 `print_survfit` and `print_survfitms` return R's compact curve tables and formatted
@@ -1081,7 +1091,8 @@ error; none silently falls back to other behaviour.
 
 - **Remaining R-style print and format methods**: `survival.r` returns data
   objects and `as_data_frame` tables for most model and summary reports.
-  Compact and detailed survival-curve reports, expected-survival reports, and
+  Cox model and summary reports, compact and detailed survival-curve reports,
+  expected-survival reports, and
   `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
   `str(summary_ratetable(...))` exposes the native rate-table text. Other model
   and test-statistic reports and the sparse (frailty) branch of

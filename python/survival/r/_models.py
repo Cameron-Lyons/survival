@@ -45,6 +45,7 @@ from ._coxph import (
     summary_coxph,
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
+from ._coxph_print import ModelPrint
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._data_prep import summary_tmerge
 from ._finegray import _finegray_frame
@@ -1294,6 +1295,16 @@ def _survfit_print_frame(result: SurvfitPrint) -> dict[str, list[Any]]:
     frame: dict[str, list[Any]] = {}
     if table.rownames is not None:
         frame["curve"] = list(table.rownames)
+    frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
+    return frame
+
+
+@as_data_frame.register(ModelPrint)
+def _model_print_frame(result: ModelPrint) -> dict[str, list[Any]]:
+    table = result.tables.get("coefficients")
+    if table is None:
+        return {}
+    frame: dict[str, list[Any]] = {"term": list(table.rownames or [])}
     frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
     return frame
 
