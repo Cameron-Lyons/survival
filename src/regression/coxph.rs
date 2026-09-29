@@ -38,6 +38,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
@@ -1244,16 +1245,19 @@ impl CoxPHFit {
         let curves = self.curves_for(survtype, options.start_time)?;
         let (x2c, risk2) = self.centered_newdata(newdata);
         let varmat = options.se_fit.then_some(&self.var);
-        let mut ids: Vec<i32> = Vec::new();
-        for &value in id {
-            if !ids.contains(&value) {
-                ids.push(value);
-            }
+        let mut positions = HashMap::new();
+        let mut rows: Vec<Vec<usize>> = Vec::new();
+        for (i, &subject) in id.iter().enumerate() {
+            let position = *positions.entry(subject).or_insert_with(|| {
+                rows.push(Vec::new());
+                rows.len() - 1
+            });
+            rows[position].push(i);
         }
-        let mut result = Vec::new();
-        for subject in ids {
-            let intervals: Vec<IndividualInterval<'_>> = (0..newdata.nrows())
-                .filter(|&i| id[i] == subject)
+        let mut result = Vec::with_capacity(rows.len());
+        for subject_rows in rows {
+            let intervals: Vec<IndividualInterval<'_>> = subject_rows
+                .into_iter()
                 .map(|i| IndividualInterval {
                     start: entry[i],
                     stop: time[i],
