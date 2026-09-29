@@ -28,6 +28,8 @@ use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 mod rng;
+mod sgtt;
+pub use sgtt::{YatesSgttInput, YatesSgttResult, yates_sgtt, yates_sgtt_py};
 
 /// Which contrasts of the population marginal means to test (R `test`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

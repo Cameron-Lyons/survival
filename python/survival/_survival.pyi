@@ -11042,6 +11042,14 @@ class YatesResult:
     @property
     def test(self) -> list[YatesContrast]: ...
 
+class YatesSgttResult:
+    @property
+    def columns(self) -> list[int]: ...
+    @property
+    def sas(self) -> list[list[float]]: ...
+    @property
+    def test(self) -> list[YatesContrast]: ...
+
 def _survpenal_fit_from_state(
     state: bytes,
     distribution: SurvregDistribution | None = None,
@@ -13988,6 +13996,17 @@ def yates_risk(
     test: str = "global",
     term: str | None = None,
 ) -> YatesResult: ...
+def yates_sgtt(
+    x: Sequence[Sequence[float]],
+    assign: Sequence[int],
+    adjustment_terms: Sequence[Sequence[int]],
+    beta: Sequence[float],
+    vmat: Sequence[Sequence[float]],
+    coefficient_assign: Sequence[int],
+    test_terms: Sequence[tuple[int, str]],
+    sigma2: float | None = None,
+    include_intercept: bool = True,
+) -> YatesSgttResult: ...
 def yates_survival(
     xmatlist: Sequence[Sequence[Sequence[float]]],
     beta: Sequence[float],

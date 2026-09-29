@@ -438,8 +438,9 @@ def test_yates_populations_and_unsupported_options():
     risk = r.yates(fit, "celltype", predict="risk")
     assert all(value > 0 for value in risk.estimate["pmm"])
     assert len(risk.mvar) == 4
-    with pytest.raises(NotImplementedError, match="sgtt"):
-        r.yates(fit, "celltype", method="sgtt")
+    sgtt = r.yates(fit, "celltype", method="sgtt")
+    assert sgtt.test[0].df == 3
+    assert sgtt.sas is not None
     with pytest.raises(ValueError, match="not found in the formula"):
         r.yates(fit, "age")
     with pytest.raises(TypeError, match="data frame or character"):

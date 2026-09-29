@@ -133,6 +133,7 @@ pub use uno_c_index_module::{
 };
 pub use yates::{
     YatesContrast, YatesCurves, YatesEstimate, YatesInput, YatesPredictor, YatesResult,
-    YatesSimulation, YatesTest, population_means, population_means_py, yates, yates_estimable,
-    yates_estimable_py, yates_py, yates_risk_py, yates_simulate, yates_survival_py,
+    YatesSgttInput, YatesSgttResult, YatesSimulation, YatesTest, population_means,
+    population_means_py, yates, yates_estimable, yates_estimable_py, yates_py, yates_risk_py,
+    yates_sgtt, yates_sgtt_py, yates_simulate, yates_survival_py,
 };

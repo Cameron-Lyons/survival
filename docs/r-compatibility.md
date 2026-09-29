@@ -706,6 +706,51 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## SAS-style Yates tests
+
+`yates(method="sgtt")` computes SAS-style type III tests for selected
+main-effect variables in a treatment-coded model. It defaults to `population="sas"`
+and requires linear predictions. Marginal estimates and their covariance
+match the direct SAS-population calculation; the test uses the estimable
+hypotheses from the full indicator design. `YatesResult.sas`, `sas_names`,
+and `sas_row_names` expose that matrix and its labels.
+
+The Rust `validation::yates_sgtt` kernel takes a `YatesSgttInput` with the
+indicator design, term assignments and adjustments, fitted coefficients,
+and covariance. It reuses one LINPACK-style QR to solve for all design
+columns and one per adjustment block. Residual-only QR callers do not
+retain the triangular factor needed by coefficient solves.
+
+For a Cox model, the baseline intercept is removed before testing the
+fitted coefficients. R 3.8-12 leaves that extra dimension in the SGTT
+hypothesis matrix and can fail with "non-conformable arguments"; the port
+supports this case. The external `YatesModel` adapter uses treatment
+contrasts; arbitrary contrast matrices are not exposed by this adapter.
+
+Joint requests such as `term="a + b"` or `term="a:b"` compare the Cartesian
+product of both variables' levels, with the first variable varying fastest.
+A `levels={"a": [...], "b": [...]}` mapping supplies per-variable values;
+omitted categorical variables use their fitted levels. Direct tests compare
+all combinations jointly, or pairwise when requested. SGTT returns one type
+III test per selected main-effect variable, in the requested order.
+
+Two R 3.8-12 defects are corrected here: reversing the requested factor order
+can apply the wrong factor levels in R, and joint nonlinear global tests
+fail when R assigns several names to a single test row. The port preserves
+the requested variable order and names a joint global test `global`.
+
+`scripts/generate_yates_sgtt_reference.R` records linear-model estimates,
+covariances, SAS matrices, and tests for additive, interaction, unbalanced,
+weighted, missing-cell, and no-intercept models.
+`scripts/generate_yates_joint_reference.R` adds joint categorical and numeric
+requests, partial level mappings, population choices, and Cox risk predictions.
+
+The native factorial benchmark (nine indicator columns, four estimable
+coefficients, 15 samples) measured median times of 39 microseconds for 1,000
+rows, 0.59 milliseconds for 10,000, and 13.8 milliseconds for 100,000 on the
+development machine. Reproduce with
+`cargo bench --bench survival_benchmarks --offline -- yates_sgtt_bench --sample-count 15 --sample-size 1`.
+
 ## Survival response vector operations
 
 `concat_surv`, `rep_surv`, `rev_surv`, `unique_surv`, `duplicated_surv`,
@@ -913,6 +958,11 @@ Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and
 `reference = "strata"`; `basehaz`, `royston` and `yates` on multi-state fits;
 `survexp`/`pyears` with a multi-state rate table ("Invalid rate table").
+
+`pyears(ratetable=cox_fit)` also remains explicitly unsupported. R 3.8-12
+recognizes the fit initially but then tries to coerce it to a numeric rate
+table and fails with "'list' object cannot be coerced to type 'double'".
+`survexp(ratetable=cox_fit)` is supported.
 
 ## Reproduce validation
 

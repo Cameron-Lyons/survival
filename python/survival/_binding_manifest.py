@@ -512,6 +512,7 @@ BINDINGS = (
     "YatesCurves",
     "YatesEstimate",
     "YatesResult",
+    "YatesSgttResult",
     "_survpenal_fit_from_state",
     "_unpickle",
     "aareg_fit",
@@ -950,6 +951,7 @@ BINDINGS = (
     "yates_estimable",
     "yates_population_means",
     "yates_risk",
+    "yates_sgtt",
     "yates_survival",
 )
 
@@ -1946,7 +1948,9 @@ MODULE_BINDINGS = {
         "YatesCurves",
         "YatesEstimate",
         "YatesResult",
+        "YatesSgttResult",
         "yates",
+        "yates_sgtt",
         "yates_estimable",
         "yates_risk",
         "yates_survival",

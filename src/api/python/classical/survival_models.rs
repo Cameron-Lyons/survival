@@ -51,6 +51,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(survcheck_py, m)?)?;
     m.add_function(wrap_pyfunction!(royston_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_py, m)?)?;
+    m.add_function(wrap_pyfunction!(yates_sgtt_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_risk_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_survival_py, m)?)?;
     m.add_function(wrap_pyfunction!(population_means_py, m)?)?;
@@ -149,6 +150,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         SurvCheckProblem,
         RoystonResult,
         YatesResult,
+        YatesSgttResult,
         YatesEstimate,
         YatesContrast,
         YatesCurves,

@@ -14,7 +14,6 @@ Rust fit behind the result (``coefficients``, ``var``, ``means``, ``loglik``, ``
 from __future__ import annotations
 
 import math
-import re
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -52,10 +51,12 @@ from ._formula import (
     _column_source,
     _covariate_term_columns,
     _covariate_term_name,
+    _data_column_names,
     _design_rows_from_spec,
     _design_term_output_names,
     _formula_columns,
     _parse_formula,
+    _split_terms,
     _strata_keep,
     _strata_term_columns,
     _subset_formula_inputs,
@@ -1112,16 +1113,15 @@ def brier(
 # yates
 # ---------------------------------------------------------------------------
 
-_FACTOR_WRAPPER = re.compile(r"\s*(?:factor|as\.factor)\(\s*([^()]+?)\s*\)\s*")
-
 
 @dataclass(frozen=True)
 class _YatesTerm:
-    """The tested variable: its model-frame column, R's label for it and its levels."""
+    """Tested variables and their Cartesian product of requested levels."""
 
-    column: str
-    name: str
-    levels: list[Any]
+    columns: list[str]
+    names: list[str]
+    levels: dict[str, list[Any]]
+    estimate_names: list[str]
 
 
 def _design_factors(design: _FormulaDesign) -> list[Any]:
@@ -1134,26 +1134,60 @@ def _design_factors(design: _FormulaDesign) -> list[Any]:
 
 
 def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _YatesTerm:
-    """R's ``cmatrix``: the variable named by ``term`` and the levels to compare."""
+    """R's ``cmatrix`` variable selection and ``expand.grid`` level ordering."""
 
     if not isinstance(term, str):
         raise TypeError("the term must be a character string")
-    match = _FACTOR_WRAPPER.fullmatch(term)
-    column = match.group(1) if match else term.strip()
-    specs = [spec for spec in _design_factors(design) if spec.term.column == column]
-    if not specs:
-        raise ValueError(f"variable {column} not found in the formula")
-    spec = specs[0]
-    categorical = isinstance(spec, _CategoricalDesignTerm)
-    if levels is None:
-        if not categorical:
-            raise ValueError("continuous variables require the levels argument")
-        level_values = list(spec.levels)
-    else:
-        level_values = _unique_in_order(_materialize_1d(levels, "levels"))
-        if categorical and any(value not in spec.levels for value in level_values):
+    parsed = _split_terms(term.strip().removeprefix("~").strip())
+    columns = _unique_in_order(
+        [
+            column
+            for item in parsed.covariates
+            for part in (item.factors if isinstance(item, _InteractionTerm) else [item])
+            for column in _covariate_term_columns(part)
+        ]
+    )
+    if not columns or parsed.strata or parsed.offsets or parsed.clusters:
+        raise ValueError("the term must select variables from the fitted formula")
+    factors = {}
+    for spec in _design_factors(design):
+        factors.setdefault(spec.term.column, spec)
+    missing = [column for column in columns if column not in factors]
+    if missing:
+        raise ValueError(f"variable {' '.join(missing)} not found in the formula")
+    level_names = _data_column_names(levels)
+    if levels is not None and level_names is None and len(columns) > 1:
+        raise ValueError("levels should be a data frame or mapping for multiple variables")
+    selected = {}
+    for column in columns:
+        spec = factors[column]
+        categorical = isinstance(spec, _CategoricalDesignTerm)
+        if levels is None or (level_names is not None and column not in level_names):
+            if not categorical:
+                raise ValueError(
+                    "continuous variables require the levels argument"
+                    if levels is None
+                    else f"levels information not found for: {column}"
+                )
+            values = list(spec.levels)
+        elif level_names is not None:
+            values = _column(levels, column)
+            if len(_unique_in_order(values)) != len(values):
+                raise ValueError("levels data frame has duplicates")
+        else:
+            values = _unique_in_order(_materialize_1d(levels, "levels"))
+        if categorical and any(value not in spec.levels for value in values):
             raise ValueError(f"invalid level for term {column}")
-    return _YatesTerm(column, _covariate_term_name(spec.term), level_values)
+        if not values:
+            raise ValueError(f"levels for {column} must not be empty")
+        selected[column] = values
+    names = [_covariate_term_name(factors[column].term) for column in columns]
+    return _YatesTerm(
+        columns,
+        names,
+        _factorial_population({}, selected),
+        names if levels is None else columns,
+    )
 
 
 def _factorial_population(
@@ -1185,7 +1219,7 @@ def _yates_population(
 ) -> dict[str, list[Any]]:
     """R's ``yates_xmat`` population rows over the adjusting variables."""
 
-    adjusters = [spec for spec in _design_factors(design) if spec.term.column != term.column]
+    adjusters = [spec for spec in _design_factors(design) if spec.term.column not in term.columns]
     categorical = {
         spec.term.column: list(spec.levels)
         for spec in adjusters
@@ -1237,6 +1271,93 @@ def _yates_design_names(design: _FormulaDesign) -> list[str]:
 
 def _columns(rows: Sequence[Sequence[float]], keep: Sequence[int]) -> list[list[float]]:
     return [[row[idx] for idx in keep] for row in rows]
+
+
+def _yates_sgtt(
+    fit: Any,
+    design: _FormulaDesign,
+    term: _YatesTerm,
+    kept: list[int],
+    beta: list[float],
+    vmat: list[list[float]],
+) -> tuple[Any, list[str]]:
+    """Build R's full indicator design and delegate the type III tests to Rust."""
+
+    external = isinstance(fit, YatesModel)
+    full_intercept = design.intercept or not external
+    factors = {}
+    for spec in _design_factors(design):
+        factors.setdefault(_covariate_term_name(spec.term), spec)
+    factor_order = [
+        name for name, spec in factors.items() if isinstance(spec, _CategoricalDesignTerm)
+    ]
+
+    def expanded(spec):
+        if isinstance(spec, _InteractionDesignTerm):
+            return replace(spec, factors=tuple(expanded(factor) for factor in spec.factors))
+        if isinstance(spec, _CategoricalDesignTerm):
+            levels = spec.levels
+            # R's model.matrix uses natural indicators for a promoted full
+            # factor, otherwise the supplied contrasts with baseline last.
+            if not spec.full and (
+                full_intercept or factor_order.index(_covariate_term_name(spec.term)) > 0
+            ):
+                levels = (*levels[1:], levels[0])
+            return replace(spec, levels=levels, full=True)
+        return spec
+
+    full = replace(
+        design,
+        covariates=tuple(expanded(spec) for spec in design.covariates),
+        intercept=full_intercept,
+    )
+    assignments = design.term_assignments or tuple(range(1, len(design.covariates) + 1))
+    nterms = max(assignments, default=0)
+    variables = [set() for _ in range(nterms)]
+    categorical = [False] * nterms
+    assign = [0] if full_intercept else []
+    original_assign = [0] if design.intercept else []
+    term_codes = {}
+    for code, original, spec in zip(assignments, design.covariates, full.covariates, strict=True):
+        components = spec.factors if isinstance(spec, _InteractionDesignTerm) else (spec,)
+        variables[code - 1] = {_covariate_term_name(factor.term) for factor in components}
+        categorical[code - 1] = all(
+            isinstance(factor, _CategoricalDesignTerm) for factor in components
+        )
+        assign.extend([code] * len(_design_term_output_names(spec)))
+        original_assign.extend([code] * len(_design_term_output_names(original)))
+        if len(components) == 1:
+            term_codes[components[0].term.column] = code
+    if any(column not in term_codes for column in term.columns):
+        raise ValueError("each tested variable must have a main-effect term for sgtt")
+    test_terms = [
+        (term_codes[column], name) for column, name in zip(term.columns, term.names, strict=True)
+    ]
+    adjusters = [
+        [
+            j + 1
+            for j in range(i + 1, nterms)
+            if categorical[i] and categorical[j] and variables[i] & variables[j]
+        ]
+        for i in range(nterms)
+    ]
+    start = int(design.intercept and not external)
+    coefficient_assign = [original_assign[start + index] for index in kept]
+    frame = _yates_model_frame(fit)
+    rows = len(next(iter(frame.values())))
+    result = _core.yates_sgtt(
+        _design_rows_from_spec(frame, full, rows),
+        assign,
+        adjusters,
+        beta,
+        vmat,
+        coefficient_assign,
+        test_terms,
+        sigma2=fit.sigma2 if external else None,
+        include_intercept=external and design.intercept,
+    )
+    names = _yates_design_names(full)
+    return result, [names[index] for index in result.columns]
 
 
 @dataclass(frozen=True)
@@ -1330,7 +1451,7 @@ def _yates_survival_summary(
 def yates(
     fit: Any,
     term: Any,
-    population: Any = "data",
+    population: Any = None,
     levels: Any | None = None,
     test: Any = "global",
     predict: Any = "linear",
@@ -1348,6 +1469,12 @@ def yates(
     ``"sas"`` or a data frame.  With aliased coefficients, a level the fit cannot
     estimate has an NA mean and the tests that use it are NA.  ``YatesModel`` adapts
     externally fitted linear models without refitting them.
+    ``term`` can select several variables, e.g. ``"a + b"`` or ``"a:b"``.
+    A ``levels`` mapping supplies per-variable values; omitted categorical
+    variables use their fitted levels. The first variable varies fastest.
+    ``method="sgtt"`` computes a SAS-style type III test for each selected
+    main-effect variable, using the SAS population and linear predictions.
+    The estimable hypothesis matrix is returned in ``sas``.
     """
 
     if isinstance(fit, CoxphmsModel):
@@ -1358,8 +1485,14 @@ def yates(
     if design is None:
         raise TypeError("the fit does not have a terms structure")
     setup = _yates_setup(fit, predict, options)
-    if _match_string_arg(method, "method", ["direct", "sgtt"], "invalid method") != "direct":
-        raise NotImplementedError('yates method = "sgtt" is not implemented')
+    method_value = _match_string_arg(
+        method.lower() if isinstance(method, str) else method,
+        "method",
+        ["direct", "sgtt"],
+        "invalid method",
+    )
+    if population is None:
+        population = "sas" if method_value == "sgtt" else "data"
     if isinstance(population, str):
         population = _match_string_arg(
             population.lower(),
@@ -1370,6 +1503,8 @@ def yates(
         population = {"empirical": "data", "yates": "factorial"}.get(population, population)
     elif not isinstance(population, Mapping):
         raise TypeError("the population argument must be a data frame or character")
+    if method_value == "sgtt" and (population != "sas" or setup.predict != "linear"):
+        raise ValueError("sgtt method only applies if population = sas and predict = linear")
     test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
 
     beta = fit.coefficients if external else coef(fit)
@@ -1387,8 +1522,18 @@ def yates(
         weights = _yates_weights(mframe, population)
     n_pop = len(next(iter(pdata.values())))
     xmatlist = [
-        _design_rows_from_spec({**pdata, yates_term.column: [level] * n_pop}, design, n_pop)
-        for level in yates_term.levels
+        _design_rows_from_spec(
+            {
+                **pdata,
+                **{
+                    column: [value] * n_pop
+                    for column, value in zip(yates_term.columns, combination, strict=True)
+                },
+            },
+            design,
+            n_pop,
+        )
+        for combination in zip(*yates_term.levels.values(), strict=True)
     ]
     estimable = _yates_estimable(fit, design, xmatlist) if len(kept) < len(beta) else None
     # the coefficient columns: a Cox model's baseline absorbs the intercept
@@ -1399,6 +1544,8 @@ def yates(
     beta = [beta[idx] for idx in kept]
     means = [0.0] * len(beta) if external else [engine.means[idx] for idx in kept]
     summary = None
+    sas = None
+    sas_names = []
     if setup.predict == "linear":
         result = _core.yates(
             _columns(_core.yates_population_means(xmatlist, weights), columns),
@@ -1411,13 +1558,15 @@ def yates(
         )
         if not result.cmat:
             names = []
+        if method_value == "sgtt":
+            sas, sas_names = _yates_sgtt(fit, design, yates_term, kept, beta, vmat)
     else:
         simulation = {
             "estimable": estimable,
             "nsim": _integer_scalar(nsim, "nsim"),
             "seed": setup.seed,
             "test": test_value,
-            "term": yates_term.name,
+            "term": yates_term.names[0] if len(yates_term.names) == 1 else "global",
         }
         xmatlist = [_columns(rows, columns) for rows in xmatlist]
         if setup.baseline is None:
@@ -1440,13 +1589,16 @@ def yates(
         names = []
     return YatesResult(
         estimate={
-            yates_term.name: list(yates_term.levels),
+            **dict(zip(yates_term.estimate_names, yates_term.levels.values(), strict=True)),
             "pmm": [row.pmm for row in result.estimate],
             "std": [row.std for row in result.estimate],
         },
-        test=result.test,
+        test=result.test if sas is None else sas.test,
         mvar=result.mvar,
         cmat=result.cmat,
         cmat_names=names,
         summary=summary,
+        sas=None if sas is None else sas.sas,
+        sas_names=sas_names,
+        sas_row_names=[] if sas is None else [f"L{index + 1}" for index in sas.columns],
     )
