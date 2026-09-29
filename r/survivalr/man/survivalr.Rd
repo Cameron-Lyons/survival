@@ -1249,6 +1249,13 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
+\code{survfitKM} delegates prepared factor and \code{Surv} inputs directly
+to the shared Rust curve engine. It preserves unused factor levels and
+returns R-named numerical components without retaining a model frame.
+It does not omit missing rows or merge almost equal times; \code{time0}
+is accepted and unused. Default weights and absent identifiers are resolved
+before \code{start.time} filtering, and empty curves have \code{NULL}
+influence components.
 \code{tmerge} builds `(tstart, tstop]` intervals with native linear-time
 sweeps. It follows R boundary and tie rules, retains event censor values and
 time-dependent covariate names, and appends all nine \code{tcount}

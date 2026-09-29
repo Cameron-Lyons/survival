@@ -1160,6 +1160,12 @@ including ridge, spline, dense/sparse frailty and callback penalties.
 branch. See [bare penalized AFT fitting](penalized-aft-low-level-fitting.md)
 for zero-based column assignments, result shapes and R reference checks.
 
+`survfitKM` fits a prepared factor and `Surv` with the common Rust curve
+engine. It preserves unused factor levels and returns numerical components
+without retaining a model frame. It does not omit missing rows or merge
+almost equal times. See [direct Kaplan–Meier fitting](km-low-level-fitting.md)
+for output shapes, R bridge behavior and measured performance.
+
 `survival.r` returns data objects and `as_data_frame` tables for most model
 and summary reports.
 Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
@@ -1180,7 +1186,6 @@ error; none silently falls back to other behaviour.
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
 - **Low-level R exports** that `survival.r` does not re-export:
-  `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,
   `yates_setup`. Their computations are reachable through the formula functions
   and domain modules such as `survival.regression.coxph_fit`,

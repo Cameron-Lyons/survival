@@ -39,6 +39,7 @@ from ._coerce import (
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
+    _warn_outside_package,
 )
 from ._coxph import ClogitModel, CoxphModel, survfit_coxph
 from ._coxphms import CoxphmsModel, survfit_coxphms
@@ -593,7 +594,7 @@ def survfit(
 # ---------------------------------------------------------------------------
 
 
-def _survfitKM(
+def _km_engine(
     frame: _SurvfitData,
     *,
     stype: Any,
@@ -610,8 +611,8 @@ def _survfitKM(
     reverse: Any,
     timefix: bool,
     id_name: str | None,
-) -> SurvfitResult:
-    """``survfitKM``: the argument checks, then one call of the engine for all curves."""
+) -> tuple[_core.SurvfitKMResult, SurvfitCall, tuple[Any, ...] | None]:
+    """Shared KM argument checks and one native call for all curves."""
 
     stype, ctype = _survfit_type_codes(type_, stype, ctype)
     conf_int, conf_type, conf_lower = _conf_arguments(conf_int, conf_type, conf_lower)
@@ -621,14 +622,14 @@ def _survfitKM(
     if robust is not None:
         robust = _logical(robust, "robust must be TRUE/FALSE")
         if frame.cluster is not None and not robust:
-            warnings.warn("cluster specified with robust=FALSE, cluster ignored", stacklevel=3)
+            _warn_outside_package("cluster specified with robust=FALSE, cluster ignored")
         if influence > 0 and not robust:
-            warnings.warn("robust=FALSE implies influence=FALSE", stacklevel=3)
+            _warn_outside_package("robust=FALSE implies influence=FALSE")
     start = _start_time_value(start_time)
     engine = _core.survfitkm(
-        list(frame.y.time),
+        frame.y.time,
         [int(value) for value in frame.y.event],
-        start=None if frame.y.start is None else list(frame.y.start),
+        start=frame.y.start,
         weights=frame.weights,
         strata=frame.strata_codes,
         id=frame.id_codes(),
@@ -647,9 +648,19 @@ def _survfitKM(
         reverse=reverse,
     )
     call = SurvfitCall(frame.terms, stype, ctype, timefix, start, id=id_name, type=type_)
+    clname = (
+        frame.clname()
+        if engine.influence_surv is not None or engine.influence_chaz is not None
+        else None
+    )
+    return engine, call, clname
+
+
+def _survfitKM(frame: _SurvfitData, **options: Any) -> SurvfitResult:
+    """Build a formula-model result from the shared engine output."""
+    engine, call, clname = _km_engine(frame, **options)
     labels = _curve_labels(engine, frame.x_levels)
-    clname = frame.clname() if influence > 0 else None
-    return _km_result(engine, labels, call, frame.model, se_fit, clname)
+    return _km_result(engine, labels, call, frame.model, options["se_fit"], clname)
 
 
 def _curve_labels(
