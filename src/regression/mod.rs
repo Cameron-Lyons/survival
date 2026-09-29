@@ -135,7 +135,7 @@ pub use spline_hazard::{
 pub use survpenal::survpenal_fit_from_state;
 pub use survpenal::{SurvpenalData, SurvpenalFit, SurvpenalOptions, survpenal_fit};
 pub use survreg_distributions::{
-    SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg, qsurvreg, rsurvreg,
-    survreg_dtest,
+    SurvregDensity, SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg,
+    qsurvreg, rsurvreg, survreg_dtest,
 };
 pub use survreg_predict::{SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg};

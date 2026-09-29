@@ -128,6 +128,8 @@ with `with_transform`. Both traits use owned callback state and
 Python objects. See
 [`survreg_callbacks/tests.rs`](../src/regression/survreg_callbacks/tests.rs)
 for a complete native mixture implementation used with both public fitters.
+The [external-crate example](../tests/survreg_callbacks.rs) imports the
+callback traits and `SurvregDensity` through the public `regression` module.
 
 Scalar distribution operations (`density`, `quantile`, `deviance`, `variance`,
 `pdf`, `cdf`, and `quantile_at`) now return `SurvivalResult` so custom errors
