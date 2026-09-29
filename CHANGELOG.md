@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional Matplotlib survival graphics for Kaplan–Meier, Turnbull, Cox,
+  and multistate curves, including confidence bands, censor marks, transformations,
+  and overlays. Numerical plot data is available without a renderer, and constant
+  runs are compressed before drawing. See [survival graphics](docs/survival-plotting.md).
 - Add R-style `survfit.matrix` through `survfit` on a square matrix of KM or
   Cox curves, with discrete and matrix-exponential updates, stratified curves,
   prediction columns, starting distributions and conditional start times.

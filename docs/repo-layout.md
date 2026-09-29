@@ -143,6 +143,8 @@ exactly one module):
   lives in the `survival.r` package and `r_api` is a thin re-export of its
   public surface (plus the private helpers the R bridge reaches through
   `python_attr`), so `survival.r_api` stays the stable import path.
+- `plotting`: optional Matplotlib rendering of fitted survival curves;
+  `_plot_data` prepares typed NumPy curve coordinates without importing the renderer.
 
 The `python/survival/r/` package exposes only the R-style API from
 `survival.r` itself: R's exported functions (under Python spellings such as

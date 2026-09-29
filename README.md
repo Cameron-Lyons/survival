@@ -29,6 +29,7 @@ A high-performance survival analysis library written in Rust, with a Python API 
 - Time-dependent AUC
 - Conditional logistic regression
 - Time-splitting utilities
+- Survival-curve graphics with an optional Matplotlib renderer
 
 The R-style interface supports penalized Cox and AFT formulas, interval-censored
 AFT models, multi-state Cox models and their curves, multistate summaries and
@@ -853,6 +854,22 @@ exact values, column names and storage modes: R `double` -> `float`, `integer`
 The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
+
+## Survival curve plots
+
+Install `survival[plot]` to render Kaplan–Meier, Cox and multistate curves:
+
+```python
+from survival import datasets, plotting, r
+
+fit = r.survfit("Surv(time, status) ~ sex", datasets.load_lung())
+plot = plotting.plot_survfit(fit, conf_int=True, conf_style="band", mark_time=True)
+plot.axes.figure.savefig("survival.svg")
+```
+
+The [plotting guide](docs/survival-plotting.md) covers transformations, confidence
+bars, overlays, scaling, R compatibility and benchmarks. Numerical plot data
+remain available without Matplotlib through `plotting.survfit_plot_data`.
 
 ## Scikit-learn estimators
 

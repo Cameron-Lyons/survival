@@ -11,6 +11,7 @@ from . import joint as joint
 from . import missing as missing
 from . import ml as ml
 from . import monitoring as monitoring
+from . import plotting as plotting
 from . import population as population
 from . import pybridge as pybridge
 from . import qol as qol

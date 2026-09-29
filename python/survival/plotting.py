@@ -1,0 +1,343 @@
+"""Survival-curve graphics with optional Matplotlib rendering.
+
+Install ``survival[plot]`` to render. ``survfit_plot_data`` needs only NumPy
+and also supports other graphics libraries without creating a figure.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+from ._plot_data import (
+    SurvivalCurve,
+    SurvivalFit,
+    SurvivalPlotData,
+    step_at,
+    survfit_plot_data,
+)
+
+__all__ = [
+    "SurvivalCurve",
+    "SurvivalPlotData",
+    "SurvivalPlot",
+    "survfit_plot_data",
+    "plot_survfit",
+    "lines_survfit",
+    "points_survfit",
+]
+
+
+@dataclass(frozen=True)
+class SurvivalPlot:
+    """Rendered curves, their axes, and the numerical data used to draw them.
+
+    ``lines``, ``confidence`` and ``marks`` contain Matplotlib artists that can
+    be styled or removed. Export with ``result.axes.figure.savefig(...)``.
+    """
+
+    axes: Any
+    data: SurvivalPlotData
+    lines: tuple[Any, ...]
+    confidence: tuple[Any, ...]
+    marks: tuple[Any, ...]
+
+
+def _axes(ax: Any, overlay: bool) -> Any:
+    if ax is not None:
+        return ax
+    try:
+        from matplotlib import pyplot as plt
+    except ImportError as exc:
+        raise ImportError(
+            "Rendering survival curves requires 'pip install survival[plot]'"
+        ) from exc
+    return plt.gca() if overlay else plt.subplots()[1]
+
+
+def _styles(value: Any, default: Any) -> list[Any]:
+    if value is None:
+        return [default]
+    if isinstance(value, str) or np.isscalar(value):
+        return [value]
+    result = list(value)
+    if not result:
+        raise ValueError("style sequences must not be empty")
+    return result
+
+
+def _limits(values: Any, name: str) -> tuple[float, float] | None:
+    if values is None:
+        return None
+    result = np.asarray(values, dtype=float)
+    if result.shape != (2,) or not np.isfinite(result).all() or result[0] >= result[1]:
+        raise ValueError(f"{name} must contain two finite increasing values")
+    return float(result[0]), float(result[1])
+
+
+def _plot_extent(data: SurvivalPlotData, *, time: bool, logarithmic: bool) -> tuple[float, float]:
+    limits: list[float] = []
+    for curve in data.curves:
+        arrays = (curve.time,) if time else (curve.estimate, curve.lower, curve.upper)
+        for values in arrays:
+            if values is not None:
+                keep = np.isfinite(values)
+                if logarithmic:
+                    keep &= values > 0
+                if np.any(keep):
+                    limits.extend((values[keep].min(), values[keep].max()))
+    if not limits:
+        raise ValueError("no finite coordinates available for the requested axis scale")
+    return min(limits), max(limits)
+
+
+def _draw(
+    fit: SurvivalFit,
+    *,
+    ax: Any = None,
+    overlay: bool = False,
+    points: bool = False,
+    censor: bool = False,
+    conf_int: Any = None,
+    conf_type: str | None = None,
+    mark_time: Any = False,
+    fun: Any = None,
+    cumhaz: Any = False,
+    cumprob: Any = False,
+    noplot: Any = "(s0)",
+    log: bool | str = False,
+    xscale: float = 1,
+    yscale: float = 1,
+    xlim: Any = None,
+    ylim: Any = None,
+    xmax: float | None = None,
+    conf_times: Any = None,
+    conf_cap: float = 0.005,
+    conf_offset: Any = 0.012,
+    conf_style: str = "lines",
+    colors: Any = None,
+    linestyles: Any = None,
+    linewidth: float = 1.5,
+    marker: str = "+",
+    markersize: float = 6,
+    legend: bool = True,
+    xlabel: str = "Time",
+    ylabel: str | None = None,
+    **line_kwargs: Any,
+) -> SurvivalPlot:
+    if not np.isfinite([xscale, yscale]).all() or xscale <= 0 or yscale <= 0:
+        raise ValueError("xscale and yscale must be finite and positive")
+    xlim, ylim = _limits(xlim, "xlim"), _limits(ylim, "ylim")
+    if xlim is not None:
+        xmax = xlim[1]
+    if conf_style not in {"lines", "band"}:
+        raise ValueError("conf_style must be 'lines' or 'band'")
+    if conf_times is not None:
+        conf_times = np.atleast_1d(np.asarray(conf_times, dtype=float))
+        if conf_times.ndim != 1 or not np.isfinite(conf_times).all():
+            raise ValueError("conf_times must be a finite vector")
+        if conf_int is None:
+            conf_int = True
+    if not np.isfinite(conf_cap) or conf_cap < 0:
+        raise ValueError("conf_cap must be finite and nonnegative")
+    offsets = np.atleast_1d(np.asarray(conf_offset, dtype=float))
+    if offsets.ndim != 1 or not len(offsets) or not np.isfinite(offsets).all():
+        raise ValueError("conf_offset must contain finite values")
+    data = survfit_plot_data(
+        fit,
+        conf_int=False if points else conf_int,
+        conf_type=conf_type,
+        mark_time=mark_time,
+        fun=fun,
+        cumhaz=cumhaz,
+        cumprob=cumprob,
+        noplot=noplot,
+        log=log,
+        xmax=xmax,
+    )
+    styles = _styles(linestyles, "-")
+    ax = _axes(ax, overlay)
+    from matplotlib.colors import is_color_like
+
+    colors = [colors] if colors is not None and is_color_like(colors) else _styles(colors, None)
+    old_limits = (ax.get_xlim(), ax.get_ylim()) if overlay and ax.has_data() else None
+    if not overlay:
+        ax.set_xscale("log" if data.xlog else "linear")
+        ax.set_yscale("log" if data.ylog else "linear")
+        domain = np.asarray(_plot_extent(data, time=True, logarithmic=data.xlog)) / xscale
+        values = np.asarray(_plot_extent(data, time=False, logarithmic=data.ylog)) * yscale
+        ax.update_datalim(np.column_stack((domain, values)))
+        ax.autoscale_view()
+    span = (xlim[1] - xlim[0]) if xlim else np.ptp(ax.get_xlim()) * xscale
+    lines, confidence, marks = [], [], []
+    for i, curve in enumerate(data.curves):
+        style = {
+            "color": colors[i % len(colors)],
+            "linewidth": linewidth,
+            "linestyle": styles[i % len(styles)],
+            **line_kwargs,
+        }
+        label = style.pop("label", curve.label)
+        if not data.plot_estimate and conf_times is not None and style["color"] is None:
+            style["color"] = f"C{i}"
+        if points:
+            keep = np.ones(len(curve.time), dtype=bool) if censor else curve.event
+            artist = ax.plot(
+                curve.time[keep] / xscale,
+                curve.estimate[keep] * yscale,
+                **{
+                    **style,
+                    "linestyle": "none",
+                    "marker": marker,
+                    "markersize": markersize,
+                    "label": label,
+                },
+            )[0]
+            lines.append(artist)
+            continue
+        if data.plot_estimate:
+            xx, yy = curve.step()
+            artist = ax.plot(xx / xscale, yy * yscale, label=label, **style)[0]
+            lines.append(artist)
+            style["color"] = artist.get_color()
+        if curve.lower is not None and curve.upper is not None and conf_times is None:
+            if conf_style == "band":
+                keep = np.r_[
+                    True,
+                    (curve.lower[1:] != curve.lower[:-1]) | (curve.upper[1:] != curve.upper[:-1]),
+                ]
+                keep[-1] = True
+                artist = ax.fill_between(
+                    curve.time[keep] / xscale,
+                    curve.lower[keep] * yscale,
+                    curve.upper[keep] * yscale,
+                    step="post",
+                    color=style["color"],
+                    alpha=0.2,
+                    label="_nolegend_" if data.plot_estimate else label,
+                )
+                confidence.append(artist)
+                if style["color"] is None:
+                    style["color"] = artist.get_facecolor()[0]
+            else:
+                for bound in (curve.lower, curve.upper):
+                    xx, yy = curve.step(bound)
+                    artist = ax.plot(
+                        xx / xscale,
+                        yy * yscale,
+                        **{
+                            **style,
+                            "linestyle": "--",
+                            "label": "_nolegend_" if data.plot_estimate else label,
+                        },
+                    )[0]
+                    confidence.append(artist)
+                    style["color"] = artist.get_color()
+                    label = "_nolegend_"
+        if data.plot_estimate and len(curve.censor_time):
+            marks.append(
+                ax.plot(
+                    curve.censor_time / xscale,
+                    curve.censor_value * yscale,
+                    color=style["color"],
+                    linestyle="none",
+                    marker=marker,
+                    markersize=markersize,
+                    label="_nolegend_",
+                )[0]
+            )
+        if curve.lower is not None and curve.upper is not None and conf_times is not None:
+            # Use the current device's range, as R does, and f=1 interpolation
+            # for interval bars (censor marks use f=0 instead).
+            offset = (
+                (i - (len(data.curves) - 1) / 2) * offsets[0]
+                if len(offsets) == 1
+                else offsets[i % len(offsets)]
+            )
+            query = conf_times + offset * span
+            lo = step_at(curve.time, curve.lower, query, right=False)
+            hi = step_at(curve.time, curve.upper, query, right=False)
+            artist = ax.vlines(
+                query / xscale,
+                lo * yscale,
+                hi * yscale,
+                colors=style["color"],
+                linewidths=linewidth,
+                label="_nolegend_" if data.plot_estimate else label,
+            )
+            confidence.append(artist)
+            if conf_cap:
+                for bound in (lo, hi):
+                    confidence.append(
+                        ax.hlines(
+                            bound * yscale,
+                            (query - conf_cap * span) / xscale,
+                            (query + conf_cap * span) / xscale,
+                            colors=style["color"],
+                            linewidths=linewidth,
+                        )
+                    )
+    if old_limits is not None:
+        ax.set_xlim(old_limits[0])
+        ax.set_ylim(old_limits[1])
+    if not overlay:
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(data.ylabel if ylabel is None else ylabel)
+        if xlim is not None:
+            ax.set_xlim(np.asarray(xlim) / xscale)
+        if ylim is not None:
+            ax.set_ylim(np.asarray(ylim) * yscale)
+        elif data.ylabel == "Survival probability" and not data.ylog:
+            ax.set_ylim(bottom=0)
+    if legend and len(data.curves) > 1:
+        ax.legend()
+    return SurvivalPlot(ax, data, tuple(lines), tuple(confidence), tuple(marks))
+
+
+def plot_survfit(fit: SurvivalFit, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
+    """Plot fitted survival, event, cumulative-hazard or multistate curves.
+
+    ``conf_int`` defaults to bands for a single curve; use ``True`` to include
+    them for grouped curves, a numeric level to recompute them, or ``"only"``.
+    ``conf_style="band"`` shades intervals; the default draws dashed lines.
+    ``conf_times`` draws interval bars at selected times instead of full bands.
+    ``mark_time=True`` adds censor marks, or supply a vector of marker times.
+    ``fun`` accepts R's transformations (``event``, ``cumhaz``, ``cloglog``,
+    ``pct``, ``log``, ``logpct``, ``identity``) or a NumPy-compatible callable.
+    ``cumprob`` accumulates selected multistate probabilities; ``noplot`` hides
+    the initial ``(s0)`` state by default. See ``survfit_plot_data`` for ordering.
+
+    ``xscale`` divides displayed times and ``yscale`` multiplies displayed values.
+    Limits and ``xmax`` are in unscaled coordinates. ``colors`` and ``linestyles``
+    recycle over curves. Remaining keywords go to Matplotlib's ``Axes.plot``.
+    The function never calls ``show`` or changes Matplotlib's backend.
+    """
+
+    return _draw(fit, ax=ax, **kwargs)
+
+
+def lines_survfit(
+    fit: SurvivalFit, *, ax: Any = None, conf_int: Any = False, **kwargs: Any
+) -> SurvivalPlot:
+    """Add survival curves to existing axes, preserving their limits and scales.
+
+    Accepts the same options as ``plot_survfit``. Confidence intervals are off
+    by default, as in R's ``lines.survfit``. Repeat axis-unit scalings when adding
+    curves to a plot made with ``xscale`` or ``yscale``.
+    """
+
+    return _draw(fit, ax=ax, overlay=True, conf_int=conf_int, **kwargs)
+
+
+def points_survfit(
+    fit: SurvivalFit, *, ax: Any = None, censor: bool = False, marker: str = "o", **kwargs: Any
+) -> SurvivalPlot:
+    """Add event-time estimates as points; ``censor=True`` includes every time.
+
+    Supports the transformations, state/transition selections and styles of
+    ``plot_survfit``. Existing axis limits and scales are preserved.
+    """
+
+    return _draw(fit, ax=ax, overlay=True, points=True, censor=censor, marker=marker, **kwargs)
