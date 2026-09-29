@@ -1277,6 +1277,8 @@ def _summary_coxms(
         rmean_endtime=ends or None,
         states=list(x.states),
         newdata=x.newdata,
+        start_time=None if x.start_time is None else x.start_time / scale,
+        strata_levels=x.strata_names or None,
     )
 
 
@@ -1453,6 +1455,9 @@ def summary_survfit(
             pstate=rows.pstate,
             states=object.states,
             n_transition=rows.n_transition,
+            type=object.type,
+            start_time=None if object.start_time is None else object.start_time / scale,
+            strata_levels=object.strata_names or None,
         )
     if isinstance(object, CoxSurvfitResult):
         engines = _cox_engines(object)
@@ -1506,6 +1511,13 @@ def summary_survfit(
         rmean_endtime=None if rmean_option == "none" else tables[0].end_time,
         conf_int=object.conf_int,
         conf_type=object.conf_type,
+        type=object.type,
+        start_time=(
+            object.start_time / scale
+            if isinstance(object, CoxSurvfitResult) and object.start_time is not None
+            else None
+        ),
+        strata_levels=strata_names or None,
     )
 
 

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _survival as _core
-from ._coerce import _finite_float, _integer_scalar, _normalize_bool_option, _r_format_number
-from ._print import numeric_matrix_lines
+from ._coerce import _normalize_bool_option, _r_format_number
+from ._print import numeric_matrix_lines, print_options
 from ._survfit import (
     _cox_curve_labels,
     _cox_engines,
@@ -49,19 +49,6 @@ class SurvfitPrint:
         return "\n".join(self.lines) + "\n"
 
 
-def _options(scale: Any, digits: Any, width: Any, default_digits: int) -> tuple[float, int, int]:
-    scale = _finite_float(scale, "scale")
-    if scale <= 0:
-        raise ValueError("scale must be finite and positive")
-    digits = default_digits if digits is None else _integer_scalar(digits, "digits")
-    if not 1 <= digits <= 22:
-        raise ValueError("digits must be between 1 and 22")
-    width = _integer_scalar(width, "width")
-    if not 10 <= width <= 10000:
-        raise ValueError("width must be between 10 and 10000")
-    return scale, digits, width
-
-
 def print_survfit(
     x: _CurveFit,
     scale: Any = 1,
@@ -90,7 +77,7 @@ def print_survfit(
         return print_survfitms(x, scale=scale, rmean=rmean, digits=digits, width=width)
     if not isinstance(x, SurvfitResult | CoxSurvfitResult):
         raise TypeError("print_survfit requires a fitted survival curve")
-    scale, digits, width = _options(scale, digits, width, 3)
+    scale, digits, width = print_options(scale, digits, width, 3)
     if rmean is None:
         enabled = (
             False if print_rmean is None else _normalize_bool_option(print_rmean, "print_rmean")
@@ -161,7 +148,7 @@ def print_survfitms(
 
     if not isinstance(x, _MULTISTATE):
         raise TypeError("print_survfitms requires fitted multistate curves")
-    scale, digits, width = _options(scale, digits, width, 7)
+    scale, digits, width = print_options(scale, digits, width, 7)
     # R validates the cutoff after adding the origin row with survfit0. The
     # native table kernel already inserts it; avoid copying a whole fit here.
     option = _rmean_option(rmean, x, include_origin=True)

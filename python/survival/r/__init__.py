@@ -113,6 +113,13 @@ from ._surv import (
     strata,
     totimeline,
 )
+from ._surv_summary_print import (
+    SurvivalTablePrint,
+    print_summary_survexp,
+    print_summary_survfit,
+    print_summary_survfitms,
+    print_survexp,
+)
 from ._surv_vector import (
     concat_surv,
     duplicated_surv,
@@ -328,6 +335,11 @@ __all__ = [
     "SurvfitPrint",
     "print_survfit",
     "print_survfitms",
+    "SurvivalTablePrint",
+    "print_summary_survfit",
+    "print_summary_survfitms",
+    "print_survexp",
+    "print_summary_survexp",
     "predict_terms_constant",
     "median",
     "median_surv",

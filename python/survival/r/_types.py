@@ -1049,6 +1049,9 @@ class SummarySurvfitCoxmsResult:
     rmean_endtime: list[float] | None
     states: list[str]
     newdata: dict[str, list[Any]] | None = field(repr=False)
+    # The conditional cutoff uses the same scaled time units as `time`.
+    start_time: float | None = None
+    strata_levels: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -1075,6 +1078,11 @@ class SummarySurvfitResult:
     pstate: list[list[float]] | None = None
     states: list[str] | None = None
     n_transition: list[list[float]] | None = None
+    type: str | None = None
+    # Retain empty groups and the cutoff for detailed reports. `start_time`
+    # is in the same scaled time units as the summary's `time` column.
+    start_time: float | None = None
+    strata_levels: list[str] | None = None
 
 
 @dataclass(frozen=True)

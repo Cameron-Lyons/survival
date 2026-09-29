@@ -864,6 +864,11 @@ Use `print(report)` for formatted text and `r.as_data_frame(report)` for
 full-precision columns. See [survival reports](docs/survival-reports.md) for
 cutoffs, units, formatting and allocation measurements.
 
+For detailed time rows, use `r.print_summary_survfit(r.summary_survfit(fit, times=[100, 300]))`.
+Expected curves and their summaries have `r.print_survexp` and
+`r.print_summary_survexp`. These reports also expose full-precision tables and
+support `as_data_frame`.
+
 ## Survival curve plots
 
 Install `survival[plot]` to render Kaplan–Meier, Cox and multistate curves:
