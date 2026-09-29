@@ -46,11 +46,19 @@ from ._coxph import (
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
+from ._data_prep import summary_tmerge
 from ._finegray import _finegray_frame
 from ._formula import _column as _formula_column
 from ._formula import _formula_columns
 from ._formula import model_frame as _formula_model_frame
-from ._pyears import _pyears_result_frame, summary_pyears
+from ._pyears import (
+    RateTableSummary,
+    _pyears_result_frame,
+    _survexp_frame,
+    summary_pyears,
+    summary_ratetable,
+    summary_survexp,
+)
 from ._surv import Surv
 from ._survfit import (
     _derived_survfit,
@@ -87,9 +95,12 @@ from ._types import (
     PyearsResult,
     SummarySurvfitCoxmsResult,
     SurvDiffResult,
+    SurvExpResult,
+    SurvExpSummary,
     SurvfitMultiStateResult,
     SurvfitQuantileResult,
     SurvfitResult,
+    TMergeFrame,
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
@@ -319,7 +330,14 @@ def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
 # formula, terms, weights, model matrix and frame
 # ---------------------------------------------------------------------------
 
-_FormulaFits = CoxphModel | CchModelResult | AaregModelResult | SurvregModelResult
+_FormulaFits = (
+    CoxphModel
+    | CchModelResult
+    | AaregModelResult
+    | SurvregModelResult
+    | PyearsResult
+    | SurvExpResult
+)
 
 
 @singledispatch
@@ -351,8 +369,10 @@ def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
-@model_term_names.register(AaregModelResult)
-def _model_term_names_aareg(fit: AaregModelResult, terms: Any | None = None) -> list[str]:
+@model_term_names.register(AaregModelResult | PyearsResult | SurvExpResult)
+def _model_term_names_stored(
+    fit: AaregModelResult | PyearsResult | SurvExpResult, terms: Any | None = None
+) -> list[str]:
     # labels.aareg
     names = list(fit.term_labels)
     return [names[idx] for idx in _terms_selection(terms, names)]
@@ -462,10 +482,20 @@ def _model_frame_cox(fit: CoxphModel) -> dict[str, list[Any]]:
 
 
 @model_frame.register(
-    AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult
+    AaregModelResult
+    | SurvregModelResult
+    | SurvfitResult
+    | SurvfitMultiStateResult
+    | PyearsResult
+    | SurvExpResult
 )
 def _model_frame_stored(
-    fit: AaregModelResult | SurvregModelResult | SurvfitResult | SurvfitMultiStateResult,
+    fit: AaregModelResult
+    | SurvregModelResult
+    | SurvfitResult
+    | SurvfitMultiStateResult
+    | PyearsResult
+    | SurvExpResult,
 ) -> dict[str, list[Any]]:
     if fit.model is None:
         raise TypeError("model_frame requires a fit made with model=TRUE")
@@ -613,9 +643,12 @@ confint.register(SurvregModelResult, confint_survreg)
 @singledispatch
 def model_summary(fit: Any, **kwargs: Any) -> Any:
     """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
-    curve (``summary.survfit``) or a ``pyears`` table (``summary.pyears``)."""
+    curve, an expected-survival result, a population rate/person-years table,
+    or merged event data."""
 
-    raise _no_method("model_summary")
+    raise TypeError(
+        "model_summary requires a fitted model, survival curve, population result, or TMergeFrame"
+    )
 
 
 model_summary.register(CoxphModel, summary_coxph)
@@ -623,6 +656,9 @@ model_summary.register(AaregModelResult, summary_aareg)
 model_summary.register(SurvregModelResult, model_summary_survreg)
 model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
 model_summary.register(PyearsResult, summary_pyears)
+model_summary.register(SurvExpResult, summary_survexp)
+model_summary.register(_core.RateTable, summary_ratetable)
+model_summary.register(TMergeFrame, summary_tmerge)
 
 
 @model_summary.register(CchModelResult)
@@ -1244,9 +1280,20 @@ as_data_frame.register(CoxZPHResult, _cox_zph_frame)
 as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)
 as_data_frame.register(ConcordanceResult, _concordance_frame)
 as_data_frame.register(PyearsResult, _pyears_result_frame)
+as_data_frame.register(SurvExpResult | SurvExpSummary, _survexp_frame)
 as_data_frame.register(_core.FineGrayOutput, _finegray_frame)
 as_data_frame.register(SurvDiffResult, _survdiff_frame)
 as_data_frame.register(_core.AnovaCoxphResult, _anova_frame)
+
+
+@as_data_frame.register(RateTableSummary)
+def _ratetable_summary_frame(result: RateTableSummary) -> dict[str, list[Any]]:
+    return {name: list(values) for name, values in result.dimensions.items()}
+
+
+@as_data_frame.register(_core.RateTable)
+def _ratetable_frame(result: Any) -> dict[str, list[Any]]:
+    return _ratetable_summary_frame(summary_ratetable(result))
 
 
 @as_data_frame.register(SurvregAnovaResult)

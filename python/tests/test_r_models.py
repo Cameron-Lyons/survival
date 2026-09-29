@@ -144,9 +144,13 @@ def test_as_data_frame_shapes(ovarian, fit):
 
 
 def test_generics_dispatch_to_survreg_or_fail_clearly():
-    for generic in (r.coef, r.vcov, r.loglik, r.nobs, r.model_summary, r.residuals):
+    for generic in (r.coef, r.vcov, r.loglik, r.nobs, r.residuals):
         with pytest.raises(TypeError, match="requires a fitted coxph or survreg model"):
             generic(object())
+    with pytest.raises(
+        TypeError, match="fitted model, survival curve, population result, or TMergeFrame"
+    ):
+        r.model_summary(object())
     with pytest.raises(TypeError, match="requires a fitted coxph or survreg model"):
         r.predict(object(), type="lp")
     with pytest.raises(TypeError, match="requires fitted coxph or survreg models"):

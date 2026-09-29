@@ -2792,11 +2792,15 @@ def _strata_term_columns(terms: _FormulaTerms) -> tuple[tuple[str, ...], ...]:
     return tuple(term.columns for term in terms.model_terms if isinstance(term, _ModelStrataTerm))
 
 
-def _model_variables(mf: ModelFrame) -> list[tuple[str, Any]]:
+def _model_variables(
+    mf: ModelFrame, overrides: Mapping[str, Any] | None = None
+) -> list[tuple[str, Any]]:
     """R's ``mf[-1]``: one evaluated column per formula term, in formula order.
 
     Interactions contribute their factors; ``strata()`` becomes the strata factor,
     ``offset()`` the numeric offset; ``cluster()`` terms are left out.
+    ``overrides`` supplies already evaluated columns, such as population
+    cut terms evaluated before subsetting and missing-value removal.
     """
 
     columns: list[tuple[str, Any]] = []
@@ -2813,7 +2817,13 @@ def _model_variables(mf: ModelFrame) -> list[tuple[str, Any]]:
     for model_term in model_terms:
         if isinstance(model_term, _ModelCovariateTerm):
             for factor in _covariate_factors(model_term.term):
-                add(_covariate_term_name(factor), _term_values(mf.data, factor, mf.n))
+                name = _covariate_term_name(factor)
+                values = (
+                    overrides[name]
+                    if overrides is not None and name in overrides
+                    else _term_values(mf.data, factor, mf.n)
+                )
+                add(name, values)
         elif isinstance(model_term, _ModelStrataTerm):
             name = f"strata({', '.join(model_term.columns)})"
             add(name, _strata_term_values(mf.data, model_term.columns))
@@ -2824,7 +2834,9 @@ def _model_variables(mf: ModelFrame) -> list[tuple[str, Any]]:
     return columns
 
 
-def _model_strata(mf: ModelFrame) -> StrataFactor | None:
+def _model_strata(
+    mf: ModelFrame, overrides: Mapping[str, Any] | None = None
+) -> StrataFactor | None:
     """R's ``strata(mf[ll])`` over the term labels: the grouping factor, or ``None``.
 
     Used where a right-hand side only groups the observations (``rttright``,
@@ -2836,7 +2848,9 @@ def _model_strata(mf: ModelFrame) -> StrataFactor | None:
     if any(isinstance(term, _InteractionTerm) for term in terms.covariates):
         raise ValueError("Interaction terms are not valid for this function")
     variables = [
-        (name, values) for name, values in _model_variables(mf) if not name.startswith("offset(")
+        (name, values)
+        for name, values in _model_variables(mf, overrides)
+        if not name.startswith("offset(")
     ]
     if not variables:
         return None

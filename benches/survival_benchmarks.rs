@@ -244,6 +244,40 @@ mod pseudo_bench {
     }
 }
 
+mod expected_survival_summary_bench {
+    use super::*;
+    use survival::population::{SurvExpResult, summary_survexp};
+
+    fn run(bencher: divan::Bencher, n: usize, queries: usize) {
+        let time: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+        let fit = SurvExpResult {
+            time: time.clone(),
+            surv: time
+                .iter()
+                .map(|&t| vec![(-t / n as f64).exp(); 2])
+                .collect(),
+            n_risk: time.iter().map(|&t| vec![n as f64 + 1.0 - t; 2]).collect(),
+            method: "cohort".into(),
+        };
+        let requested: Vec<f64> = (0..queries)
+            .map(|i| i as f64 * n as f64 / queries as f64 + 0.5)
+            .collect();
+        bencher.bench_local(|| {
+            black_box(summary_survexp(&fit, Some(&requested), 1.0).expect("valid expected curves"))
+        });
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn sparse_times(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 25);
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn dense_times(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, n);
+    }
+}
+
 mod aareg_bench {
     use super::*;
 

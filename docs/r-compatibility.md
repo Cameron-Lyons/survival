@@ -417,8 +417,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   `start.time > 1`.
 - `survexp` with a coxph rate table and an individual method returns values
   when `subset =` or the na.action removes rows (R errors), and a row whose Cox
-  response is missing is dropped with the others (R returns NA for it when no
-  other row is removed).
+  response is missing is dropped with the others under `na.omit` (R returns NA
+  for it when no other row is removed). `na.exclude` restores removed rows as
+  NaN at positions relative to the selected subset.
 
 Turnbull curves follow R's EM (`survfitTurnbull.R`: Aitken acceleration every
 fifth step, stopping at max |change| < 5e-5). That rule is sensitive to
@@ -701,6 +702,84 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Population model components and summaries
+
+Native calendar conversion rejects nonfinite day counts and dates outside
+the `CalendarDate` range (years representable by `i32`). Calendar cutpoints,
+input dates, and derived birth dates receive the same checks; malformed
+table dimensions also reject zero lengths and size overflow. Rust
+`days_to_date` and `start_of_year` return `SurvivalResult`; Python raises
+`ValueError`. R can retain and print nonfinite or larger numeric `Date`
+values, which cannot be represented by the native calendar object.
+
+`pyears` and cohort `survexp` honor `model`, `x`, and `y`. `model=True`
+retains the evaluated formula columns, original source columns referenced by
+`rmap` expressions, and supplied weights. Factors retain their level order
+and unused levels, and `tcut` columns retain cutpoints and labels. Subsetting
+and missing-row removal apply consistently to every retained component.
+`model=True` takes precedence over `x` and `y`, as in R.
+
+With `model=False`, `pyears(x=True)` keeps a row-major matrix of one-based
+category codes and raw scaled `tcut` times; `survexp(x=True)` keeps a
+`StrataFactor` with zero-based codes, labels, and counts. Without grouping
+terms, either function retains a vector of ones. `pyears(y=True)` keeps the
+`Surv` response or a one-column numeric matrix. `survexp(y=True)` keeps
+numeric follow-up times; without a response, a rate-table call uses the
+maximum requested time before output scaling, and a Cox-reference call
+keeps `None`.
+
+Both results support `model_formula` and `model_term_names`, plus
+`model_frame` when made with `model=True`. The latter returns plain columns
+and expands a `Surv` response into its time/status columns; `.model`
+preserves the richer column objects. The default flags retain no row data.
+Individual `survexp` methods return a plain vector and ignore the retention
+flags. With `na.exclude`, they restore excluded rows as NaN.
+
+`scripts/generate_population_retention_reference.R` records these components
+and numerical outputs against R, including repeated subset rows, missing
+values, expression mappings, factor order, and both rate-table and Cox
+references.
+
+`summary_survexp`, `summary_ratetable`, and `summary_tmerge` are available
+through `survival.r` and the `model_summary` generic.
+
+Expected-survival summaries return a `SurvExpSummary`: a vector for one
+curve or a time-by-curve matrix otherwise. The `strata` labels name columns,
+as on `SurvExpResult`. Requested times are sorted with duplicates retained;
+missing times and values outside the observed range are dropped. Survival
+uses the preceding observation (1 before the first), and risk counts use
+the next observation. Omitted times keep the original rows. Scalar `scale`
+divides the output times, including R's zero and nonfinite arithmetic.
+Repeated source times use R's averaged interpolation indices without its
+tie-collapse warning. R call expressions and manually attached `na.action`
+attributes are not represented in these Python result containers.
+
+Rust callers use `population::summary_survexp` with a `SurvExpResult`; the
+Python native entry point accepts its time vector and row-major matrices.
+The native selector validates source shapes and time order, sorts the
+requested times when necessary, then uses a single sweep. Its selection
+work is linear in source rows plus requested rows after sorting, with output
+copying proportional to the number of selected cells. The
+`expected_survival_summary_bench` group measures sparse and dense requests
+on two-curve inputs of 1,000–100,000 rows.
+On a local Linux x86-64 release build, the median of 15 samples at 100,000
+source rows was 0.309 ms for 25 requested times and 3.80 ms for 100,000
+requested times, excluding source-curve construction. Reproduce with
+`cargo bench --bench survival_benchmarks -- expected_survival_summary_bench --sample-count 15 --sample-size 1`.
+
+`summary_ratetable` returns a `RateTableSummary` containing the canonical
+attributes, a dimension table, and native summary text available through
+`str(result)`. Factor dimensions have levels; other dimensions have bounds
+in their native units, with calendar bounds formatted as ISO dates.
+`summary_tmerge` returns a column-oriented count table with one row per
+operation. These methods return structured data without printing. Expected
+curves and summaries, rate tables and their summaries, and the merged-data
+count table all support `as_data_frame`.
+
+`scripts/generate_population_summary_reference.R` regenerates curve-selection
+edge cases, population-method examples, all three bundled rate-table
+summaries, and merged-data counts from R survival 3.8-12.
+
 ## P-spline prediction
 
 `predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the
@@ -776,17 +855,13 @@ error; none silently falls back to other behaviour.
 - **R-style print and format methods**: `survival.r` returns data objects and
   `as_data_frame` tables instead of printed output. Only
   `print_survreg_penal` ports R's printed table, and `format_surv` formats a
-  `Surv`. The sparse (frailty) branch of `print.survreg.penal` is not ported.
-- **`summary.survexp`, `summary.tmerge` and `summary.ratetable`** (and their
-  print methods).
+  `Surv`; `str(summary_ratetable(...))` exposes the native rate-table text.
+  The sparse (frailty) branch of `print.survreg.penal` is not ported.
 - **`Surv` methods beyond subsetting**: `survival.r.Surv` supports `subset`,
   `len`, `as_matrix`, `format_surv`, `is_na_surv`, and the `median`/`quantile`
   generics; R's `c`, `rep`, `rev`,
   `unique`, `duplicated`, `t`, `levels`, `head`/`tail`, `as.character` and the
   `Math`/`Ops`/`Summary` groups are not ported.
-- **Components accepted and ignored**: `pyears` and `survexp` accept `model`,
-  `x` and `y` for compatibility, but their results carry no model frame, design
-  or response.
 - **Low-level R exports** that `survival.r` does not re-export: `coxph.fit`,
   `agreg.fit`, `agexact.fit`, `survreg.fit`, `survpenal.fit`, `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,

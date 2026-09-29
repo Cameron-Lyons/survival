@@ -377,6 +377,10 @@ Common result objects can be converted to column-oriented tables with
 `as_data_frame(...)`; the experimental R bridge exposes the same path through
 `as.data.frame(...)`, `summary(...)`, and `print(...)` methods.
 `Surv` responses also support table conversion for quick data inspection.
+`model_summary` also accepts expected-survival curves, rate tables, and
+`tmerge` results. Expected-curve summaries use Rust to select requested
+times; rate-table summaries describe dimensions and date ranges, while
+merged-data summaries report where updates fell relative to each interval.
 The `survival.residuals` name remains the residual diagnostics module; the
 R-style residual generic is available as `survival.r_api.residuals(...)` for
 fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
@@ -555,6 +559,13 @@ print(result.pyears, result.event, result.expected)
 expected = population.survexp(us, positions, times=[365.25, 1826.25])
 print(expected.method, expected.surv)
 ```
+
+The formula API (`survival.r.pyears` and `survival.r.survexp`) supports
+`model=True` to retain evaluated input columns, or `x=True` and `y=True`
+to retain grouping and response components. `model=True` takes precedence.
+Use `model_frame`, `model_formula`, and `model_term_names` to inspect them;
+see [population model components](docs/r-compatibility.md#population-model-components-and-summaries)
+for the retained representations and missing-row behavior.
 
 ### Kaplan-Meier Survival Curves
 

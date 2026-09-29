@@ -13456,6 +13456,14 @@ def summary_pyears(
     conf_level: float = 0.95,
     scale: float = 1.0,
 ) -> PyearsSummary: ...
+def summary_survexp(
+    time: Sequence[float],
+    surv: Sequence[Sequence[float]],
+    n_risk: Sequence[Sequence[float]],
+    times: Sequence[float] | None = None,
+    scale: float = 1.0,
+    method: str = ...,
+) -> SurvExpResult: ...
 def summary_survfit(
     fit: SurvfitKMResult,
     times: Sequence[float] | None = None,
