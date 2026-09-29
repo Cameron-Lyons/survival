@@ -105,7 +105,7 @@ jobs:
       - name: Install maturin and test dependencies
         run: |
           .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install maturin numpy pandas polars pytest pytest-cov ruff==0.16.4
+          .venv/bin/python -m pip install maturin numpy pandas polars pytest pytest-cov matplotlib ruff==0.16.4
 
       - name: Install extension with maturin develop
         run: .venv/bin/maturin develop --release --features extension-module,ml

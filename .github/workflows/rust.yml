@@ -148,7 +148,7 @@ jobs:
             ${{ runner.os }}-cargo-py${{ matrix.python-version }}-
 
       - name: Install maturin and test dependencies
-        run: pip install maturin numpy pandas polars pytest
+        run: pip install maturin numpy pandas polars pytest matplotlib
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
@@ -197,7 +197,7 @@ jobs:
       - name: Install maturin and test dependencies
         run: |
           .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install maturin numpy pandas polars pytest
+          .venv/bin/python -m pip install maturin numpy pandas polars pytest matplotlib
 
       - name: Remove any preinstalled survival package
         run: .venv/bin/python -m pip uninstall -y survival || true

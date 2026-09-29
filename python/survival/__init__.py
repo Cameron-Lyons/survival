@@ -29,6 +29,7 @@ _PUBLIC_MODULES = {
     "missing": ".missing",
     "ml": ".ml",
     "monitoring": ".monitoring",
+    "plotting": ".plotting",
     "population": ".population",
     "pybridge": ".pybridge",
     "qol": ".qol",
