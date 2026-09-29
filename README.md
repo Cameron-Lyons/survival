@@ -134,6 +134,11 @@ NumPy inputs and results avoid list conversions. See
 [Cox prediction performance](docs/cox-prediction-performance.md) for the API,
 algorithm and reproducible benchmarks.
 
+Full Cox curves accumulate coefficient uncertainty with one vector per curve.
+Individual predictions find each interval's baseline times by binary search
+and group subject rows once. See [full-curve performance](docs/cox-curve-performance.md)
+for the scope, memory bounds and reproducible measurements.
+
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
 

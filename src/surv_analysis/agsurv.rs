@@ -483,19 +483,47 @@ fn baseline_survival(curve: &AgsurvCurve, survtype: CoxSurvType) -> SurvivalResu
     })
 }
 
-/// `x' V x` for each row of `dt` (`rowSums((dt %*% varmat) * dt)`).
-fn quadratic_forms(dt: &Array2<f64>, varmat: &Array2<f64>) -> Vec<f64> {
-    dt.outer_iter()
-        .map(|row| {
-            let mut total = 0.0;
-            for (i, &left) in row.iter().enumerate() {
-                for (j, &right) in row.iter().enumerate() {
-                    total += left * varmat[(i, j)] * right;
-                }
-            }
-            total
+/// Running pieces of `cumsum(varhaz) + dt' V dt`. Only the current
+/// covariate sums are needed; retaining one row per time costs O(ntime * nvar).
+struct CurveVariance<'a> {
+    varmat: &'a Array2<f64>,
+    dt: Vec<f64>,
+    baseline: f64,
+}
+
+impl<'a> CurveVariance<'a> {
+    fn new(varmat: &'a Array2<f64>, nvar: usize) -> SurvivalResult<Self> {
+        if varmat.dim() != (nvar, nvar) {
+            return Err(SurvivalError::invalid_input(format!(
+                "varmat must have shape ({nvar}, {nvar})"
+            )));
+        }
+        Ok(Self {
+            varmat,
+            dt: vec![0.0; nvar],
+            baseline: 0.0,
         })
-        .collect()
+    }
+
+    fn reset(&mut self) {
+        self.dt.fill(0.0);
+        self.baseline = 0.0;
+    }
+
+    fn accumulate(&mut self, varhaz: f64, increments: impl Iterator<Item = f64>) -> f64 {
+        self.baseline += varhaz;
+        for (total, increment) in self.dt.iter_mut().zip(increments) {
+            *total += increment;
+        }
+        // Preserve the original summation order, including off-diagonal terms.
+        let mut coefficient = 0.0;
+        for (i, &left) in self.dt.iter().enumerate() {
+            for (j, &right) in self.dt.iter().enumerate() {
+                coefficient += left * self.varmat[(i, j)] * right;
+            }
+        }
+        self.baseline + coefficient
+    }
 }
 
 /// `coxsurv.fit`'s `expand`: curves of one stratum for the rows of `x2`
@@ -525,30 +553,19 @@ pub fn expand_curve(
     let mut surv = Array2::zeros((ntime, m));
     let mut cumhaz = Array2::zeros((ntime, m));
     let mut std_err = varmat.map(|_| Array2::zeros((ntime, m)));
-    let mut cum_varhaz = curve.varhaz.clone();
-    let mut running = 0.0;
-    for value in cum_varhaz.iter_mut() {
-        running += *value;
-        *value = running;
-    }
+    let mut variance = varmat.map(|v| CurveVariance::new(v, nvar)).transpose()?;
     for i in 0..m {
         for g in 0..ntime {
             surv[(g, i)] = base_surv[g].powf(risk2[i]);
             cumhaz[(g, i)] = curve.cumhaz[g] * risk2[i];
         }
-        if let (Some(varmat), Some(std_err)) = (varmat, std_err.as_mut()) {
-            // dt = cumsum(hazard %o% x2[i,] - xbar)
-            let mut dt = Array2::zeros((ntime, nvar));
-            let mut running = vec![0.0; nvar];
+        if let (Some(variance), Some(std_err)) = (variance.as_mut(), std_err.as_mut()) {
+            variance.reset();
             for g in 0..ntime {
-                for k in 0..nvar {
-                    running[k] += curve.hazard[g] * x2[(i, k)] - curve.xbar[(g, k)];
-                    dt[(g, k)] = running[k];
-                }
-            }
-            let term2 = quadratic_forms(&dt, varmat);
-            for g in 0..ntime {
-                std_err[(g, i)] = ((cum_varhaz[g] + term2[g]) * risk2[i] * risk2[i]).sqrt();
+                let increments =
+                    (0..nvar).map(|k| curve.hazard[g] * x2[(i, k)] - curve.xbar[(g, k)]);
+                let var = variance.accumulate(curve.varhaz[g], increments);
+                std_err[(g, i)] = (var * risk2[i] * risk2[i]).sqrt();
             }
         }
     }
@@ -597,10 +614,12 @@ pub fn individual_curve(
     let mut n_risk = Vec::new();
     let mut n_event = Vec::new();
     let mut n_censor = Vec::new();
-    let mut hazard = Vec::new();
-    let mut surv_increments = Vec::new();
-    let mut varh1 = Vec::new();
-    let mut dt_rows: Vec<Vec<f64>> = Vec::new();
+    let mut cumhaz = Vec::new();
+    let mut surv = Vec::new();
+    let mut std_err = varmat.map(|_| Vec::new());
+    let mut variance = varmat.map(|v| CurveVariance::new(v, nvar)).transpose()?;
+    let mut running_hazard = 0.0;
+    let mut running_surv = 1.0;
     let mut toffset = 0.0;
     for (position, interval) in intervals.iter().enumerate() {
         if position > 0 {
@@ -612,6 +631,11 @@ pub fn individual_curve(
                 interval.stratum
             ))
         })?;
+        if curve.xbar.ncols() != nvar {
+            return Err(SurvivalError::invalid_input(
+                "all strata must have the same number of covariates",
+            ));
+        }
         if interval.x2.len() != nvar {
             return Err(SurvivalError::invalid_input(format!(
                 "interval covariates have {} values but the model has {nvar}",
@@ -620,69 +644,46 @@ pub fn individual_curve(
         }
         // onecurve's `slist$surv[indx]^risk2[i]`
         let increments = kp_increments(curve, survtype)?;
-        for g in 0..curve.time.len() {
-            let t = curve.time[g];
-            if t <= interval.start || t > interval.stop {
-                continue;
-            }
-            time.push(toffset + t);
-            hazard.push(curve.hazard[g] * interval.risk2);
-            surv_increments.push(increments.map_or(0.0, |s| s[g].powf(interval.risk2)));
+        // The baseline times are sorted. Look up (start, stop] once instead
+        // of scanning the entire stratum for every interval of every subject.
+        let first = curve.time.partition_point(|&t| t <= interval.start);
+        let end = curve.time.partition_point(|&t| t <= interval.stop);
+        for g in first..end {
+            time.push(toffset + curve.time[g]);
             n_event.push(curve.n_event[g]);
             n_risk.push(curve.n_risk[g]);
             n_censor.push(curve.n_censor[g]);
-            dt_rows.push(
-                (0..nvar)
-                    .map(|k| {
-                        (curve.hazard[g] * interval.x2[k] - curve.xbar[(g, k)]) * interval.risk2
-                    })
-                    .collect(),
-            );
-            varh1.push(curve.varhaz[g] * interval.risk2 * interval.risk2);
+            running_hazard += curve.hazard[g] * interval.risk2;
+            cumhaz.push(running_hazard);
+            surv.push(if let Some(increments) = increments {
+                running_surv *= increments[g].powf(interval.risk2);
+                running_surv
+            } else {
+                (-running_hazard).exp()
+            });
+            if let (Some(variance), Some(std_err)) = (variance.as_mut(), std_err.as_mut()) {
+                let increments = (0..nvar).map(|k| {
+                    (curve.hazard[g] * interval.x2[k] - curve.xbar[(g, k)]) * interval.risk2
+                });
+                let var = variance.accumulate(
+                    curve.varhaz[g] * interval.risk2 * interval.risk2,
+                    increments,
+                );
+                std_err.push(var.sqrt());
+            }
         }
     }
     let ntime = time.len();
-    let mut cumhaz = Array2::zeros((ntime, 1));
-    let mut surv = Array2::zeros((ntime, 1));
-    let mut running_hazard = 0.0;
-    let mut running_surv = 1.0;
-    for g in 0..ntime {
-        running_hazard += hazard[g];
-        cumhaz[(g, 0)] = running_hazard;
-        surv[(g, 0)] = if survtype == CoxSurvType::KalbfleischPrentice {
-            running_surv *= surv_increments[g];
-            running_surv
-        } else {
-            (-running_hazard).exp()
-        };
-    }
-    let std_err = varmat.map(|varmat| {
-        let mut dt = Array2::zeros((ntime, nvar));
-        let mut running = vec![0.0; nvar];
-        for g in 0..ntime {
-            for k in 0..nvar {
-                running[k] += dt_rows[g][k];
-                dt[(g, k)] = running[k];
-            }
-        }
-        let term2 = quadratic_forms(&dt, varmat);
-        let mut cum_varh1 = 0.0;
-        let mut std_err = Array2::zeros((ntime, 1));
-        for g in 0..ntime {
-            cum_varh1 += varh1[g];
-            std_err[(g, 0)] = (cum_varh1 + term2[g]).sqrt();
-        }
-        std_err
-    });
+    let column = |values| Array2::from_shape_vec((ntime, 1), values).expect("one value per time");
     Ok(CoxSurvCurve {
         n: curves[first.stratum].n,
         time,
         n_risk,
         n_event,
         n_censor,
-        surv,
-        cumhaz,
-        std_err,
+        surv: column(surv),
+        cumhaz: column(cumhaz),
+        std_err: std_err.map(column),
     })
 }
 
@@ -1006,6 +1007,221 @@ mod tests {
         // dt at t=1 for row 0: hazard * 1 - xbar.
         let dt = curve.hazard[0] * 1.0 - curve.xbar[(0, 0)];
         assert_close(std_err[(0, 0)], (curve.varhaz[0] + dt * 0.5 * dt).sqrt());
+    }
+
+    fn example_curves() -> [AgsurvCurve; 2] {
+        [
+            AgsurvCurve {
+                n: 5,
+                time: vec![1.0, 2.0, 4.0],
+                n_event: vec![1.0, 2.0, 1.0],
+                n_risk: vec![5.0, 4.0, 2.0],
+                n_censor: vec![0.0, 0.0, 1.0],
+                hazard: vec![0.1, 0.2, 0.3],
+                cumhaz: vec![0.1, 0.3, 0.6],
+                varhaz: vec![0.01, 0.04, 0.09],
+                ndeath: vec![1, 2, 1],
+                xbar: arr2(&[[0.01, 0.02], [0.01, 0.03], [0.04, 0.05]]),
+                surv: Some(vec![0.9, 0.8, 0.7]),
+            },
+            AgsurvCurve {
+                n: 8,
+                time: vec![0.5, 2.0, 3.0, 6.0],
+                n_event: vec![1.0, 2.0, 3.0, 1.0],
+                n_risk: vec![8.0, 7.0, 5.0, 2.0],
+                n_censor: vec![0.0, 0.0, 0.0, 1.0],
+                hazard: vec![0.2, 0.3, 0.4, 0.5],
+                cumhaz: vec![0.2, 0.5, 0.9, 1.4],
+                varhaz: vec![0.04, 0.09, 0.16, 0.25],
+                ndeath: vec![1, 2, 3, 1],
+                xbar: arr2(&[[0.01, 0.02], [0.08, 0.02], [0.1, 0.06], [0.1, 0.2]]),
+                surv: Some(vec![0.8, 0.7, 0.6, 0.5]),
+            },
+        ]
+    }
+
+    #[test]
+    fn individual_intervals_keep_boundaries_offsets_and_covariance_across_strata() {
+        let curves = example_curves();
+        let varmat = arr2(&[[0.5, 0.1], [0.1, 0.25]]);
+        let intervals = [
+            IndividualInterval {
+                start: 1.0,
+                stop: 2.0,
+                stratum: 0,
+                x2: &[0.5, -1.0],
+                risk2: 1.0,
+            },
+            // No baseline times here. It still changes the time offset but
+            // contributes neither hazard nor coefficient uncertainty.
+            IndividualInterval {
+                start: 10.0,
+                stop: 11.0,
+                stratum: 1,
+                x2: &[100.0, -100.0],
+                risk2: 10.0,
+            },
+            IndividualInterval {
+                start: 1.0,
+                stop: 3.0,
+                stratum: 1,
+                x2: &[1.0, 0.5],
+                risk2: 2.0,
+            },
+        ];
+        for survtype in [
+            CoxSurvType::KalbfleischPrentice,
+            CoxSurvType::Breslow,
+            CoxSurvType::Efron,
+        ] {
+            for se_fit in [false, true] {
+                let result =
+                    individual_curve(&curves, survtype, &intervals, se_fit.then_some(&varmat))
+                        .unwrap();
+                assert_eq!(result.n, 5);
+                assert_eq!(result.time, vec![2.0, 4.0, 5.0]);
+                assert_eq!(result.n_risk, vec![4.0, 7.0, 5.0]);
+                assert_eq!(result.n_event, vec![2.0, 2.0, 3.0]);
+                assert_eq!(result.n_censor, vec![0.0; 3]);
+                let expected_dt = [(0.09, -0.23), (0.53, 0.03), (1.13, 0.31)];
+                let baseline_variance = [0.04, 0.4, 1.04];
+                let hazard: [f64; 3] = [0.2, 0.8, 1.6];
+                let kp = [0.8, 0.8 * 0.49, 0.8 * 0.49 * 0.36];
+                assert_eq!(result.std_err.is_some(), se_fit);
+                for g in 0..3 {
+                    assert_close(result.cumhaz[(g, 0)], hazard[g]);
+                    assert_close(
+                        result.surv[(g, 0)],
+                        if survtype == CoxSurvType::KalbfleischPrentice {
+                            kp[g]
+                        } else {
+                            (-hazard[g]).exp()
+                        },
+                    );
+                    if let Some(se) = &result.std_err {
+                        let (a, b) = expected_dt[g];
+                        let var: f64 =
+                            baseline_variance[g] + 0.5 * a * a + 0.2 * a * b + 0.25 * b * b;
+                        assert_close(se[(g, 0)], var.sqrt());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn expansion_resets_coefficient_uncertainty_for_each_prediction_row() {
+        let curve = &example_curves()[0];
+        let x2 = arr2(&[[0.5, -1.0], [1.0, 0.5], [0.5, -1.0]]);
+        let varmat = arr2(&[[0.5, 0.1], [0.1, 0.25]]);
+        let result = expand_curve(
+            curve,
+            CoxSurvType::Efron,
+            x2.view(),
+            &[1.0, 2.0, 1.0],
+            Some(&varmat),
+        )
+        .unwrap();
+        let se = result.std_err.unwrap();
+        // At the final time, H=.6, summed xbar=(.06,.10), sum(varhaz)=.14.
+        // Thus dt=(.24,-.70) for row 0, (.54,.20) for row 1.
+        for (col, a, b, risk) in [(0, 0.24, -0.70, 1.0), (1, 0.54, 0.20, 2.0)] {
+            let variance: f64 = (0.14 + 0.5 * a * a + 0.2 * a * b + 0.25 * b * b) * risk * risk;
+            assert_close(se[(2, col)], variance.sqrt());
+        }
+        assert_eq!(se.column(0), se.column(2));
+    }
+
+    #[test]
+    fn curve_variance_supports_zero_covariates_and_empty_outputs() {
+        let mut curves = example_curves();
+        for curve in &mut curves {
+            curve.xbar = Array2::zeros((curve.time.len(), 0));
+        }
+        let covariance = Array2::zeros((0, 0));
+        let x2 = Array2::zeros((1, 0));
+        let breslow = CoxSurvType::Breslow;
+        let expanded =
+            expand_curve(&curves[0], breslow, x2.view(), &[2.0], Some(&covariance)).unwrap();
+        assert_close(expanded.std_err.unwrap()[(2, 0)], (0.14_f64 * 4.0).sqrt());
+        let interval = IndividualInterval {
+            start: 1.0,
+            stop: 2.0,
+            stratum: 1,
+            x2: &[],
+            risk2: 2.0,
+        };
+        let selected = individual_curve(
+            &curves,
+            breslow,
+            std::slice::from_ref(&interval),
+            Some(&covariance),
+        )
+        .unwrap();
+        assert_eq!(selected.time, vec![2.0]);
+        assert_close(selected.std_err.unwrap()[(0, 0)], 0.6);
+        for (start, stop) in [(7.0, 8.0), (-2.0, -1.0), (3.0, 3.0)] {
+            let empty = individual_curve(
+                &curves,
+                breslow,
+                &[IndividualInterval {
+                    start,
+                    stop,
+                    ..interval.clone()
+                }],
+                Some(&covariance),
+            )
+            .unwrap();
+            assert_eq!(empty.n, 8);
+            assert_eq!(empty.surv.dim(), (0, 1));
+            assert_eq!(empty.cumhaz.dim(), (0, 1));
+            assert_eq!(empty.std_err.unwrap().dim(), (0, 1));
+        }
+        let no_newdata = Array2::zeros((0, 0));
+        let empty = expand_curve(
+            &curves[0],
+            breslow,
+            no_newdata.view(),
+            &[],
+            Some(&covariance),
+        )
+        .unwrap();
+        assert_eq!(empty.surv.dim(), (3, 0));
+        assert_eq!(empty.std_err.unwrap().dim(), (3, 0));
+    }
+
+    #[test]
+    fn curve_variance_rejects_wrong_dimensions_without_panicking() {
+        let mut curves = example_curves();
+        let breslow = CoxSurvType::Breslow;
+        let bad = Array2::zeros((1, 2));
+        let x2 = arr2(&[[0.0, 0.0]]);
+        let interval = IndividualInterval {
+            start: 0.0,
+            stop: 6.0,
+            stratum: 1,
+            x2: &[0.0, 0.0],
+            risk2: 1.0,
+        };
+        for error in [
+            expand_curve(&curves[0], breslow, x2.view(), &[1.0], Some(&bad)).unwrap_err(),
+            individual_curve(
+                &curves,
+                breslow,
+                std::slice::from_ref(&interval),
+                Some(&bad),
+            )
+            .unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("varmat must have shape (2, 2)"));
+        }
+        curves[1].xbar = Array2::zeros((4, 1));
+        assert!(
+            individual_curve(&curves, breslow, &[interval], None)
+                .unwrap_err()
+                .to_string()
+                .contains("all strata must have the same number of covariates")
+        );
     }
 
     #[test]
