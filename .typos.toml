@@ -44,3 +44,10 @@ extend-exclude = [
     "target/",
     "*.lock",
 ]
+
+[type.cox-report-reference]
+extend-glob = ["cox_report_reference.json"]
+
+[type.cox-report-reference.extend-words]
+# R truncates this frailty term label to fit the printed coefficient table.
+distributio = "distributio"
