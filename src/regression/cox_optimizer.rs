@@ -131,6 +131,7 @@ pub(crate) struct CoxFitBuilder {
     weights: Option<Array1<f64>>,
     method: TieMethod,
     max_iter: usize,
+    iterate_empty: bool,
     eps: f64,
     toler: f64,
     doscale: Option<Vec<bool>>,
@@ -149,6 +150,7 @@ impl CoxFitBuilder {
             weights: None,
             method: TieMethod::Breslow,
             max_iter: COX_MAX_ITER,
+            iterate_empty: false,
             eps: COX_CONVERGENCE_TOLERANCE,
             toler: COX_RANK_TOLERANCE,
             doscale: None,
@@ -183,6 +185,12 @@ impl CoxFitBuilder {
 
     pub(crate) fn max_iter(mut self, max_iter: usize) -> Self {
         self.max_iter = max_iter;
+        self
+    }
+
+    /// The bare agexact fitter still iterates when the matrix has no columns.
+    pub(crate) fn iterate_empty(mut self, value: bool) -> Self {
+        self.iterate_empty = value;
         self
     }
 
@@ -321,6 +329,7 @@ impl CoxFitBuilder {
             },
             fitter,
             max_iter: self.max_iter,
+            iterate_empty: self.iterate_empty,
             eps: self.eps,
             toler: self.toler,
             scale: vec![1.0; nvar],
@@ -452,6 +461,7 @@ pub(crate) struct CoxFit {
     data: CoxData,
     fitter: Fitter,
     max_iter: usize,
+    iterate_empty: bool,
     eps: f64,
     toler: f64,
     scale: Vec<f64>,
@@ -1088,7 +1098,7 @@ impl CoxFit {
         self.iter = 0;
         self.loglik[0] = self.evaluate(&beta0)?;
         self.loglik[1] = self.loglik[0];
-        if nvar == 0 {
+        if nvar == 0 && !self.iterate_empty {
             self.flag = 0;
             return Ok(());
         }

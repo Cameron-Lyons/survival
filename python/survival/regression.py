@@ -14,6 +14,8 @@ __all__ = bind_names(
         "cch_fit",
         "CoxPHFit",
         "coxph_fit",
+        "CoxphFitResult",
+        "coxph_fit_raw",
         "coxphms_fit",
         "CoxPenalty",
         "CoxpenalFit",

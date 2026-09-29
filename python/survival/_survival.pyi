@@ -2641,6 +2641,34 @@ class CoxphDetail:
     @property
     def wtrisk(self) -> list[float]: ...
 
+class CoxphFitResult:
+    @property
+    def coefficients(self) -> list[float]: ...
+    @property
+    def first(self) -> list[float]: ...
+    @property
+    def flag(self) -> int: ...
+    @property
+    def info(self) -> list[int] | None: ...
+    @property
+    def iter(self) -> int: ...
+    @property
+    def linear_predictors(self) -> list[float]: ...
+    @property
+    def loglik(self) -> list[float]: ...
+    @property
+    def means(self) -> list[float]: ...
+    @property
+    def method(self) -> TieMethod: ...
+    @property
+    def n(self) -> int: ...
+    @property
+    def residuals(self) -> list[float] | None: ...
+    @property
+    def score(self) -> float: ...
+    @property
+    def var(self) -> list[list[float]]: ...
+
 class CoxphWtest:
     @property
     def df(self) -> int: ...
@@ -11760,6 +11788,22 @@ def coxph_fit(
     cluster: ArrayLike | None = None,
     robust: bool | None = None,
 ) -> CoxPHFit: ...
+def coxph_fit_raw(
+    time: ArrayLike,
+    status: ArrayLike,
+    x: ArrayLike,
+    entry: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
+    method: str = "efron",
+    init: Sequence[float] | None = None,
+    iter_max: int | None = None,
+    eps: float | None = None,
+    toler_chol: float | None = None,
+    nocenter: Sequence[float] | None = None,
+    resid: bool = True,
+) -> CoxphFitResult: ...
 def coxph_wtest(
     var: Sequence[Sequence[float]],
     b: Sequence[Sequence[float]],

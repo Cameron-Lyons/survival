@@ -25,7 +25,7 @@ use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::step::{find_interval, step_at};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
-use crate::regression::cox_optimizer::{CoxFitBuilder, TieMethod};
+use crate::regression::cox_optimizer::{CoxFitBuilder, CoxFitResults, TieMethod};
 use crate::regression::coxph_diagnostics::{
     SchoenfeldResiduals, collapse_rows, martingale_residuals_at, score_residuals_at,
 };
@@ -582,6 +582,55 @@ pub(crate) struct FittedCox {
     pub wald_test: f64,
 }
 
+/// Shared optimizer setup; callers choose whether offsets have already been centered.
+pub(crate) fn fit_cox_engine(
+    data: &CoxphData,
+    options: &CoxphOptions,
+    offset: Option<&[f64]>,
+    iterate_empty: bool,
+) -> SurvivalResult<(CoxFitResults, Vec<bool>)> {
+    let nvar = data.x.ncols();
+    data.check_fit_input()?;
+    if let Some(init) = &options.init {
+        if init.len() != nvar {
+            return Err(SurvivalError::invalid_input(
+                "Wrong length for inital values",
+            ));
+        }
+        validate_finite(init, "init")?;
+    }
+    let nocenter = nocenter_columns(&data.x, options.nocenter.as_deref());
+    let doscale = nocenter.iter().map(|&skip| !skip).collect();
+
+    let mut engine = CoxFitBuilder::new(
+        Array1::from_vec(data.time.clone()),
+        Array1::from_vec(data.status.clone()),
+        data.x.clone(),
+    )
+    .method(options.method)
+    .max_iter(options.iter_max)
+    .iterate_empty(iterate_empty)
+    .eps(options.eps)
+    .toler(options.toler_chol)
+    .doscale(doscale)
+    .initial_beta(options.init.clone().unwrap_or_else(|| vec![0.0; nvar]));
+    if let Some(entry) = &data.entry {
+        engine = engine.entry_times(Array1::from_vec(entry.clone()));
+    }
+    if let Some(strata) = &data.strata {
+        engine = engine.strata(Array1::from_vec(strata.clone()));
+    }
+    if let Some(offset) = offset {
+        engine = engine.offset(Array1::from_vec(offset.to_vec()));
+    }
+    if let Some(weights) = &data.weights {
+        engine = engine.weights(Array1::from_vec(weights.clone()));
+    }
+    let mut engine = engine.build()?;
+    engine.fit()?;
+    Ok((engine.results(), nocenter))
+}
+
 impl CoxPHFit {
     /// Fits the model: `coxph.fit` / `agreg.fit` / `coxexact.fit` /
     /// `agexact.fit` at the centred offset, followed by the post-processing
@@ -594,44 +643,7 @@ impl CoxPHFit {
         if nevent == 0 {
             return Ok(Self::without_events(data, centred_offset, &options));
         }
-        data.check_fit_input()?;
-        if let Some(init) = &options.init {
-            if init.len() != nvar {
-                return Err(SurvivalError::invalid_input(
-                    "Wrong length for inital values",
-                ));
-            }
-            validate_finite(init, "init")?;
-        }
-        let nocenter = nocenter_columns(&data.x, options.nocenter.as_deref());
-        let doscale = nocenter.iter().map(|&skip| !skip).collect();
-
-        let mut engine = CoxFitBuilder::new(
-            Array1::from_vec(data.time.clone()),
-            Array1::from_vec(data.status.clone()),
-            data.x.clone(),
-        )
-        .method(options.method)
-        .max_iter(options.iter_max)
-        .eps(options.eps)
-        .toler(options.toler_chol)
-        .doscale(doscale)
-        .initial_beta(options.init.clone().unwrap_or_else(|| vec![0.0; nvar]));
-        if let Some(entry) = &data.entry {
-            engine = engine.entry_times(Array1::from_vec(entry.clone()));
-        }
-        if let Some(strata) = &data.strata {
-            engine = engine.strata(Array1::from_vec(strata.clone()));
-        }
-        if data.offset.is_some() {
-            engine = engine.offset(Array1::from_vec(centred_offset.clone()));
-        }
-        if let Some(weights) = &data.weights {
-            engine = engine.weights(Array1::from_vec(weights.clone()));
-        }
-        let mut engine = engine.build()?;
-        engine.fit()?;
-        let results = engine.results();
+        let (results, nocenter) = fit_cox_engine(&data, &options, Some(&centred_offset), false)?;
 
         let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);

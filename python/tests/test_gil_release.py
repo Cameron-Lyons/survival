@@ -116,6 +116,7 @@ def test_heavy_kernels_release_the_gil():
 
     calls = {
         "coxph_fit": lambda: regression.coxph_fit(time_, status, x),
+        "coxph_fit_raw": lambda: regression.coxph_fit_raw(time_, status, x, resid=False),
         "CoxPHFit.dfbeta": lambda: fit.dfbeta(),
         "CoxPHFit.survfit": lambda: fit.survfit(x[:5]),
         "CoxPHFit.predict_survival_at": lambda: fit.predict_survival_at(np.linspace(0.0, 3.0, 128)),

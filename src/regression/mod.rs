@@ -27,6 +27,7 @@ pub(crate) mod coxpenal;
 pub(crate) mod coxph;
 pub(crate) mod coxph_detail;
 pub(crate) mod coxph_diagnostics;
+pub(crate) mod coxph_lowlevel;
 pub(crate) mod coxph_wtest;
 pub(crate) mod coxphms;
 pub(crate) mod cure_models;
@@ -83,6 +84,7 @@ pub use coxph::{
 };
 pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
 pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
+pub use coxph_lowlevel::{CoxphFitResult, coxph_fit_raw};
 pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
 pub use coxphms::coxphms_fit;
 pub use cure_models::{
