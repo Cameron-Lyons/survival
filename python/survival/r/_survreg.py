@@ -1020,11 +1020,7 @@ def predict_survreg(
     include_se = _normalize_bool_option(se_fit, "se.fit")
     action = _normalize_na_action(na_action)
     new = None if newdata is None else _newdata_inputs(fit, newdata, action)
-    term_names = [
-        label
-        for position, label in enumerate(fit.term_labels, start=1)
-        if position != fit.strata_term
-    ]
+    term_names = [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
     quantiles = _quantile_vector(p, "p")
     selection = _term_selection(terms, term_names)
     predictions: list[list[float]] = []
@@ -1422,13 +1418,17 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
     return names if selection is None else [names[idx] for idx in selection]
 
 
-def model_matrix_survreg(fit: SurvregModelResult) -> dict[str, Any]:
+def model_matrix_survreg(fit: SurvregModelResult, data: Any | None = None) -> dict[str, Any]:
     """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
 
+    strata_names = {f"strata({', '.join(columns)})" for columns in fit.strata_terms}
+    removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
     return {
-        "data": [[float(value) for value in row] for row in fit.fit.covariates],
+        "data": [[float(value) for value in row] for row in fit.fit.covariates]
+        if data is None
+        else _newdata_inputs(fit, data, "na.omit").x,
         "columns": list(fit.coefficient_names),
-        "assign": list(fit.assign),
+        "assign": [code - sum(index < code for index in removed) for code in fit.assign],
     }
 
 

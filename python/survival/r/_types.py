@@ -37,9 +37,10 @@ _MISSING = _MissingArgument()
 class _CovariateTerm:
     """One factor of a formula term.
 
-    ``call`` carries the text of an opaque categorising call (``tcut(...)``,
-    ``cut(...)``) that only ``pyears`` evaluates; ``column`` is then the data
-    column it reads (or the first column of its ``arithmetic`` argument).
+    ``call`` keeps a categorising or penalty expression; ``column`` is its
+    first data column (or the first column of its ``arithmetic`` argument).
+    ``strata_columns`` identifies a strata factor used in an interaction;
+    its call label and underlying columns stay distinct.
     """
 
     column: str
@@ -48,6 +49,7 @@ class _CovariateTerm:
     transform: str | None = None
     arithmetic: str | None = None
     call: str | None = None
+    strata_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -92,6 +92,7 @@ from ._types import (
     _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
+    _InteractionDesignTerm,
     _InteractionTerm,
     _ModelCovariateTerm,
     _PenaltyDesignTerm,
@@ -1938,6 +1939,12 @@ def _check_interaction_margins(fit: CoxphModel) -> None:
         else frozenset([term.term])
         for term in fit.terms.model_terms
         if isinstance(term, _ModelCovariateTerm)
+        and not any(
+            factor.strata_columns
+            for factor in (
+                term.term.factors if isinstance(term.term, _InteractionTerm) else [term.term]
+            )
+        )
     ]
     present = set(terms)
     if any(len(term) > 1 and any(term - {v} not in present for v in term) for term in terms):
@@ -2041,6 +2048,12 @@ def _survfit_curves(
     ``na.omit`` would leave out."""
 
     _check_interaction_margins(fit)
+    if newdata is None and any(
+        isinstance(term, _InteractionDesignTerm)
+        and any(factor.term.strata_columns for factor in term.factors)
+        for term in fit.design.covariates
+    ):
+        raise ValueError("Models with strata by covariate interaction terms require newdata")
     engine = fit.penalized if fit.penalized is not None else fit.fit
     options: dict[str, Any] = {
         "stype": stype,

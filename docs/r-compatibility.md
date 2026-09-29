@@ -37,6 +37,36 @@ pickle retain these callbacks. Native Rust callers implement
 `regression::SurvregCallbacks`. See [AFT distribution callbacks](survreg-density.md)
 for the batch contract, examples, and serialization requirements.
 
+Cox and AFT formulas support stratum-specific effects such as
+`age * strata(sex)`, `age:strata(sex)`, and interactions with compound strata
+or categorical covariates. The strata still determine the Cox baseline hazards
+or AFT scales. Cox constructs the full model matrix before dropping the strata
+main effects; AFT removes those main effects before assigning contrasts. The
+port preserves this difference, including factor order and column labels.
+Cox survival curves for these models require `newdata`, as in R.
+
+`scripts/generate_strata_interaction_reference.R` checks coefficients,
+covariances, design matrices, predictions, residuals, curves, and proportional
+hazards diagnostics. Its cases include delayed entry, Breslow ties, case
+weights, combined strata, and AFT scale strata. R's `predict.coxph` can remove
+the wrong columns when a strata interaction follows a multi-column factor:
+linear prediction errors and term prediction can silently use different
+columns. The fixture retains those R results and separately calculates the
+intended predictions from R's correct `model.matrix.coxph` output; the port
+uses that model matrix consistently.
+
+R's curve prediction fails for the same factor models, so the reference
+generator verifies their curves against equivalent separate fits within each
+stratum. R's proportional-hazards test also fails for redundant full factor
+indicators; the port's global test agrees with the equivalent treatment-coded
+model. The fixture records these R errors alongside the working references.
+
+`model_matrix(survreg_fit, data)` builds prediction rows with the fitted
+contrasts and drops incomplete rows. R's method can fail while rebuilding
+the terms of a model with strata interactions. Yates factorial and SAS
+populations retain compound strata as evaluated factors; their labels are
+not parsed back into the original source columns.
+
 ```python
 from survival import datasets, r
 

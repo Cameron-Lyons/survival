@@ -47,6 +47,7 @@ from ._formula import (
     _parse_formula,
     _strata_keep,
     _strata_term_columns,
+    _strata_term_values,
     _subset_formula_inputs,
 )
 from ._surv import Surv, _complete_codes, _strata
@@ -192,7 +193,13 @@ def _r_factor_design(
             return term
         # a logical expression (I(sex == 2)) has no column to declare levels
         column = term.term.column
-        source = None if term.term.arithmetic is not None else _column_source(data, column)
+        source = (
+            _strata_term_values(data, term.term.strata_columns)
+            if term.term.strata_columns
+            else None
+            if term.term.arithmetic is not None
+            else _column_source(data, column)
+        )
         return replace(term, levels=levels_of(source, term.levels))
 
     covariates: list[_DesignTerm] = []
@@ -345,7 +352,14 @@ def _model_frame(
 
     design = _r_factor_design(
         data,
-        _fit_formula_design(data, _formula_response_spec(formula), terms, n, full_data=full_data),
+        _fit_formula_design(
+            data,
+            _formula_response_spec(formula),
+            terms,
+            n,
+            full_data=full_data,
+            strata_margins=True,
+        ),
     )
     names, assign = _design_names_and_assign(design)
     return _ModelFrame(

@@ -163,11 +163,15 @@ def _yates_population(
 
     adjusters = [spec for spec in _design_factors(design) if spec.term.column not in term.columns]
     categorical = {
-        spec.term.column: list(spec.levels)
+        (_covariate_term_name(spec.term) if spec.term.strata_columns else spec.term.column): list(
+            spec.levels
+        )
         for spec in adjusters
         if isinstance(spec, _CategoricalDesignTerm)
     }
-    continuous = [spec.term.column for spec in adjusters if spec.term.column not in categorical]
+    continuous = [
+        spec.term.column for spec in adjusters if not isinstance(spec, _CategoricalDesignTerm)
+    ]
     if population == "data" or (population == "sas" and not categorical):
         return mframe
     if population == "factorial" and continuous:
@@ -464,6 +468,15 @@ def yates(
         pdata = _yates_population(mframe, design, yates_term, population)
         weights = _yates_weights(mframe, population)
     n_pop = len(next(iter(pdata.values())))
+    factor_values = (
+        {
+            spec.term: pdata[_covariate_term_name(spec.term)]
+            for spec in _design_factors(design)
+            if spec.term.strata_columns and _covariate_term_name(spec.term) in pdata
+        }
+        if isinstance(population, str) and population != "data"
+        else None
+    )
     xmatlist = [
         _design_rows_from_spec(
             {
@@ -475,6 +488,7 @@ def yates(
             },
             design,
             n_pop,
+            factor_values=factor_values,
         )
         for combination in zip(*yates_term.levels.values(), strict=True)
     ]
