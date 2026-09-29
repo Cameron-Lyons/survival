@@ -11,8 +11,8 @@
 //! coefficients, the levels outside the row space of the fit's design;
 //! [`yates`] evaluates `Cmat %*% beta` with variance `Cmat V Cmat'` and the
 //! contrast tests; [`yates_simulate`] averages a nonlinear prediction
-//! (`predict = "risk"` or `"survival"`) over the population and estimates its
-//! variance from simulated coefficients.
+//! (Cox risk/survival or an external GLM inverse link) over the population
+//! and estimates its variance from simulated coefficients.
 //!
 //! For a Cox model the caller passes `Cmat` restricted to the non-aliased
 //! coefficient columns (R drops the intercept, strata and `NA` columns) and
@@ -480,11 +480,15 @@ pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
 }
 
 /// What [`yates_simulate`] predicts for each population row: the prediction
-/// functions of R's `yates_setup.coxph`.
-#[derive(Debug, Clone, Copy)]
+/// functions of R's `yates_setup.coxph` and `yates_setup.glm`.
+#[derive(Clone, Copy)]
 pub enum YatesPredictor<'a> {
     /// `predict = "risk"`: `exp(eta)`.
     Risk,
+    /// A vectorized external inverse link. It receives one linear predictor
+    /// per population row and returns one response per row. Called once at
+    /// the fitted coefficients and once per draw, with all levels batched.
+    Response(&'a (dyn Fn(&[f64]) -> SurvivalResult<Vec<f64>> + Sync)),
     /// `predict = "survival"`: the curve `exp(-exp(eta) * cumhaz)` of the
     /// baseline `survfit(fit, censor = FALSE)` (`time`, `cumhaz`) from time 0
     /// on, preceded by its mean restricted to `rmean`.  `conf_int` is the
@@ -497,11 +501,32 @@ pub enum YatesPredictor<'a> {
     },
 }
 
+impl std::fmt::Debug for YatesPredictor<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Risk => f.write_str("Risk"),
+            Self::Response(_) => f.write_str("Response(<inverse link>)"),
+            Self::Survival {
+                time,
+                cumhaz,
+                rmean,
+                conf_int,
+            } => f
+                .debug_struct("Survival")
+                .field("time", time)
+                .field("cumhaz", cumhaz)
+                .field("rmean", rmean)
+                .field("conf_int", conf_int)
+                .finish(),
+        }
+    }
+}
+
 /// Inputs of [`yates_simulate`].
 #[derive(Debug, Clone)]
 pub struct YatesSimulation<'a> {
-    /// One model matrix per level over the non-aliased coefficient columns
-    /// (R's `xmatlist` without the intercept and `NA` columns).
+    /// One model matrix per level over the non-aliased coefficient columns.
+    /// Cox inputs omit the intercept; external GLMs retain their intercept.
     pub xmatlist: &'a [Vec<Vec<f64>>],
     pub beta: &'a [f64],
     pub vmat: &'a [Vec<f64>],
@@ -532,6 +557,11 @@ enum Prediction {
 
 impl Prediction {
     fn new(predictor: YatesPredictor<'_>) -> SurvivalResult<Self> {
+        if matches!(predictor, YatesPredictor::Response(_)) {
+            return Err(SurvivalError::invalid_input(
+                "external inverse links are evaluated through yates_simulate",
+            ));
+        }
         let YatesPredictor::Survival {
             time,
             cumhaz,
@@ -611,7 +641,7 @@ impl Prediction {
     }
 }
 
-/// Prepared nonlinear Yates prediction. Baseline work is done once; evaluating
+/// Prepared nonlinear Cox Yates prediction. Baseline work is done once; evaluating
 /// N predictors allocates only the N-by-output-width result matrix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(frozen, module = "survival._survival", skip_from_py_object)]
@@ -741,12 +771,47 @@ fn covariance_root(vmat: &[Vec<f64>]) -> SurvivalResult<Vec<Vec<f64>>> {
 /// `mvar` entries keep their simulated values; a test that uses it is `NA`.
 pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult> {
     validate_simulation(input)?;
-    let prediction = Prediction::new(input.predictor)?;
+    let prediction = match input.predictor {
+        YatesPredictor::Response(_) => None,
+        other => Some(Prediction::new(other)?),
+    };
     let root = covariance_root(input.vmat)?;
     let nlev = input.xmatlist.len();
     let p = input.beta.len();
-    let width = prediction.width();
-    let estimates = prediction.population(input.xmatlist, input.means, input.beta);
+    let width = prediction.as_ref().map_or(1, Prediction::width);
+    // Reuse the predictor buffer across inverse-link calls. The built-in
+    // paths continue reducing each row directly into its population mean.
+    let mut eta = Vec::new();
+    let mut population = |coef: &[f64]| -> SurvivalResult<Vec<Vec<f64>>> {
+        if let YatesPredictor::Response(inverse_link) = input.predictor {
+            eta.clear();
+            let center = dot_product(input.means, coef);
+            for rows in input.xmatlist {
+                eta.extend(rows.iter().map(|row| dot_product(row, coef) - center));
+            }
+            let response = inverse_link(&eta)?;
+            validate_length(eta.len(), response.len(), "inverse link response")?;
+            validate_finite(&response, "inverse link response")?;
+            let mut start = 0;
+            Ok(input
+                .xmatlist
+                .iter()
+                .map(|rows| {
+                    let end = start + rows.len();
+                    let mean = response[start..end].iter().sum::<f64>() / rows.len() as f64;
+                    start = end;
+                    vec![mean]
+                })
+                .collect())
+        } else {
+            Ok(prediction.as_ref().expect("built-in predictor").population(
+                input.xmatlist,
+                input.means,
+                coef,
+            ))
+        }
+    };
+    let estimates = population(input.beta)?;
 
     // R's matrix(rnorm(nsim * p), nrow = nsim) fills the draws by column
     let mut rng = rng::RNormal::new(input.seed);
@@ -765,7 +830,7 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
         let coef: Vec<f64> = (0..p)
             .map(|j| input.beta[j] + (0..p).map(|k| z[k] * root[k][j]).sum::<f64>())
             .collect();
-        let sims = prediction.population(input.xmatlist, input.means, &coef);
+        let sims = population(&coef)?;
         let first: Vec<f64> = sims.iter().map(|row| row[0]).collect();
         validate_finite(&first, "simulated prediction")?;
         let delta: Vec<f64> = first
@@ -963,6 +1028,59 @@ pub fn yates_risk_py(
         means: &means,
         estimable: estimable.as_deref(),
         predictor: YatesPredictor::Risk,
+        nsim,
+        seed,
+        test: YatesTest::parse(test)?,
+    };
+    simulate_py(py, &input, term)
+}
+
+/// Simulate an external GLM's vectorized response, without refitting it.
+#[cfg(feature = "python")]
+#[pyfunction(name = "yates_response")]
+#[pyo3(signature = (xmatlist, beta, vmat, inverse_link, means=None, estimable=None, nsim=200, seed=0, test="global", term=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn yates_response_py(
+    py: Python<'_>,
+    xmatlist: Vec<FloatRows>,
+    beta: FloatVec,
+    vmat: FloatRows,
+    inverse_link: Py<PyAny>,
+    means: Option<FloatVec>,
+    estimable: Option<Vec<bool>>,
+    nsim: usize,
+    seed: u32,
+    test: &str,
+    term: Option<&str>,
+) -> PyResult<YatesResult> {
+    if !inverse_link.bind(py).is_callable() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "inverse_link must be callable",
+        ));
+    }
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
+    let means = means
+        .map(FloatVec::into_inner)
+        .unwrap_or_else(|| vec![0.0; beta.len()]);
+    let callback = |eta: &[f64]| {
+        Python::attach(|py| {
+            inverse_link
+                .bind(py)
+                .call1((FloatVec(eta.to_vec()),))?
+                .extract::<FloatVec>()
+                .map(FloatVec::into_inner)
+        })
+        .map_err(|error| {
+            SurvivalError::computation(format!("inverse link callback failed: {error}"))
+        })
+    };
+    let input = YatesSimulation {
+        xmatlist: &xmatlist,
+        beta: &beta,
+        vmat: &vmat,
+        means: &means,
+        estimable: estimable.as_deref(),
+        predictor: YatesPredictor::Response(&callback),
         nsim,
         seed,
         test: YatesTest::parse(test)?,
@@ -1291,5 +1409,70 @@ mod tests {
         }
         assert!(summary.lower[2][1] < summary.surv[2][1]);
         assert!(summary.surv[2][1] < summary.upper[2][1]);
+    }
+
+    #[test]
+    fn external_response_shares_draws_centering_and_population_reductions() {
+        let xmatlist = vec![vec![vec![1.0, 0.0], vec![1.0, 2.0]], vec![vec![1.0, 3.0]]];
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let inverse = |eta: &[f64]| {
+            assert_eq!(eta.len(), 3);
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(eta.iter().map(|v| v.exp()).collect())
+        };
+        let mut input = YatesSimulation {
+            xmatlist: &xmatlist,
+            beta: &[0.2, 0.1],
+            vmat: &[vec![0.01, 0.002], vec![0.002, 0.02]],
+            means: &[1.0, 0.5],
+            estimable: None,
+            predictor: YatesPredictor::Risk,
+            nsim: 37,
+            seed: 42,
+            test: YatesTest::Global,
+        };
+        let expected = yates_simulate(&input).unwrap();
+        input.predictor = YatesPredictor::Response(&inverse);
+        assert_eq!(yates_simulate(&input).unwrap(), expected);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 38);
+    }
+
+    #[test]
+    fn external_response_validates_callback_results() {
+        let xmatlist = vec![vec![vec![1.0]], vec![vec![2.0]]];
+        let wrong_length = |_: &[f64]| Ok(vec![1.0]);
+        let nonfinite = |_: &[f64]| Ok(vec![1.0, f64::NAN]);
+        let failed = |_: &[f64]| Err(SurvivalError::computation("link failed"));
+        let mut input = YatesSimulation {
+            xmatlist: &xmatlist,
+            beta: &[0.1],
+            vmat: &[vec![0.01]],
+            means: &[0.0],
+            estimable: None,
+            predictor: YatesPredictor::Response(&wrong_length),
+            nsim: 2,
+            seed: 1,
+            test: YatesTest::Global,
+        };
+        assert!(
+            yates_simulate(&input)
+                .unwrap_err()
+                .to_string()
+                .contains("inverse link response")
+        );
+        input.predictor = YatesPredictor::Response(&nonfinite);
+        assert!(
+            yates_simulate(&input)
+                .unwrap_err()
+                .to_string()
+                .contains("inverse link response")
+        );
+        input.predictor = YatesPredictor::Response(&failed);
+        assert!(
+            yates_simulate(&input)
+                .unwrap_err()
+                .to_string()
+                .contains("link failed")
+        );
     }
 }

@@ -14198,6 +14198,18 @@ def yates_population_means(
     xmatlist: Sequence[ArrayLike],
     weights: ArrayLike | None = None,
 ) -> list[list[float]]: ...
+def yates_response(
+    xmatlist: Sequence[ArrayLike],
+    beta: ArrayLike,
+    vmat: ArrayLike,
+    inverse_link: Any,
+    means: ArrayLike | None = None,
+    estimable: Sequence[bool] | None = None,
+    nsim: int = 200,
+    seed: int = 0,
+    test: str = "global",
+    term: str | None = None,
+) -> YatesResult: ...
 def yates_risk(
     xmatlist: Sequence[ArrayLike],
     beta: ArrayLike,

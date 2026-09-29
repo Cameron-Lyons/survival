@@ -44,12 +44,83 @@ For an external GLM, provide a callable `fit.family.linkinv`, a family mapping
 with `"linkinv"`, or `fit.model.family.link.inverse` as in statsmodels.
 `link`/`linear` return `None`; `response` returns a callable that passes a
 numeric NumPy input to that inverse link. No GLM fitting dependency is needed.
-This direct callback interface does not add external GLM support to `r.yates`.
 GLM `terms` and Cox `expected`/`terms` retain R's explicit errors.
 
 Other fitted objects use the default method: return `None`, ignore `predict`,
 and warn only for an explicit `type` other than `linear` or `link`. R's
 default method uses `type` while its Cox and GLM methods use `predict`.
+
+## Full simulations for external GLMs
+
+`r.YatesModel` adapts an external GLM for full `r.yates` analysis. Supply its
+formula, model data, coefficients and coefficient covariance in R design-column
+order, including the intercept. The optional `family` accepts a mapping with
+`linkinv`, an object with `linkinv`, or a statsmodels-style family with
+`link.inverse`. The adapter never refits the model.
+
+```python
+adapter = r.YatesModel(
+    "y ~ group + age", data, coefficients, covariance,
+    family={"linkinv": lambda eta: 1 / (1 + np.exp(-eta))},
+)
+result = r.yates(adapter, "group", predict="response", nsim=200,
+                 options={"seed": 123})
+```
+
+Here `data`, `coefficients` and `covariance` come from the external fit.
+`link`/`linear` use the exact linear contrast calculation; `response` averages
+the inverse link at the supplied coefficients, then estimates uncertainty from
+R-compatible normal draws. The shared Rust loop computes predictors, population
+reductions, online covariance and contrast tests. Python receives one NumPy
+vector containing all populations for the point estimate and for each draw:
+`nsim + 1` inverse-link calls. The callback must return a finite numeric vector
+with one response per input row. Its errors retain the callback's message.
+
+Optional model `weights` are finite nonnegative case weights with positive
+total. As in R, they weight linear estimates for the data population; nonlinear
+averages are unweighted. Model offsets are omitted from both calculations,
+following R's Yates convention. Data, factorial, SAS and explicit populations,
+joint variables, selected levels, interactions, aliased coefficients and
+pairwise tests use the existing formula and contrast machinery. SAS type III
+tests require linear predictions and the SAS population. GLMs normally leave
+`sigma2=None`; it supplies sum-of-squares columns for external linear models.
+
+Simulation state and the random stream belong to each call. Python facade
+results retain neither the model nor the inverse link, and support pickle. An adapter can be
+pickled when its family function can be pickled. Native Python callers can use
+`survival.validation.yates_response` with prepared population matrices; Rust
+callers use `YatesPredictor::Response` with a vectorized, fallible inverse link.
+The prepared `YatesPrediction` object continues to represent Cox risk or
+survival; external links are called directly by the shared simulator.
+
+Thirty stock-R GLM cases in `scripts/generate_yates_glm_reference.R` cover
+binomial, Poisson, Gaussian, Gamma and quasi families; eight inverse links;
+case weights, offsets, aliases, interactions, populations, level selection,
+pairwise and type III tests. Each case runs through all three family protocols.
+Independent checks reconstruct the simulated covariance from recorded callback
+batches, compare a log link with native Cox risk, and check concurrent calls,
+ownership, serialization and invalid callbacks. The R `yates` facade still
+delegates to stock R; this addition exposes full external GLM simulations in
+Python and the native Rust API.
+
+`scripts/benchmark_yates_glm.R` compares complete R and Python marginal-mean
+calls on the same already-fitted binomial GLM and explicit population. It
+checks means, covariance and the contrast test before timing. A local run on
+the machine described below, with 5,000 population rows, three target levels,
+seven coefficients, 200 draws and seven measured calls, gave:
+
+| Full response simulation | Median | Sample range |
+| --- | ---: | ---: |
+| R survival | 68 ms | 65–70 ms |
+| Python/Rust | 47 ms | 46–49 ms |
+
+This run improved by 1.45×; an earlier three-sample run measured 63 ms and
+42 ms. Timings include population matrix construction, callback execution,
+simulation and result assembly. Model fitting, adapter construction, conversion
+of the supplied population to a Python mapping, warmup and garbage collection
+are excluded. Peak memory is not measured. The numerical kernel reuses its
+predictor buffer and accumulates covariance online; it does not retain each
+draw's population responses.
 
 ## Summary corrections and ownership
 

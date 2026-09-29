@@ -40,6 +40,16 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
         r.print_survcheck(r.survcheck("Surv(time, status) ~ 1", data, id="id")), r.ModelPrint
     )
     assert_type(r.print_yates(r.yates(cox, "age", levels=[40, 60, 80])), r.YatesPrint)
+    glm = r.YatesModel(
+        "y ~ age",
+        data,
+        [1.0, 0.1],
+        [[0.2, 0.0], [0.0, 0.3]],
+        family={"linkinv": lambda eta: eta},
+        weights=[1.0] * len(data["y"]),
+    )
+    assert_type(glm, r.YatesModel)
+    assert_type(r.yates(glm, "age", levels=[40, 60], predict="response"), r.YatesResult)
     aft = r.survreg("Surv(time, status) ~ age", data)
     assert_type(aft, r.SurvregModelResult)
     assert_type(r.print_survreg(aft), r.ModelPrint | r.SurvregPenalPrint)

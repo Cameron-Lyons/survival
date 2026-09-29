@@ -160,6 +160,12 @@ seed is zero. External linear models can supply their coefficients and covarianc
 through `r.YatesModel(formula, data, coefficients, variance, sigma2=None)`;
 coefficients must follow the formula's columns, including its intercept. R's
 `lm` is part of the separate `stats` package; the adapter does not refit it.
+External GLMs also supply `family=...` with `linkinv` or `link.inverse` and
+use `predict="response"`. The shared Rust simulation loop calls that inverse
+link once per coefficient draw for all populations together. Linear/link
+predictions can use optional case weights; nonlinear means remain unweighted
+and model offsets are omitted, following R. See [Yates setup](yates-setup.md)
+for the callback contract, reference coverage and ownership rules.
 
 ## Reference differences retained deliberately
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from numbers import Real
 from typing import Any
@@ -37,7 +37,12 @@ from ._types import (
     _InteractionTerm,
 )
 from ._yates_model import YatesModel
-from ._yates_setup import _COXPH_PREDICT, _cox_survival_baseline, _yates_survival_summary
+from ._yates_setup import (
+    _COXPH_PREDICT,
+    _cox_survival_baseline,
+    _yates_survival_summary,
+    yates_setup,
+)
 
 
 @dataclass(frozen=True)
@@ -316,13 +321,13 @@ class _YatesSetup:
     seed: int = 0
     baseline: CoxSurvfitResult | None = None
     rmean: float = math.inf
+    response: Callable[[Any], Any] | None = None
 
 
 def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
     """R's ``yates_setup``: ``yates_setup.coxph`` for a Cox model; ``yates_setup.default``
-    for a ``YatesModel``, which gives the linear predictor whatever ``predict`` is (``yates``
-    passes it as ``predict=``, which that method's ``type`` argument never receives, so R
-    neither checks nor warns).
+    for an external linear model, or ``yates_setup.glm`` when the adapter
+    supplies a family. The default method ignores ``predict``, as in R.
 
     ``options`` holds R's ``rmean`` for ``predict="survival"`` and the ``seed`` of R's
     generator (``set.seed``) for the simulated predictions.
@@ -331,7 +336,21 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
     if callable(predict) or isinstance(predict, Mapping):
         raise ValueError("user written prediction functions are not yet supported")
     if isinstance(fit, YatesModel):
-        return _YatesSetup("linear")
+        response = yates_setup(fit, predict)
+        if response is None:
+            return _YatesSetup("linear")
+        if not callable(response):
+            raise TypeError("the GLM prediction setup must be callable")
+        if options is not None and not isinstance(options, Mapping):
+            raise TypeError("options must be a mapping")
+        settings = dict(options or {})
+        if unknown := set(settings) - {"seed"}:
+            raise TypeError(
+                f"unrecognized response options: {', '.join(sorted(map(str, unknown)))}"
+            )
+        return _YatesSetup(
+            "response", _integer_scalar(settings.get("seed", 0), "seed"), response=response
+        )
     kind = _match_string_arg(
         # match.arg(NULL) is the first choice
         "lp" if predict is None else predict,
@@ -386,7 +405,10 @@ def yates(
     their R-compatible random stream.  ``population`` is ``"data"``, ``"factorial"``,
     ``"sas"`` or a data frame.  With aliased coefficients, a level the fit cannot
     estimate has an NA mean and the tests that use it are NA.  ``YatesModel`` adapts
-    externally fitted linear models without refitting them.
+    externally fitted linear models and GLMs without refitting them. Supply
+    its ``family`` and use ``predict="response"`` for inverse-link simulations.
+    As in R, nonlinear population averages are unweighted; case weights apply
+    to linear data-population means.
     ``term`` can select several variables, e.g. ``"a + b"`` or ``"a:b"``,
     or use one-based fitted term numbers such as ``[1, 2]``.
     A ``levels`` mapping supplies per-variable values; omitted categorical
@@ -412,6 +434,7 @@ def yates(
     )
     if population is None:
         population = "sas" if method_value == "sgtt" else "data"
+    population_names: list[str] = []
     if isinstance(population, str):
         population = _match_string_arg(
             population.lower(),
@@ -420,9 +443,14 @@ def yates(
             "unknown population",
         )
         population = {"empirical": "data", "yates": "factorial"}.get(population, population)
-    elif not isinstance(population, Mapping):
-        raise TypeError("the population argument must be a data frame or character")
-    if method_value == "sgtt" and (population != "sas" or setup.predict != "linear"):
+    else:
+        frame_names = _data_column_names(population)
+        if frame_names is None:
+            raise TypeError("the population argument must be a data frame or character")
+        population_names = frame_names
+    if method_value == "sgtt" and (
+        not isinstance(population, str) or population != "sas" or setup.predict != "linear"
+    ):
         raise ValueError("sgtt method only applies if population = sas and predict = linear")
     test_value = _match_string_arg(test, "test", ["global", "trend", "pairwise"], "invalid test")
 
@@ -432,14 +460,18 @@ def yates(
     if len(vmat) > len(kept):
         vmat = _columns([vmat[idx] for idx in kept], kept)
     yates_term = _yates_term(design, term, levels)
-    if isinstance(population, Mapping):
-        pdata = {str(name): list(values) for name, values in population.items()}
-        weights = None
-    else:
+    if isinstance(population, str):
         mframe = _yates_model_frame(fit)
         pdata = _yates_population(mframe, design, yates_term, population)
         weights = _yates_weights(mframe, population)
+    else:
+        pdata = {str(name): _column(population, name) for name in population_names}
+        weights = None
+    if not pdata or not len(next(iter(pdata.values()))):
+        raise ValueError("population must contain at least one row")
     n_pop = len(next(iter(pdata.values())))
+    if any(len(values) != n_pop for values in pdata.values()):
+        raise ValueError("population columns must have the same length")
     factor_values = (
         {
             spec.term: pdata[_covariate_term_name(spec.term)]
@@ -498,7 +530,9 @@ def yates(
             "term": yates_term.names[0] if len(yates_term.names) == 1 else "global",
         }
         xmatlist = [_columns(rows, columns) for rows in xmatlist]
-        if setup.baseline is None:
+        if setup.response is not None:
+            result = _core.yates_response(xmatlist, beta, vmat, setup.response, **simulation)
+        elif setup.baseline is None:
             result = _core.yates_risk(xmatlist, beta, vmat, means, **simulation)
         else:
             baseline = setup.baseline
