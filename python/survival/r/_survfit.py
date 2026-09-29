@@ -32,6 +32,7 @@ from ._coerce import (
     _mstate_categories,
     _mstate_event_label,
     _pop_dotted_keyword,
+    _quantile_vector,
     _r_factor,
     _scalar_or_vector,
     _start_time_value,
@@ -54,7 +55,7 @@ from ._formula import (
     _timeline_counting,
     _timeline_response,
 )
-from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv
+from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv, is_na_surv
 from ._types import (
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
@@ -1539,9 +1540,10 @@ def quantile_survfit(
 ) -> SurvfitQuantileResult:
     """R's ``quantile.survfit``: the quantiles of each curve and of its confidence bands.
 
-    A ``survfit.coxph`` object reports its ``start_time`` (else 0) for a probability of 0 and
+    A ``survfit.coxph`` object uses its ``start_time`` (else 0) as the curve origin and
     has a row per curve, labelled as the rows of ``summary_survfit``'s table (R returns a
-    stratum x curve x probability array when there are both).
+    stratum x curve x probability array when there are both). With the default tolerance,
+    entirely censored curves have undefined quantiles, including at probability zero.
     """
 
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, True)
@@ -1560,7 +1562,7 @@ def quantile_survfit(
         start_time = 0.0
     else:
         raise TypeError("Must be a survfit object")
-    probs = _float_vector([probs] if isinstance(probs, int | float) else probs, "probs")
+    probs = _quantile_vector(probs, "probs")
     if any(math.isnan(value) for value in probs):
         raise ValueError("invalid probability")
     if any(value < 0.0 or value > 1.0 for value in probs):
@@ -1590,6 +1592,52 @@ def quantile_survfit(
         strata=labels or None,
         lower=rows("lower"),
         upper=rows("upper"),
+    )
+
+
+def quantile_surv(
+    x: Surv,
+    probs: Any = (0.25, 0.5, 0.75),
+    na_rm: Any = False,
+    *,
+    conf_int: Any = True,
+    scale: Any = 1,
+    tolerance: Any | None = None,
+    **kwargs: Any,
+) -> SurvfitQuantileResult:
+    """R's ``quantile.Surv``: fit the response, then invert its survival curve.
+
+    The fitted curve uses Kaplan–Meier for right/counting responses and
+    Turnbull for left/interval censoring. Confidence bounds default to on.
+    Missing rows require ``na_rm=True``; multiple-endpoint responses are refused.
+    The result has one curve row, as for :func:`quantile_survfit`.
+    """
+
+    if not isinstance(x, Surv):
+        raise TypeError("argument is not a Surv object")
+    na_rm = _pop_dotted_keyword(kwargs, "na.rm", "na_rm", na_rm, False)
+    if not _logical(na_rm, "na.rm must be TRUE/FALSE") and any(is_na_surv(x)):
+        raise ValueError("missing values and NaN's not allowed if 'na.rm' is FALSE")
+    if x.type in {"mright", "mcounting"}:
+        raise ValueError("quantile method not defined for multiple-endpoint Surv objects")
+    return quantile_survfit(
+        survfit(x), probs, conf_int=conf_int, scale=scale, tolerance=tolerance, **kwargs
+    )
+
+
+def median_surv(x: Surv, na_rm: Any = False, **kwargs: Any) -> SurvfitQuantileResult:
+    """R's ``median.Surv``: a 0.5 quantile, including confidence bounds by default."""
+
+    return quantile_surv(x, probs=0.5, na_rm=na_rm, **kwargs)
+
+
+def median_survfit(
+    x: Any, *, scale: Any = 1, tolerance: Any | None = None, **kwargs: Any
+) -> SurvfitQuantileResult:
+    """R's ``median.survfit``: one median per curve, without confidence bounds."""
+
+    return quantile_survfit(
+        x, probs=0.5, conf_int=False, scale=scale, tolerance=tolerance, **kwargs
     )
 
 

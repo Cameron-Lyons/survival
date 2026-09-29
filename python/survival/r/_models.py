@@ -52,7 +52,15 @@ from ._formula import _formula_columns
 from ._formula import model_frame as _formula_model_frame
 from ._pyears import _pyears_result_frame, summary_pyears
 from ._surv import Surv
-from ._survfit import _derived_survfit, _engine_of, summary_survfit
+from ._survfit import (
+    _derived_survfit,
+    _engine_of,
+    median_surv,
+    median_survfit,
+    quantile_surv,
+    quantile_survfit,
+    summary_survfit,
+)
 from ._survfit_residuals import survfit_residuals
 from ._survreg import (
     SurvregAnovaResult,
@@ -80,10 +88,45 @@ from ._types import (
     SummarySurvfitCoxmsResult,
     SurvDiffResult,
     SurvfitMultiStateResult,
+    SurvfitQuantileResult,
     SurvfitResult,
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
+
+
+@singledispatch
+def quantile(x: Any, probs: Any = (0.25, 0.5, 0.75), **kwargs: Any) -> SurvfitQuantileResult:
+    """R's quantile methods for ``Surv`` responses and fitted survival curves.
+
+    ``probs`` defaults to the quartiles; ``conf_int``, ``scale`` and ``tolerance``
+    are the curve quantile options. Responses additionally accept ``na_rm``.
+    """
+
+    raise TypeError("quantile requires a Surv response or survfit object")
+
+
+@singledispatch
+def median(x: Any, **kwargs: Any) -> SurvfitQuantileResult:
+    """R's median methods for responses and survival curves.
+
+    A response includes confidence bounds by default; a fitted curve returns
+    only its median. Both return a ``SurvfitQuantileResult`` with ``probs=[0.5]``.
+    """
+
+    raise TypeError("median requires a Surv response or survfit object")
+
+
+quantile.register(Surv, quantile_surv)
+median.register(Surv, median_surv)
+quantile.register(
+    SurvfitResult | CoxSurvfitResult | SurvfitMultiStateResult | CoxSurvfitMultiStateResult,
+    quantile_survfit,
+)
+median.register(
+    SurvfitResult | CoxSurvfitResult | SurvfitMultiStateResult | CoxSurvfitMultiStateResult,
+    median_survfit,
+)
 
 
 def _no_method(generic: str) -> TypeError:

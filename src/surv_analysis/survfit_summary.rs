@@ -691,16 +691,40 @@ pub struct SurvfitQuantiles {
     pub upper: Option<Vec<Vec<f64>>>,
 }
 
-/// `approx(x, seq_along(x), v, method = "constant", f = 1)` on a strictly
-/// increasing `x` with the `NA` points removed: the index of the first `x`
-/// at or above `v`, `None` outside the range.
-fn approx_constant_index(points: &[(f64, usize)], v: f64) -> Option<usize> {
-    let first = points.first()?;
-    if v < first.0 {
+/// Constant interpolation with `f = 1` on sorted nonmissing points, shifted
+/// by the tolerance. R averages indices when rounding the shift creates a
+/// tie, then truncates that index when subscripting the time vector.
+/// The same point buffer serves both shifts; only a queried tie is reduced.
+fn approx_constant_index(points: &[(f64, usize)], shift: f64, v: f64) -> Option<usize> {
+    if v < points.first()?.0 + shift {
         return None;
     }
-    let k = points.partition_point(|&(x, _)| x < v);
-    points.get(k).map(|&(_, index)| index)
+    let k = points.partition_point(|&(x, _)| x + shift < v);
+    let &(x, index) = points.get(k)?;
+    let target = x + shift;
+    let mut end = k + 1;
+    let mut sum = index as f64;
+    while end < points.len() && points[end].0 + shift == target {
+        sum += points[end].1 as f64;
+        end += 1;
+    }
+    Some((sum / (end - k) as f64) as usize)
+}
+
+/// Confidence bands need not be monotone. `approx` sorts their abscissae;
+/// the ordinate remains the index in the original unique-level time vector.
+fn approximation_points(values: &[f64]) -> Vec<(f64, usize)> {
+    let mut points = Vec::with_capacity(values.len());
+    points.extend(
+        values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| (!v.is_nan()).then_some((v, i))),
+    );
+    if !points.windows(2).all(|w| w[0].0 <= w[1].0) {
+        points.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    points
 }
 
 /// `findq` of `quantile.survfit`: where a horizontal line at `p` intersects
@@ -721,27 +745,42 @@ fn findq(x: &[f64], y: &[f64], probs: &[f64], tol: f64) -> Vec<f64> {
     // for approx (R's duplicated() treats NA as a repeat of NA).
     let mut xs = Vec::with_capacity(x.len());
     let mut ys = Vec::with_capacity(y.len());
-    let mut seen = std::collections::HashSet::with_capacity(y.len());
+    // Ordinary survival curves and most confidence bands are monotone.
+    // Adjacent comparisons avoid a hash table on that common path. Keep
+    // the first NA in its original position, as R's duplicated() does.
+    let monotone = y.iter().filter(|v| !v.is_nan()).is_sorted();
+    let mut seen = (!monotone).then(|| std::collections::HashSet::with_capacity(y.len()));
+    let mut last_finite = None;
+    let mut seen_nan = false;
     for (&xi, &yi) in x.iter().zip(y) {
-        let key = if yi.is_nan() {
-            f64::NAN.to_bits()
+        let keep = if let Some(seen) = seen.as_mut() {
+            let key = if yi.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                (yi + 0.0).to_bits()
+            };
+            seen.insert(key)
+        } else if yi.is_nan() {
+            let keep = !seen_nan;
+            seen_nan = true;
+            keep
         } else {
-            (yi + 0.0).to_bits()
+            let keep = last_finite != Some(yi);
+            last_finite = Some(yi);
+            keep
         };
-        if seen.insert(key) {
+        if keep {
             xs.push(xi);
             ys.push(yi);
         }
     }
     let n = ys.len();
-    let finite: Vec<usize> = (0..n).filter(|&i| !ys[i].is_nan()).collect();
-    let plus: Vec<(f64, usize)> = finite.iter().map(|&i| (ys[i] + tol, i)).collect();
-    let minus: Vec<(f64, usize)> = finite.iter().map(|&i| (ys[i] - tol, i)).collect();
+    let points = approximation_points(&ys);
     probs
         .iter()
         .map(|&p| {
-            let indx1 = approx_constant_index(&plus, p);
-            let indx2 = approx_constant_index(&minus, p);
+            let indx1 = approx_constant_index(&points, tol, p);
+            let indx2 = approx_constant_index(&points, -tol, p);
             let mut quant = match (indx1, indx2) {
                 (Some(i1), Some(i2)) => (xs[i1] + xs[i2]) / 2.0,
                 _ => f64::NAN,
@@ -749,12 +788,9 @@ fn findq(x: &[f64], y: &[f64], probs: &[f64], tol: f64) -> Vec<f64> {
             if p == 0.0 {
                 quant = xs[0];
             }
-            if !ys[n - 1].is_nan()
-                && (p - ys[n - 1]).abs() < tol
-                && let Some(i1) = indx1
-            {
+            if !ys[n - 1].is_nan() && (p - ys[n - 1]).abs() < tol {
                 // end of the curve
-                quant = (xs[i1] + xmax) / 2.0;
+                quant = indx1.map_or(f64::NAN, |i1| (xs[i1] + xmax) / 2.0);
             }
             quant
         })
@@ -808,6 +844,9 @@ pub fn quantile_survfit_from(
         return Err(SurvivalError::invalid_input("start time must be finite"));
     }
     let tol = tolerance.unwrap_or_else(r_tolerance);
+    if !tol.is_finite() {
+        return Err(SurvivalError::invalid_input("tolerance must be finite"));
+    }
     let conf_int = conf_int && fit.lower.is_some() && fit.upper.is_some();
     let xmin = origin;
     let doquant = |time: &[f64], surv: &[f64]| -> Vec<f64> {
@@ -1148,5 +1187,47 @@ mod tests {
         assert_eq!(q.quantile[0][3], 5.0);
         let table = survmean(&survfit0(&fit), 1.0, RmeanOption::None).unwrap();
         assert_eq!(table.median, vec![3.0]);
+    }
+
+    #[test]
+    fn quantile_search_matches_r_for_bands_missing_values_and_rounded_ties() {
+        let reference: serde_json::Value = serde_json::from_str(include_str!(
+            "../../python/tests/fixtures/surv_quantile_reference.json"
+        ))
+        .unwrap();
+        let numbers = |value: &serde_json::Value| -> Vec<f64> {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap_or(f64::NAN))
+                .collect()
+        };
+        for case in reference["findq"].as_array().unwrap() {
+            let actual = findq(
+                &numbers(&case["x"]),
+                &numbers(&case["y"]),
+                &numbers(&case["p"]),
+                case["tol"].as_f64().unwrap(),
+            );
+            let expected = numbers(&case["expected"]);
+            assert_eq!(actual.len(), expected.len());
+            for (a, b) in actual.iter().zip(expected) {
+                assert!(
+                    (*a - b).abs() < 1e-14 || (a.is_nan() && b.is_nan()),
+                    "{}: {a} != {b}",
+                    case["name"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_quantiles_reject_nonfinite_tolerance() {
+        for tolerance in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                quantile_survfit(&aml_maintained(), &[0.5], false, 1.0, Some(tolerance)).is_err()
+            );
+        }
     }
 }

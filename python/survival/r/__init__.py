@@ -73,6 +73,7 @@ from ._models import (
     extract_aic,
     fitted,
     loglik,
+    median,
     model_formula,
     model_frame,
     model_matrix,
@@ -82,6 +83,7 @@ from ._models import (
     nobs,
     predict,
     predict_terms_constant,
+    quantile,
     residuals,
     vcov,
 )
@@ -109,6 +111,9 @@ from ._surv import (
 from ._survdiff import survdiff
 from ._survfit import (
     aggregate_survfit,
+    median_surv,
+    median_survfit,
+    quantile_surv,
     quantile_survfit,
     summary_survfit,
     survfit,
@@ -289,6 +294,11 @@ __all__ = [
     "predict",
     "print_survreg_penal",
     "predict_terms_constant",
+    "median",
+    "median_surv",
+    "median_survfit",
+    "quantile",
+    "quantile_surv",
     "quantile_survfit",
     "psurvreg",
     "qsurvreg",
