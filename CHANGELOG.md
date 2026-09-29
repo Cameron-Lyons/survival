@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add detailed survival-summary and expected-survival reports with grouped
+  tables, confidence columns, state probabilities and full-precision data-frame
+  conversion. Preserve conditional cutoff units when formatting scaled summaries.
 - Add compact survival reports for Kaplan–Meier, Turnbull, Cox and multistate
   curves, including counts, medians, restricted means and R-style text formatting.
   Reports use the Rust summary kernels without expanding event-time arrays and

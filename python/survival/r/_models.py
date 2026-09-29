@@ -60,6 +60,7 @@ from ._pyears import (
     summary_survexp,
 )
 from ._surv import Surv
+from ._surv_summary_print import SurvivalTablePrint
 from ._survfit import (
     _derived_survfit,
     _engine_of,
@@ -1294,6 +1295,24 @@ def _survfit_print_frame(result: SurvfitPrint) -> dict[str, list[Any]]:
     if table.rownames is not None:
         frame["curve"] = list(table.rownames)
     frame.update((name, [row[j] for row in table.values]) for j, name in enumerate(table.colnames))
+    return frame
+
+
+@as_data_frame.register(SurvivalTablePrint)
+def _survival_table_print_frame(result: SurvivalTablePrint) -> dict[str, list[Any]]:
+    if not result.tables:
+        return {}
+    columns = result.tables[0].colnames
+    if any(table.colnames != columns for table in result.tables):
+        raise ValueError("report tables must have matching columns")
+    frame: dict[str, list[Any]] = {name: [] for name in columns}
+    if any(group is not None for group in result.groups):
+        frame["strata"] = []
+    for table, group in zip(result.tables, result.groups, strict=True):
+        for j, name in enumerate(columns):
+            frame[name].extend(row[j] for row in table.values)
+        if "strata" in frame:
+            frame["strata"].extend([group] * len(table.values))
     return frame
 
 

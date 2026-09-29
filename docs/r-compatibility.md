@@ -1047,6 +1047,16 @@ restricted means, scaling and column-block wrapping. `SurvfitPrint.table` and
 See [survival reports](survival-reports.md) for defaults, R reference tests,
 allocation measurements and differences in output metadata.
 
+`print_summary_survfit` and `print_summary_survfitms` format detailed time rows,
+including grouped Cox predictions and state probabilities. `print_survexp` and
+`print_summary_survexp` format expected curves with a risk column per group.
+Their `SurvivalTablePrint` objects retain numeric tables and support
+`as_data_frame`. Summary objects retain complete strata levels, response type,
+and a conditional cutoff in the same units as their times. This corrects R's
+scaled-report cutoff bug; the port also reports a clear error for an entirely
+event-free summary instead of R's failed NULL-to-matrix conversion. The report
+guide documents layouts, metadata omissions and 58 detailed R reference cases.
+
 ## Graphics
 
 `survival.plotting` provides optional Matplotlib rendering through the generic
@@ -1071,10 +1081,11 @@ error; none silently falls back to other behaviour.
 
 - **Remaining R-style print and format methods**: `survival.r` returns data
   objects and `as_data_frame` tables for most model and summary reports.
-  `print_survfit`, `print_survfitms`, and `print_survreg_penal` provide compact
-  formatted reports; `format_surv` formats a `Surv`, and
-  `str(summary_ratetable(...))` exposes the native rate-table text. Other printed
-  summaries and the sparse (frailty) branch of `print.survreg.penal` are not ported.
+  Compact and detailed survival-curve reports, expected-survival reports, and
+  `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
+  `str(summary_ratetable(...))` exposes the native rate-table text. Other model
+  and test-statistic reports and the sparse (frailty) branch of
+  `print.survreg.penal` are not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.

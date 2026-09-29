@@ -73,8 +73,72 @@ R print options: pass options explicitly. The numerical kernels retain the
 [documented R corrections](r-compatibility.md), including stratum-specific event
 counts for multistate Cox curves with several prediction rows.
 
-`print.summary.survfit` and model coefficient reports remain separate work;
-`r.summary_survfit` already returns their underlying numerical summaries.
+## Detailed and expected-survival tables
+
+`r.print_summary_survfit` formats the event-time or requested-time rows from
+`r.summary_survfit`. It dispatches multistate summaries to
+`r.print_summary_survfitms`; both return a `SurvivalTablePrint` object.
+
+```python
+summary = r.summary_survfit(fit, times=[100, 300, 600])
+detail = r.print_summary_survfit(summary, digits=4)
+print(detail)
+rows = r.as_data_frame(detail)
+```
+
+The report holds one `NamedMatrix` in `tables` per entry in `groups`; an
+ungrouped table uses `None` as its label. `as_data_frame` combines groups into
+full-precision columns and adds `strata` when groups exist. Each table's values
+and labels are independent of the source summary.
+
+Ordinary summaries show time, risk and event counts, survival, and available
+standard errors and confidence limits. Several Cox prediction curves receive
+separate survival columns; as in R, their confidence columns are omitted from
+this report. Counting-process summaries with entry counts also show censor
+counts. Multistate reports show total risk and event counts plus one probability
+column per state. A one-state result includes its available confidence columns;
+multistate Cox predictions form separate `data 1`, `data 2`, ... groups.
+
+Strata print in separate blocks. R's one-row blocks use named-vector layout
+with shared precision across values; the port preserves that behavior while
+keeping a matrix in `tables`. Empty ordinary strata retain their headers.
+An entirely event-free summary raises a clear error: request
+`summary_survfit(..., censored=True)` to include censoring observations.
+
+`r.print_survexp` formats expected curves, and `r.print_summary_survexp` formats
+their selected-time summaries. Group names on expected-survival objects name
+columns, so one table contains the time grid, risk counts and probabilities.
+Both return `SurvivalTablePrint`, use three digits by default, and accept
+`width`. Expected-curve printing also accepts a positive `scale` and `naprint`.
+Like R, `naprint=False` drops rows having at least the number of columns minus
+two missing cells; `True` keeps them. Expected-summary printing retains missing
+cells. Original call expressions, omission notices and rate-table prose are
+not reconstructed.
+
+```python
+reference = r.coxph("Surv(time, status) ~ age + sex", datasets.load_lung())
+expected = r.survexp("~sex", datasets.load_lung(), ratetable=reference, times=[100, 300, 600])
+print(r.print_survexp(expected))
+print(r.print_summary_survexp(r.summary_survexp(expected, times=[0, 200, 500])))
+```
+
+Native summary objects retain their response `type`, complete `strata_levels`,
+and conditional `start_time` for reporting. `start_time` uses the same units as
+the scaled summary times. This fixes R 3.8-12's report filtering, which compares
+scaled times with an unscaled cutoff and can drop all valid rows. Requested
+times before a multistate conditional start are handled by the existing native
+summary selector; R can produce mismatched time/probability lengths and fail
+when printing them. Expected-summary reports retain each curve's own risk counts,
+including when requested times are supplied.
+
+`scripts/generate_detailed_report_reference.R` records 58 R cases, including
+56 numeric/text outputs and two explicit failures. Tests compare all displayed
+tables and text, then exercise native summary construction, conditional scaling,
+empty groups, data-frame conversion, copies and serialization. Report preparation
+groups rows in one pass, sums multistate counts in NumPy, and filters expected
+curve missingness before creating Python output rows. It does not refit models.
+
+Other model coefficient and test-statistic reports remain separate work.
 
 ## Validation and allocation cost
 
