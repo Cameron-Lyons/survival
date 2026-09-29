@@ -65,12 +65,21 @@ def _python_steps_during(call: Callable[[], object]) -> tuple[int, float]:
 
 
 def _assert_detaches(call: Callable[[], object]) -> None:
-    idle_steps, idle_time = _python_steps_during(lambda: time.sleep(0.02))
-    steps, elapsed = _python_steps_during(call)
-    # With the GIL held the thread only runs at the call's boundaries (a share near 0);
-    # detached, it runs for most of the call.
-    share = (steps / elapsed) / (idle_steps / idle_time)
-    assert share > 0.1, f"the thread ran for {share:.1%} of a {elapsed:.3f} s call"
+    best_share = 0.0
+    elapsed = 0.0
+    # Shared CI runners can briefly deschedule the spinner. Retry the complete
+    # measurement, including its baseline, without lowering the GIL-release threshold.
+    for _ in range(3):
+        idle_steps, idle_time = _python_steps_during(lambda: time.sleep(0.02))
+        steps, elapsed = _python_steps_during(call)
+        share = (steps / elapsed) / (idle_steps / idle_time)
+        best_share = max(best_share, share)
+        if share > 0.1:
+            return
+    assert best_share > 0.1, (
+        f"the thread ran for at most {best_share:.1%} across three measurements "
+        f"(last call: {elapsed:.3f} s)"
+    )
 
 
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
