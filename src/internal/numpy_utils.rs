@@ -201,7 +201,7 @@ mod python {
     use pyo3::Borrowed;
     use pyo3::exceptions::{PyTypeError, PyValueError};
     use pyo3::prelude::*;
-    use pyo3::types::{PyDict, PyList, PyTuple};
+    use pyo3::types::{PyDict, PyFloat, PyList, PyTuple};
     use std::convert::Infallible;
 
     use super::{BoolVec, FloatMatrix, FloatRows, FloatVec, IntVec};
@@ -371,6 +371,9 @@ mod python {
             return Ok(FloatMatrix(read_2d(array)));
         }
         if is_plain_sequence(obj) {
+            if let Some(matrix) = plain_matrix(obj) {
+                return Ok(matrix);
+            }
             if let Ok(rows) = obj.extract::<Vec<Vec<f64>>>() {
                 return FloatMatrix::from_rows(rows).map_err(PyErr::from);
             }
@@ -383,6 +386,48 @@ mod python {
             1 => Ok(column_matrix(read_1d(converted.cast::<PyArray1<f64>>()?))),
             ndim => Err(wrong_ndim(obj, "a float matrix", ndim)),
         }
+    }
+
+    /// Lists/tuples of float rows go directly into one row-major allocation.
+    /// Keep the general extractor for sequence subclasses, array-valued rows,
+    /// other scalar types, vectors and invalid inputs. Reading only PyFloat
+    /// objects cannot invoke custom conversion methods before falling back.
+    fn plain_matrix(obj: &Bound<'_, PyAny>) -> Option<FloatMatrix> {
+        let exact_sequence = |value: &Bound<'_, PyAny>| {
+            value.is_exact_instance_of::<PyList>() || value.is_exact_instance_of::<PyTuple>()
+        };
+        if !exact_sequence(obj) {
+            return None;
+        }
+        let nrow = obj.len().ok()?;
+        let ncol = if nrow == 0 {
+            0
+        } else {
+            let first = obj.get_item(0).ok()?;
+            if !exact_sequence(&first) {
+                return None;
+            }
+            first.len().ok()?
+        };
+        let mut values = Vec::with_capacity(nrow.checked_mul(ncol)?);
+        for row in obj.try_iter().ok()? {
+            let row = row.ok()?;
+            if !exact_sequence(&row) || row.len().ok()? != ncol {
+                return None;
+            }
+            if let Ok(row) = row.cast::<PyList>() {
+                for value in row.iter() {
+                    values.push(value.cast::<PyFloat>().ok()?.value());
+                }
+            } else {
+                for value in row.cast::<PyTuple>().ok()?.iter() {
+                    values.push(value.cast::<PyFloat>().ok()?.value());
+                }
+            }
+        }
+        Array2::from_shape_vec((nrow, ncol), values)
+            .ok()
+            .map(FloatMatrix)
     }
 
     fn read_rows(array: &Bound<'_, PyArray2<f64>>) -> FloatRows {
@@ -756,6 +801,17 @@ mod python_tests {
 
             let rows = matrix(py, "[[1, 2, 3], [4, 5, 6]]").unwrap();
             assert_eq!((rows.nrow(), rows.ncol()), (2, 3));
+            for expr in [
+                "[[1.0, 2.0], (3.0, 4.0)]",
+                "((1, 2), (3, 4))",
+                "[(1, 2), [3, 4]]",
+                "[np.array([1., 2.]), [3, 4]]",
+                "type('Rows', (list,), {})([[1, 2], [3, 4]])",
+            ] {
+                assert_eq!(matrix(py, expr).unwrap().as_flat(), &[1., 2., 3., 4.]);
+            }
+            assert_eq!(matrix(py, "[]").unwrap().dim(), (0, 0));
+            assert_eq!(matrix(py, "[[], ()]").unwrap().dim(), (2, 0));
 
             let column = matrix(py, "[1.0, 2.0, 3.0]").unwrap();
             assert_eq!((column.nrow(), column.ncol()), (3, 1));

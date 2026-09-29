@@ -112,6 +112,10 @@ including strided arrays, pandas/polars columns, and Python sequences. Status
 values must be binary; integral floating-point arrays are accepted with checked
 conversion. The numerical fit runs in Rust with the Python GIL released.
 
+Cox and AFT matrix inputs also accept these array layouts. Lists and tuples
+of float rows fill a single Rust matrix allocation. See
+[matrix input conversion and benchmarks](docs/python-matrix-inputs.md).
+
 For right-censored curves with independent observations, robust standard errors
 use a linear sweep after sorting, including when fractional case weights select
 robust variance automatically. Repeated clusters, counting-process data, and
