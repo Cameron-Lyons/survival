@@ -1171,6 +1171,11 @@ log-scales, initial-fit coefficients, score coordinates and R's naming
 conventions. Its lightweight native result shares the full solver without
 retaining training rows or callbacks. See [bare AFT fitting](aft-low-level-fitting.md)
 for prepared response codes, custom densities and R reference tests.
+The R `survreg.fit` bridge also uses this compact path, including vectorized
+R density callbacks. It preserves names and R warning conditions, honors
+explicit callback lists regardless of their display name, and passes matrices
+without building per-row R lists. The same document records complete R-call
+benchmarks against the previous bridge and stock survival.
 
 `survpenal_fit` exposes the corresponding compact penalized AFT interface,
 including ridge, spline, dense/sparse frailty and callback penalties.
