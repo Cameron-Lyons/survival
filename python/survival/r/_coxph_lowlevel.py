@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
-
-import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
@@ -17,6 +15,7 @@ from ._coerce import (
     _materialize_labels,
     _matrix_input_column_names,
     _normalize_bool_option,
+    _numeric_design_matrix,
     _warn_outside_package,
 )
 from ._coxph import _cox_fit_diagnostic_messages, coxph_control
@@ -93,25 +92,6 @@ class CoxFitResult:
         return ("coxph.null", "coxph") if self.null_model else ("coxph",)
 
 
-def _design(x: Any, n: int, kind: str) -> np.ndarray:
-    if isinstance(x, Mapping):
-        values = np.column_stack(list(x.values())) if x else np.empty((n, 0))
-    else:
-        values = x.to_numpy() if hasattr(x, "to_numpy") else x
-    matrix = np.asarray(values)
-    if matrix.ndim == 1 and matrix.size == 0:
-        matrix = np.empty((n, 0))
-    elif matrix.ndim == 1 and kind == "coxph":
-        matrix = matrix.reshape(-1, 1)
-    if matrix.ndim != 2:
-        raise ValueError("Invalid formula for cox fitting function")
-    if matrix.shape[0] != n:
-        raise ValueError("x and y have different numbers of rows")
-    if matrix.dtype.kind not in "biuf":
-        raise TypeError("x must be a numeric matrix")
-    return matrix.astype(np.float64, copy=False)
-
-
 def _fit(
     kind: str,
     x: Any,
@@ -137,7 +117,13 @@ def _fit(
     if any(value is None for value in y.event):
         raise ValueError("y contains missing status values")
     n = len(y)
-    matrix = _design(x, n, kind)
+    matrix = _numeric_design_matrix(
+        x,
+        n,
+        vector=kind == "coxph",
+        empty=True,
+        invalid="Invalid formula for cox fitting function",
+    )
     p = matrix.shape[1]
     options = coxph_control(**({} if control is None else _control_mapping(control, "control")))
     residuals = _normalize_bool_option(resid, "resid")

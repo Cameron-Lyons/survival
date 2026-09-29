@@ -51,6 +51,7 @@ mod survreg_callbacks;
 pub(crate) mod survreg_density;
 pub use survreg_callbacks::{SurvregCallbacks, SurvregTransformCallbacks};
 pub(crate) mod survreg_distributions;
+pub(crate) mod survreg_lowlevel;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
@@ -144,4 +145,5 @@ pub use survreg_distributions::{
     SurvregDensity, SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg,
     qsurvreg, rsurvreg, survreg_dtest,
 };
+pub use survreg_lowlevel::{SurvregFitResult, survreg_fit_raw};
 pub use survreg_predict::{SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg};

@@ -1139,7 +1139,7 @@ use the common curve renderer; R's obsolete `survfit.coxph` class has no separat
 Python representation. Matplotlib controls device layout, ticks, padding and fonts;
 the interface does not emulate base R graphics parameters.
 
-## Bare Cox fitters
+## Bare model fitters
 
 `coxph_fit`, `agreg_fit` and `agexact_fit` expose R's matrix interfaces with
 raw offsets, optional residuals, null-model components and iteration
@@ -1147,6 +1147,12 @@ diagnostics. Their lightweight native result shares the full-model optimizer
 without retaining training data or calculating full-model diagnostics.
 See [bare Cox fitting](cox-low-level-fitting.md) for method selection,
 output shapes, performance measurements and R reference checks.
+
+`survreg_fit` exposes the bare AFT matrix interface, preserving estimated
+log-scales, initial-fit coefficients, score coordinates and R's naming
+conventions. Its lightweight native result shares the full solver without
+retaining training rows or callbacks. See [bare AFT fitting](aft-low-level-fitting.md)
+for prepared response codes, custom densities and R reference tests.
 
 ## Not yet implemented
 
@@ -1167,7 +1173,7 @@ error; none silently falls back to other behaviour.
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
 - **Low-level R exports** that `survival.r` does not re-export:
-  `survreg.fit`, `survpenal.fit`, `survfitKM`,
+  `survpenal.fit`, `survfitKM`,
   `coxsurv.fit`, `survfitcoxph.fit`, `attrassign`, `untangle.specials`,
   `yates_setup`. Their computations are reachable through the formula functions
   and domain modules such as `survival.regression.coxph_fit`,

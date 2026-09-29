@@ -58,6 +58,7 @@ fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<P
         crate::concordance::ConcordanceCounts,
         crate::concordance::ConcordanceRanks,
         SurvregFit,
+        crate::regression::SurvregFitResult,
         SurvregControl,
         SurvregDistribution,
         SurvregFamily,

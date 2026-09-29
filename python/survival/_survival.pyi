@@ -9899,6 +9899,28 @@ class SurvregFit:
     @property
     def weights(self) -> list[float] | None: ...
 
+class SurvregFitResult:
+    @property
+    def coefficients(self) -> list[float]: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def df(self) -> int: ...
+    @property
+    def icoef(self) -> list[float]: ...
+    @property
+    def iter(self) -> int: ...
+    @property
+    def linear_predictors(self) -> list[float]: ...
+    @property
+    def loglik(self) -> list[float]: ...
+    @property
+    def rescaled(self) -> bool: ...
+    @property
+    def score(self) -> list[float]: ...
+    @property
+    def var(self) -> list[list[float]]: ...
+
 class SurvregPredictType:
     Lp: SurvregPredictType
     Quantile: SurvregPredictType
@@ -13789,6 +13811,14 @@ def survreg_fit(
     control: SurvregControl | None = None,
     robust: bool | None = None,
 ) -> SurvregFit: ...
+def survreg_fit_raw(
+    data: SurvregData,
+    distribution: SurvregDistribution,
+    init: Sequence[float] | None = None,
+    scale: float = 0.0,
+    control: SurvregControl | None = None,
+    nstrat: int | None = None,
+) -> SurvregFitResult: ...
 def survshap(
     x_explain: Sequence[float],
     x_background: Sequence[float],
