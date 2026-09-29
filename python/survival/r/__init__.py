@@ -14,6 +14,7 @@ from __future__ import annotations
 from .._survival import AnovaCoxphResult
 from ._aareg import aareg
 from ._aareg_print import print_aareg, print_summary_aareg
+from ._array_print import print_ratetable, print_surv, print_surv2
 from ._cch import cch
 from ._concordance import concordance, concordancefit, survConcordance, survConcordance_fit
 from ._coxph import (
@@ -198,6 +199,8 @@ from ._types import (
     PsplineResult,
     PyearsResult,
     RateTable,
+    RateTablePrint,
+    ResponsePrint,
     StateFigResult,
     StrataFactor,
     SummarySurvfitCoxmsResult,
@@ -226,6 +229,11 @@ from ._yates import yates
 from ._yates_model import YatesModel
 
 __all__ = [
+    "print_ratetable",
+    "print_surv",
+    "print_surv2",
+    "RateTablePrint",
+    "ResponsePrint",
     "print_pyears",
     "print_survcheck",
     "print_yates",

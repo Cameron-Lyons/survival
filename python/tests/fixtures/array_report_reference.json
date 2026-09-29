@@ -1,0 +1,813 @@
+{
+  "r_version": "R version 4.5.3 (2026-03-11)",
+  "survival_version": "3.8.12",
+  "objects": {
+    "right": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1.111111111, 2.22, 3, 4, 5, 100],
+        "event": [1, 0, 1, 0, 1, 0]
+      }
+    },
+    "counting": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [0, 1, 0, 3],
+        "time2": [1, 4, 5, 6],
+        "event": [1, 0, 1, 0]
+      }
+    },
+    "left": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [0.001, 10, "Inf", "NA"],
+        "event": [0, 1, 1, "NA"],
+        "type": "left"
+      }
+    },
+    "interval": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1, 2, 3, 4, 5, "NA"],
+        "time2": [2, 3, "Inf", 4, 8, 5],
+        "type": "interval2"
+      }
+    },
+    "missing": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1, "NA", 3, 4],
+        "event": [1, 0, "NA", 1]
+      }
+    },
+    "large": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 1000],
+        "event": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]
+      }
+    },
+    "states": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1, 2, 3, 4, 5],
+        "event": {
+          "values": ["none", "病気", "recovered", "病気", "none"],
+          "levels": ["none", "病気", "recovered"]
+        }
+      }
+    },
+    "escaped": {
+      "kind": "Surv",
+      "arguments": {
+        "time": [1, 2, 3, 4, 5],
+        "event": {
+          "values": ["quote\"d", "line\nnew", "tab\tnew", "slash\\end", "日本"],
+          "levels": ["quote\"d", "line\nnew", "tab\tnew", "slash\\end", "日本"]
+        }
+      }
+    },
+    "timeline": {
+      "kind": "Surv2",
+      "arguments": {
+        "time": [0, 2, 4, 0, 3],
+        "event": [0, 1, 0, 0, 1]
+      }
+    },
+    "timeline_states": {
+      "kind": "Surv2",
+      "arguments": {
+        "time": [0, 2, 4, 0, 3],
+        "event": {
+          "values": ["none", "病気", "recovered", "none", "病気"],
+          "levels": ["none", "病気", "recovered"]
+        },
+        "repeated": true
+      }
+    },
+    "one": {
+      "kind": "ratetable",
+      "dims": [3],
+      "dimid": ["age"],
+      "dimnames": [
+        ["first", "second", "third"]
+      ],
+      "rates": [0.000123456789, 0.000246913578, 0.000370370367]
+    },
+    "matrix": {
+      "kind": "ratetable",
+      "dims": [2, 3],
+      "dimid": ["age", "sex"],
+      "dimnames": [
+        ["first", "longer row"],
+        ["male", "female", "other"]
+      ],
+      "rates": [0.000123456789, 0.000246913578, 0.000370370367, 0.000493827156, 0.000617283945, 0.000740740734]
+    },
+    "array": {
+      "kind": "ratetable",
+      "dims": [2, 3, 2],
+      "dimid": ["age", "sex", "year"],
+      "dimnames": [
+        ["r1", "r2"],
+        ["one", "two", "three"],
+        ["a", "b"]
+      ],
+      "rates": [0.1234567, 0.2469134, 0.3703701, 0.4938268, 0.6172835, 0.7407402, 0.8641969, 0.9876536, 1.1111103, 1.234567, 1.3580237, 1.4814804]
+    },
+    "four": {
+      "kind": "ratetable",
+      "dims": [1, 2, 2, 2],
+      "dimid": ["age", "sex", "race", "year"],
+      "dimnames": [
+        ["row"],
+        ["M", "F"],
+        ["one", "two"],
+        ["A", "B"]
+      ],
+      "rates": [0.000123456789, 0.000246913578, 0.000370370367, 0.000493827156, 0.000617283945, 0.000740740734, 0.000864197523, 0.000987654312]
+    },
+    "precision": {
+      "kind": "ratetable",
+      "dims": [3, 2, 2],
+      "dimid": ["age", "sex", "year"],
+      "dimnames": [
+        ["x", "y", "z"],
+        ["first", "second"],
+        ["early", "late"]
+      ],
+      "rates": [1e-09, 2e-08, 9.99999999, 0, 1e-12, 3, 1000, 1e-09, 3.14159265, 1, 10, 1e-05]
+    },
+    "unicode": {
+      "kind": "ratetable",
+      "dims": [2, 2],
+      "dimid": ["年齢", "性別"],
+      "dimnames": [
+        ["a\nb", "日本"],
+        ["男", "女"]
+      ],
+      "rates": [0.1, 0.00012, 1.234, 12]
+    },
+    "labels": {
+      "kind": "ratetable",
+      "dims": [2, 2],
+      "dimid": ["row", "column"],
+      "dimnames": [
+        ["x", "y"],
+        ["a\"b", "c\\d"]
+      ],
+      "rates": [0.01, 0.002, 100, 200]
+    },
+    "survexp.us": {
+      "kind": "builtin",
+      "name": "survexp.us"
+    },
+    "survexp.usr": {
+      "kind": "builtin",
+      "name": "survexp.usr"
+    },
+    "survexp.mn": {
+      "kind": "builtin",
+      "name": "survexp.mn"
+    }
+  },
+  "cases": [
+    {
+      "name": "right",
+      "object": "right",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1]   1.111111    2.220000+   3.000000    4.000000+   5.000000  100.000000+"]
+    },
+    {
+      "name": "counting",
+      "object": "counting",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["(0,1]", "(1,4+]", "(0,5]", "(3,6+]"],
+      "lines": ["[1] (0,1]  (1,4+] (0,5]  (3,6+]"]
+    },
+    {
+      "name": "left",
+      "object": "left",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["1e-03-", "1e+01", "  Inf", "   NA?"],
+      "lines": ["[1] 1e-03- 1e+01    Inf     NA?"]
+    },
+    {
+      "name": "interval",
+      "object": "interval",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["[1, 2]", "[2, 3]", "3+", "4", "[5, 8]", "5-"],
+      "lines": ["[1] [1, 2] [2, 3] 3+     4      [5, 8] 5-"]
+    },
+    {
+      "name": "missing",
+      "object": "missing",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": [" 1", "NA+", " 3?", " 4"],
+      "lines": ["[1]  1  NA+  3?  4"]
+    },
+    {
+      "name": "large",
+      "object": "large",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1     2     3     4     5     6     7     8     9    10    11    12", "[13]   13    14  1000+"]
+    },
+    {
+      "name": "states",
+      "object": "states",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["1:none", "2:病気", "3:recovered", "4:病気", "5:none"],
+      "lines": ["[1] 1:none      2:病気      3:recovered 4:病気      5:none"]
+    },
+    {
+      "name": "escaped",
+      "object": "escaped",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["1:quote\"d", "2:line\nnew", "3:tab\tnew", "4:slash\\end", "5:日本"],
+      "lines": ["[1] 1:quote\"d    2:line\\nnew  3:tab\\tnew   4:slash\\\\end 5:日本"]
+    },
+    {
+      "name": "timeline",
+      "object": "timeline",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["0+", "2", "4+", "0+", "3"],
+      "lines": ["[1] 0+ 2  4+ 0+ 3"]
+    },
+    {
+      "name": "timeline_states",
+      "object": "timeline_states",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": ["0:none", "2:病気", "4:recovered", "0:none", "3:病気"],
+      "lines": ["[1] 0:none      2:病気      4:recovered 0:none      3:病気"]
+    },
+    {
+      "name": "one",
+      "object": "one",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age", "age", "       first       second        third", "0.0001234568 0.0002469136 0.0003703704"]
+    },
+    {
+      "name": "matrix",
+      "object": "matrix",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male       female        other", "  first      0.0001234568 0.0003703704 0.0006172839", "  longer row 0.0002469136 0.0004938272 0.0007407407"]
+    },
+    {
+      "name": "array",
+      "object": "array",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two     three", "  r1 0.1234567 0.3703701 0.6172835", "  r2 0.2469134 0.4938268 0.7407402", "", ", , year = b", "", "    sex", "age        one      two    three", "  r1 0.8641969 1.111110 1.358024", "  r2 0.9876536 1.234567 1.481480", ""]
+    },
+    {
+      "name": "four",
+      "object": "four",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex race year", ", , race = one, year = A", "", "     sex", "age              M            F", "  row 0.0001234568 0.0002469136", "", ", , race = two, year = A", "", "     sex", "age              M            F", "  row 0.0003703704 0.0004938272", "", ", , race = one, year = B", "", "     sex", "age              M            F", "  row 0.0006172839 0.0007407407", "", ", , race = two, year = B", "", "     sex", "age              M            F", "  row 0.0008641975 0.0009876543", ""]
+    },
+    {
+      "name": "precision",
+      "object": "precision",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = early", "", "   sex", "age first second", "  x 1e-09  0e+00", "  y 2e-08  1e-12", "  z 1e+01  3e+00", "", ", , year = late", "", "   sex", "age        first second", "  x 1.000000e+03  1e+00", "  y 1.000000e-09  1e+01", "  z 3.141593e+00  1e-05", ""]
+    },
+    {
+      "name": "unicode",
+      "object": "unicode",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): 年齢 性別", "      性別", "年齢      男     女", "  a\\nb 0.10000  1.234", "  日本 0.00012 12.000"]
+    },
+    {
+      "name": "labels",
+      "object": "labels",
+      "arguments": [],
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): row column", "   column", "row   a\"b c\\\\d", "  x 0.010  100", "  y 0.002  200"]
+    },
+    {
+      "name": "survexp.us",
+      "object": "survexp.us",
+      "arguments": {
+        "max": 6
+      },
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = 1940", "", "     sex", "age           male       female", "  0   1.473010e-04 1.161029e-04", "  1   1.518233e-05 1.342093e-05", "  2   7.923844e-06 6.688519e-06", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 80 slices ]"]
+    },
+    {
+      "name": "survexp.usr",
+      "object": "survexp.usr",
+      "arguments": {
+        "max": 6
+      },
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex race year", ", , race = white, year = 1940", "", "     sex", "age           male       female", "  0   1.350207e-04 1.057536e-04", "  1   1.336591e-05 1.185314e-05", "  2   7.264935e-06 6.029907e-06", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 161 slices ]"]
+    },
+    {
+      "name": "survexp.mn",
+      "object": "survexp.mn",
+      "arguments": {
+        "max": 6
+      },
+      "width": 80,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = 1970", "", "     sex", "age           male       female", "  0   5.461366e-05 3.960055e-05", "  1   3.369629e-06 2.300761e-06", "  2   2.328163e-06 1.944564e-06", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 50 slices ]"]
+    },
+    {
+      "name": "wrap_10",
+      "object": "large",
+      "arguments": {
+        "max": 12
+      },
+      "width": 10,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1", " [2]    2", " [3]    3", " [4]    4", " [5]    5", " [6]    6", " [7]    7", " [8]    8", " [9]    9", "[10]   10", "[11]   11", "[12]   12", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "wrap_20",
+      "object": "large",
+      "arguments": {
+        "max": 12
+      },
+      "width": 20,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1    2    3", " [4]    4    5    6", " [7]    7    8    9", "[10]   10   11   12", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "wrap_25",
+      "object": "large",
+      "arguments": {
+        "max": 12
+      },
+      "width": 25,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1    2    3    4", " [5]    5    6    7    8", " [9]    9   10   11   12", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "wrap_30",
+      "object": "large",
+      "arguments": {
+        "max": 12
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1    2    3    4    5", " [6]    6    7    8    9   10", "[11]   11   12", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "wrap_80",
+      "object": "large",
+      "arguments": {
+        "max": 12
+      },
+      "width": 80,
+      "row_names": null,
+      "labels": ["   1", "   2", "   3", "   4", "   5", "   6", "   7", "   8", "   9", "  10", "  11", "  12", "  13", "  14", "1000+"],
+      "lines": [" [1]    1    2    3    4    5    6    7    8    9   10   11   12", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "right_quoted",
+      "object": "right",
+      "arguments": {
+        "quote": true
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1] \"  1.111111\"", "[2] \"  2.220000+\"", "[3] \"  3.000000\"", "[4] \"  4.000000+\"", "[5] \"  5.000000\"", "[6] \"100.000000+\""]
+    },
+    {
+      "name": "right_aligned",
+      "object": "right",
+      "arguments": {
+        "right": true
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1]    1.111111   2.220000+", "[3]    3.000000   4.000000+", "[5]    5.000000 100.000000+"]
+    },
+    {
+      "name": "names",
+      "object": "right",
+      "arguments": [],
+      "width": 30,
+      "row_names": ["row1", "row2", "row3", "row4", "row5", "row6"],
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["       row1        row2", "   1.111111   2.220000+", "       row3        row4", "   3.000000   4.000000+", "       row5        row6", "   5.000000 100.000000+"]
+    },
+    {
+      "name": "names_quoted",
+      "object": "right",
+      "arguments": {
+        "quote": true,
+        "max": 3
+      },
+      "width": 30,
+      "row_names": ["first", "long", "日本", "other", "x", "y"],
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["        first          long", " \"  1.111111\" \"  2.220000+\"", "         日本", " \"  3.000000\"", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "escaped_quoted",
+      "object": "escaped",
+      "arguments": {
+        "quote": true
+      },
+      "width": 50,
+      "row_names": null,
+      "labels": ["1:quote\"d", "2:line\nnew", "3:tab\tnew", "4:slash\\end", "5:日本"],
+      "lines": ["[1] \"1:quote\\\"d\"   \"2:line\\nnew\"  \"3:tab\\tnew\"", "[4] \"4:slash\\\\end\" \"5:日本\""]
+    },
+    {
+      "name": "array_max_0",
+      "object": "array",
+      "arguments": {
+        "max": 0
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", " [ reached 'max' / getOption(\"max.print\") -- omitted 2 slices ]"]
+    },
+    {
+      "name": "array_max_1",
+      "object": "array",
+      "arguments": {
+        "max": 1
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one", "  r1 0.1234567", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_2",
+      "object": "array",
+      "arguments": {
+        "max": 2
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_3",
+      "object": "array",
+      "arguments": {
+        "max": 3
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "    sex", "age      three", "  r1 0.6172835", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_4",
+      "object": "array",
+      "arguments": {
+        "max": 4
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "    sex", "age      three", "  r1 0.6172835", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_5",
+      "object": "array",
+      "arguments": {
+        "max": 5
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "    sex", "age      three", "  r1 0.6172835", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_6",
+      "object": "array",
+      "arguments": {
+        "max": 6
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 slice ]"]
+    },
+    {
+      "name": "array_max_7",
+      "object": "array",
+      "arguments": {
+        "max": 7
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one", "  r1 0.8641969", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row 2 columns ]"]
+    },
+    {
+      "name": "array_max_8",
+      "object": "array",
+      "arguments": {
+        "max": 8
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one      two", "  r1 0.8641969 1.111110", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row 1 column ]"]
+    },
+    {
+      "name": "array_max_9",
+      "object": "array",
+      "arguments": {
+        "max": 9
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one      two", "  r1 0.8641969 1.111110", "    sex", "age     three", "  r1 1.358024", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "array_max_10",
+      "object": "array",
+      "arguments": {
+        "max": 10
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one      two", "  r1 0.8641969 1.111110", "    sex", "age     three", "  r1 1.358024", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "array_max_11",
+      "object": "array",
+      "arguments": {
+        "max": 11
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one      two", "  r1 0.8641969 1.111110", "    sex", "age     three", "  r1 1.358024", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "array_max_12",
+      "object": "array",
+      "arguments": {
+        "max": 12
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = a", "", "    sex", "age        one       two", "  r1 0.1234567 0.3703701", "  r2 0.2469134 0.4938268", "    sex", "age      three", "  r1 0.6172835", "  r2 0.7407402", "", ", , year = b", "", "    sex", "age        one      two", "  r1 0.8641969 1.111110", "  r2 0.9876536 1.234567", "    sex", "age     three", "  r1 1.358024", "  r2 1.481480", ""]
+    },
+    {
+      "name": "matrix_max_0",
+      "object": "matrix",
+      "arguments": {
+        "max": 0
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age", "  first", "  longer row", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row and 3 columns ]"]
+    },
+    {
+      "name": "matrix_max_1",
+      "object": "matrix",
+      "arguments": {
+        "max": 1
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row and 2 columns ]"]
+    },
+    {
+      "name": "matrix_max_2",
+      "object": "matrix",
+      "arguments": {
+        "max": 2
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", "            sex", "age                female", "  first      0.0003703704", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row and 1 column ]"]
+    },
+    {
+      "name": "matrix_max_3",
+      "object": "matrix",
+      "arguments": {
+        "max": 3
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", "            sex", "age                female", "  first      0.0003703704", "            sex", "age                 other", "  first      0.0006172839", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "matrix_max_4",
+      "object": "matrix",
+      "arguments": {
+        "max": 4
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", "            sex", "age                female", "  first      0.0003703704", "            sex", "age                 other", "  first      0.0006172839", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "matrix_max_5",
+      "object": "matrix",
+      "arguments": {
+        "max": 5
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", "            sex", "age                female", "  first      0.0003703704", "            sex", "age                 other", "  first      0.0006172839", " [ reached 'max' / getOption(\"max.print\") -- omitted 1 row ]"]
+    },
+    {
+      "name": "matrix_max_6",
+      "object": "matrix",
+      "arguments": {
+        "max": 6
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex", "            sex", "age                  male", "  first      0.0001234568", "  longer row 0.0002469136", "            sex", "age                female", "  first      0.0003703704", "  longer row 0.0004938272", "            sex", "age                 other", "  first      0.0006172839", "  longer row 0.0007407407"]
+    },
+    {
+      "name": "one_max_0",
+      "object": "one",
+      "arguments": {
+        "max": 0
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age", "age", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 3 entries ]"]
+    },
+    {
+      "name": "one_max_1",
+      "object": "one",
+      "arguments": {
+        "max": 1
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age", "age", "       first", "0.0001234568", " [ reached 'max' / getOption(\"max.print\") -- omitted 2 entries ]"]
+    },
+    {
+      "name": "one_max_2",
+      "object": "one",
+      "arguments": {
+        "max": 2
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age", "age", "       first       second", "0.0001234568 0.0002469136", "       third", "0.0003703704"]
+    },
+    {
+      "name": "one_max_3",
+      "object": "one",
+      "arguments": {
+        "max": 3
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age", "age", "       first       second", "0.0001234568 0.0002469136", "       third", "0.0003703704"]
+    },
+    {
+      "name": "response_max_0",
+      "object": "right",
+      "arguments": {
+        "max": 0
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": [" [1]", " [ reached 'max' / getOption(\"max.print\") -- omitted 6 entries ]"]
+    },
+    {
+      "name": "response_max_1",
+      "object": "right",
+      "arguments": {
+        "max": 1
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1]   1.111111", " [ reached 'max' / getOption(\"max.print\") -- omitted 5 entries ]"]
+    },
+    {
+      "name": "response_max_4",
+      "object": "right",
+      "arguments": {
+        "max": 4
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1]   1.111111    2.220000+", "[3]   3.000000    4.000000+", " [ reached 'max' / getOption(\"max.print\") -- omitted 2 entries ]"]
+    },
+    {
+      "name": "response_max_5",
+      "object": "right",
+      "arguments": {
+        "max": 5
+      },
+      "width": 30,
+      "row_names": null,
+      "labels": ["  1.111111", "  2.220000+", "  3.000000", "  4.000000+", "  5.000000", "100.000000+"],
+      "lines": ["[1]   1.111111    2.220000+", "[3]   3.000000    4.000000+", "[5]   5.000000  100.000000+"]
+    },
+    {
+      "name": "precise",
+      "object": "precision",
+      "arguments": {
+        "digits": 12,
+        "max": 7
+      },
+      "width": 35,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = early", "", "   sex", "age       first second", "  x 0.000000001  0e+00", "  y 0.000000020  1e-12", "  z 9.999999990  3e+00", "", ", , year = late", "", "   sex", "age          first", "  x 1000.000000000", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 2 rows 1 column ]"]
+    },
+    {
+      "name": "rough",
+      "object": "precision",
+      "arguments": {
+        "digits": 2
+      },
+      "width": 40,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex year", ", , year = early", "", "   sex", "age first second", "  x 1e-09  0e+00", "  y 2e-08  1e-12", "  z 1e+01  3e+00", "", ", , year = late", "", "   sex", "age   first second", "  x 1.0e+03  1e+00", "  y 1.0e-09  1e+01", "  z 3.1e+00  1e-05", ""]
+    },
+    {
+      "name": "four_narrow",
+      "object": "four",
+      "arguments": {
+        "max": 3
+      },
+      "width": 15,
+      "row_names": null,
+      "labels": null,
+      "lines": ["Rate table with dimension(s): age sex race year", ", , race = one, year = A", "", "     sex", "age              M", "  row 0.0001234568", "     sex", "age              F", "  row 0.0002469136", "", ", , race = two, year = A", "", "     sex", "age              M", "  row 0.0003703704", "", " [ reached 'max' / getOption(\"max.print\") -- omitted 2 slices ]"]
+    }
+  ]
+}

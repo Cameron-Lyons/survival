@@ -1090,6 +1090,13 @@ retained by `as.factor` and unused levels dropped by `factor`, as in R.
 
 ## Compact curve reports
 
+Raw responses and rate arrays have `print_surv`, `print_surv2` and
+`print_ratetable`. These reports retain full-precision data separately from
+labels and text, support explicit width and display limits, and expose
+independent `as_data_frame` columns. Rate-array formatting skips hidden
+slices. See [response and rate-table reports](response-ratetable-reports.md)
+for R truncation rules, named axes, Unicode and the empty-response difference.
+
 `print_survfit` and `print_survfitms` return R's compact curve tables and formatted
 text without expanding the full event-time summary. They support ordinary,
 Cox and multistate fits, count-column reduction, medians and confidence limits,
@@ -1136,9 +1143,10 @@ error; none silently falls back to other behaviour.
   reports, expected-survival reports, case-cohort, conditional-logistic,
   proportional-hazards, concordance, survival-difference reports and
   `print_survreg_penal` are available. `format_surv` formats a `Surv`, and
-  `str(summary_ratetable(...))` exposes the native rate-table text. Dedicated
-  `print.Surv`, `print.Surv2`, `print.ratetable` and the sparse (frailty) branch of `print.survreg.penal`
-  are not ported.
+  `str(summary_ratetable(...))` exposes the native rate-table text. Raw response
+  and rate-array reports are available through `print_surv`, `print_surv2` and
+  `print_ratetable`. The sparse (frailty) branch of `print.survreg.penal` is
+  not ported.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
