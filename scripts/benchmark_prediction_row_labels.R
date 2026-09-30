@@ -4,6 +4,7 @@ n <- if (length(args)) as.integer(args[[1L]]) else 20000L
 repeats <- if (length(args) > 1L) as.integer(args[[2L]]) else 9L
 mode <- if (length(args) > 2L) args[[3L]] else "current"
 include_transport <- length(args) > 3L && args[[4L]] == "transport"
+include_interactions <- length(args) > 4L && args[[5L]] == "interactions"
 suppressPackageStartupMessages(library(survival))
 if (mode != "stock") suppressPackageStartupMessages(library(survivalr))
 set.seed(719)
@@ -15,6 +16,7 @@ for (j in seq_len(16)) {
   newdata[[name]] <- rnorm(n)
 }
 formula <- as.formula(paste("Surv(time,status)~", paste(paste0("x", seq_len(16)), collapse = "+")))
+if (include_interactions) formula <- update(formula, . ~ . + x1:x2 + x3:x4 + x5:x6:x7)
 measure <- function(fun) {
   for (i in seq_len(3)) invisible(fun())
   samples <- vapply(seq_len(repeats), function(i) {
@@ -55,8 +57,9 @@ results <- lapply(workloads, function(workload) {
 })
 cat(jsonlite::toJSON(list(rows = n, columns = 16L, training_rows = 2000L,
   repeats = repeats, warmups = 3L, mode = mode,
+  interactions = include_interactions,
   r = as.character(getRversion()), survival = as.character(packageVersion("survival")),
   reticulate = if (mode != "stock") as.character(packageVersion("reticulate")) else NULL,
   transport = transport,
-  scope = "Complete public new-data predictions with errors, including bridge conversion, formula design, calculation, output materialization and row/column metadata; fitting, input setup and explicit GC excluded. Baseline numerical outputs/shapes checked; current complete names also checked against stock R.",
+  scope = "Complete public new-data predictions with errors, including bridge conversion, formula design, calculation, output materialization and row/column metadata; fitting, input setup and explicit GC excluded. Numerical outputs and shapes checked against stock R; complete names also checked unless mode is baseline.",
   results = results), auto_unbox = TRUE, pretty = TRUE, digits = NA), "\n")

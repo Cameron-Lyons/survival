@@ -2469,13 +2469,18 @@ def _single_design_columns(
     evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
     allow_missing: bool = False,
-) -> list[list[float]]:
+    *,
+    as_arrays: bool = False,
+) -> list[Any]:
     if isinstance(spec, _MatrixDesignTerm) or (
         isinstance(spec, _PenaltyDesignTerm) and evaluated is not None and spec.term in evaluated
     ):
         if evaluated is None or spec.term not in evaluated:
             raise ValueError("an evaluated matrix is required for a matrix time transform")
         rows = evaluated[spec.term]
+        if as_arrays:
+            matrix = np.asarray(rows, dtype=float).reshape(n, len(spec.names))
+            return list(matrix.T)
         return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _PenaltyDesignTerm):
         penalty_values = {column: _column(data, column) for column in spec.columns}
@@ -2501,6 +2506,26 @@ def _single_design_columns(
                 return result
         return penalty_columns(spec, penalty_values)
     if isinstance(spec, _NumericDesignTerm):
+        term = spec.term
+        if as_arrays and not (
+            term.transform
+            or term.arithmetic
+            or term.call
+            or term.strata
+            or term.categorical_wrapper
+        ):
+            values = (
+                evaluated[term]
+                if evaluated is not None and term in evaluated
+                else _column_source(data, term.column)
+            )
+            array = _numeric_ndarray(values)
+            if array is not None:
+                if len(array) != n:
+                    raise ValueError(
+                        "formula columns must have the same length as the Surv response"
+                    )
+                return [array]
         return [_numeric_variable(data, spec.term, n, evaluated)]
 
     values = (
@@ -2539,20 +2564,71 @@ def _design_term_columns(
     evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
     allow_missing: bool = False,
-) -> list[list[float]]:
+    *,
+    as_arrays: bool = False,
+) -> list[Any]:
     if isinstance(spec, _InteractionDesignTerm):
         factor_columns = [
-            _single_design_columns(data, factor, n, evaluated, factor_values, allow_missing)
+            _single_design_columns(
+                data, factor, n, evaluated, factor_values, allow_missing, as_arrays=as_arrays
+            )
             for factor in spec.factors
         ]
-        interaction_columns: list[list[float]] = []
+        if as_arrays:
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                factor_columns = [
+                    [np.asarray(column, dtype=float) for column in columns]
+                    for columns in factor_columns
+                ]
+        interaction_columns: list[Any] = []
         for reversed_combo in product(*reversed(factor_columns)):
             column_combo = tuple(reversed(reversed_combo))
-            interaction_columns.append(
-                [math.prod(column[idx] for column in column_combo) for idx in range(n)]
-            )
+            if as_arrays:
+                values = np.ones(n, dtype=float)
+                # Match math.prod's left-to-right float multiplication, including
+                # signed zero and NaNs, without NumPy's arithmetic warnings.
+                with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                    for column in column_combo:
+                        np.multiply(values, column, out=values)
+                interaction_columns.append(values)
+            else:
+                interaction_columns.append(
+                    [math.prod(column[idx] for column in column_combo) for idx in range(n)]
+                )
         return interaction_columns
-    return _single_design_columns(data, spec, n, evaluated, factor_values, allow_missing)
+    return _single_design_columns(
+        data, spec, n, evaluated, factor_values, allow_missing, as_arrays=as_arrays
+    )
+
+
+def _design_array_from_spec(
+    data: Any,
+    design: _FormulaDesign,
+    n: int,
+    *,
+    evaluated: Mapping[_CovariateTerm, Any] | None = None,
+    factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
+    allow_missing: bool = False,
+) -> np.ndarray:
+    """An owned, contiguous float64 prediction design. Plain numeric columns stay
+    arrays until copied into the matrix; other terms keep their formula evaluators.
+    Interactions retain the fitted column order and scalar multiplication order."""
+
+    columns = [
+        column
+        for term in design.covariates
+        for column in _design_term_columns(
+            data, term, n, evaluated, factor_values, allow_missing, as_arrays=True
+        )
+    ]
+    intercept = int(design.intercept)
+    matrix = np.empty((n, len(columns) + intercept), dtype=float)
+    if intercept:
+        matrix[:, 0] = 1.0
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        for index, column in enumerate(columns, start=intercept):
+            matrix[:, index] = column
+    return matrix
 
 
 def _design_rows_from_spec(

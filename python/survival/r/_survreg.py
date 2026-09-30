@@ -932,6 +932,7 @@ def _newdata_inputs(
     *,
     allow_missing_predictors: bool = False,
     allow_missing_strata: bool = False,
+    as_array: bool = False,
 ) -> _NewData:
     """``model.frame(Terms, newdata, na.action)`` and ``model.matrix(object, newframe)``:
     the rows, strata and offset of the complete ``newdata`` rows."""
@@ -978,6 +979,7 @@ def _newdata_inputs(
         na_action=na_action,
         allow_missing_predictors=allow_missing_predictors,
         allow_missing_strata=allow_missing_strata,
+        as_array=as_array,
     )
 
 
@@ -1059,6 +1061,7 @@ def predict_survreg(
             action,
             allow_missing_predictors=True,
             allow_missing_strata=predict_type not in {"quantile", "uquantile"},
+            as_array=True,
         )
     )
     term_names = _prediction_term_labels(fit)
