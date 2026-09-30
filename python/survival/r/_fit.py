@@ -13,6 +13,7 @@ from typing import Any
 
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _categories,
     _float_vector,
     _floats_or_nan,
     _materialize_1d,
@@ -108,6 +109,7 @@ class _ModelFrame:
     weights_column: str | None = None
     id_column: str | None = None
     na_action: NaAction | None = None
+    cluster_levels: tuple[Any, ...] | None = None
 
     @property
     def n(self) -> int:
@@ -327,6 +329,7 @@ def _model_frame(
             )
         else:
             cluster_values = _formula_cluster_values(data, terms, n)
+    cluster_levels = None if cluster_values is None else _categories(cluster_values)
     if cluster_values is not None:
         cluster_values = _materialize_labels(cluster_values, "cluster")
         if len(cluster_values) != n:
@@ -381,6 +384,7 @@ def _model_frame(
         offset=offset_values,
         weights=weight_values,
         cluster=cluster_values,
+        cluster_levels=None if cluster_levels is None else tuple(cluster_levels),
         id=id_values,
         istate=istate_values,
         extra={

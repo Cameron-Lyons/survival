@@ -975,6 +975,7 @@ def fit_multistate(
         tt=False,
         id=tuple(frame.id or ()),
         cluster=None if frame.cluster is None else tuple(frame.cluster),
+        cluster_levels=frame.cluster_levels,
         model=frame.model_frame() if keep_model else None,
         weights_column=frame.weights_column,
         id_column=frame.id_column,

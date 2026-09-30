@@ -508,6 +508,13 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 - Several fits: `var` is `crossprod(dfbeta)`, whose diagonal is each fit's own
   variance. R's `cord.work` computes `t(wt * dfbeta) %*% dfbeta`, applying the
   case weights twice, and fails with weights plus a cluster.
+- Joint concordance aligns influence rows by cluster membership, preserving
+  the first model's factor order. Renaming groups or changing their declared
+  order leaves covariance unchanged; genuinely different partitions are
+  refused. R compares only the number of groups and pairs their influence
+  rows by position, which can reverse a covariance's sign. Fitted Cox models
+  retain categorical cluster levels, and plain character cluster labels use
+  lexical order. See [cluster alignment](concordance-clusters.md).
 - A missing strata or cluster value raises ("strata contains missing values",
   "cluster contains missing values"); R either errors ("NAs are not allowed in
   subscripted assignments") or, with `std.err = FALSE`, misaligns its counts,

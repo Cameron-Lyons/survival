@@ -108,6 +108,8 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
     value <- explicit_cluster
     if (is.null(value) && is.null(newdata) && inherits(fit, "survival_py_coxph")) {
       value <- unlist(fit$cluster, use.names = FALSE)
+      levels <- unlist(fit$cluster_levels, use.names = FALSE)
+      if (!is.null(levels)) value <- factor(value, levels = levels)
     }
     value
   })

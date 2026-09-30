@@ -26,9 +26,11 @@ from ._coerce import (
     _is_missing_value,
     _materialize_labels,
     _normalize_bool_option,
+    _numeric_ndarray,
     _optional_float_vector,
     _pop_dotted_keyword,
     _r_factor,
+    _r_factor_levels,
 )
 from ._coxph import CoxphModel, predict_coxph
 from ._coxphms import CoxphmsModel
@@ -219,7 +221,7 @@ def concordancefit(
     cluster_codes: list[int | None] | None = None
     if cluster is not None:
         # R's rowsum(dfbeta, cluster) orders the clusters as sort(unique(cluster))
-        cluster_codes = _factor(cluster, "cluster")[0]
+        cluster_codes = _cluster_codes(cluster)
         if len(cluster_codes) != n:
             raise ValueError("y and cluster are not the same length")
         if None in cluster_codes:
@@ -265,6 +267,18 @@ def _influence_option(value: Any) -> int:
     if influence not in (0, 1, 2, 3):
         raise ValueError("influence must be 0, 1, 2 or 3")
     return influence
+
+
+class _ClusterCodes(list[int | None]):
+    """Validated joint-fit groups, encoded once and shared by every score call."""
+
+
+def _cluster_codes(cluster: Any) -> list[int | None]:
+    """Factor order when declared, otherwise numeric or lexical label order."""
+    if isinstance(cluster, _ClusterCodes):
+        return cluster
+    levels = None if _numeric_ndarray(cluster) is not None else _r_factor_levels(cluster)
+    return _factor(cluster, "cluster", levels=levels)[0]
 
 
 def _is_matrix(x: Any) -> bool:
@@ -365,7 +379,11 @@ def _concordance_formula(
         frame.x,
         strata=frame.strata_labels(),
         weights=frame.weights,
-        cluster=frame.cluster,
+        cluster=(
+            frame.cluster
+            if frame.cluster_levels is None
+            else _r_factor(frame.cluster, frame.cluster_levels)
+        ),
         names=frame.names,
         _strata_levels=frame.strata_levels,
         _formula=formula,
@@ -404,13 +422,17 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
             raise ValueError("cannot yet handle models with tt terms")
         if newdata is not None:
             return _newdata_fit_data(fit, newdata, _strata_specs(fit.terms), predict_coxph, cluster)
+        if cluster is None:
+            cluster = fit.cluster
+            if fit.cluster_levels is not None:
+                cluster = _r_factor(cluster, fit.cluster_levels)
         return _FitData(
             y=fit.y,
             x=fit.linear_predictors,
             strata=fit.strata,
             strata_levels=fit.strata_levels,
             weights=fit.weights if need_weights else None,
-            cluster=cluster if cluster is not None else fit.cluster,
+            cluster=cluster,
         )
     if isinstance(fit, SurvregModelResult):
         if newdata is not None:
@@ -576,6 +598,16 @@ def _concordance_from_data(
             )
         if other.weights != first.weights:
             raise ValueError("all models must have the same weight vector")
+    if any(d.cluster is not None for d in data):
+        # Influence rows must refer to the same groups before cross-multiplying.
+        # Names and factor order may differ without changing group membership.
+        cluster_codes, partition = _prepare_cluster(first.cluster, len(first.x))
+        for other in data[1:]:
+            if other.cluster is first.cluster:
+                continue
+            if _prepare_cluster(other.cluster, len(other.x))[1] != partition:
+                raise ValueError("models must have identical clustering")
+        data = [replace(d, cluster=cluster_codes) for d in data]
     influence = _influence_option(options["influence"])
     options["influence"] = 3 if influence == 2 else 1
     # each fit has one predictor: scalar concordance/cvar, a dfbeta vector
@@ -605,6 +637,19 @@ def _concordance_from_data(
         ranks=ranks,
         formula=formula,
     )
+
+
+def _prepare_cluster(cluster: Any, n: int) -> tuple[_ClusterCodes | None, list[int]]:
+    """Output-order codes plus memberships independent of names and levels."""
+    if cluster is None:
+        return None, list(range(n))
+    codes = _cluster_codes(cluster)
+    if len(codes) != n:
+        raise ValueError("y and cluster are not the same length")
+    if None in codes:
+        raise ValueError("cluster contains missing values")
+    groups = {code: group for group, code in enumerate(dict.fromkeys(codes))}
+    return _ClusterCodes(codes), list(map(groups.__getitem__, codes))
 
 
 def concordance(
