@@ -1217,6 +1217,54 @@ impl CoxPHFit {
         Ok(result)
     }
 
+    /// Cohort expected survival, aggregating baseline hazards directly instead
+    /// of materializing every subject's survival and cumulative-hazard curve.
+    pub fn expected_survival(
+        &self,
+        newdata: &CoxNewData,
+        group: &[usize],
+        weights: &[f64],
+        y: Option<&[f64]>,
+        times: Option<&[f64]>,
+        method: &str,
+    ) -> SurvivalResult<crate::population::SurvExpResult> {
+        use crate::population::{CoxExpectedBaseline, survexp_cox_prepared};
+        self.check_newdata(newdata)?;
+        if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
+            return Err(SurvivalError::invalid_input(
+                "newdata must carry the strata for expected survival",
+            ));
+        }
+        let (_, risk) = self.centered_newdata(newdata);
+        let strata: Vec<usize> = (0..newdata.nrows())
+            .map(|i| {
+                newdata.strata.as_ref().map_or(0, |codes| {
+                    self.sorted
+                        .position_of(codes[i])
+                        .expect("strata were checked")
+                })
+            })
+            .collect();
+        let baselines = self
+            .baseline_curves()?
+            .iter()
+            .map(|curve| {
+                let rows = || {
+                    curve
+                        .n_event
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &n)| (n > 0.0).then_some(i))
+                };
+                CoxExpectedBaseline {
+                    time: rows().map(|i| curve.time[i]).collect(),
+                    cumhaz: rows().map(|i| curve.cumhaz[i]).collect(),
+                }
+            })
+            .collect::<Vec<_>>();
+        survexp_cox_prepared(&baselines, &risk, &strata, group, weights, y, times, method)
+    }
+
     /// `survfit(fit, newdata, id)`: one curve per subject whose covariates
     /// change over the (entry, time] intervals of `newdata`.
     pub fn survfit_individual(
@@ -1894,6 +1942,41 @@ impl CoxPHFit {
         Ok(FloatMatrix::new(py.detach(|| {
             self.predict_survival_at(&times, newdata.as_ref())
         })?))
+    }
+
+    #[pyo3(name = "expected_survival", signature = (newdata, group, weights, new_strata=None, new_offset=None, y=None, times=None, method="ederer"))]
+    #[allow(clippy::too_many_arguments)]
+    fn expected_survival_py(
+        &self,
+        py: Python<'_>,
+        newdata: FloatMatrix,
+        group: IntVec,
+        weights: FloatVec,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
+        y: Option<FloatVec>,
+        times: Option<FloatVec>,
+        method: &str,
+    ) -> PyResult<crate::population::SurvExpResult> {
+        let new = newdata_from_python(Some(newdata), new_strata, new_offset, None, None)?
+            .expect("newdata supplied");
+        let group = group
+            .iter()
+            .map(|&v| {
+                usize::try_from(v)
+                    .map_err(|_| SurvivalError::invalid_input("group codes must be nonnegative"))
+            })
+            .collect::<SurvivalResult<Vec<_>>>()?;
+        Ok(py.detach(|| {
+            self.expected_survival(
+                &new,
+                &group,
+                &weights,
+                y.as_deref(),
+                times.as_deref(),
+                method,
+            )
+        })?)
     }
 
     /// `residuals(fit, type = "martingale", weighted, collapse)`.

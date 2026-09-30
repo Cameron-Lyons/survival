@@ -504,6 +504,21 @@ impl CoxpenalFit {
         self.curve_source().survfit(newdata, options)
     }
 
+    /// Expected cohort survival using the shared baseline aggregation.
+    pub fn expected_survival(
+        &self,
+        newdata: &CoxNewData,
+        group: &[usize],
+        weights: &[f64],
+        y: Option<&[f64]>,
+        times: Option<&[f64]>,
+        method: &str,
+    ) -> SurvivalResult<crate::population::SurvExpResult> {
+        self.check_newdata_allowed()?;
+        self.curve_source()
+            .expected_survival(newdata, group, weights, y, times, method)
+    }
+
     /// `survfit(fit, newdata, id)` for time-dependent new data.
     pub fn survfit_individual(
         &self,
@@ -816,6 +831,41 @@ impl CoxpenalFit {
             start_time,
         };
         Ok(py.detach(|| self.survfit(newdata.as_ref(), options))?)
+    }
+
+    #[pyo3(name = "expected_survival", signature = (newdata, group, weights, new_strata=None, new_offset=None, y=None, times=None, method="ederer"))]
+    #[allow(clippy::too_many_arguments)]
+    fn expected_survival_py(
+        &self,
+        py: Python<'_>,
+        newdata: FloatMatrix,
+        group: IntVec,
+        weights: FloatVec,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
+        y: Option<FloatVec>,
+        times: Option<FloatVec>,
+        method: &str,
+    ) -> PyResult<crate::population::SurvExpResult> {
+        let new = newdata_from_python(Some(newdata), new_strata, new_offset, None, None)?
+            .expect("newdata supplied");
+        let group = group
+            .iter()
+            .map(|&v| {
+                usize::try_from(v)
+                    .map_err(|_| SurvivalError::invalid_input("group codes must be nonnegative"))
+            })
+            .collect::<SurvivalResult<Vec<_>>>()?;
+        Ok(py.detach(|| {
+            self.expected_survival(
+                &new,
+                &group,
+                &weights,
+                y.as_deref(),
+                times.as_deref(),
+                method,
+            )
+        })?)
     }
 
     /// `survfit(fit, newdata, id)` for time-dependent new data.

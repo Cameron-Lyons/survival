@@ -352,3 +352,20 @@ def test_numpy_and_list_inputs_give_identical_concordance():
     assert from_numpy.count_strata == from_lists.count_strata
     assert from_numpy.var == from_lists.var
     assert from_numpy.dfbeta == from_lists.dfbeta
+
+
+def test_prepared_expected_survival_releases_the_gil():
+    n = 20000
+    grid = np.arange(1, 301, dtype=float)
+    _assert_detaches(
+        lambda: population.survexp_cox_prepared(
+            grid,
+            grid / 300,
+            [len(grid)],
+            np.linspace(0.5, 2, n),
+            np.zeros(n, dtype=np.int32),
+            np.arange(n, dtype=np.int32) % 4,
+            np.ones(n),
+            method="ederer",
+        )
+    )

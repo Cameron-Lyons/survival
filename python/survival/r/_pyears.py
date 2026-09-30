@@ -1581,7 +1581,7 @@ def survexp(
         formula = "time ~ 1"
     if not isinstance(formula, str):
         raise ValueError("A formula argument is required")
-    from ._coxph import CoxphModel, _survfit_curves, predict_coxph
+    from ._coxph import CoxphModel, _check_interaction_margins, _survfit_newdata, predict_coxph
     from ._coxphms import CoxphmsModel
 
     method_value = _survexp_method(method, cohort, conditional, _response_spec(formula) is not None)
@@ -1626,24 +1626,24 @@ def survexp(
                 hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
             )
             return _pad_rows(values, _excluded_rows(mf.na_action))
-        # survexp.cfit needs a curve for every data row: a row whose rate variables
-        # the Cox model's terms make missing (log(-1)) is an error, not left out
-        curves, _, _ = _survfit_curves(
+        # Every retained row needs valid Cox prediction terms. A transformation
+        # that becomes missing (log(-1)) is an error, not a silently omitted row.
+        _check_interaction_margins(ratetable)
+        new, _, _ = _survfit_newdata(
             ratetable,
             mapped,
             individual=False,
             id=None,
-            stype=2,
-            ctype=2 if ratetable.method == "efron" else 1,
-            se_fit=False,
-            censor=False,
             na_action="na.fail",
         )
         groups, levels = _survexp_groups(mf, data)
-        result = _core.survexp_cox(
-            curves,
+        engine = ratetable.penalized if ratetable.penalized is not None else ratetable.fit
+        result = engine.expected_survival(
+            new.x,
             groups or [0] * mf.n,
             mf.weights or [1.0] * mf.n,
+            new_strata=new.strata,
+            new_offset=new.offset,
             y=response,
             times=_survexp_times(times),
             method=method_value,

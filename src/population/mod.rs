@@ -31,6 +31,8 @@ pub use ratetable_data::{
     survexp_mn, survexp_mn_table, survexp_us, survexp_us_table, survexp_usr, survexp_usr_table,
 };
 pub use survexp::{SurvExpResult, SurvexpInput, SurvexpMethod, survexp, survexp_py};
-pub use survexp_cox::{survexp_cox, survexp_cox_py};
+pub use survexp_cox::{
+    CoxExpectedBaseline, survexp_cox, survexp_cox_prepared, survexp_cox_prepared_py, survexp_cox_py,
+};
 pub use survexp_fit::{SurvexpFit, survexp_fit};
 pub use survexp_summary::{summary_survexp, summary_survexp_py};

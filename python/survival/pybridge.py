@@ -47,3 +47,29 @@ def _yates_model_metadata(fit: Any) -> dict[str, Any]:
             part.term.column: list(part.levels) for part in factors if not part.term.strata
         },
     }
+
+
+def _survexp_cox_fit(
+    fit: Any, data: Any, group: Any, weights: Any, y: Any, times: Any, method: str
+) -> Any:
+    """Prepared R population rows applied to a Python-backed Cox rate model."""
+    import numpy as np
+
+    from .r._coxph import _check_interaction_margins, _survfit_newdata, predict_coxph
+
+    if method.startswith("individual"):
+        hazard = np.asarray(predict_coxph(fit, data, type="expected", na_action="na.fail"))
+        return hazard if method == "individual.h" else np.exp(-hazard)
+    _check_interaction_margins(fit)
+    new, _, _ = _survfit_newdata(fit, data, individual=False, id=None, na_action="na.fail")
+    engine = fit.penalized if fit.penalized is not None else fit.fit
+    return engine.expected_survival(
+        new.x,
+        group,
+        weights,
+        new_strata=new.strata,
+        new_offset=new.offset,
+        y=y,
+        times=times,
+        method=method,
+    ).to_arrays()

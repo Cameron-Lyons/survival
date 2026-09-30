@@ -830,6 +830,103 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Expected survival from prepared Cox baselines
+
+Cox expected-survival cohorts now aggregate baseline hazards and subject risks
+directly in Rust. Python's `survexp` prepares prediction rows once and calls
+`CoxPHFit.expected_survival` or its penalized-fit counterpart. It no longer
+constructs survival and cumulative-hazard matrices with one column per subject.
+The numerical kernel uses O(N + B + T × G) storage for N subjects, B baseline
+points, T requested times and G output groups, in addition to the fitted model
+and prediction design. The existing expanded-curve API remains available.
+
+Rust callers can supply `CoxExpectedBaseline` values to `survexp_cox_prepared`.
+The Python numeric entry point takes flattened baseline times/hazards and their
+lengths, subject risks, zero-based strata/groups, weights, optional follow-up and
+requested times. Typed inputs accept NumPy vectors without Python list conversion.
+All numerical work releases the GIL. `SurvExpResult.to_arrays()` returns independent
+writable snapshots with time-by-group survival and risk-count matrices.
+
+The kernel preserves weighted Ederer, Hakulinen and conditional calculations,
+including `exp(-H).powf(risk)` rounding/underflow and NaN propagation after a
+cohort's risk set becomes empty. Output uses the union of event times in the
+strata represented by the population, with constant interpolation at requested
+times. Repeated output times are retained. A stratum without events has survival
+one; an entirely event-free model can be evaluated at explicit times. This
+corrects the former expanded path losing the column count for empty curves.
+Weights must be finite and nonnegative, with positive total weight per group.
+
+R `survexp` formulas now support R and Python-backed Cox rate models through
+shared numerical kernels, without forwarding the call to `survival::survexp`.
+R owns formula evaluation, contrasts, factor levels and metadata. For R fits,
+the shared Cox baseline kernel reads the original response, weights and fitted
+risk scores; the prepared cohort kernel combines those baselines with new risks.
+For individual predictions, shared step lookup evaluates the fitted model's
+response, which may differ from the outer population formula's follow-up.
+Population rate tables also cross the boundary as whole numeric matrices and
+use bulk result snapshots.
+
+Formula environments, retained model/X/Y data, row names, subsets, `na.exclude`
+and mappings with non-syntactic names are preserved. Sparse frailty models reject
+new cohort curves as R does; individual predictions retain fitted frailty in the
+training risk sets and assign zero frailty to new rows. R exposes `n.risk` only
+for Ederer Cox cohorts; the native/Python result also supplies counts for the
+other cohort methods.
+
+The R bridge adopts the existing Python corrections for individual offsets
+(inside the exponential) and source-row alignment after subset/NA handling.
+Stratified conditional/Hakulinen cohorts now work where R 3.8-12 errors while
+indexing its hazard matrix; independent per-row R curves verify the reduction.
+A singleton Ederer population reports one person at risk, correcting R's
+training-sample count. Empty-event baselines return survival one at requested
+times instead of failing in interpolation. Null Cox models retain the population
+row count when their rate-data frame has no columns; R's expected-survival wrapper
+drops those rows and errors before prediction.
+
+Tests compare prepared and expanded curves across tie methods, counting
+responses, strata, offsets, weights and repeated times. Whole-result R checks
+cover formula metadata, remapping, penalized fits and disabled reference numerical
+functions. For exact counting fits, the R oracle repairs only two fitter metadata
+defects before comparison: its omitted `coxph` class and numeric method code.
+Ownership, malformed inputs, concurrent calls and GIL release are also checked.
+
+`scripts/benchmark_survexp.py` and `scripts/benchmark_survexp.R` time complete
+formula calls after checking results. Model fitting is excluded. Both scripts
+use 2,000 training observations and a separate 5,000-row population with four
+groups, at least three untimed calls per variant and seven alternating samples. Explicit garbage collection
+is outside measured calls; allocation and automatic collection are included.
+The Python comparison loads the prior facade from `88d8f565` with
+`--baseline-source`, using the same current fitted-model implementation for both
+paths. Its peak RSS comes from three fresh processes per variant, before the
+parent runs timed calls; it includes imports, model fitting and population setup,
+and measures the Ederer case. R and Python generate different datasets, so their
+timings are not a cross-language comparison.
+
+On an Intel Core Ultra 5 325 with Python 3.14.7 and a release extension:
+
+| Complete Python call | Previous median (range) | Prepared median (range) |
+| --- | ---: | ---: |
+| Ederer | 125.7 ms (71.5–131.0) | 42.7 ms (39.8–44.0) |
+| Hakulinen | 108.3 ms (83.7–137.3) | 28.6 ms (28.5–33.9) |
+| Conditional | 78.5 ms (75.6–136.8) | 10.3 ms (9.7–14.4) |
+
+The median improvements are 2.94×, 3.79× and 7.60×. Ederer peak process RSS
+was 58.1–58.4 MiB for the prepared path and 180.2–180.3 MiB for the previous
+path, about 68% lower. These process peaks include common setup, not just the
+numerical kernel's allocations.
+
+On the same machine with R 4.5.3 / survival 3.8-12:
+
+| Complete R call | Stock R median (range) | R/Rust median (range) |
+| --- | ---: | ---: |
+| Ederer | 233 ms (124–340) | 49 ms (44–52) |
+| Hakulinen | 660 ms (639–821) | 37 ms (37–42) |
+| Conditional | 527 ms (440–671) | 16 ms (16–17) |
+
+The median improvements are 4.76×, 17.84× and 32.94×. The broad reference
+ranges are retained here; these are local complete-call measurements, not
+general performance guarantees. R peak memory was not measured.
+
 ## Person-years formula preparation
 
 R `pyears` formulas now use one native tabulation path for fixed categories,

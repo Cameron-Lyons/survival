@@ -143,3 +143,8 @@ finegray_arrays: dict[str, Any] = finegray_prepared.to_arrays()
 # Person-years cell tables preserve list getters and expose owned array snapshots.
 pyears_cells: _survival.PyearsResult = _survival.pyears([1.0, 2.0], scale=1.0)
 pyears_snapshots: dict[str, Any] = pyears_cells.to_arrays()
+
+expected_cohort: _survival.SurvExpResult = _survival.survexp_cox_prepared(
+    [1.0], [0.2], [1], [1.0, 2.0], [0, 0], [0, 0], [1.0, 1.0]
+)
+expected_arrays: dict[str, Any] = expected_cohort.to_arrays()
