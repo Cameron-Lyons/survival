@@ -1185,13 +1185,10 @@ def _survfit0_cox(x: CoxSurvfitResult) -> CoxSurvfitResult:
 
 
 def _coxms_engine(x: CoxSurvfitMultiStateResult, operation: str) -> _core.SurvfitAJResult:
-    """The counts and time grid of multi-state Cox curves, which a state subset no
-    longer has."""
+    """The retained counts and time grid, including selected states and strata."""
 
     if x.engine is None:
-        raise ValueError(
-            f"{operation} of a state subset of multi-state Cox curves is not supported"
-        )
+        raise ValueError(f"{operation} requires retained multi-state curve counts")
     return x.engine
 
 
@@ -1239,7 +1236,7 @@ def _survfit0_coxms(x: CoxSurvfitMultiStateResult) -> CoxSurvfitMultiStateResult
         n_risk=engine0.n_risk,
         n_event=engine0.n_event,
         n_censor=engine0.n_censor,
-        n_transition=engine0.n_transition,
+        n_transition=engine0.n_transition if x.n_transition is not None else None,
         strata=_coxms_strata(x, engine0),
         pstate=pstate,
         cumhaz=cumhaz,

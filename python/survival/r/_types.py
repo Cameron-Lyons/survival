@@ -997,8 +997,9 @@ class CoxSurvfitMultiStateResult:
     ``n``, ``n_id`` and ``p0`` (one entry or row per stratum).  Strata stack their
     times, ``strata`` giving each block's length.  ``newdata`` holds the rows the curves
     are for (or the group labels after ``aggregate``).  ``engine`` holds the counts and
-    time grid; it is dropped by a stratum or state subset, as is ``cumhaz`` by a state
-    subset (``oldstate`` then records the original states).
+    time grid and follows stratum/state selections. A state subset drops ``cumhaz``
+    and ``n_transition``; ``oldstate`` then records the original states. Probability
+    mass in selected states is preserved without renormalization.
     """
 
     n: list[int]
@@ -1037,6 +1038,24 @@ class CoxSurvfitMultiStateResult:
         dims["data"] = int(self.pstate.shape[1])
         dims["states"] = len(self.states)
         return dims
+
+    def subset(
+        self,
+        *,
+        strata: Sequence[int | str] | None = None,
+        data: Sequence[int] | None = None,
+        states: Sequence[int | str] | None = None,
+    ) -> CoxSurvfitMultiStateResult:
+        """Select strata, prediction rows and states by zero-based indices or names.
+
+        Omitted dimensions keep every value. Results retain counts for summaries,
+        reports and ``survfit0``; their arrays and count rows are independent.
+        Repeated stratum labels receive unique suffixes (``a``, ``a.1``, ...).
+        """
+
+        from ._models import _subset_coxms_curves
+
+        return _subset_coxms_curves(self, strata=strata, data=data, states=states)
 
 
 @dataclass(frozen=True)
