@@ -428,11 +428,12 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
     event = if (is.null(event)) NULL else .as_python_vector(event),
     group = if (is.null(group)) NULL else .as_python_vector(group),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
-    subset = if (missing(subset)) NULL else subset,
+    subset = if (missing(subset)) NULL else .as_python_formula_subset(
+      subset, n = if (!is.null(direct_time)) NROW(direct_time) else length(stop)
+    ),
     `na_action` = if (missing(na.action)) NULL else .as_na_action(na.action),
     scale = scale,
     `data_frame` = FALSE
   )
   .as_pyears_result(result, match.call(), data.frame = data.frame)
 }
-

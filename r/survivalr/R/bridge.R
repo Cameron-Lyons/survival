@@ -303,28 +303,6 @@ if (getRversion() >= "2.15.1") {
   }
 }
 
-.as_python_formula_subset <- function(value, data) {
-  if (is.null(value)) {
-    return(NULL)
-  }
-  n <- if (is.data.frame(data) || is.matrix(data)) {
-    nrow(data)
-  } else if (is.list(data) && length(data) > 0L) {
-    length(data[[1L]])
-  } else {
-    NROW(data)
-  }
-  rows <- seq_len(n)
-  if (is.data.frame(data)) {
-    names(rows) <- row.names(data)
-  }
-  selected <- rows[value]
-  if (anyNA(selected)) {
-    stop("subset contains unknown or missing rows", call. = FALSE)
-  }
-  as.integer(unname(selected) - 1L)
-}
-
 .strata_expr_labels <- function(exprs, n) {
   if (n == 0L) {
     return(character())
@@ -7222,7 +7200,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
         "survfit",
         response = .as_formula_string(formula),
         data = .as_python_data(data),
-        subset = subset,
+        subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
       evaluated_dots,
@@ -7247,7 +7225,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
         "survfit",
         response = .as_formula_string(formula),
         data = .as_python_data(data),
-        subset = subset,
+        subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
       evaluated_dots,
@@ -7281,7 +7259,7 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
         "survfit",
         response = formula,
         group = if (is.null(group)) NULL else .as_python_vector(group),
-        subset = subset,
+        subset = .as_python_formula_subset(subset, n = reticulate::py_len(formula)),
         `na.action` = .as_na_action(na.action)
       ),
       dots,
@@ -7548,10 +7526,10 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = NULL,
                      rho = 0, timefix = TRUE, ..., group = NULL) {
   env <- parent.frame()
   group_values <- .eval_formula_arg(substitute(group), missing(group), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
   .call_r_api(
     "survdiff",
-    response = .as_formula_string(formula),
+    response = if (inherits(formula, "Surv")) .as_python_surv(formula) else .as_formula_string(formula),
     data = .as_python_data(data),
     group = group_values,
     subset = subset_values,
@@ -7840,7 +7818,7 @@ rttright <- function(formula, data, weights, subset, na.action,
                      times, id, timefix = TRUE, renorm = TRUE) {
   env <- parent.frame()
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
   id_values <- .eval_formula_arg(substitute(id), missing(id), data, env, vector = TRUE)
   if (if (missing(data)) .formula_has_offset(formula) else .formula_has_offset(formula, data)) {
     warning("Offset term ignored", call. = FALSE)
@@ -8037,7 +8015,7 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   }
   id_values <- .eval_formula_arg(substitute(id), missing(id), data, env, vector = TRUE)
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
   result <- .call_r_api(
     "survcondense",
     formula = .as_formula_string(formula),
@@ -8089,7 +8067,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
         "coxph",
         response = .as_formula_string(formula),
         data = .as_python_data(data),
-        subset = subset,
+        subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
       evaluated_dots,
@@ -8409,7 +8387,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
         "survreg",
         response = .as_formula_string(formula),
         data = .as_python_data(data),
-        subset = subset,
+        subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
       evaluated_dots,
@@ -8485,7 +8463,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   )
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
   cluster_values <- .eval_formula_arg(substitute(cluster), missing(cluster), data, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data, env, vector = TRUE)
+  subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
   .call_r_api(
     "concordance",
     .as_formula_string(formula),
@@ -8581,7 +8559,7 @@ survConcordance <- function(formula, data, weights, subset, na.action) {
   env <- parent.frame()
   data_values <- if (missing(data)) NULL else data
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data_values, env, vector = TRUE)
-  subset_values <- .eval_formula_arg(substitute(subset), missing(subset), data_values, env, vector = TRUE)
+  subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data_values, env)
   result <- .call_r_api(
     "survConcordance",
     formula = .as_formula_string(formula),

@@ -48,6 +48,7 @@ from ._surv import (
     _ordered_named_response_arguments,
     _repeated_option,
     _strata,
+    _subset_surv,
     _time_column,
 )
 from ._types import (
@@ -801,12 +802,13 @@ class _FormulaRows(dict[str, Any]):
     Like R's data frame it keeps its row count without any column, as for ``~ 1``.
     """
 
-    __slots__ = ("nrow", "strata_cache")
+    __slots__ = ("nrow", "strata_cache", "response_cache")
 
     def __init__(self, columns: dict[str, Any], nrow: int) -> None:
         super().__init__(columns)
         self.nrow = nrow
         self.strata_cache: dict[_StrataSpec, StrataFactor] = {}
+        self.response_cache: tuple[_SurvResponseSpec, Surv] | None = None
 
 
 def _data_row_count(data: Any, formula: str | None = None) -> int:
@@ -1383,6 +1385,9 @@ def _data_rows(
             for spec, factor in data.strata_cache.items()
             if set(spec.columns) <= frame.keys()
         }
+        response = getattr(data, "response_cache", None)
+        if response is not None and set(response[0].columns) <= frame.keys():
+            selected.response_cache = (response[0], _subset_surv(response[1], list(rows)))
     return selected
 
 
@@ -1405,11 +1410,16 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
     if array is not None:
         if len(array) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
+        missing = index < 0
+        if missing.any():
+            selected = np.full((len(index), *array.shape[1:]), np.nan)
+            selected[~missing] = array[index[~missing]]
+            return selected
         return array[index]
     values = _coerce_array_like(source, name)
     if len(values) != n:
         raise ValueError(f"variable lengths differ (found for '{name}')")
-    return _rows_of(source, [values[row] for row in rows])
+    return _rows_of(source, [None if row < 0 else values[row] for row in rows])
 
 
 def _formula_data_rows(
@@ -1437,6 +1447,16 @@ def _subset_formula_inputs(
 ) -> tuple[_FormulaRows, dict[str, Any]]:
     n = _data_row_count(data, formula)
     data = _with_strata_cache(data, _strata_specs(_formula_rhs_terms(formula, data)), n)
+    spec = _response_spec(formula)
+    if spec is not None and spec.surv and not spec.timeline:
+        # R builds Surv before row selection. Reconstructing after selection can
+        # reinterpret 1/2 status codes when every selected event is censored.
+        response = _surv_from_spec(data, spec)
+        if not isinstance(data, _FormulaRows):
+            data = _FormulaRows(
+                {name: _column_source(data, name) for name in _data_column_names(data) or ()}, n
+            )
+        data.response_cache = (spec, response)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
@@ -2675,6 +2695,9 @@ _MODEL_FRAME_ARGUMENTS = ("weights", "offset", "id", "cluster", "istate")
 def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
     """Evaluate a ``Surv(...)`` response spec against *data*."""
 
+    cached = getattr(data, "response_cache", None) if isinstance(data, _FormulaRows) else None
+    if cached is not None and cached[0] == spec:
+        return cached[1]
     if spec.timeline:
         raise ValueError("response must be a survival object")
     args = _formula_response_values(data, spec)
@@ -3128,7 +3151,7 @@ def _with_strata_cache(data: Any, specs: Sequence[_StrataSpec], n: int) -> Any:
 def _strata_rows(factor: StrataFactor, rows: Sequence[int]) -> StrataFactor:
     """Subset evaluated strata and omit empty groups from the fitted stratum codes."""
 
-    codes = [factor.codes[row] for row in rows]
+    codes = [None if row < 0 else factor.codes[row] for row in rows]
     counts = [0] * len(factor.levels)
     for code in codes:
         if code is not None:
@@ -3138,7 +3161,7 @@ def _strata_rows(factor: StrataFactor, rows: Sequence[int]) -> StrataFactor:
     return StrataFactor(
         codes=[None if code is None else remap[code] for code in codes],
         levels=[factor.levels[code] for code in kept],
-        labels=[factor.labels[row] for row in rows],
+        labels=[None if row < 0 else factor.labels[row] for row in rows],
         counts=[counts[code] for code in kept],
     )
 

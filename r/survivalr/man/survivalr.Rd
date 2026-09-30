@@ -1029,7 +1029,10 @@ special-term inputs for \code{untangle.specials}.}
 \item{formula}{Formula, formula string, bridged \code{Surv} response, or
 bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
-\item{subset}{Optional row subset.}
+\item{subset}{Optional row subset, evaluated in the data and formula environment.
+R row indexing applies, including one-based numeric positions, negative exclusions,
+logical recycling and data-frame row names. Missing selections are handled by
+\code{na.action}. Python's separate API uses zero-based positions.}
 \item{na.action}{Missing-data policy, either a string or one of the common
 \pkg{stats} NA action functions; \code{NULL} uses
 \code{getOption("na.action")}, as \code{model.frame} does. With
