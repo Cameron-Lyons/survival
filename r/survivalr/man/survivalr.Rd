@@ -1341,8 +1341,12 @@ with the shared Rust Yates kernel. Survival summaries omit the extra time-zero
 row and recompute cumulative hazard and its uncertainty, keeping every result
 row aligned with the baseline times. Linear predictors must be vectors or
 single-row/column matrices. The GLM method calls the supplied family's inverse
-link. A native R Cox fit supplies its baseline through R's \code{survfit};
-Python-backed fits use the Rust baseline implementation.
+link. Native R Cox fits and Python-backed fits use the shared Rust baseline
+and confidence-band kernels. R prepares fitted formulas, weights, offsets and
+covariance, sharing model reconstruction with \code{survexp}. Prepared setup
+closures retain the baseline and predictor without retaining the fitted model.
+The baseline preserves the training sample count when all observations share
+a single censored time.
 
 \code{survreg.fit} matrix calls use the same compact fitter as the Python
 interface, with direct matrix conversion and no retained training inputs.

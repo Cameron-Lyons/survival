@@ -216,8 +216,14 @@ support pickle round trips; an external inverse link must itself be picklable.
 Rust callers use `validation::YatesPrediction::new(YatesPredictor)` and
 `evaluate(&[f64])`, plus `yates_survival_summary` for matrix views. Python's
 `survival.validation` exposes the same prepared predictor and summary helper.
-The R bridge preserves R names and matrix attributes. A stock R fit supplies
-its stock R baseline; a `survivalr` fit supplies the Rust-computed baseline.
+The R bridge preserves R names and matrix attributes. Both stock R fits and
+Python-backed fits use the shared Rust baseline and confidence-band kernels.
+For stock fits, R prepares the retained or reconstructed response, design,
+weights, offsets and coefficient covariance. This preparation is shared with
+Cox expected survival. Sparse frailty is excluded from the default curve,
+following R's convention, while individual expected-survival predictions keep
+fitted frailty in their training risk sets. The setup's closures retain the
+baseline and prepared predictor without retaining the original fitted model.
 
 ## Validation and benchmark
 
@@ -233,6 +239,31 @@ estimable: zero restricted means and standard errors, with no curve times.
 R 3.8-12's full `yates` instead fails when it tries to eigendecompose a
 zero-by-zero covariance matrix; the direct R setup still defines the empty
 baseline predictions. A separate Python regression checks this extension.
+
+R baseline comparisons cover right/counting responses, all three tie methods,
+weights, offsets, aliased coefficients, robust covariance, splines and sparse
+frailty. Tests also check reconstructed responses, near-tie time fixing,
+subsets, missing rows and retained matrices after source data removal. When
+all observations share a single censored time, the baseline keeps its training
+sample count; R 3.8-12 removes that count while filtering out censored times.
+
+`Rscript scripts/benchmark_yates_baseline.R` measures complete setup calls,
+including baseline uncertainty, result conversion and predictor construction.
+It checks complete baseline fields and predictions before timing, makes three
+warmup calls, then alternates implementations for seven samples. Model fitting,
+prediction evaluation and garbage collection are outside timing; fits retain
+their model frames, design matrices and responses. Peak memory is not measured.
+On an Intel Core Ultra 5 325 with R 4.5.3, survival 3.8-12 and Python 3.14.7,
+5,000 weighted observations and 3,334 event times gave:
+
+| Response / covariates | R survival median (range) | Rust bridge median (range) |
+| --- | ---: | ---: |
+| Right censored / 1 | 15 ms (14–15) | 5 ms (4–5) |
+| Right censored / 40 | 126 ms (123–133) | 12 ms (11–13) |
+| Counting process / 10 | 63 ms (60–63) | 6 ms (5–6) |
+
+These setup calls improved by 3–10.5× in this local run. Timing has millisecond
+resolution and varies with allocation and machine load.
 
 With the release extension installed, run
 `Rscript scripts/benchmark_yates_setup.R` and set `RETICULATE_PYTHON` to its

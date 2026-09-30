@@ -1564,7 +1564,9 @@ output conventions and column-grouping performance.
 `yates_setup` exposes Cox risk/survival prediction and external GLM inverse
 links. Prepared Cox evaluation and survival summaries share the native
 calculations used by `yates`; summaries correct R's extra time-zero row and
-stale cumulative hazard. See [Yates setup](yates-setup.md) for accepted inputs,
+stale cumulative hazard. R-fitted Cox models also use the shared Rust baseline
+and confidence-band kernels, with model preparation shared by `survexp`.
+Prepared R closures release the original fit. See [Yates setup](yates-setup.md) for accepted inputs,
 dispatch rules, empty baselines and performance measurements.
 
 The R `survivalr::yates` formula interface uses the same Rust means,
