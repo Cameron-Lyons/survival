@@ -133,6 +133,10 @@ pub struct YatesResult {
     pub cmat: Vec<Vec<f64>>,
     /// The curves of `predict = "survival"`.
     pub summary: Option<YatesCurves>,
+    /// Simulation means for a custom predictor with multiple columns.
+    pub prediction_mean: Option<Vec<Vec<f64>>>,
+    /// Sample variances matching `prediction_mean` (R's `mvar2`).
+    pub prediction_variance: Option<Vec<Vec<f64>>>,
 }
 
 /// Average the rows of each level's model matrix, optionally with case
@@ -476,6 +480,8 @@ pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
             input.cmat.to_vec()
         },
         summary: None,
+        prediction_mean: None,
+        prediction_variance: None,
     })
 }
 
@@ -489,6 +495,11 @@ pub enum YatesPredictor<'a> {
     /// per population row and returns one response per row. Called once at
     /// the fitted coefficients and once per draw, with all levels batched.
     Response(&'a (dyn Fn(&[f64]) -> SurvivalResult<Vec<f64>> + Sync)),
+    /// A vectorized prediction method returning one or more columns per
+    /// population row. The first column supplies estimates and tests;
+    /// simulation means and variances of all columns are available to a
+    /// caller's summary method. The column count must remain constant.
+    Custom(&'a (dyn Fn(&[f64]) -> SurvivalResult<Array2<f64>> + Sync)),
     /// `predict = "survival"`: the curve `exp(-exp(eta) * cumhaz)` of the
     /// baseline `survfit(fit, censor = FALSE)` (`time`, `cumhaz`) from time 0
     /// on, preceded by its mean restricted to `rmean`.  `conf_int` is the
@@ -506,6 +517,7 @@ impl std::fmt::Debug for YatesPredictor<'_> {
         match self {
             Self::Risk => f.write_str("Risk"),
             Self::Response(_) => f.write_str("Response(<inverse link>)"),
+            Self::Custom(_) => f.write_str("Custom(<prediction method>)"),
             Self::Survival {
                 time,
                 cumhaz,
@@ -557,7 +569,10 @@ enum Prediction {
 
 impl Prediction {
     fn new(predictor: YatesPredictor<'_>) -> SurvivalResult<Self> {
-        if matches!(predictor, YatesPredictor::Response(_)) {
+        if matches!(
+            predictor,
+            YatesPredictor::Response(_) | YatesPredictor::Custom(_)
+        ) {
             return Err(SurvivalError::invalid_input(
                 "external inverse links are evaluated through yates_simulate",
             ));
@@ -770,37 +785,83 @@ fn covariance_root(vmat: &[Vec<f64>]) -> SurvivalResult<Vec<Vec<f64>>> {
 /// As in R, a non-estimable level's `pmm` is `NaN` while its `std` and
 /// `mvar` entries keep their simulated values; a test that uses it is `NA`.
 pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult> {
+    yates_simulate_with_draws(input, |nsim, p| {
+        // R's matrix(rnorm(nsim * p), nrow = nsim) fills draws by column.
+        let mut rng = rng::RNormal::new(input.seed);
+        let mut z = vec![vec![0.0; p]; nsim];
+        for j in 0..p {
+            for row in &mut z {
+                row[j] = rng.normal();
+            }
+        }
+        Ok(z)
+    })
+}
+
+/// Simulate with standard-normal draws supplied by the caller. The provider
+/// receives `(nsim, number_of_coefficients)` once, after the point prediction
+/// and before simulated predictions. This lets an R caller preserve its RNG
+/// kind, global state, and random draws made by a custom prediction method.
+/// The seed in `input` is unused on this path.
+pub fn yates_simulate_with_draws(
+    input: &YatesSimulation<'_>,
+    normal_draws: impl FnOnce(usize, usize) -> SurvivalResult<Vec<Vec<f64>>>,
+) -> SurvivalResult<YatesResult> {
     validate_simulation(input)?;
     let prediction = match input.predictor {
-        YatesPredictor::Response(_) => None,
+        YatesPredictor::Response(_) | YatesPredictor::Custom(_) => None,
         other => Some(Prediction::new(other)?),
     };
     let root = covariance_root(input.vmat)?;
     let nlev = input.xmatlist.len();
     let p = input.beta.len();
-    let width = prediction.as_ref().map_or(1, Prediction::width);
     // Reuse the predictor buffer across inverse-link calls. The built-in
     // paths continue reducing each row directly into its population mean.
     let mut eta = Vec::new();
     let mut population = |coef: &[f64]| -> SurvivalResult<Vec<Vec<f64>>> {
-        if let YatesPredictor::Response(inverse_link) = input.predictor {
+        if matches!(
+            input.predictor,
+            YatesPredictor::Response(_) | YatesPredictor::Custom(_)
+        ) {
             eta.clear();
             let center = dot_product(input.means, coef);
             for rows in input.xmatlist {
                 eta.extend(rows.iter().map(|row| dot_product(row, coef) - center));
             }
-            let response = inverse_link(&eta)?;
-            validate_length(eta.len(), response.len(), "inverse link response")?;
-            validate_finite(&response, "inverse link response")?;
+            let response = match input.predictor {
+                YatesPredictor::Response(inverse_link) => {
+                    let response = inverse_link(&eta)?;
+                    validate_length(eta.len(), response.len(), "inverse link response")?;
+                    validate_finite(&response, "inverse link response")?;
+                    Array2::from_shape_vec((eta.len(), 1), response)
+                        .expect("validated inverse link length")
+                }
+                YatesPredictor::Custom(predict) => {
+                    let response = predict(&eta)?;
+                    validate_length(eta.len(), response.nrows(), "prediction rows")?;
+                    if response.ncols() == 0 {
+                        return Err(SurvivalError::invalid_input(
+                            "prediction must have at least one column",
+                        ));
+                    }
+                    response
+                }
+                _ => unreachable!("external predictor"),
+            };
             let mut start = 0;
             Ok(input
                 .xmatlist
                 .iter()
                 .map(|rows| {
                     let end = start + rows.len();
-                    let mean = response[start..end].iter().sum::<f64>() / rows.len() as f64;
+                    let mean = (0..response.ncols())
+                        .map(|col| {
+                            (start..end).map(|row| response[(row, col)]).sum::<f64>()
+                                / rows.len() as f64
+                        })
+                        .collect();
                     start = end;
-                    vec![mean]
+                    mean
                 })
                 .collect())
         } else {
@@ -812,14 +873,14 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
         }
     };
     let estimates = population(input.beta)?;
-
-    // R's matrix(rnorm(nsim * p), nrow = nsim) fills the draws by column
-    let mut rng = rng::RNormal::new(input.seed);
-    let mut z = vec![vec![0.0; p]; input.nsim];
-    for j in 0..p {
-        for row in &mut z {
-            row[j] = rng.normal();
-        }
+    let width = estimates[0].len();
+    let first: Vec<f64> = estimates.iter().map(|row| row[0]).collect();
+    validate_finite(&first, "point prediction")?;
+    let z = normal_draws(input.nsim, p)?;
+    validate_length(input.nsim, z.len(), "normal draws rows")?;
+    for row in &z {
+        validate_length(p, row.len(), "normal draws columns")?;
+        validate_finite(row, "normal draws")?;
     }
     // running means and sums of squared deviations of every prediction, and
     // the co-moments of the first prediction across levels
@@ -831,6 +892,7 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
             .map(|j| input.beta[j] + (0..p).map(|k| z[k] * root[k][j]).sum::<f64>())
             .collect();
         let sims = population(&coef)?;
+        validate_length(width, sims[0].len(), "prediction columns")?;
         let first: Vec<f64> = sims.iter().map(|row| row[0]).collect();
         validate_finite(&first, "simulated prediction")?;
         let delta: Vec<f64> = first
@@ -858,7 +920,6 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
         .map(|row| row.into_iter().map(|value| value / denominator).collect())
         .collect();
 
-    let first: Vec<f64> = estimates.iter().map(|row| row[0]).collect();
     let identity: Vec<Vec<f64>> = (0..nlev)
         .map(|i| (0..nlev).map(|j| f64::from(i == j)).collect())
         .collect();
@@ -885,6 +946,14 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
             result.summary = Some(survival_curves(nlev, width - 2, conf_int, |level, time| {
                 (mean[level][time + 2], variance[level][time + 2])
             }));
+        } else if matches!(input.predictor, YatesPredictor::Custom(_)) && width > 1 {
+            result.prediction_mean = Some(mean);
+            result.prediction_variance = Some(
+                squares
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|value| value / denominator).collect())
+                    .collect(),
+            );
         }
     }
     Ok(result)
@@ -992,8 +1061,39 @@ fn simulate_py(
     py: Python<'_>,
     input: &YatesSimulation<'_>,
     term: Option<&str>,
+    normal_draws: Option<Py<PyAny>>,
 ) -> PyResult<YatesResult> {
-    let mut result = py.detach(|| yates_simulate(input))?;
+    let mut result = if let Some(normal_draws) = normal_draws {
+        #[cfg(feature = "python")]
+        {
+            py.detach(|| {
+                yates_simulate_with_draws(input, |nsim, p| {
+                    Python::attach(|py| {
+                        let source = normal_draws.bind(py);
+                        let values = if source.is_callable() {
+                            source.call1((nsim, p))?
+                        } else {
+                            source.clone()
+                        };
+                        values.extract::<FloatRows>().map(FloatRows::into_inner)
+                    })
+                    .map_err(|error| {
+                        SurvivalError::computation(format!("normal draws provider failed: {error}"))
+                    })
+                })
+            })?
+        }
+        #[cfg(not(feature = "python"))]
+        {
+            let _ = normal_draws;
+            return Err(SurvivalError::invalid_input(
+                "Python draw providers require the python feature",
+            )
+            .into());
+        }
+    } else {
+        py.detach(|| yates_simulate(input))?
+    };
     if let Some(term) = term {
         for row in &mut result.test {
             if row.name == "global" {
@@ -1006,7 +1106,7 @@ fn simulate_py(
 
 /// Python entry point for `predict = "risk"`: see [`yates_simulate`].
 #[pyfunction(name = "yates_risk")]
-#[pyo3(signature = (xmatlist, beta, vmat, means, estimable=None, nsim=200, seed=0, test="global", term=None))]
+#[pyo3(signature = (xmatlist, beta, vmat, means, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn yates_risk_py(
     py: Python<'_>,
@@ -1019,6 +1119,7 @@ pub fn yates_risk_py(
     seed: u32,
     test: &str,
     term: Option<&str>,
+    normal_draws: Option<Py<PyAny>>,
 ) -> PyResult<YatesResult> {
     let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
     let input = YatesSimulation {
@@ -1032,13 +1133,13 @@ pub fn yates_risk_py(
         seed,
         test: YatesTest::parse(test)?,
     };
-    simulate_py(py, &input, term)
+    simulate_py(py, &input, term, normal_draws)
 }
 
 /// Simulate an external GLM's vectorized response, without refitting it.
 #[cfg(feature = "python")]
 #[pyfunction(name = "yates_response")]
-#[pyo3(signature = (xmatlist, beta, vmat, inverse_link, means=None, estimable=None, nsim=200, seed=0, test="global", term=None))]
+#[pyo3(signature = (xmatlist, beta, vmat, inverse_link, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn yates_response_py(
     py: Python<'_>,
@@ -1052,6 +1153,7 @@ pub fn yates_response_py(
     seed: u32,
     test: &str,
     term: Option<&str>,
+    normal_draws: Option<Py<PyAny>>,
 ) -> PyResult<YatesResult> {
     if !inverse_link.bind(py).is_callable() {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -1085,13 +1187,66 @@ pub fn yates_response_py(
         seed,
         test: YatesTest::parse(test)?,
     };
-    simulate_py(py, &input, term)
+    simulate_py(py, &input, term, normal_draws)
+}
+
+/// Simulate an external prediction method returning a matrix, with all
+/// population rows batched once at the fit and once per coefficient draw.
+#[cfg(feature = "python")]
+#[pyfunction(name = "yates_predict")]
+#[pyo3(signature = (xmatlist, beta, vmat, predict, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn yates_predict_py(
+    py: Python<'_>,
+    xmatlist: Vec<FloatRows>,
+    beta: FloatVec,
+    vmat: FloatRows,
+    predict: Py<PyAny>,
+    means: Option<FloatVec>,
+    estimable: Option<Vec<bool>>,
+    nsim: usize,
+    seed: u32,
+    test: &str,
+    term: Option<&str>,
+    normal_draws: Option<Py<PyAny>>,
+) -> PyResult<YatesResult> {
+    if !predict.bind(py).is_callable() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "predict must be callable",
+        ));
+    }
+    let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
+    let means = means
+        .map(FloatVec::into_inner)
+        .unwrap_or_else(|| vec![0.0; beta.len()]);
+    let callback = |eta: &[f64]| {
+        Python::attach(|py| {
+            predict
+                .bind(py)
+                .call1((FloatVec(eta.to_vec()),))?
+                .extract::<FloatMatrix>()
+                .map(FloatMatrix::into_inner)
+        })
+        .map_err(|error| SurvivalError::computation(format!("prediction callback failed: {error}")))
+    };
+    let input = YatesSimulation {
+        xmatlist: &xmatlist,
+        beta: &beta,
+        vmat: &vmat,
+        means: &means,
+        estimable: estimable.as_deref(),
+        predictor: YatesPredictor::Custom(&callback),
+        nsim,
+        seed,
+        test: YatesTest::parse(test)?,
+    };
+    simulate_py(py, &input, term, normal_draws)
 }
 
 /// Python entry point for `predict = "survival"`: see [`yates_simulate`];
 /// `time` and `cumhaz` are the baseline `survfit(fit, censor = FALSE)`.
 #[pyfunction(name = "yates_survival")]
-#[pyo3(signature = (xmatlist, beta, vmat, means, time, cumhaz, rmean, conf_int=0.95, estimable=None, nsim=200, seed=0, test="global", term=None))]
+#[pyo3(signature = (xmatlist, beta, vmat, means, time, cumhaz, rmean, conf_int=0.95, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn yates_survival_py(
     py: Python<'_>,
@@ -1108,6 +1263,7 @@ pub fn yates_survival_py(
     seed: u32,
     test: &str,
     term: Option<&str>,
+    normal_draws: Option<Py<PyAny>>,
 ) -> PyResult<YatesResult> {
     let xmatlist: Vec<_> = xmatlist.into_iter().map(FloatRows::into_inner).collect();
     let input = YatesSimulation {
@@ -1126,7 +1282,7 @@ pub fn yates_survival_py(
         seed,
         test: YatesTest::parse(test)?,
     };
-    simulate_py(py, &input, term)
+    simulate_py(py, &input, term, normal_draws)
 }
 
 /// Python entry point for [`population_means`]: `xmatlist` is a list of
@@ -1474,5 +1630,68 @@ mod tests {
                 .to_string()
                 .contains("link failed")
         );
+    }
+
+    #[test]
+    fn supplied_draws_follow_point_prediction_and_preserve_multicolumn_moments() {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let predict = |eta: &[f64]| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Array2::from_shape_fn((eta.len(), 2), |(i, j)| {
+                if j == 0 { eta[i] } else { eta[i].powi(2) }
+            }))
+        };
+        let input = YatesSimulation {
+            xmatlist: &[vec![vec![1.0]], vec![vec![2.0]]],
+            beta: &[1.0],
+            vmat: &[vec![1.0]],
+            means: &[0.0],
+            estimable: None,
+            predictor: YatesPredictor::Custom(&predict),
+            nsim: 3,
+            seed: 0,
+            test: YatesTest::Global,
+        };
+        let result = yates_simulate_with_draws(&input, |n, p| {
+            assert_eq!((n, p), (3, 1));
+            assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+            Ok(vec![vec![-1.0], vec![0.0], vec![1.0]])
+        })
+        .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 4);
+        assert_eq!(result.estimate[0].pmm, 1.0);
+        assert_eq!(result.estimate[1].std, 2.0);
+        assert_eq!(result.mvar, vec![vec![1.0, 2.0], vec![2.0, 4.0]]);
+        let mean = result.prediction_mean.unwrap();
+        let variance = result.prediction_variance.unwrap();
+        assert!((mean[1][1] - 20.0 / 3.0).abs() < 1e-14);
+        assert!((variance[1][1] - 208.0 / 3.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn supplied_draws_validate_shape_and_finite_values_before_simulation() {
+        let input = YatesSimulation {
+            xmatlist: &[vec![vec![1.0]]],
+            beta: &[0.0],
+            vmat: &[vec![1.0]],
+            means: &[0.0],
+            estimable: None,
+            predictor: YatesPredictor::Risk,
+            nsim: 2,
+            seed: 0,
+            test: YatesTest::Global,
+        };
+        for (draws, message) in [
+            (vec![vec![0.0]], "normal draws rows"),
+            (vec![vec![0.0, 0.0]; 2], "normal draws columns"),
+            (vec![vec![f64::NAN]; 2], "normal draws"),
+        ] {
+            assert!(
+                yates_simulate_with_draws(&input, |_, _| Ok(draws))
+                    .unwrap_err()
+                    .to_string()
+                    .contains(message)
+            );
+        }
     }
 }

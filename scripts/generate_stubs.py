@@ -75,7 +75,13 @@ RETURN_OVERRIDES: dict[str, str] = {}
 # casts to one of several classes, or a type with a hand-written `FromPyObject`.
 PARAM_OVERRIDES: dict[str, dict[str, str]] = {
     "cox_zph": {"fit": "CoxPHFit | CoxpenalFit", "transform": "str | Sequence[float] | None"},
+    **{
+        name: {"normal_draws": "ArrayLike | Callable[[int, int], ArrayLike] | None"}
+        for name in ("yates_risk", "yates_survival", "yates_response", "yates_predict")
+    },
 }
+PARAM_OVERRIDES["yates_response"]["inverse_link"] = "Callable[[NDArray[np.float64]], ArrayLike]"
+PARAM_OVERRIDES["yates_predict"]["predict"] = "Callable[[NDArray[np.float64]], ArrayLike]"
 
 # Keys whose value is not a Python object we can annotate; the runtime tells us nothing.
 _SKIP_MEMBERS = {"__doc__", "__module__", "__new__", "__init__", "__hash__", "__eq__", "__ne__"}

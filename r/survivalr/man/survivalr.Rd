@@ -1293,6 +1293,21 @@ The legacy wrapper requires \code{newrisk}; its \code{vartype} argument is unuse
 Terminal Kalbfleisch--Prentice increments are bounded to avoid a fractional
 power of a negative floating-point rounding residue.
 
+\code{yates} prepares formulas and population designs in R and uses shared
+Rust kernels for marginal means, estimability, covariance, contrasts and SAS
+type III tests. Nonlinear simulations use R's global \code{rnorm} stream,
+preserving \code{set.seed}, \code{RNGkind} and random draws inside custom S3
+prediction methods. Such methods may return multiple prediction columns and
+an optional summary function. Built-in Cox risk and survival predictions run
+directly in Rust. Fitted contrasts, weights, subject ids and transformation
+metadata are retained. Python-backed Cox and AFT fits are accepted; AFT
+calculations exclude scale parameters from the coefficient covariance.
+Levels matrices specify joint settings, while lists form Cartesian products.
+The final numeric term, reversed variable order, empty adjustment sets and
+matrix-valued SAS adjusters are supported. Trend tests, multi-state models,
+stratified survival predictions and functions passed directly as \code{predict}
+remain unsupported. Type III tests require linear predictions and SAS populations.
+
 \code{yates_setup} prepares Cox survival predictions once and evaluates them
 with the shared Rust Yates kernel. Survival summaries omit the extra time-zero
 row and recompute cumulative hazard and its uncertainty, keeping every result

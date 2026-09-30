@@ -123,7 +123,7 @@ def test_r_bridge_exports_core_survival_entry_points():
 
 
 def test_r_bridge_defines_exported_functions():
-    bridge = (R_PACKAGE / "R" / "bridge.R").read_text()
+    bridge = "\n".join(path.read_text() for path in sorted((R_PACKAGE / "R").glob("*.R")))
 
     assert 'reticulate::import("survival.r_api", convert = TRUE)' in bridge
     assert 'inherits(x, "python.builtin.object")' in bridge

@@ -495,7 +495,10 @@ test_that("R formula wrappers delegate to the Python survival package", {
     group = factor(c("A", "A", "B", "B", "C", "C"))
   )
   yates_fit <- stats::lm(y ~ group, data = yates_data, model = TRUE)
-  expect_equal(yates(yates_fit, "group"), survival::yates(yates_fit, "group"))
+  actual_yates <- yates(yates_fit, "group")
+  expected_yates <- survival::yates(yates_fit, "group")
+  actual_yates$call <- expected_yates$call
+  expect_equal(actual_yates, expected_yates)
 
   yates_cox_data <- data.frame(
     time = c(5, 8, 6, 9, 7, 10, 4, 11, 12, 13),

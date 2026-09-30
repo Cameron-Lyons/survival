@@ -218,6 +218,7 @@ __all__ = bind_names(
         "yates_estimable",
         "yates_risk",
         "yates_response",
+        "yates_predict",
         "yates_survival",
         "yates_survival_summary",
         "yates_population_means",

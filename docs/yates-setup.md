@@ -99,9 +99,81 @@ case weights, offsets, aliases, interactions, populations, level selection,
 pairwise and type III tests. Each case runs through all three family protocols.
 Independent checks reconstruct the simulated covariance from recorded callback
 batches, compare a log link with native Cox risk, and check concurrent calls,
-ownership, serialization and invalid callbacks. The R `yates` facade still
-delegates to stock R; this addition exposes full external GLM simulations in
-Python and the native Rust API.
+ownership, serialization and invalid callbacks.
+
+## R formula interface and caller-owned simulations
+
+`survivalr::yates` now builds formulas and population designs in R and computes
+marginal means, estimability, covariance, contrasts and SAS type III tests with
+the shared Rust kernels. It accepts R linear models, GLMs and Cox models, and
+Python-backed Cox and AFT fits. It retains fitted factor levels, contrasts,
+transformation metadata, case weights, subject ids, result names and the
+original call. No model is refitted. AFT calculations select the coefficient
+covariance, excluding fitted scale parameters.
+
+```r
+set.seed(123)
+result <- survivalr::yates(fit, "group", predict = "response", nsim = 200)
+```
+
+Nonlinear simulations consume R's global random stream through `rnorm`.
+`set.seed`, `RNGkind`, the subsequent random stream, and random draws inside
+custom prediction methods retain their R behavior. Linear analyses consume
+no random values. R's `options$seed` remains unused. Python `r.yates` keeps
+its existing per-call seed convention.
+
+Custom S3 `yates_setup` methods may return a prediction function or a list
+with `predict` and `summary` functions. The first prediction receives the
+linear predictor and stacked population design; later calls receive the
+linear predictor alone. Vector predictions supply marginal means and tests.
+Matrix predictions also supply simulation means and sample variances of all
+columns to the summary method, or return them as `pmm` and `mvar2`. Column
+counts must remain constant. Built-in Cox risk and survival run directly in
+Rust, with one baseline prepared per call.
+
+The native Python functions `validation.yates_risk`, `yates_response`,
+`yates_survival` and `yates_predict` accept `normal_draws`: an `nsim` by
+coefficient-count matrix of standard-normal values, or a callable receiving
+those two dimensions. The callable runs once after the point prediction.
+When supplied, these draws replace the built-in seeded generator. Rust
+callers use `yates_simulate_with_draws`; ordinary `yates_simulate` is unchanged.
+`YatesPredictor::Custom` and Python `yates_predict` accept predictions with
+multiple columns. The native result's `prediction_mean` and
+`prediction_variance` are populated for these multi-column predictions when
+any requested population is estimable. Callback errors retain their context.
+
+The R wrapper corrects several stock-R edge cases: the last numeric term is
+selectable; reordered variables use their own fitted levels; a levels matrix
+specifies joint settings; empty adjustment sets and matrix-valued SAS adjusters
+work; and explicit populations preserve custom contrasts. Cox designs align
+by coefficient name, excluding strata-only columns. Existing corrections for
+non-estimable populations, zero-variance tests and aligned survival summaries
+also apply. `trend`, stratified survival prediction, multi-state Cox models,
+and functions passed directly as `predict` remain unsupported. Type III tests
+require linear predictions, the SAS population and treatment/SAS contrasts.
+
+`scripts/benchmark_yates_r_bridge.R` compares complete R-facing calls against
+stock R for linear, GLM response, Cox risk and Cox survival predictions. It
+checks numerical results and the final RNG state before timing. Formula and
+population preparation, conversion, simulation and result assembly are included;
+fitting, warmup and garbage collection are excluded.
+
+On the machine described below, with 5,000 population rows, three target
+levels, 200 draws and seven alternating measurements after three warmup calls:
+
+| Complete R-facing analysis | Stock R median (range) | R/Rust median (range) |
+| --- | ---: | ---: |
+| Linear | 8 ms (7–9) | 5 ms (5–6) |
+| GLM response | 83 ms (66–84) | 67 ms (52–70) |
+| Cox risk | 74 ms (72–153) | 21 ms (20–21) |
+| Cox survival | 4,903 ms (4,609–4,968) | 327 ms (319–334) |
+
+These medians improved by 1.60×, 1.24×, 3.52× and 14.99× respectively.
+Survival uses 30 baseline times. A preliminary run with one warmup call
+measured 8/6, 77/61, 69/21 and 4,774/320 ms; its first measured linear bridge
+call included R JIT compilation. The script now warms each path three times.
+Peak memory is not measured, and these local timings do not establish results
+for other model or population sizes.
 
 `scripts/benchmark_yates_glm.R` compares complete R and Python marginal-mean
 calls on the same already-fitted binomial GLM and explicit population. It
