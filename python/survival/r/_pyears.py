@@ -21,6 +21,8 @@ from datetime import timedelta as _TimeDelta
 from itertools import pairwise
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
@@ -716,6 +718,8 @@ def _pyears_followup(mf: ModelFrame) -> tuple[list[float], list[float] | None, l
         if any(value < 0.0 for value in mf.y):
             raise ValueError("Negative follow up time")
         return list(mf.y), None, None
+    if not isinstance(response, Surv):
+        raise ValueError("Only right-censored and counting process survival types are supported")
     if response.type == "right":
         if any(value < 0.0 for value in response.time):
             raise ValueError("Negative survival time")
@@ -1115,7 +1119,7 @@ def pyears(
         raise ValueError("Data set has 0 observations")
     stop_values, start_values, event_values = _pyears_followup(mf)
     terms = _pyears_terms(mf, data, calls)
-    categories = [[term.values[row] for term in terms] for row in range(mf.n)]
+    categories = np.column_stack([term.values for term in terms]) if terms else np.empty((mf.n, 0))
     positions = None if table is None else _rate_positions(mf, table)
     result = _core.pyears(
         stop_values,
@@ -1144,7 +1148,7 @@ def pyears(
         else _population_model_frame(
             mf, data, row_key, rmap, [] if table is None else table.dimid, calls
         ),
-        x=((categories if terms else [1.0] * mf.n) if retention[1] else None),
+        x=((categories.tolist() if terms else [1.0] * mf.n) if retention[1] else None),
         y=(mf.response if mf.response is not None else [[value] for value in mf.y])
         if retention[2]
         else None,
