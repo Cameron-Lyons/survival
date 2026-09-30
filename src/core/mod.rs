@@ -16,4 +16,4 @@ pub use coxcount1::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::{CoxschoResiduals, schoenfeld_residuals};
 pub use natural_spline::{NaturalSplineKnot, SplineBasisResult, nsk, nsk_basis};
 pub use pspline::{PsplineBasis, pspline_basis};
-pub use strata_order::SurvResponse;
+pub use strata_order::{SurvResponse, grouped_sum};

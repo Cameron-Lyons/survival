@@ -716,6 +716,7 @@ BINDINGS = (
     "group_lasso_cox",
     "group_sequential_analysis",
     "group_variables",
+    "grouped_sum",
     "hazard_ratio",
     "hazard_to_reliability",
     "horseshoe_cox",
@@ -1086,6 +1087,7 @@ MODULE_BINDINGS = {
         "nsk",
         "PsplineBasis",
         "pspline_basis",
+        "grouped_sum",
     ),
     "data_prep": (
         "AeqSurvResult",

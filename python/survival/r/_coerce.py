@@ -482,6 +482,53 @@ def _encode_labels(values: Sequence[Any], name: str) -> list[int]:
     return [labels[value] for value in values]
 
 
+_GROUP_NAN = object()
+
+
+def _rowsum_groups(
+    source: Any,
+    n: int,
+    message: str = "Wrong length for 'collapse'",
+    *,
+    levels: Sequence[Any] | None = None,
+) -> tuple[list[int], list[str | None]]:
+    """R rowsum groups: observed factor levels, else sorted values, then NaN/NA."""
+    values = _materialize_labels(source, "collapse")
+    if len(values) != n:
+        raise ValueError(message)
+    declared = _categories(source) if levels is None else levels
+    unique = _label_levels(values, "collapse")
+    keys = {
+        value: _GROUP_NAN
+        if declared is None and isinstance(value, float) and math.isnan(value)
+        else None
+        if _is_missing_value(value)
+        else value
+        for value in unique
+    }
+    present = set(keys.values())
+    ordinary = present - {None, _GROUP_NAN}
+    if declared is None:
+        order = sorted(ordinary, key=lambda value: (isinstance(value, str), value))
+    else:
+        order = [value for value in declared if value in ordinary]
+        if len(order) != len(ordinary):
+            raise ValueError("collapse contains values outside its declared factor levels")
+    if _GROUP_NAN in present:
+        order.append(_GROUP_NAN)
+    if None in present:
+        order.append(None)
+    if _GROUP_NAN in present or None in present:
+        _warn_outside_package("missing values for 'group'", RuntimeWarning)
+    position = {value: code for code, value in enumerate(order)}
+    codes = [position[keys[value]] for value in values]
+    names = [
+        None if value is None else "NaN" if value is _GROUP_NAN else _as_character(value)
+        for value in order
+    ]
+    return codes, names
+
+
 def _cox_tie_method(method: str | None, ties: str | None) -> str:
     choices = ("efron", "breslow", "exact")
     message = "coxph ties must be 'efron', 'breslow', or 'exact'"

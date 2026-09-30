@@ -108,14 +108,40 @@ pub(crate) fn stratum_groups(strata: &[i32]) -> Vec<(i32, Vec<usize>)> {
 /// of each group, one row per group in ascending label order.  Rows are
 /// added in input order, as R does.
 pub(crate) fn rowsum(values: ArrayView2<'_, f64>, group: &[i32]) -> Array2<f64> {
+    grouped_sum(values, group, false).expect("internal rowsum groups match the matrix rows")
+}
+
+/// Sum matrix rows by integer group in ascending group order, retaining the
+/// input addition order within each group. With `squares`, return the square
+/// root of each sum of squared entries (R's collapsed prediction errors).
+/// Empty and zero-column matrices retain their column count; NaN propagates.
+pub fn grouped_sum(
+    values: ArrayView2<'_, f64>,
+    group: &[i32],
+    squares: bool,
+) -> SurvivalResult<Array2<f64>> {
+    if values.nrows() != group.len() {
+        return Err(SurvivalError::invalid_input(
+            "group must have one value per matrix row",
+        ));
+    }
     let groups = stratum_groups(group);
     let mut sums = Array2::zeros((groups.len(), values.ncols()));
     for (mut sum, (_, rows)) in sums.outer_iter_mut().zip(&groups) {
         for &row in rows {
-            sum += &values.row(row);
+            if squares {
+                for (total, value) in sum.iter_mut().zip(values.row(row)) {
+                    *total += value * value;
+                }
+            } else {
+                sum += &values.row(row);
+            }
         }
     }
-    sums
+    if squares {
+        sums.mapv_inplace(f64::sqrt);
+    }
+    Ok(sums)
 }
 
 #[cfg(test)]
@@ -178,5 +204,42 @@ mod tests {
         let sums = rowsum(values.view(), &[2, 1, 2, 5]);
         assert_eq!(sums, ndarray::array![[2.0, 6.0], [4.0, 12.0], [4.0, 8.0]]);
         assert_eq!(rowsum(Array2::zeros((0, 2)).view(), &[]).dim(), (0, 2));
+    }
+
+    #[test]
+    fn grouped_sum_validates_and_preserves_empty_shapes_and_addition_order() {
+        let values = ndarray::array![[1e16, 3.0], [-1e16, 4.0], [1.0, 0.0]];
+        assert_eq!(
+            grouped_sum(values.view(), &[-3, -3, -3], false).unwrap(),
+            ndarray::array![[1.0, 7.0]]
+        );
+        assert_eq!(
+            grouped_sum(values.view(), &[1, 2], false)
+                .unwrap_err()
+                .to_string(),
+            "group must have one value per matrix row"
+        );
+        assert_eq!(
+            grouped_sum(Array2::zeros((0, 3)).view(), &[], true)
+                .unwrap()
+                .dim(),
+            (0, 3)
+        );
+        assert_eq!(
+            grouped_sum(Array2::zeros((3, 0)).view(), &[1, 2, 1], false)
+                .unwrap()
+                .dim(),
+            (2, 0)
+        );
+    }
+
+    #[test]
+    fn grouped_sum_errors_use_quadrature_and_propagate_nonfinite_entries() {
+        let values = ndarray::array![[3.0, f64::NAN], [4.0, 2.0], [2.0, f64::INFINITY]];
+        let sums = grouped_sum(values.view(), &[2, 2, 1], true).unwrap();
+        assert_eq!(sums[(0, 0)], 2.0);
+        assert!(sums[(0, 1)].is_infinite());
+        assert_eq!(sums[(1, 0)], 5.0);
+        assert!(sums[(1, 1)].is_nan());
     }
 }

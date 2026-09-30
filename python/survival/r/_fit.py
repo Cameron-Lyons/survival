@@ -113,6 +113,7 @@ class _ModelFrame:
     id_column: str | None = None
     na_action: NaAction | None = None
     cluster_levels: tuple[Any, ...] | None = None
+    id_levels: tuple[Any, ...] | None = None
 
     @property
     def n(self) -> int:
@@ -420,6 +421,7 @@ def _model_frame(
             raise ValueError("cluster must have the same length as the Surv response")
 
     id_values = aligned["id"]
+    id_levels = None if id_values is None else _categories(id_values)
     if id_values is not None:
         id_values = _materialize_labels(id_values, "id")
         if len(id_values) != n:
@@ -475,6 +477,7 @@ def _model_frame(
         cluster=cluster_values,
         cluster_levels=None if cluster_levels is None else tuple(cluster_levels),
         id=id_values,
+        id_levels=None if id_levels is None else tuple(id_levels),
         istate=istate_values,
         extra={
             name: _materialize_labels(aligned[name], name)
@@ -554,6 +557,7 @@ def _newdata_frame(
     na_action: str | None,
     allow_missing_predictors: bool = False,
     allow_missing_strata: bool = False,
+    extra_missing: Sequence[int] = (),
 ) -> _NewData:
     """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
     na.action)``).
@@ -646,6 +650,7 @@ def _newdata_frame(
             missing.update(i for i, value in enumerate(response.time) if math.isnan(value))
             if response.start is not None:
                 missing.update(i for i, value in enumerate(response.start) if math.isnan(value))
+    missing.update(extra_missing)
     made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
     if made and not keep_missing:
         # the design reads the evaluated variables at the rows that stay

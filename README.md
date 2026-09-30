@@ -381,6 +381,10 @@ Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
 Cox and `survreg` models.
+Grouped Cox predictions and Cox/AFT residuals preserve factor order and missing
+groups. Prediction errors combine in quadrature through a shared Rust kernel;
+the R interface retains group names. See [grouped model outputs](docs/model-collapse.md)
+for omission rules, reference differences and complete-call timings.
 `predict(pspline(x), newx)` evaluates a spline basis using the original
 boundaries, degree, intercept and column combinations, with linear
 extrapolation outside the boundaries.

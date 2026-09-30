@@ -1,5 +1,19 @@
 use super::*;
 
+/// Sum rows by ascending integer group; squares returns error quadrature.
+#[pyfunction(name = "grouped_sum")]
+#[pyo3(signature = (values, group, *, squares=false))]
+fn grouped_sum_py(
+    py: Python<'_>,
+    values: crate::internal::numpy_utils::FloatMatrix,
+    group: crate::internal::numpy_utils::IntVec,
+    squares: bool,
+) -> PyResult<crate::internal::numpy_utils::FloatMatrix> {
+    Ok(crate::internal::numpy_utils::FloatMatrix::new(py.detach(
+        || crate::core::grouped_sum(values.view(), &group, squares),
+    )?))
+}
+
 /// `coxcount1`: risk sets of right-censored data for `tt()` terms.
 #[pyfunction(name = "coxcount1")]
 #[pyo3(signature = (survival, strata=None))]
@@ -90,6 +104,7 @@ fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<P
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(grouped_sum_py, m)?)?;
     m.add_function(wrap_pyfunction!(aareg_fit_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_callback, m)?)?;
     m.add_class::<CoxPenaltyTerms>()?;

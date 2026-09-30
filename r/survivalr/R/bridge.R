@@ -1564,7 +1564,8 @@ attrassign <- function(object, tt) {
 
 .call_r_api <- function(name, ..., .wrap = character()) {
   arguments <- lapply(.compact_null(list(...)), .unwrap_grouped_survfit)
-  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit")) {
+  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit") ||
+      (name %in% c("predict", "residuals") && isTRUE(arguments[["_with_group_names"]]))) {
     captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments)
     result <- captured$result
     for (message in captured$warnings) {
@@ -9060,14 +9061,16 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
-  result <- .call_r_api(
-    "predict",
-    object,
-    newdata = .as_python_data(newdata),
-    type = type,
-    `se.fit` = se.fit,
-    ...
-  )
+  grouped <- inherits(object, "survival_py_coxph") && !.is_coxphms_fit(object) &&
+    !is.null(dots[["collapse"]]) && !identical(dots[["collapse"]], FALSE)
+  if (grouped) {
+    dots$collapse <- .as_python_collapse(dots$collapse)
+    dots[["_with_group_names"]] <- TRUE
+  }
+  result <- do.call(.call_r_api, c(list("predict", fit = object, newdata = .as_python_data(newdata),
+                                    type = type, `se.fit` = se.fit), dots))
+  group_names <- if (grouped) result[["group_names"]] else NULL
+  if (grouped) result <- result[["values"]]
   value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
@@ -9076,10 +9079,32 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
     value <- .survreg_alias_prediction_missing(value)
   }
-  if (is.null(newdata)) {
+  if (is.null(newdata) && !grouped) {
     value <- .excluded_rows_na(object, value)
   }
+  value <- .attach_group_names(value, group_names)
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
+}
+
+.as_python_collapse <- function(value) {
+  if (is.factor(value)) return(.as_python_factor(value))
+  if (identical(value, TRUE) || identical(value, FALSE)) return(value)
+  if (anyNA(value)) return(lapply(value, function(item) {
+    if (is.numeric(item) && is.nan(item)) return(item)
+    if (is.na(item)) reticulate::py_none() else item
+  }))
+  value
+}
+
+.attach_group_names <- function(value, group_names) {
+  if (is.null(group_names)) return(value)
+  labels <- unname(vapply(group_names, function(label) if (is.null(label)) NA_character_ else
+    as.character(label)[[1L]], character(1)))
+  label <- function(x) {
+    if (is.matrix(x)) rownames(x) <- labels else if (is.numeric(x)) names(x) <- labels
+    x
+  }
+  if (is.list(value)) lapply(value, label) else label(value)
 }
 
 # naresid/napredict pad a na.exclude fit's values with NA at the rows it dropped;
@@ -9118,8 +9143,20 @@ residuals.survival_py_model <- function(object, ..., type = NULL) {
     type <- if (inherits(object, "survival_py_survreg")) "response" else "martingale"
   }
   dots <- list(...)
-  result <- .call_r_api("residuals", object, type = type, ...)
-  .excluded_rows_na(object, .as_residual_result(object, result, type, terms = dots[["terms"]]))
+  metadata <- (inherits(object, "survival_py_coxph") && !.is_coxphms_fit(object)) ||
+    inherits(object, "survival_py_survreg")
+  if (metadata) {
+    if (!is.null(dots$collapse)) dots$collapse <- .as_python_collapse(dots$collapse)
+    dots[["_with_group_names"]] <- TRUE
+  }
+  arguments <- list("residuals", object, type = type)
+  if (metadata) names(arguments)[2L] <- "fit"
+  result <- do.call(.call_r_api, c(arguments, dots))
+  group_names <- if (metadata) result[["group_names"]] else NULL
+  if (metadata) result <- result[["values"]]
+  value <- .as_residual_result(object, result, type, terms = dots[["terms"]])
+  if (is.null(group_names)) value <- .excluded_rows_na(object, value)
+  .attach_group_names(value, group_names)
 }
 
 anova.survival_py_model <- function(object, ..., test = "Chisq") {
