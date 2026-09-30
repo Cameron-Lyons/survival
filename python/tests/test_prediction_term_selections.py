@@ -36,13 +36,14 @@ def compare(actual, expected, *, vector=False):
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda c: c["name"])
-def test_term_prediction_selectors_values_errors_and_labels_match_r(case):
+@pytest.mark.parametrize("as_arrays", [False, True], ids=["lists", "arrays"])
+def test_term_prediction_selectors_values_errors_and_labels_match_r(case, as_arrays):
     fit = fitted(case["model"])
     newdata = {
         **REFERENCE["newdata"],
         "cl": RFactor(REFERENCE["newdata"]["cl"], REFERENCE["levels"]),
     }
-    options = {"type": case.get("type", "terms"), "se_fit": case["se_fit"]}
+    options = {"type": case.get("type", "terms"), "se_fit": case["se_fit"], "_as_arrays": as_arrays}
     if case["selection"] != "default":
         options["terms"] = bridge._r_term_subscript(case["terms"], case["kind"], case["levels"])
     expected = case["expected"]["result"]

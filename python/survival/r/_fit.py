@@ -11,6 +11,8 @@ from dataclasses import dataclass, field, replace
 from itertools import compress, product
 from typing import Any
 
+import numpy as np
+
 from ._coerce import (
     _DEFAULT_NA_ACTION,
     _categories,
@@ -719,7 +721,11 @@ def _prediction_row_labels(
 
 
 def _prediction_row_result(
-    values: Any, fit_names: list[str] | None, se_names: list[str] | None
+    values: Any,
+    fit_names: list[str] | None,
+    se_names: list[str] | None,
+    *,
+    null_dimnames: bool = False,
 ) -> dict[str, Any]:
     """Transfer a shared fit/error label vector to R once."""
     shared = fit_names is se_names
@@ -728,6 +734,7 @@ def _prediction_row_result(
         "fit_names": fit_names,
         "se_names": None if shared else se_names,
         "shared_names": shared,
+        "null_dimnames": null_dimnames,
     }
 
 
@@ -741,13 +748,33 @@ def _row_width(values: list[Any]) -> int | None:
     return len(values[0]) if values and isinstance(values[0], list) else None
 
 
-def _pad_rows(values: list[Any], rows: Sequence[int], width: int | None = None) -> list[Any]:
-    """R's ``naresid.exclude``: ``values`` (a vector, or a matrix as a list of rows)
+def _prediction_values(result: Any, as_arrays: bool) -> tuple[Any, Any]:
+    """Read native snapshots for the R bridge, retaining the public list getters."""
+    if as_arrays:
+        arrays = result.to_arrays()
+        return arrays["fit"], arrays["se_fit"]
+    return result.fit, result.se_fit
+
+
+def _empty_prediction(width: int | None, as_arrays: bool) -> Any:
+    return np.empty((0,) if width is None else (0, width)) if as_arrays else []
+
+
+def _pad_rows(values: Any, rows: Sequence[int], width: int | None = None) -> Any:
+    """R's ``naresid.exclude``: ``values`` (a vector or matrix, lists or NumPy arrays)
     with NaN, or a row of NaN, inserted at the sorted 0-based ``rows`` of the result.
     ``width`` is the column count of a matrix without rows (``None`` for a vector)."""
 
     if not rows:
         return values
+    if isinstance(values, np.ndarray):
+        gap_indices = np.asarray(sorted(set(rows)), dtype=np.intp)
+        count = len(values) + len(gap_indices)
+        retained = np.ones(count, dtype=bool)
+        retained[gap_indices] = False
+        output = np.full((count, *values.shape[1:]), math.nan)
+        output[retained] = values
+        return output
     if values:
         width = _row_width(values)
     gaps = set(rows)

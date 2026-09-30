@@ -52,7 +52,8 @@ def close(actual, expected, case):
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda c: c["name"])
-def test_complete_grouped_predictions_match_r(case):
+@pytest.mark.parametrize("as_arrays", [False, True], ids=["lists", "arrays"])
+def test_complete_grouped_predictions_match_r(case, as_arrays):
     group = [int(g) for g in case["collapse"]] if case["numeric_groups"] else case["collapse"]
     if case["levels"] is not None:
         group = RFactor(group, case["levels"])
@@ -67,6 +68,7 @@ def test_complete_grouped_predictions_match_r(case):
             na_action=case.get("na_action", "na.pass"),
             collapse=group,
             _with_group_names=True,
+            _as_arrays=as_arrays,
         )
     expected = case["expected"]["result"]
     assert "error" not in expected
@@ -75,6 +77,7 @@ def test_complete_grouped_predictions_match_r(case):
         close(result["values"].se_fit, expected["se_fit"], case)
         names = expected["fit"]["names"]
     else:
+        assert isinstance(result["values"], np.ndarray if as_arrays else list)
         close(result["values"], expected, case)
         names = expected["names"]
     assert result["group_names"] == names

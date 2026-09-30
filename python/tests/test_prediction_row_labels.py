@@ -40,12 +40,14 @@ def fitted(name, action):
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["name"])
-def test_prediction_rows_and_values_match_independent_r(case):
+@pytest.mark.parametrize("as_arrays", [False, True], ids=["lists", "arrays"])
+def test_prediction_rows_and_values_match_independent_r(case, as_arrays):
     options = {
         "type": case["type"],
         "se_fit": case["se_fit"],
         "na_action": case["na_action"],
         "_with_row_names": True,
+        "_as_arrays": as_arrays,
     }
     if case["p"] is not None:
         options["p"] = case["p"]
@@ -79,6 +81,7 @@ def test_prediction_rows_and_values_match_independent_r(case):
         else [(value, expected, result["fit_names"])]
     )
     for actual, reference, labels in pairs:
+        assert isinstance(actual, np.ndarray if as_arrays else list)
         shape = reference["dim"] or [len(reference["values"])]
         values = np.asarray(reference["values"], dtype=float).reshape(shape, order="F")
         np.testing.assert_allclose(actual, values, rtol=3e-7, atol=3e-8, equal_nan=True)

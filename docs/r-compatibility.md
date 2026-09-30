@@ -1854,6 +1854,15 @@ take 21–58 ms versus 47–87 ms in the predecessor; see
 [numeric data-frame conversion](r-numeric-data-columns.md) for stock R timings
 and the measured scope.
 
+Native Cox/AFT predictions also provide owned array snapshots. The R bridge
+uses them for bulk output conversion, retaining grouped and missing-row shapes,
+sparse frailty, term selections and prediction labels. Entirely omitted AFT
+quantiles retain their matrix width and stock absent/empty names. Both output
+paths check the existing prediction references; another 72 independent calls
+cover entirely omitted AFT outputs. See
+[prediction array snapshots](prediction-array-snapshots.md) for interface details,
+validation and complete-call timings.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

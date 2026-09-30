@@ -48,6 +48,9 @@ impl SurvregPredictType {
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregPrediction {
+    /// Column count retained independently of the row count.
+    #[pyo3(get)]
+    pub n_columns: usize,
     #[pyo3(get)]
     pub predict_type: SurvregPredictType,
     /// One row per observation.  `Response`/`Lp` have a single column,
@@ -67,8 +70,19 @@ impl SurvregPrediction {
             "SurvregPrediction(type={:?}, n={}, columns={}, has_se={})",
             self.predict_type,
             self.fit.len(),
-            self.fit.first().map_or(0, Vec::len),
+            self.n_columns,
             self.se_fit.is_some()
+        )
+    }
+
+    #[cfg(feature = "python")]
+    /// Independent writable float64 matrices, including empty dimensions.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        crate::internal::numpy_utils::prediction_matrix_arrays(
+            py,
+            &self.fit,
+            self.se_fit.as_deref(),
+            self.n_columns,
         )
     }
 }
@@ -219,6 +233,7 @@ pub fn predict_survreg(
                 }
             }
             Ok(SurvregPrediction {
+                n_columns: 1,
                 predict_type,
                 fit: pred.into_iter().map(|v| vec![v]).collect(),
                 se_fit: se.map(|se| se.into_iter().map(|v| vec![v]).collect()),
@@ -288,6 +303,7 @@ pub fn predict_survreg(
                 }
             }
             Ok(SurvregPrediction {
+                n_columns: p.len(),
                 predict_type,
                 fit: pred,
                 se_fit: se,
@@ -376,6 +392,7 @@ pub fn predict_survreg(
                     .collect()
             });
             Ok(SurvregPrediction {
+                n_columns: columns.len(),
                 predict_type,
                 fit: pred,
                 se_fit: se,
