@@ -149,6 +149,20 @@ class _CategoricalDesignTerm:
 
 
 @dataclass(frozen=True)
+class CoxPenaltyBasis:
+    """A time-transform's numeric basis and native Cox penalty.
+
+    ``basis`` accepts the same numeric vector/matrix inputs as ``coxph``'s
+    callbacks. ``column_names``, when supplied, names the fitted columns in
+    full. A sparse penalty takes one column of numeric group labels.
+    """
+
+    basis: Any
+    penalty: _core.CoxPenalty
+    column_names: Sequence[str] | None = None
+
+
+@dataclass(frozen=True)
 class _PenaltyDesignTerm:
     """A fitted penalty basis, including the state needed to transform new data.
 

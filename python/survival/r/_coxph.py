@@ -35,6 +35,7 @@ from ._coerce import (
     _is_missing_value,
     _label_levels,
     _match_string_arg,
+    _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
     _normalize_bool_option,
@@ -88,6 +89,7 @@ from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
     CoxBaseHazardResult,
+    CoxPenaltyBasis,
     CoxPHDetailResult,
     CoxPHWTestResult,
     CoxSurvfitMultiStateResult,
@@ -95,6 +97,7 @@ from ._types import (
     CoxZPHResult,
     NaAction,
     PredictResult,
+    PsplineResult,
     _CategoricalDesignTerm,
     _CovariateTerm,
     _DesignTerm,
@@ -157,6 +160,7 @@ class CoxphModel:
     # dropped, since model.frame() does not use them
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
     cluster_levels: tuple[Any, ...] | None = None
+    _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if name == "history" and self.penalized is not None:
@@ -414,6 +418,32 @@ def _time_transform_design(
     term: _CovariateTerm, value: Any, n: int
 ) -> tuple[_SingleDesignTerm, Any]:
     """Keep the callback's matrix columns or factor levels until model-matrix coding."""
+    spline = value if isinstance(value, PsplineResult) else None
+    if spline is not None:
+        value = {
+            "_survival_tt_kind": "matrix",
+            "values": spline.basis,
+            "penalty": _core.CoxPenalty.pspline(
+                df=spline.df,
+                theta=spline.theta,
+                nterm=spline.nterm,
+                eps=spline.eps,
+                method=spline.method,
+                intercept=spline.intercept,
+            )
+            if spline.penalty
+            else None,
+        }
+    if isinstance(value, CoxPenaltyBasis):
+        if not isinstance(value.penalty, _core.CoxPenalty):
+            raise TypeError("a CoxPenaltyBasis requires a native CoxPenalty")
+        value = {
+            "_survival_tt_kind": "matrix",
+            "values": value.basis,
+            "penalty": value.penalty,
+            "penalty_names": value.column_names,
+            "exact_names": value.column_names is not None,
+        }
     metadata = value if isinstance(value, Mapping) and "_survival_tt_kind" in value else {}
     source = metadata.get("values", value)
     values = _coerce_array_like(source, "tt result")
@@ -486,8 +516,17 @@ def _time_transform_design(
         names = tuple(_covariate_term_name(term) + str(name) for name in suffixes)
         penalty = metadata.get("penalty")
         if penalty is not None:
-            names = tuple(metadata.get("penalty_names") or names)
-            if len(names) == 1:
+            if penalty.kind == "pspline":
+                if spline is None:
+                    raise ValueError("a spline time transform requires a PsplineResult basis")
+                first = 1 if spline.intercept else 3
+                names = tuple(f"ps({term.column}){first + j}" for j in range(width))
+            penalty_names = metadata.get("penalty_names")
+            if penalty_names is not None:
+                names = tuple(
+                    str(name) for name in _materialize_1d(penalty_names, "tt penalty names")
+                )
+            if len(names) == 1 and not metadata.get("exact_names"):
                 names *= width
             if len(names) != width:
                 raise ValueError("tt penalty column names must match its width")
@@ -498,6 +537,13 @@ def _time_transform_design(
                 penalty,
                 report=metadata.get("report"),
                 controller_history=metadata.get("history"),
+                nterm=spline.nterm if spline is not None else 0,
+                degree=spline.degree if spline is not None else 3,
+                boundary=spline.boundary_knots if spline is not None else None,
+                intercept=spline.intercept if spline is not None else False,
+                combine=tuple(spline.combine)
+                if spline is not None and spline.combine is not None
+                else None,
             ), rows
         return _MatrixDesignTerm(term, names), rows
     return _NumericDesignTerm(term), [float(v) for v in values]
@@ -812,6 +858,7 @@ def _coxph_fit_frame(
         ]
     )
     penalized = None
+    sparse_values = None
     if penalized_terms:
         if use_robust:
             warnings.warn(
@@ -841,6 +888,10 @@ def _coxph_fit_frame(
             cluster=cluster,
         )
         fit = penalized.coxph
+        sparse = next((term for term in penalized_terms if term.penalty.sparse), None)
+        if sparse is not None:
+            column = frame.assign[_design_term_name(sparse)][0]
+            sparse_values = tuple(row[column] for row in data.x)
         dense = [
             i
             for i, term in enumerate(frame.design.covariates)
@@ -911,6 +962,7 @@ def _coxph_fit_frame(
         penalized=penalized,
         na_action=frame.na_action,
         _frame=replace(frame, x=[]),
+        _sparse_values=sparse_values,
     )
 
 
@@ -1548,8 +1600,12 @@ def summary_coxph_penal(
         penalty = term.kind if isinstance(term, _PenaltyDesignTerm) and term.penalized else None
         coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
         if isinstance(term, _PenaltyDesignTerm) and term.report is not None:
-            report = term.report(
-                coef, _block(var, columns), _block(var2, columns), df, _print_digits
+            report = (
+                term.report(penalized.frail, penalized.fvar, None, df, _print_digits)
+                if penalized.pterms[i] == 2
+                else term.report(
+                    coef, _block(var, columns), _block(var2, columns), df, _print_digits
+                )
             )
             names = report["names"]
             report_rows = report["coefficients"]
@@ -1581,6 +1637,19 @@ def summary_coxph_penal(
             )
             rows.append(row)
             print2.append(text)
+        elif penalized.pterms[i] == 2:
+            test = _frailty_wald(penalized.frail, penalized.fvar)
+            rows.append(
+                _penal_row(
+                    label,
+                    math.nan,
+                    math.nan,
+                    math.nan,
+                    test,
+                    df,
+                    _core.pchisq(test, df, lower_tail=False),
+                )
+            )
         elif term_tests and len(columns) > 1:
             test = coxph_wtest(_block(var, columns), coef).test[0]
             p = _core.pchisq(test, 1.0, lower_tail=False)
@@ -2713,7 +2782,11 @@ def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[fl
     if position is not None:
         if fit.penalized is None:
             raise ValueError("sparse frailty terms require a penalized fit")
-        codes = [float(group + 1) for group in fit.penalized.frail_index]
+        codes = (
+            list(fit._sparse_values)
+            if fit._sparse_values is not None
+            else [float(group + 1) for group in fit.penalized.frail_index]
+        )
         blocks.insert(position, ([_term_labels(fit)[position]], [codes]))
     return blocks
 

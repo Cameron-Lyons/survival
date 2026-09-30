@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve sparse and dense frailty penalties returned by Cox time transforms,
+  including controller histories, summaries and saved models. Python callbacks
+  accept `CoxPenaltyBasis` and direct `pspline()` results; stored model matrices
+  retain sparse group columns without expanding the native fitting matrix.
+
 - Add person-years, survival-data consistency and marginal-means reports.
   Retain built-in rate-table origins and matched-population summaries, and
   preserve categorical status metadata in `factor()`/`as.factor()` survival
