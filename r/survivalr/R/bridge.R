@@ -1364,7 +1364,11 @@ attrassign <- function(object, tt) {
   }
   value <- tolower(gsub("-", "_", trimws(type)))
   if (startsWith("terms", value)) {
-    return(.model_term_names(object, terms = terms))
+    labels <- if (is.null(terms)) .call_r_api("_prediction_term_names", object) else
+      .call_r_api("_prediction_term_names", object, terms = terms)
+    return(vapply(as.list(labels), function(label) {
+      if (is.null(label)) NA_character_ else as.character(label)
+    }, character(1)))
   }
   NULL
 }
@@ -1569,10 +1573,20 @@ attrassign <- function(object, tt) {
 }
 
 .call_r_api <- function(name, ..., .wrap = character()) {
-  arguments <- lapply(.compact_null(list(...)), .unwrap_grouped_survfit)
-  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit") ||
-      (name %in% c("predict", "residuals") && isTRUE(arguments[["_with_group_names"]]))) {
-    captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments)
+  arguments <- list(...)
+  if (name %in% c("predict", "fitted", "_prediction_term_names") && "terms" %in% names(arguments)) {
+    arguments$terms <- .as_python_terms(arguments$terms)
+  }
+  if (name %in% c("predict", "fitted")) {
+    for (key in intersect(c("na.action", "na_action"), names(arguments))) {
+      arguments[[key]] <- .as_na_action(arguments[[key]])
+    }
+  }
+  arguments <- lapply(.compact_null(arguments), .unwrap_grouped_survfit)
+  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted") ||
+      (name == "residuals" && isTRUE(arguments[["_with_group_names"]]))) {
+    captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments,
+      user_warnings = name %in% c("predict", "fitted"))
     result <- captured$result
     for (message in captured$warnings) {
       warning(message, call. = FALSE)
@@ -1587,6 +1601,17 @@ attrassign <- function(object, tt) {
     return(.wrap_python(result, .wrap))
   }
   result
+}
+
+.as_python_terms <- function(value) {
+  if (inherits(value, "python.builtin.object")) return(value)
+  kind <- if (is.factor(value)) "factor" else typeof(value)
+  levels <- if (is.factor(value)) as.list(levels(value)) else NULL
+  if (is.factor(value)) value <- as.character(value)
+  values <- lapply(value, function(item) {
+    if (is.na(item)) reticulate::py_none() else item
+  })
+  .python_attr("_r_term_subscript")(values, kind, levels)
 }
 
 # A stratified survfit is a named list of per-stratum curves on this side (keyed by
@@ -8936,12 +8961,12 @@ model.frame.survival_py_survfit <- function(formula, ...) {
 fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   if (inherits(object, "survival_py_coxph")) {
     # fitted.coxph: the linear predictors, other arguments ignored
-    return(.as_numeric_vector(.call_r_api("fitted", object)))
+    return(.as_numeric_vector(.call_r_api("fitted", fit = object)))
   }
   dots <- list(...)
   result <- .call_r_api(
     "fitted",
-    object,
+    fit = object,
     type = type,
     `se.fit` = se.fit,
     ...
@@ -8949,7 +8974,8 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
-    col.names = .predict_column_names(object, type, terms = dots[["terms"]])
+    col.names = .predict_column_names(object, type,
+      terms = if ("terms" %in% names(dots)) .as_python_terms(dots[["terms"]]) else NULL)
   )
   if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
     value <- .survreg_alias_prediction_missing(value)
@@ -9080,7 +9106,8 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
-    col.names = .predict_column_names(object, type, terms = dots[["terms"]])
+    col.names = .predict_column_names(object, type,
+      terms = if ("terms" %in% names(dots)) .as_python_terms(dots[["terms"]]) else NULL)
   )
   if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
     value <- .survreg_alias_prediction_missing(value)

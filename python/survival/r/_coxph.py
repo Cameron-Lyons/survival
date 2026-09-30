@@ -50,6 +50,8 @@ from ._coerce import (
     _start_time_value,
     _subset_indices,
     _subset_optional_sequence,
+    _term_subscript,
+    _term_subscript_name,
     _warn_outside_package,
 )
 from ._data_prep import aeqSurv
@@ -1800,18 +1802,39 @@ def _terms_selection(terms: Any | None, names: Sequence[str]) -> list[int]:
 
     if terms is None:
         return list(range(len(names)))
-    values = [terms] if isinstance(terms, str | int) else list(terms)
+    values, kind = _term_subscript(terms)
+    if kind == "NULL":
+        return []
+    if kind in {"integer", "double"}:
+        try:
+            numeric = [math.nan if _is_missing_value(value) else float(value) for value in values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid terms argument") from exc
+        if any(
+            not math.isnan(value)
+            and (
+                not math.isfinite(value)
+                or not value.is_integer()
+                or value < 1
+                or value > len(names)
+            )
+            for value in numeric
+        ):
+            raise ValueError("Invalid terms argument")
+        if any(math.isnan(value) for value in numeric):
+            raise ValueError("missing value where TRUE/FALSE needed")
+        return [int(value) - 1 for value in numeric]
     selected: list[int] = []
     for value in values:
-        if isinstance(value, str):
-            if value not in names:
-                raise ValueError("a name given in the terms argument not found in the model")
-            selected.append(list(names).index(value))
-        else:
-            idx = _integer_scalar(value, "terms")
-            if idx < 1 or idx > len(names):
-                raise ValueError("Invalid terms argument")
-            selected.append(idx - 1)
+        name = _term_subscript_name(value)
+        if name is None or name not in names:
+            raise ValueError("a name given in the terms argument not found in the model")
+        position = (
+            list(names).index(name) if kind != "factor" else (_categories(terms) or []).index(value)
+        )
+        if position >= len(names):
+            raise ValueError("subscript out of bounds")
+        selected.append(position)
     return selected
 
 
@@ -1895,6 +1918,11 @@ def predict_coxph(
         "type must be one of lp, risk, expected, terms, survival",
     )
     include_se = _normalize_bool_option(se_fit, "se_fit")
+    selected = (
+        _terms_selection(terms, _term_labels(fit))
+        if terms is not None or predict_type == "terms"
+        else []
+    )
     if reference is None:
         reference_name = "sample" if predict_type == "terms" else "strata"
     else:
@@ -1951,8 +1979,6 @@ def predict_coxph(
 
     pred: Any
     se: Any
-    if predict_type == "terms":
-        selected = _terms_selection(terms, _term_labels(fit))
     sparse_only = (
         predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
     )

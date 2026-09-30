@@ -34,6 +34,7 @@ from ._coerce import (
     _integer_scalar,
     _materialize_labels,
     _matrix_input_column_names,
+    _matrix_term_selection,
     _normalize_bool_option,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
@@ -987,6 +988,11 @@ def _term_selection(terms: Any | None, names: Sequence[str]) -> list[int] | None
     return selected
 
 
+def _prediction_term_labels(fit: SurvregModelResult) -> list[str]:
+    """Prediction columns follow coefficient assignments, excluding scale strata."""
+    return [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
+
+
 def _drop(values: list[list[float]], keep_matrix: bool) -> Any:
     """R's ``drop``: one column (or one quantile row) becomes a vector."""
 
@@ -1033,9 +1039,16 @@ def predict_survreg(
             allow_missing_strata=predict_type not in {"quantile", "uquantile"},
         )
     )
-    term_names = [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
+    term_names = _prediction_term_labels(fit)
     quantiles = _quantile_vector(p, "p")
-    selection = _term_selection(terms, term_names)
+    selection = (
+        _matrix_term_selection(terms, term_names, warning_repeats=2 if include_se else 1)
+        if predict_type == "terms"
+        else None
+    )
+    native_selection = (
+        None if selection is None else [value for value in selection if value is not None]
+    )
     predictions: list[list[float]] = []
     se_values: list[list[float]] = []
     if new is None or new.n:
@@ -1047,7 +1060,7 @@ def predict_survreg(
             offset=None if new is None else new.offset,
             strata=None if new is None else new.strata,
             assign=list(fit.assign),
-            terms=selection,
+            terms=native_selection,
         )
         predictions = result.fit
         if include_se:
@@ -1055,6 +1068,17 @@ def predict_survreg(
             if standard_errors is None:
                 raise RuntimeError("native predictor did not return requested standard errors")
             se_values = standard_errors
+    if selection is not None and any(value is None for value in selection):
+
+        def missing_columns(rows: list[list[float]]) -> list[list[float]]:
+            result = []
+            for row in rows:
+                values = iter(row)
+                result.append([math.nan if value is None else next(values) for value in selection])
+            return result
+
+        predictions = missing_columns(predictions)
+        se_values = missing_columns(se_values)
     # naresid restores omitted rows; na.pass predictor NaNs have already
     # propagated through just the outputs that use them.
     if new is None:

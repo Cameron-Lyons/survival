@@ -30,6 +30,7 @@ from ._coerce import (
     _integer_scalar,
     _materialize_1d,
     _materialize_labels,
+    _matrix_term_selection,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
 )
@@ -81,6 +82,7 @@ from ._survpenal_print import SurvregPenalPrint
 from ._survreg import (
     SurvregAnovaResult,
     SurvregModelResult,
+    _prediction_term_labels,
     coef_names_survreg,
     confint_survreg,
     model_matrix_survreg,
@@ -407,6 +409,29 @@ def _model_term_names_stored(
 
 
 model_term_names.register(SurvregModelResult, model_term_names_survreg)
+
+
+@singledispatch
+def _prediction_term_names(fit: Any, terms: Any | None = None) -> list[str | None]:
+    """Names of selected prediction columns, separate from full formula labels."""
+    raise _no_method("_prediction_term_names")
+
+
+@_prediction_term_names.register(CoxphModel)
+def _prediction_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str | None]:
+    names = _term_labels(fit)
+    return [names[i] for i in _terms_selection(terms, names)]
+
+
+@_prediction_term_names.register(SurvregModelResult)
+def _prediction_term_names_aft(
+    fit: SurvregModelResult, terms: Any | None = None
+) -> list[str | None]:
+    names = _prediction_term_labels(fit)
+    selection = _matrix_term_selection(terms, names, warn_overflow=False)
+    return (
+        list(names) if selection is None else [None if i is None else names[i] for i in selection]
+    )
 
 
 @singledispatch

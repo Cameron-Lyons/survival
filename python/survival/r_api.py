@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from . import r as _r
 from .r import *  # noqa: F403
-from .r._coerce import _r_factor  # noqa: F401
+from .r._coerce import _r_factor, _r_term_subscript  # noqa: F401
 from .r._coxph import _cox_fit_diagnostic_messages  # noqa: F401
 from .r._misc import _frailty_encoding, _survcheck_codes  # noqa: F401
 from .r._models import (  # noqa: F401
+    _prediction_term_names,
     _subset_coxms_curves,
     _subset_survfit_multistate,
     _survfit_multistate_structure,

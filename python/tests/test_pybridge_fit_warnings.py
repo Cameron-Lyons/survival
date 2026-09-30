@@ -36,6 +36,9 @@ def test_fit_warning_capture_restores_filters_and_preserves_other_category_filte
         captured = _call_fit_with_warnings(fit, {})
         assert captured == {"result": 7, "warnings": ["visible fit warning"]}
         assert warnings.filters == previous_filters
+        captured = _call_fit_with_warnings(fit, {}, user_warnings=True)
+        assert captured == {"result": 7, "warnings": ["hidden user warning", "visible fit warning"]}
+        assert warnings.filters == previous_filters
         with pytest.raises(RuntimeWarning, match="outside fit"):
             warnings.warn("outside fit", RuntimeWarning, stacklevel=1)
 

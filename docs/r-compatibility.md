@@ -1833,6 +1833,16 @@ output rows per group and restoring omitted-only groups afterward. Empty R
 term predictions retain their column count. Another 146 R cases check these
 paths; see [native grouped prediction performance](cox-grouped-prediction-performance.md).
 
+AFT prediction term selections follow R's positive, zero, negative, fractional,
+logical and missing matrix indices, retaining selected widths and errors.
+Cox keeps its stricter positive-index/name validation, including for vector
+predictions. R term column names follow fitted covariate assignments separately
+from the full formula's strata labels. The 656-call reference retains stock
+AFT strata-label displacement and penalized Cox survival errors alongside
+independent corrections; see [prediction term selections](prediction-term-selections.md).
+Ungrouped R prediction row labels are not consistently restored and remain an
+audit item; grouped labels are covered separately above.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on
