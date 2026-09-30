@@ -252,6 +252,15 @@ if (getRversion() >= "2.15.1") {
   }
   if (is.data.frame(data)) {
     columns <- lapply(data, function(column) {
+      if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
+          is.null(dim(column)) && length(column) <= .Machine$integer.max && !anyNA(column)) {
+        # A one-dimensional R array crosses in bulk as a NumPy array, including
+        # empty and single-row columns. Keep NA and classed columns on the
+        # existing path so their missing-value and categorical semantics remain.
+        value <- as.vector(column)
+        dim(value) <- length(value)
+        return(value)
+      }
       value <- .as_python_vector(column)
       if (is.factor(column)) {
         value
