@@ -35,9 +35,9 @@ Matrix covariates keep their column dimension when a missing row is inserted;
 factor metadata, aligned arguments and evaluated strata follow the same rows.
 
 This change does not resolve the documented AFT empty-scale difference: unused
-strata are still omitted. Model-frame behavior without an explicit subset,
-R formula evaluation without a data argument, and the separate R native-model-
-frame response adapter remain subjects for further compatibility work.
+strata are still omitted. Response normalization during omission without an explicit subset and in R
+native model frames is covered by the subsequent [normalization correction](response-normalization.md).
+R formula evaluation without a data argument remains under review.
 
 ## Verification
 

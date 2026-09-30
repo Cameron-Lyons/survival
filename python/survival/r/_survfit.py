@@ -48,7 +48,6 @@ from ._formula import (
     _column_source,
     _covariate_term_name,
     _formula_cluster_values,
-    _formula_columns,
     _formula_response_spec,
     _parse_formula,
     _strata_term_values,
@@ -244,15 +243,7 @@ def _formula_model_frame(
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
     elif subset is not None:
         data, extras = _subset_formula_inputs(formula, data, subset, **extras)
-    spec = _formula_response_spec(formula)
-    # is.na(Surv): a missing endpoint of an interval-censored response is a censoring code
-    exclude = set(spec.columns) if spec.type in {"interval", "interval2"} else set()
-    if set(_formula_columns(formula, data)) - exclude or any(
-        v is not None for v in extras.values()
-    ):
-        data, extras, _removed = _apply_formula_na_action(
-            formula, data, na_action, exclude_columns=exclude, **extras
-        )
+    data, extras, _removed = _apply_formula_na_action(formula, data, na_action, **extras)
     response, terms = _parse_formula(formula, data)
     n = len(response)
 

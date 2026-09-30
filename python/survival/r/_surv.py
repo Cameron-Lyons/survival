@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import copy
 import math
-import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
@@ -38,6 +37,7 @@ from ._coerce import (
     _numeric_ndarray,
     _r_format_numbers,
     _subset_sequence,
+    _warn_outside_package,
 )
 from ._surv_ops import _SurvivalOperations
 from ._types import _MISSING, StrataFactor, Timeline
@@ -122,7 +122,7 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
         for row in np.flatnonzero(~valid).tolist():
             codes[row] = None
         if (present & ~valid).any():
-            warnings.warn("Invalid status value, converted to NA", stacklevel=3)
+            _warn_outside_package("Invalid status value, converted to NA")
         return codes
     raw = _materialize_1d(values, name)
     if all(_is_bool_like(value) or _is_missing_value(value) for value in raw):
@@ -152,7 +152,7 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
             status.append(None)
             invalid = True
     if invalid:
-        warnings.warn("Invalid status value, converted to NA", stacklevel=3)
+        _warn_outside_package("Invalid status value, converted to NA")
     return status
 
 
@@ -181,7 +181,7 @@ def _interval_status(values: Any) -> list[int | None]:
             status.append(None)
             invalid = True
     if invalid:
-        warnings.warn("Status must be 0, 1, 2 or 3; converted to NA", stacklevel=3)
+        _warn_outside_package("Status must be 0, 1, 2 or 3; converted to NA")
     return status
 
 
@@ -281,7 +281,7 @@ class Surv(_SurvivalOperations):
                 start = [
                     math.nan if bad else value for value, bad in zip(start, backwards, strict=True)
                 ]
-                warnings.warn("Stop time must be > start time, NA created", stacklevel=4)
+                _warn_outside_package("Stop time must be > start time, NA created")
             if mstate or _is_factor_like(args[2]):
                 status, states, clabel = _mstate_status(args[2])
                 surv_type = "mcounting"
@@ -427,7 +427,7 @@ def _interval2_columns(
         else:
             status.append(3)
     if any(backwards):
-        warnings.warn("Invalid interval: start > stop, NA created", stacklevel=4)
+        _warn_outside_package("Invalid interval: start > stop, NA created")
     time = [
         right_value if code == 2 else left
         for left, right_value, code in zip(time, time2, status, strict=True)
@@ -451,7 +451,7 @@ def _interval_time2(time: list[float], right: Any, status: list[int | None]) -> 
         for idx, bad in enumerate(backwards):
             if bad:
                 status[idx] = None
-        warnings.warn("Invalid interval: start > stop, NA created", stacklevel=4)
+        _warn_outside_package("Invalid interval: start > stop, NA created")
     return time2
 
 
@@ -601,6 +601,8 @@ def _survreg_response_arrays(
 ) -> tuple[list[float], list[float], list[float] | None]:
     """R's ``survreg`` response columns: time, status code and (interval data) time2."""
 
+    if None in response.event:
+        raise ValueError("missing values in the response")
     if response.type == "right":
         return list(response.time), [float(value or 0) for value in response.event], None
     if response.type == "left":
