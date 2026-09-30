@@ -160,6 +160,12 @@ retain near ties; survival-time responses apply `timefix`. See
 [external-model concordance](linear-model-concordance.md) for input contracts,
 R differences, numerical references and complete-call benchmarks.
 
+The R fitted-model method also uses the shared Python model preparation and
+comparison path. Each Cox or AFT model retains its own response, strata,
+weights and applicable clusters, including joint comparisons and omitted
+training rows. See [fitted-model concordance](model-concordance.md) for the
+wrapper corrections, metadata conventions and complete-call measurements.
+
 `yates(..., predict="risk", nsim=200, options={"seed": 123})` uses Rust simulation
 with R's default Mersenne-Twister/inversion normal stream. An explicit seed gives
 reproducible covariance estimates without altering a global RNG. The default
@@ -186,7 +192,7 @@ of the reference JSON files were changed. The differences are:
 | 6 | Cox concordance | Exact linear-predictor ties depend on floating-point/BLAS rounding. The reference and this platform classify a few tied pairs differently. |
 | 1 | Exact counting-process Cox deviance residuals | The reference's unclassed fit dispatch returns martingale residuals for a deviance request. The port computes deviance residuals. |
 | 18 | Interval-censored AFT residual derivatives | The reference has opposite signs in some scale derivatives. The port's likelihood derivatives are checked against finite differences for every censoring type and distribution family. |
-| 4 | AFT prediction with a new-data offset | R's `predict.survreg` sets the new-data offset to 0 when the model has one scale (`predict.survreg.R:82`) and keeps it when there are several. The port includes it in the linear predictor and the transformed predictions in both cases. |
+| 4 | AFT prediction with a new-data offset | R's `predict.survreg` drops new-data offsets on the linear-predictor/response path; only its stratified quantile path extracts them. The port includes them in the linear predictor and transformed predictions. |
 | 1 | `survcondense` with no rows to merge | The reference produces zero rows through negative indexing of an empty index. The port preserves all input rows. |
 
 These cases remain explicit `xfail(strict=True)` entries (`KNOWN_FAILURES`), so

@@ -70,6 +70,24 @@ def _concordance_lm_data(
     return _concordance_from_data(prepared, options=options, names=names)
 
 
+def _concordance_survival_models(
+    fits: list[Any],
+    names: list[str],
+    options: dict[str, Any],
+    newdata: Any | None,
+    clusters: list[Any],
+) -> Any:
+    """Keep fitted rows in Python; R supplies cluster codes in its sort order."""
+    from .r._concordance import _concordance_from_data, _fit_data
+
+    need_weights = any(fit.weights is not None for fit in fits)
+    prepared = [
+        _fit_data(fit, newdata, need_weights, cluster)
+        for fit, cluster in zip(fits, clusters, strict=True)
+    ]
+    return _concordance_from_data(prepared, options=options, names=names)
+
+
 def _survexp_cox_fit(
     fit: Any, data: Any, group: Any, weights: Any, y: Any, times: Any, method: str
 ) -> Any:
