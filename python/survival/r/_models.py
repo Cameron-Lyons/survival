@@ -49,11 +49,22 @@ from ._coxph import (
 )
 from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
-from ._data_prep import summary_tmerge
+from ._data_prep import aeqSurv, summary_tmerge
 from ._finegray import _finegray_frame
-from ._fit import _model_matrix_names_and_assign, _model_matrix_newdata_design, _newdata_frame
+from ._fit import (
+    _model_matrix_contrasts,
+    _model_matrix_names_and_assign,
+    _model_matrix_newdata_design,
+    _newdata_frame,
+    _prediction_row_labels,
+)
 from ._formula import _column as _formula_column
-from ._formula import _formula_columns, _formula_model_term_degree, _strata_specs
+from ._formula import (
+    _data_row_labels,
+    _formula_columns,
+    _formula_model_term_degree,
+    _strata_specs,
+)
 from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
@@ -449,14 +460,18 @@ def _model_weights_fit(
 
 
 @singledispatch
-def model_matrix(fit: Any, data: Any | None = None) -> dict[str, Any]:
+def model_matrix(
+    fit: Any, data: Any | None = None, *, _with_metadata: bool = False
+) -> dict[str, Any]:
     """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
 
     raise _no_method("model_matrix")
 
 
 @model_matrix.register(CoxphModel)
-def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any]:
+def _model_matrix_cox(
+    fit: CoxphModel, data: Any | None = None, *, _with_metadata: bool = False
+) -> dict[str, Any]:
     """R's ``model.matrix.coxph``: the fit's design, or with ``data`` the design of
     those rows (``model.frame(Terms, data)``, whose default ``na.omit`` leaves out
     the incomplete ones).  ``assign`` numbers each column's term by its position in
@@ -469,6 +484,7 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
 
     position = _sparse_term(fit)
     design = _fit_frame(fit).design if position is not None else fit.design
+    fitted_design = design
     if data is None:
         strata = fit.strata
         rows = fit.x
@@ -498,7 +514,46 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
                 raise ValueError("data must contain the strata variable(s) of the model")
             strata = [fit.strata_levels[code] for code in new.strata] if new.strata else None
     names, assign = _model_matrix_names_and_assign(design)
-    return {"data": rows, "columns": names, "assign": assign, "strata": strata}
+    result = {"data": rows, "columns": names, "assign": assign, "strata": strata}
+    if _with_metadata:
+        if data is None and fit.tt:
+            if fit._matrix_rows is not None:
+                labels = list(fit._matrix_rows)
+            else:
+                # Older stored fits have the original frame but no expanded
+                # labels. Rebuild its row indices without invoking tt callbacks.
+                frame = _fit_frame(fit)
+                response = aeqSurv(frame.y) if fit.timefix else frame.y
+                if response.start is None:
+                    counts = _core.coxcount1(
+                        _core.SurvivalData(list(response.time), response._event_codes()),
+                        frame.strata,
+                    )
+                else:
+                    counts = _core.coxcount2(
+                        _core.CountingProcessData(
+                            list(response.start), list(response.time), response._event_codes()
+                        ),
+                        frame.strata,
+                    )
+                source = _data_row_labels(frame.data, frame.n)
+                labels = _make_unique(
+                    [str(row + 1) if source is None else source[row] for row in counts.index]
+                )
+        elif data is None:
+            missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
+            labels = _prediction_row_labels(
+                fit._prediction_rows, len(rows) + len(missing), missing, False
+            )
+        else:
+            labels = _prediction_row_labels(_data_row_labels(new.data, new.n), new.n, (), False)
+        result.update(
+            row_names=labels,
+            contrasts=_model_matrix_contrasts(
+                design, fitted_design=fitted_design if data is not None else None
+            ),
+        )
+    return result
 
 
 model_matrix.register(SurvregModelResult, model_matrix_survreg)

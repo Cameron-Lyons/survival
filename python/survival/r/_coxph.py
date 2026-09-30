@@ -174,6 +174,7 @@ class CoxphModel:
     id_levels: tuple[Any, ...] | None = None
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
     _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
+    _matrix_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if name == "history" and self.penalized is not None:
@@ -425,6 +426,7 @@ class _CoxData:
     cluster: list[Any] | None
     id: list[Any] | None
     design: _FormulaDesign | None = None
+    row_names: tuple[str, ...] | None = None
 
 
 def _time_transform_design(
@@ -513,6 +515,8 @@ def _time_transform_design(
                 levels,
                 contrasts=tuple(tuple(row) for row in rows),
                 contrast_names=tuple(contrast_names),
+                contrast_label=metadata.get("contrast_label", "contr.poly" if ordered else None),
+                contrast_metadata=metadata.get("contrast_metadata"),
             ), values
         return _CategoricalDesignTerm(term, levels), values
     matrix = (
@@ -557,6 +561,7 @@ def _time_transform_design(
                 report=metadata.get("report"),
                 controller_history=metadata.get("history"),
                 matrix_names=matrix_names,
+                contrast_metadata=metadata.get("contrast_metadata"),
                 nterm=spline.nterm if spline is not None else 0,
                 degree=spline.degree if spline is not None else 3,
                 boundary=spline.boundary_knots if spline is not None else None,
@@ -641,6 +646,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
         cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
         id=None if frame.id is None else [frame.id[idx] for idx in tindex],
         design=design,
+        row_names=_data_row_labels(data, len(tindex)),
     )
 
 
@@ -985,6 +991,7 @@ def _coxph_fit_frame(
         _frame=replace(frame, x=[]),
         _sparse_values=sparse_values,
         _prediction_rows=frame.row_names,
+        _matrix_rows=data.row_names,
     )
 
 

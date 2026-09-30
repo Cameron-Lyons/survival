@@ -22,6 +22,7 @@ from ._coerce import (
     _finite_float,
     _floats_or_nan,
     _hashable_group_value,
+    _is_bool_like,
     _is_missing_value,
     _keep_rows_after_na_action,
     _materialize_1d,
@@ -2278,6 +2279,20 @@ def _fit_single_design_term(
         levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, penalty_values, options, levels)
     values = _term_raw_values(data, term, n)
+    if (
+        term.transform in {None, "I", "identity"}
+        and term.categorical_wrapper is None
+        and term.strata is None
+        and any(_is_bool_like(value) for value in values)
+        and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
+        and (
+            term.arithmetic is not None
+            or _mstate_categories(_column_source(data, term.column)) is None
+        )
+    ):
+        # R model.matrix treats logical variables as factors with both levels,
+        # even when only TRUE or FALSE remains after subset/NA omission.
+        return _CategoricalDesignTerm(term, (False, True))
     if not term.categorical and (
         term.transform is not None
         or term.arithmetic is not None
