@@ -139,7 +139,8 @@ pub struct SurvregData {
 }
 
 impl SurvregData {
-    /// Validates every component once; the fit relies on it.
+    /// Validate every component. Fitting rechecks public fields because a Rust
+    /// caller can construct or modify them without using this constructor.
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         time: Vec<f64>,
@@ -151,72 +152,7 @@ impl SurvregData {
         strata: Option<Vec<usize>>,
         cluster: Option<Vec<usize>>,
     ) -> SurvivalResult<Self> {
-        validate_non_empty(&time, "time")?;
-        validate_finite(&time, "time")?;
-        let n = time.len();
-        validate_length(n, status.len(), "status")?;
-        validate_length(n, covariates.nrows(), "covariates")?;
-        if covariates.ncols() == 0 {
-            return Err(SurvivalError::invalid_input(
-                "covariates must have at least one column (the intercept)",
-            ));
-        }
-        if let Some(((row, column), value)) = covariates
-            .indexed_iter()
-            .find(|(_, value)| !value.is_finite())
-        {
-            return Err(SurvivalError::invalid_input(format!(
-                "covariates contains non-finite value {value} at row {row}, column {column}"
-            )));
-        }
-        for (index, &code) in status.iter().enumerate() {
-            if !(0..=3).contains(&code) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "status must contain the codes 0 (right censored), 1 (exact), 2 (left censored) or 3 (interval censored); got {code} at index {index}"
-                )));
-            }
-        }
-        let interval_rows: Vec<usize> = (0..n).filter(|&i| status[i] == 3).collect();
-        match &time2 {
-            Some(time2) => {
-                validate_length(n, time2.len(), "time2")?;
-                for &i in &interval_rows {
-                    if !time2[i].is_finite() {
-                        return Err(SurvivalError::invalid_input(format!(
-                            "time2 contains non-finite value {} at interval-censored index {i}",
-                            time2[i]
-                        )));
-                    }
-                    if time2[i] < time[i] {
-                        return Err(SurvivalError::invalid_input(format!(
-                            "Invalid interval: start > stop at index {i}"
-                        )));
-                    }
-                }
-            }
-            None if !interval_rows.is_empty() => {
-                return Err(SurvivalError::invalid_input(
-                    "time2 is required for interval-censored (status 3) rows",
-                ));
-            }
-            None => {}
-        }
-        if let Some(weights) = &weights {
-            validate_length(n, weights.len(), "weights")?;
-            validate_finite(weights, "weights")?;
-            validate_positive(weights, "weights")?;
-        }
-        if let Some(offset) = &offset {
-            validate_length(n, offset.len(), "offset")?;
-            validate_finite(offset, "offset")?;
-        }
-        if let Some(strata) = &strata {
-            validate_length(n, strata.len(), "strata")?;
-        }
-        if let Some(cluster) = &cluster {
-            validate_length(n, cluster.len(), "cluster")?;
-        }
-        Ok(Self {
+        let data = Self {
             time,
             time2,
             status,
@@ -225,7 +161,103 @@ impl SurvregData {
             offset,
             strata,
             cluster,
-        })
+        };
+        data.validate()?;
+        Ok(data)
+    }
+
+    pub(crate) fn validate(&self) -> SurvivalResult<()> {
+        validate_non_empty(&self.time, "time")?;
+        validate_finite(&self.time, "time")?;
+        let n = self.n();
+        validate_length(n, self.status.len(), "status")?;
+        validate_length(n, self.covariates.nrows(), "covariates")?;
+        if self.nvar() == 0 {
+            return Err(SurvivalError::invalid_input(
+                "covariates must have at least one column (the intercept)",
+            ));
+        }
+        if let Some(((row, column), value)) = self
+            .covariates
+            .indexed_iter()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(SurvivalError::invalid_input(format!(
+                "covariates contains non-finite value {value} at row {row}, column {column}"
+            )));
+        }
+        for (index, &code) in self.status.iter().enumerate() {
+            if !(0..=3).contains(&code) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "status must contain the codes 0 (right censored), 1 (exact), 2 (left censored) or 3 (interval censored); got {code} at index {index}"
+                )));
+            }
+        }
+        match &self.time2 {
+            Some(time2) => {
+                validate_length(n, time2.len(), "time2")?;
+                for i in (0..n).filter(|&i| self.status[i] == 3) {
+                    if !time2[i].is_finite() {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "time2 contains non-finite value {} at interval-censored index {i}",
+                            time2[i]
+                        )));
+                    }
+                    if time2[i] < self.time[i] {
+                        return Err(SurvivalError::invalid_input(format!(
+                            "Invalid interval: start > stop at index {i}"
+                        )));
+                    }
+                }
+            }
+            None if self.status.contains(&3) => {
+                return Err(SurvivalError::invalid_input(
+                    "time2 is required for interval-censored (status 3) rows",
+                ));
+            }
+            None => {}
+        }
+        if let Some(weights) = &self.weights {
+            validate_length(n, weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            validate_positive(weights, "weights")?;
+        }
+        if let Some(offset) = &self.offset {
+            validate_length(n, offset.len(), "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+        if let Some(strata) = &self.strata {
+            validate_length(n, strata.len(), "strata")?;
+            if strata.contains(&usize::MAX) {
+                return Err(SurvivalError::invalid_input("Invalid strata variable"));
+            }
+        }
+        if let Some(cluster) = &self.cluster {
+            validate_length(n, cluster.len(), "cluster")?;
+        }
+        Ok(())
+    }
+
+    /// Resolve scale strata, including explicitly retained unused strata, and
+    /// reject dimensions whose dense covariance allocation cannot be represented.
+    /// Called only after structural validation and before user callbacks.
+    pub(crate) fn fitting_strata(&self, requested: Option<usize>) -> SurvivalResult<usize> {
+        let observed = self.nstrata();
+        let nstrata = requested.unwrap_or(observed);
+        if nstrata == 0 || observed > nstrata {
+            return Err(SurvivalError::invalid_input("Invalid strata variable"));
+        }
+        let bytes = self
+            .nvar()
+            .checked_add(nstrata)
+            .and_then(|p| p.checked_mul(p))
+            .and_then(|cells| cells.checked_mul(std::mem::size_of::<f64>()));
+        if bytes.is_none_or(|bytes| bytes > isize::MAX as usize) {
+            return Err(SurvivalError::invalid_input(
+                "too many AFT parameters for a covariance matrix",
+            ));
+        }
+        Ok(nstrata)
     }
 
     pub fn n(&self) -> usize {
@@ -256,6 +288,7 @@ impl SurvregData {
     #[pyo3(signature = (time, status, covariates, time2=None, weights=None, offset=None, strata=None, cluster=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         time: FloatVec,
         status: IntVec,
         covariates: FloatMatrix,
@@ -265,16 +298,18 @@ impl SurvregData {
         strata: Option<Vec<usize>>,
         cluster: Option<Vec<usize>>,
     ) -> PyResult<Self> {
-        Ok(Self::try_new(
-            time.into_inner(),
-            status.into_inner(),
-            covariates.into_inner(),
-            time2.map(FloatVec::into_inner),
-            weights.map(FloatVec::into_inner),
-            offset.map(FloatVec::into_inner),
-            strata,
-            cluster,
-        )?)
+        Ok(py.detach(move || {
+            Self::try_new(
+                time.into_inner(),
+                status.into_inner(),
+                covariates.into_inner(),
+                time2.map(FloatVec::into_inner),
+                weights.map(FloatVec::into_inner),
+                offset.map(FloatVec::into_inner),
+                strata,
+                cluster,
+            )
+        })?)
     }
 
     /// The design matrix, one list per row.
@@ -990,15 +1025,12 @@ pub(crate) fn fit_survreg_engine(
     control: &SurvregControl,
     nstrata: Option<usize>,
 ) -> SurvivalResult<SurvregEngineResult> {
+    data.validate()?;
     distribution.validate()?;
     control.validate()?;
     let n = data.n();
     let nvar = data.nvar();
-    let observed_strata = data.nstrata();
-    let nstrata = nstrata.unwrap_or(observed_strata);
-    if nstrata == 0 || observed_strata > nstrata {
-        return Err(SurvivalError::invalid_input("Invalid strata variable"));
-    }
+    let nstrata = data.fitting_strata(nstrata)?;
     let eps = control.rel_tolerance;
     let tol_chol = control.toler_chol;
 
@@ -1265,16 +1297,17 @@ pub(crate) fn survreg_from_codes(
             }
         })
         .collect::<SurvivalResult<_>>()?;
-    let data = SurvregData::try_new(
+    // The shared fitting boundary validates these owned buffers.
+    let data = SurvregData {
         time,
-        status,
-        matrix_from_rows(&covariates, "covariates")?,
         time2,
+        status,
+        covariates: matrix_from_rows(&covariates, "covariates")?,
         weights,
-        offsets,
+        offset: offsets,
         strata,
-        None,
-    )?;
+        cluster: None,
+    };
     let defaults = SurvregControl::default();
     let control = SurvregControl {
         iter_max: max_iter.unwrap_or(defaults.iter_max),
@@ -1317,6 +1350,9 @@ pub fn survreg_fit_py(
         )
     })?)
 }
+
+#[cfg(test)]
+mod input_tests;
 
 #[cfg(test)]
 mod tests {

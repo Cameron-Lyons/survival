@@ -97,6 +97,14 @@ def test_penalty_controller_releases_the_gil():
     _assert_detaches(lambda: controller.step(old, 1, loglik=-100, events_by_group=events))
 
 
+def test_aft_constructor_releases_the_gil():
+    n = 500_000
+    x = np.ones((n, 8))
+    times = np.ones(n)
+    status = np.ones(n, dtype=np.int32)
+    _assert_detaches(lambda: regression.SurvregData(times, status, x))
+
+
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
 def test_cox_fits_on_four_threads_overlap():
     time_, status, x = _cox_data(100_000)
@@ -161,6 +169,12 @@ def test_heavy_kernels_release_the_gil():
         "cox_zph": lambda: regression.cox_zph(fit),
         "cox_zph_smooth": lambda: regression.cox_zph_smooth(time_, x, [1.0, 1.0]),
         "survreg_fit": lambda: regression.survreg_fit(survreg_data, weibull),
+        "survpenal_fit": lambda: regression.survpenal_fit(
+            survreg_data,
+            weibull,
+            [regression.CoxPenalty.ridge(theta=1)],
+            [[1, 2]],
+        ),
         "survreg_fit_raw": lambda: regression.survreg_fit_raw(
             survreg_data, regression.SurvregDistribution("gaussian")
         ),
