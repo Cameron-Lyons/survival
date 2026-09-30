@@ -1049,6 +1049,7 @@ attrassign <- function(object, tt) {
 
 .as_model_matrix <- function(result) {
   values <- .as_numeric_matrix(result[["data"]])
+  if (nrow(values) == 0L) values <- matrix(numeric(), 0L, length(result[["columns"]]))
   colnames(values) <- as.character(result[["columns"]])
   assign <- result[["assign"]]
   if (!is.null(assign)) {
@@ -8898,8 +8899,14 @@ weights.survival_py_model <- function(object, ...) {
   .as_numeric_vector(values)
 }
 
-model.matrix.survival_py_model <- function(object, ...) {
-  .as_model_matrix(.call_r_api("model_matrix", object, ...))
+model.matrix.survival_py_model <- function(object, data = NULL, ...) {
+  result <- .call_r_api("model_matrix", object, data = data, ...)
+  values <- .as_model_matrix(result)
+  if (!is.null(data) && !is.null(result[["strata"]])) {
+    attr(values, "strata") <- factor(unlist(result[["strata"]], use.names = FALSE),
+      levels = unlist(.result_field(object, "strata_levels"), use.names = FALSE))
+  }
+  values
 }
 
 model.frame.survival_py_model <- function(formula, ...) {

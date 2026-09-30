@@ -519,6 +519,7 @@ def _time_transform_design(
         if len(suffixes) != width:
             raise ValueError("tt matrix column names must match its width")
         names = tuple(_covariate_term_name(term) + str(name) for name in suffixes)
+        matrix_names = names
         penalty = metadata.get("penalty")
         if penalty is not None:
             if penalty.kind == "pspline":
@@ -542,6 +543,7 @@ def _time_transform_design(
                 penalty,
                 report=metadata.get("report"),
                 controller_history=metadata.get("history"),
+                matrix_names=matrix_names,
                 nterm=spline.nterm if spline is not None else 0,
                 degree=spline.degree if spline is not None else 3,
                 boundary=spline.boundary_knots if spline is not None else None,

@@ -121,7 +121,7 @@ for (spec in specs) {
     loglik=I(fit$loglik),df=if(is.null(fit$df))NULL else I(fit$df),
     frail=if(is.null(fit$frail))NULL else I(fit$frail),fvar=if(is.null(fit$fvar))NULL else I(fit$fvar),
     lp=I(unname(fit$linear.predictors)),x=unname(fit$x),assign=lapply(fit$assign,function(x)I(x-1L)),
-    matrix_assign=I(attr(fit$x,"assign")),
+    matrix_assign=I(attr(fit$x,"assign")),matrix_names=I(colnames(fit$x)),
     y=unname(unclass(fit$y)),pterms=if(is.null(fit$pterms))NULL else I(fit$pterms),
     summary=unname(tab),summary_columns=summary_columns,summary_names=I(rownames(tab)),
     print2=summary(fit)$print2,martingale=I(unname(residuals(residual_fit))),

@@ -183,6 +183,8 @@ class _PenaltyDesignTerm:
     combine: tuple[int, ...] | None = None
     report: Callable[..., Any] | None = None
     controller_history: Callable[[], Any] | None = None
+    # Basis labels can differ from the fitted coefficient labels (e.g. ps(x)3).
+    matrix_names: tuple[str, ...] = ()
 
     @property
     def penalized(self) -> bool:

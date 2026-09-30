@@ -39,8 +39,6 @@ from ._coxph import (
     _coxph_model_frame,
     _fit_frame,
     _has_strata,
-    _model_matrix_by_term,
-    _prediction_newdata,
     _sparse_term,
     _term_labels,
     _terms_selection,
@@ -52,8 +50,9 @@ from ._coxph import predict_terms_constant as predict_terms_constant  # re-expor
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._data_prep import summary_tmerge
 from ._finegray import _finegray_frame
+from ._fit import _model_matrix_names_and_assign, _model_matrix_newdata_design, _newdata_frame
 from ._formula import _column as _formula_column
-from ._formula import _formula_columns, _formula_model_term_degree
+from ._formula import _formula_columns, _formula_model_term_degree, _strata_specs
 from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
@@ -443,36 +442,37 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
     A multi-state fit's design is the unstacked one, a column per covariate (NaN
     where a formula list left a covariate missing)."""
 
-    names = list(fit.ms.x_names) if isinstance(fit, CoxphmsModel) else list(fit.coef_names)
-    assign = [0] * len(names)
-    for term_idx, columns in zip(fit.design.term_assignments, fit.assign.values(), strict=True):
-        for col in columns:
-            assign[col] = term_idx
+    position = _sparse_term(fit)
+    design = _fit_frame(fit).design if position is not None else fit.design
     if data is None:
         strata = fit.strata
-        if _sparse_term(fit) is not None:
-            blocks = _model_matrix_by_term(fit)
-            names = [name for block_names, _ in blocks for name in block_names]
-            assign = [
-                term
-                for term, (block_names, _) in zip(
-                    _fit_frame(fit).design.term_assignments, blocks, strict=True
-                )
-                for _ in block_names
-            ]
-            full_columns = [column for _, block_columns in blocks for column in block_columns]
-            rows = [list(row) for row in zip(*full_columns, strict=True)]
-        else:
-            rows = fit.x
+        rows = fit.x
+        if position is not None:
+            if fit.penalized is None:
+                raise ValueError("sparse frailty terms require a penalized fit")
+            columns = list(_fit_frame(fit).assign.values())[position]
+            values = fit._sparse_values
+            if values is None:
+                values = tuple(float(group + 1) for group in fit.penalized.frail_index)
+            for row, value in zip(rows, values, strict=True):
+                row.insert(columns[0], value)
     else:
-        new = _prediction_newdata(
-            fit, data, need_strata=_has_strata(fit), need_response=False, na_action="na.omit"
+        design = _model_matrix_newdata_design(design, data)
+        new = _newdata_frame(
+            design,
+            _strata_specs(fit.terms),
+            fit.strata_levels,
+            data,
+            need_strata=_has_strata(fit),
+            need_response=False,
+            na_action="na.omit",
         )
         rows, strata = new.x, None
         if _has_strata(fit):
             if new.strata is None:
                 raise ValueError("data must contain the strata variable(s) of the model")
-            strata = [fit.strata_levels[code] for code in new.strata]
+            strata = [fit.strata_levels[code] for code in new.strata] if new.strata else None
+    names, assign = _model_matrix_names_and_assign(design)
     return {"data": rows, "columns": names, "assign": assign, "strata": strata}
 
 

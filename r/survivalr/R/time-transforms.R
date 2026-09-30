@@ -33,10 +33,11 @@
   basis <- if (is.factor(value) && !sparse) {
     # Cox penalty factors use every group, including the reference group.
     stats::model.matrix(~ value - 1)
-  } else if (is.matrix(value)) unname(value) else matrix(as.numeric(value), ncol = 1L)
+  } else if (is.matrix(value)) value else matrix(as.numeric(value), ncol = 1L)
   controller <- .survpenal_controller(attribute, seq_len(ncol(basis)), basis, status)
   result <- list(`_survival_tt_kind` = "matrix", values = unname(basis),
-    names = if (is.null(colnames(basis))) NULL else as.list(colnames(basis)),
+    names = if (is.factor(value) && !sparse) as.list(as.character(seq_len(ncol(basis))))
+      else if (is.null(colnames(basis))) NULL else as.list(colnames(basis)),
     penalty = controller$penalty,
     penalty_names = if (is.null(attribute$varname)) NULL else as.list(attribute$varname),
     history = controller$history)
