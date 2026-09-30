@@ -34,9 +34,10 @@ removal. Its type, multistate labels and interval endpoints survive selection.
 Matrix covariates keep their column dimension when a missing row is inserted;
 factor metadata, aligned arguments and evaluated strata follow the same rows.
 
-This change does not resolve the documented AFT empty-scale difference: unused
-strata are still omitted. Response normalization during omission without an explicit subset and in R
-native model frames is covered by the subsequent [normalization correction](response-normalization.md).
+The subsequent [AFT scale correction](aft-unused-strata.md) preserves unused
+scale strata after selection. Response normalization during omission without an
+explicit subset and in R native model frames is covered by the subsequent
+[normalization correction](response-normalization.md).
 R formula evaluation without a data argument remains under review.
 
 ## Verification

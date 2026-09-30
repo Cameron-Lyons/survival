@@ -969,7 +969,22 @@ pub fn survreg_fit(
     control: &SurvregControl,
     robust: bool,
 ) -> SurvivalResult<SurvregFit> {
-    let result = fit_survreg_engine(data, distribution, init, scale, control, None)?;
+    survreg_fit_with_nstrata(data, distribution, init, scale, control, robust, None)
+}
+
+/// Fits prepared inputs with an explicit scale-stratum count, retaining unused
+/// strata. `None` infers the count from the largest observed stratum code.
+/// Other arguments have the same meaning as in [`survreg_fit`].
+pub fn survreg_fit_with_nstrata(
+    data: &SurvregData,
+    distribution: &SurvregDistribution,
+    init: Option<&[f64]>,
+    scale: f64,
+    control: &SurvregControl,
+    robust: bool,
+    nstrata: Option<usize>,
+) -> SurvivalResult<SurvregFit> {
+    let result = fit_survreg_engine(data, distribution, init, scale, control, nstrata)?;
     let raw = result.fit;
     let n = data.n();
     let mut fit = SurvregFit {
@@ -1328,7 +1343,8 @@ pub(crate) fn survreg_from_codes(
 /// `survreg.fit` with typed inputs: [`survreg_fit`] for Python, accepting a
 /// user-defined [`SurvregDistribution`].
 #[pyfunction(name = "survreg_fit")]
-#[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, robust=None))]
+#[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, robust=None, nstrat=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn survreg_fit_py(
     py: Python<'_>,
     data: &SurvregData,
@@ -1337,16 +1353,18 @@ pub fn survreg_fit_py(
     scale: f64,
     control: Option<SurvregControl>,
     robust: Option<bool>,
+    nstrat: Option<usize>,
 ) -> PyResult<SurvregFit> {
     let control = control.unwrap_or_default();
     Ok(py.detach(|| {
-        survreg_fit(
+        survreg_fit_with_nstrata(
             data,
             distribution,
             init.as_deref(),
             scale,
             &control,
             robust.unwrap_or(false),
+            nstrat,
         )
     })?)
 }

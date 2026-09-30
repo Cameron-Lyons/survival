@@ -60,6 +60,7 @@ def fit_penalized(
     scale: float,
     control: Any,
     robust: bool | None,
+    nstrat: int | None,
 ) -> tuple[Any, tuple[str, ...]]:
     """``survpenal.fit`` on a ``SurvregData`` whose design columns are laid out by
     ``assign`` (see :func:`assign_list`), for its ``penalty_terms``: the ``SurvpenalFit``
@@ -81,6 +82,7 @@ def fit_penalized(
         scale=scale,
         control=control,
         robust=robust,
+        nstrat=nstrat,
     )
     if len(fit.assign2) > len(labels):
         labels.append("sigma")

@@ -72,6 +72,8 @@ is `survival.regression.survreg_fit_raw`. Both accept `SurvregData` and a
 `SurvregDistribution`, ignore the distribution's response transform and
 fixed scale, and return the bare numerical components. An optional explicit
 stratum count can preserve unused scale strata. Cluster variance is refused.
+The [full AFT APIs](aft-unused-strata.md) also accept an explicit count while
+retaining prediction inputs and optional robust covariance.
 
 The bare and full paths share initialization, matrix rescaling and Newton
 iterations. Only the full path copies the design into a retained model,

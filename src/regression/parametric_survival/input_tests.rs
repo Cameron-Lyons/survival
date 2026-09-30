@@ -319,6 +319,72 @@ fn aft_ignored_upper_endpoints_and_unused_strata_remain_supported() {
 }
 
 #[test]
+fn full_aft_fits_retain_declared_unused_scale_strata() {
+    let mut input = data();
+    input.strata = Some(vec![0, 2, 0, 2, 0, 2, 0, 2]);
+    input.cluster = Some(vec![0, 0, 1, 1, 2, 2, 3, 3]);
+    let distribution = SurvregDistribution::from_name("gaussian", None).unwrap();
+    let control = SurvregControl::default();
+    let full = survreg_fit_with_nstrata(&input, &distribution, None, 0.0, &control, true, Some(4))
+        .unwrap();
+    input.cluster = None;
+    let raw = SurvregFitResult::fit(&input, &distribution, None, 0.0, &control, Some(4)).unwrap();
+    assert_eq!(full.coefficients, raw.coefficients);
+    assert_eq!(full.nstrata(), 4);
+    assert_eq!(full.naive_variance_matrix.as_ref().unwrap(), &raw.var);
+    for column in [3, 5] {
+        assert!(full.variance_matrix[column].iter().all(|&v| v == 0.0));
+        assert_eq!(full.score[column], 0.0);
+    }
+    let data = SurvpenalData::try_new(input, terms()).unwrap();
+    let options = SurvpenalOptions::default();
+    let full = SurvpenalFit::fit_with_nstrata(&data, &distribution, &options, Some(4)).unwrap();
+    let raw = SurvpenalFitResult::fit(&data, &distribution, &options, Some(4)).unwrap();
+    assert_eq!(full.survreg.coefficients, raw.coefficients);
+    assert_eq!(full.survreg.nstrata(), 4);
+    assert_eq!(full.var2, raw.var2);
+    for column in [3, 5] {
+        assert!(
+            full.survreg.variance_matrix[column]
+                .iter()
+                .all(|&v| v == 0.0)
+        );
+        assert_eq!(full.score[column], 0.0);
+    }
+}
+
+#[test]
+fn full_aft_fits_validate_declared_scale_strata() {
+    let mut input = data();
+    input.strata = Some(vec![2; input.n()]);
+    let data = SurvpenalData::try_new(input, terms()).unwrap();
+    let distribution = SurvregDistribution::from_name("gaussian", None).unwrap();
+    for count in [0, 1, 2, usize::MAX, usize::MAX / 2] {
+        assert!(
+            survreg_fit_with_nstrata(
+                &data.survreg,
+                &distribution,
+                None,
+                0.0,
+                &SurvregControl::default(),
+                false,
+                Some(count),
+            )
+            .is_err()
+        );
+        assert!(
+            SurvpenalFit::fit_with_nstrata(
+                &data,
+                &distribution,
+                &SurvpenalOptions::default(),
+                Some(count),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn penalized_aft_checks_mutated_term_assignments() {
     let distribution = SurvregDistribution::from_name("gaussian", None).unwrap();
     for columns in [vec![], vec![0], vec![2], vec![1, 1]] {

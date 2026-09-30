@@ -185,12 +185,17 @@ def _r_levels(values: Any, levels: Sequence[Any]) -> tuple[Any, ...]:
 
 
 def _r_factor_design(
-    data: Any, design: _FormulaDesign, *, drop_unused_levels: bool = False
+    data: Any,
+    design: _FormulaDesign,
+    *,
+    drop_unused_levels: bool = False,
+    drop_unused_strata: bool = True,
 ) -> _FormulaDesign:
     """Give every categorical term R's factor level order (the formula module
     keeps first-appearance order): ``model.frame``'s levels, a factor's unused ones
     included, or with *drop_unused_levels* only those that occur, as ``lm``'s
-    ``model.frame(drop.unused.levels = TRUE)`` has them."""
+    ``model.frame(drop.unused.levels = TRUE)`` has them. AFT also retains evaluated
+    strata levels with *drop_unused_strata=False*, including interaction columns."""
 
     levels_of = _r_levels if drop_unused_levels else _model_frame_levels
 
@@ -200,7 +205,7 @@ def _r_factor_design(
         # a logical expression (I(sex == 2)) has no column to declare levels
         column = term.term.column
         source = (
-            _strata_term_values(data, term.term.strata)
+            _strata_term_values(data, term.term.strata, drop_unused=drop_unused_strata)
             if term.term.strata
             else None
             if term.term.arithmetic is not None

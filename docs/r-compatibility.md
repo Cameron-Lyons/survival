@@ -747,13 +747,16 @@ this does not show.
   `scripts/generate_partial_prediction_reference.R` checks these outputs.
 - A Cox expected-count prediction with an unknown stratum remains NaN here;
   R leaves its initial value at zero and reports survival 1 for that row.
-- Empty strata after subset or missing-row removal are omitted. R retains
-  their factor levels; `survreg(~ age + g + strata(g, na.group = TRUE))` can
-  fail while assigning scale names after `g` removes the missing-value group.
-  The strata-expression reference records that error and checks the equivalent
-  complete-case R fit. For the same redundant Cox model, expected counts use
-  the estimable coefficients; R propagates its aliased coefficient's NA. The
-  reference checks expected counts against the equivalent model without `g`.
+- AFT retains scale strata after subset or missing-row removal, including
+  zero covariance rows for empty groups. This matches R for empty interior
+  strata. Trailing empty strata work here where R can fail assigning scale
+  names or forming prediction/residual matrices. Penalized AFT uses observed
+  scales for effective sample size, avoiding R's singular initial inverse.
+  The [unused-scale reference](aft-unused-strata.md) records those errors and
+  the small R corrections used for comparison. For the redundant Cox model
+  `~ age + g + strata(g, na.group = TRUE)`, expected counts use the estimable
+  coefficients; R propagates its aliased coefficient's NA. That reference
+  checks expected counts against the equivalent model without `g`.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)

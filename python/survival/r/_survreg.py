@@ -555,6 +555,7 @@ def _formula_frame(
     design = _r_factor_design(
         data,
         _fit_formula_design(data, spec, terms, n, include_intercept=True, full_data=full_data),
+        drop_unused_strata=False,
     )
     if terms.offsets:
         if offset is not None:
@@ -573,7 +574,7 @@ def _formula_frame(
     strata: list[int] | None = None
     strata_levels: tuple[str, ...] = ()
     if strata_terms:
-        factor = _strata_keep(data, strata_terms)
+        factor = _strata_keep(data, strata_terms, drop_unused=False)
         strata = _complete_codes(factor, "strata contains missing values")
         strata_levels = tuple(factor.levels)
     model_terms = [
@@ -763,6 +764,7 @@ def survreg(
             scale=scale_value,
             control=control,
             robust=robust_value,
+            nstrat=len(frame.strata_levels) or None,
         )
         fit = penalized.survreg
     else:
@@ -773,6 +775,7 @@ def survreg(
             scale=scale_value,
             control=control,
             robust=robust_value,
+            nstrat=len(frame.strata_levels) or None,
         )
         if control.iter_max > 1 and not fit.converged:
             warnings.warn(
@@ -1170,9 +1173,16 @@ def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
             scale=fixed_scale,
             control=fit.control,
             robust=None,
+            nstrat=len(fit.strata_levels) if strata_term else None,
         )
         return refit.survreg
-    return _core.survreg_fit(data, model.distribution, scale=fixed_scale, control=fit.control)
+    return _core.survreg_fit(
+        data,
+        model.distribution,
+        scale=fixed_scale,
+        control=fit.control,
+        nstrat=len(fit.strata_levels) if strata_term else None,
+    )
 
 
 def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:

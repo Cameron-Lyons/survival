@@ -14022,6 +14022,7 @@ def survpenal_fit(
     scale: float = 0.0,
     control: SurvregControl | None = None,
     robust: bool | None = None,
+    nstrat: int | None = None,
 ) -> SurvpenalFit: ...
 def survpenal_fit_raw(
     data: SurvregData,
@@ -14042,6 +14043,7 @@ def survreg_fit(
     scale: float = 0.0,
     control: SurvregControl | None = None,
     robust: bool | None = None,
+    nstrat: int | None = None,
 ) -> SurvregFit: ...
 def survreg_fit_raw(
     data: SurvregData,
