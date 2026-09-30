@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
@@ -136,7 +137,7 @@ def _kernel_residuals(
         aj_kernel = _core.survfitresid_aj if collapse is not None else _core.pseudo_aj
         return aj_kernel(
             list(y.time),
-            [int(value) for value in y.event],
+            y._event_codes(),
             list(y.states),
             times,
             istate=istate,
@@ -148,7 +149,7 @@ def _kernel_residuals(
     kernel = _core.survfitresid if collapse is not None else _core.pseudo
     return kernel(
         list(y.time),
-        [int(value) for value in y.event],
+        y._event_codes(),
         times,
         stype=call.stype,
         ctype=call.ctype,
@@ -182,7 +183,7 @@ def _residual_frame(result: SurvfitResidualsResult) -> dict[str, list[Any]]:
     """R's ``data.frame = TRUE`` layout: one row per (id, column, time), times slowest."""
 
     n = len(result.id)
-    columns = result.columns or [None]
+    columns: Sequence[str | None] = result.columns or [None]
     frame: dict[str, list[Any]] = {
         result.id_name or "(id)": [
             value for _time in result.time for _column in columns for value in result.id

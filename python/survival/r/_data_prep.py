@@ -416,7 +416,7 @@ def survSplit(
         timeline=True,
     )
     # R only invents the id column for right-censored (time, status) data
-    if added_id and (mf.response is None or mf.response.type != "right"):
+    if added_id and (not isinstance(mf.response, Surv) or mf.response.type != "right"):
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
     # a Surv2 timeline keeps its (time, event) form: cut rows are inserted into it
@@ -430,12 +430,16 @@ def survSplit(
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
         if timeline:
+            if mf.id is None:
+                raise ValueError("id is required for timeline data")
             newdata["(id)"] = [mf.id[row] for row in rows]
         elif idname is not None and (added_id or idname in names):
+            if mf.id is None:
+                raise ValueError("id column is missing from the model frame")
             newdata[idname] = [mf.id[row] for row in rows]
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
-    if timeline:
+    if isinstance(mf.response, Surv2):
         # the Surv2 arguments that are variable names name the columns, whatever
         # start and event say
         start = time_name or start or "tstart"
@@ -547,7 +551,11 @@ def fromtimeline(
     response = cast(Surv, mf.response)
     counting = response.start is not None
     status = _status_labels(response.states, response.event)
-    times = [list(response.start), list(response.time)] if counting else [list(response.time)]
+    times = (
+        [list(response.start), list(response.time)]
+        if response.start is not None
+        else [list(response.time)]
+    )
     taken = {spec.name, *new}
     if yname is None:
         names = _timeline_response_names(spec, counting)
@@ -626,7 +634,7 @@ def survcondense(
     if mf.terms.clusters:
         raise ValueError("function does not handle cluster() terms")
     response = mf.response
-    if response is None:
+    if not isinstance(response, Surv):
         raise ValueError("the response must be a Surv object")
     if response.type not in {"counting", "mcounting"}:
         raise ValueError("invalid survival type")
@@ -676,7 +684,7 @@ def _rttright_survcheck(response: Surv, id_values: Sequence[Any]) -> None:
     check = _core.survcheck(
         [codes[value] for value in id_values],
         list(response.time),
-        [int(event) for event in response.event],
+        response._event_codes(),
         list(response.states) or ["event"],
         time1=None if response.start is None else list(response.start),
     )
@@ -718,7 +726,7 @@ def rttright(
         raise ValueError("a formula argument is required")
     mf = model_frame(formula, data, subset=subset, na_action=na_action, weights=weights, id=id)
     surv = mf.response
-    if surv is None:
+    if not isinstance(surv, Surv):
         raise ValueError("response must be a Surv object")
     if surv.type not in {"right", "mright", "counting", "mcounting"}:
         raise ValueError("response must be right censored")
@@ -752,7 +760,7 @@ def rttright(
     query = None if times is None else _float_vector(_scalar_or_vector(times, "times"), "times")
     result = _core.rttright(
         list(surv.time),
-        [int(value) for value in surv.event],
+        surv._event_codes(),
         None if surv.start is None else list(surv.start),
         strata_codes,
         casewt,

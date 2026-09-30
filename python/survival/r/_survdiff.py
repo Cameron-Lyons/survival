@@ -73,7 +73,7 @@ def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvDiffResult:
 
     if any(value < 0.0 or value > 1.0 for value in offset):
         raise ValueError("The offset must be a survival probability")
-    fit = _core.survdiff_one_sample([int(value) for value in y.event], offset, rho)
+    fit = _core.survdiff_one_sample(y._event_codes(), offset, rho)
     return SurvDiffResult(
         n=[len(y)],
         obs=[fit.obs[0][0]],
@@ -101,13 +101,14 @@ def _k_sample(
     )
     fit = _core.survdiff(
         list(y.time),
-        [int(value) for value in y.event],
+        y._event_codes(),
         group_codes,
         strata=strata_codes,
         rho=rho,
         timefix=timefix,
     )
-    stratified = fit.strata is not None
+    strata_counts = fit.strata
+    stratified = strata_counts is not None
     return SurvDiffResult(
         n=[int(value) for value in fit.n],
         obs=fit.obs if stratified else [row[0] for row in fit.obs],
@@ -119,8 +120,8 @@ def _k_sample(
         groups=group_levels,
         strata=(
             None
-            if not stratified or strata is None
-            else dict(zip(strata.levels, [int(v) for v in fit.strata], strict=True))
+            if strata_counts is None or strata is None
+            else dict(zip(strata.levels, [int(v) for v in strata_counts], strict=True))
         ),
     )
 

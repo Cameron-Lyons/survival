@@ -104,9 +104,9 @@ class _SurvfitData:
     x_codes: list[int]
     x_levels: list[str]
     weights: list[float] | None
-    id: list[Any] | None
-    cluster: list[Any] | None
-    istate: list[Any] | None
+    id: Sequence[Any] | None
+    cluster: Sequence[Any] | None
+    istate: Sequence[Any] | None
     model: dict[str, Any]
     terms: tuple[str, ...]
 
@@ -174,7 +174,7 @@ def _case_weights(weights: Any | None, n: int) -> list[float] | None:
     return values
 
 
-def _aligned(values: Any | None, n: int, name: str) -> list[Any] | None:
+def _aligned(values: Any | None, n: int, name: str) -> Sequence[Any] | None:
     if values is None:
         return None
     materialized = _materialize_labels(values, name)
@@ -628,7 +628,7 @@ def _km_engine(
     start = _start_time_value(start_time)
     engine = _core.survfitkm(
         frame.y.time,
-        [int(value) for value in frame.y.event],
+        frame.y._event_codes(),
         start=frame.y.start,
         weights=frame.weights,
         strata=frame.strata_codes,
@@ -795,7 +795,7 @@ def _survfitAJ(
             warnings.warn("an id value appears on more than one cluster", stacklevel=3)
     engine = _core.survfitaj(
         list(frame.y.time),
-        [int(value) for value in frame.y.event],
+        frame.y._event_codes(),
         list(frame.y.states),
         start=None if frame.y.start is None else list(frame.y.start),
         weights=frame.weights,
@@ -904,7 +904,7 @@ def _aj_result(
 def _interval_coding(y: Surv) -> tuple[list[float], list[float], list[int]]:
     """R's ``Surv(type = "interval")`` columns: time1, time2 (interval rows) and status."""
 
-    status = [int(value) for value in y.event]
+    status = y._event_codes()
     if y.type == "left":
         return list(y.time), list(y.time), [2 if value == 0 else 1 for value in status]
     # Surv already stores a left-censored row's right end in time1 (time2 is R's placeholder 1)
@@ -1044,16 +1044,17 @@ def _survfit_matrix(
             raise ValueError("all curves must be of the same dimension")
     start = _start_time_value(start_time)
     starts = [getattr(c, "start_time", None) for _, _, c in cells]
-    if any(s is not None for s in starts):
-        if any(s != starts[0] for s in starts):
-            raise ValueError("all curves must have a consistent start.time value")
-        if start is not None and start < starts[0]:
+    if any(s != starts[0] for s in starts):
+        raise ValueError("all curves must have a consistent start.time value")
+    curve_start = starts[0]
+    if curve_start is not None:
+        if start is not None and start < curve_start:
             warnings.warn(
                 "curves have a larger start.time than the parameter; using the curves' start.time",
                 RuntimeWarning,
                 stacklevel=3,
             )
-        start = starts[0] if start is None else max(start, starts[0])
+        start = curve_start if start is None else max(start, curve_start)
     if isinstance(p0, Mapping):
         if states is None:
             states = [str(s) for s in p0]
@@ -1088,10 +1089,13 @@ def _survfit_matrix(
     if _logical(time0, "time0 must be TRUE/FALSE"):
         engine = _core.survfit0_aj(engine)
     result = _aj_result(engine, labels, SurvfitCall(), None, False, time0=bool(time0))
+    strata_counts = engine.strata
+    if strata_counts is None:
+        raise RuntimeError("native matrix curves have no stratum counts")
     return dataclasses.replace(
         result,
         n_id=None,
-        strata=dict(zip(labels, engine.strata, strict=True)),
+        strata=dict(zip(labels, strata_counts, strict=True)),
     )
 
 
@@ -1399,6 +1403,39 @@ def _rmean_option(
     return repr(value)
 
 
+@overload
+def summary_survfit(
+    object: CoxSurvfitMultiStateResult,
+    times: Any | None = None,
+    censored: Any = False,
+    scale: Any = 1,
+    extend: Any = False,
+    rmean: Any | None = None,
+) -> SummarySurvfitCoxmsResult: ...
+
+
+@overload
+def summary_survfit(
+    object: SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult,
+    times: Any | None = None,
+    censored: Any = False,
+    scale: Any = 1,
+    extend: Any = False,
+    rmean: Any | None = None,
+) -> SummarySurvfitResult: ...
+
+
+@overload
+def summary_survfit(
+    object: Any,
+    times: Any | None = None,
+    censored: Any = False,
+    scale: Any = 1,
+    extend: Any = False,
+    rmean: Any | None = None,
+) -> SummarySurvfitResult | SummarySurvfitCoxmsResult: ...
+
+
 def summary_survfit(
     object: Any,
     times: Any | None = None,
@@ -1696,7 +1733,9 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
             raise ValueError("arguments must have the same length")
         if any(code is None for code in codes):
             raise ValueError("by contains missing values")
-        factors.append(_core.GroupingFactor([int(code) for code in codes], labels, name))
+        factors.append(
+            _core.GroupingFactor([code for code in codes if code is not None], labels, name)
+        )
     return factors
 
 
@@ -1748,7 +1787,7 @@ def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
         if name in names
     }
     if "cumhaz" in names:
-        updates["cumhaz"] = [] if isinstance(x.cumhaz, list) else None
+        updates["cumhaz"] = [] if isinstance(getattr(x, "cumhaz", None), list) else None
     if result.surv is not None:
         updates["surv"] = result.surv
     if "colnames" in names:

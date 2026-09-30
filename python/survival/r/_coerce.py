@@ -88,7 +88,7 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
     return result
 
 
-class _RFactorVector:
+class _RFactorVector(Sequence[Any]):
     """Iterable factor values with level metadata preserved across reticulate."""
 
     def __init__(self, values: Any, levels: Any):
@@ -101,8 +101,19 @@ class _RFactorVector:
     def __len__(self) -> int:
         return len(self._values)
 
-    def __getitem__(self, item: int) -> Any:
+    def __getitem__(self, item: int | slice) -> Any:
         return self._values[item]
+
+
+def _curve_matrix(values: list[float] | list[list[float]]) -> list[list[float]]:
+    """View homogeneous curve columns as a matrix, wrapping a vector as one column.
+
+    Result containers declare either a vector or a matrix. The first row chooses
+    that shape; no matrix copy is needed at the native read-only boundary.
+    """
+    if values and isinstance(values[0], list):
+        return cast(list[list[float]], values)
+    return [[value] for value in cast(list[float], values)]
 
 
 def _r_factor(values: Any, levels: Any) -> _RFactorVector:
@@ -451,7 +462,7 @@ def _as_matrix_rows(
     return matrix
 
 
-def _label_levels(values: list[Any], name: str) -> tuple[Any, ...]:
+def _label_levels(values: Sequence[Any], name: str) -> tuple[Any, ...]:
     labels: dict[Any, None] = {}
     for value in values:
         try:
@@ -461,7 +472,7 @@ def _label_levels(values: list[Any], name: str) -> tuple[Any, ...]:
     return tuple(labels)
 
 
-def _encode_labels(values: list[Any], name: str) -> list[int]:
+def _encode_labels(values: Sequence[Any], name: str) -> list[int]:
     labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
     return [labels[value] for value in values]
 
@@ -545,8 +556,10 @@ def _r_format_numbers(values: Sequence[Any], digits: int = 7) -> list[str]:
     rgt = mxsl = mxns = -(10**9)
     mxl = -(10**9)
     mnl = 10**9
-    for number in finite:
-        neg, kpower, nsig = _r_scientific(number, digits) if number != 0.0 else (False, 0, 1)
+    for finite_number in finite:
+        neg, kpower, nsig = (
+            _r_scientific(finite_number, digits) if finite_number != 0.0 else (False, 0, 1)
+        )
         left = kpower + 1
         sleft = int(neg) + (left if left > 0 else 1)
         rgt = max(rgt, nsig - left)

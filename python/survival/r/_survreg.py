@@ -1060,7 +1060,12 @@ def predict_survreg(
             assign=list(fit.assign),
             terms=selection,
         )
-        predictions, se_values = result.fit, result.se_fit
+        predictions = result.fit
+        if include_se:
+            standard_errors = result.se_fit
+            if standard_errors is None:
+                raise RuntimeError("native predictor did not return requested standard errors")
+            se_values = standard_errors
     # naresid restores omitted rows; na.pass predictor NaNs have already
     # propagated through just the outputs that use them.
     if new is None:

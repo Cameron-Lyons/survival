@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from operator import index
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from .. import _survival as _core
 
@@ -182,7 +182,7 @@ _DesignTerm = _SingleDesignTerm | _InteractionDesignTerm
 
 @dataclass(frozen=True)
 class _FormulaDesign:
-    response: _SurvResponseSpec
+    response: _SurvResponseSpec | None
     covariates: tuple[_DesignTerm, ...]
     offsets: tuple[_CovariateTerm, ...]
     term_assignments: tuple[int, ...] = ()
@@ -508,7 +508,8 @@ class SurvExpResult:
 
         if self.surv and isinstance(self.surv[0], list):
             return [[negative_log(value) for value in row] for row in self.surv]
-        return [negative_log(value) for value in self.surv]
+        # The result contract is homogeneous: a vector or a matrix, never mixed rows.
+        return [negative_log(value) for value in cast(list[float], self.surv)]
 
 
 @dataclass(frozen=True)

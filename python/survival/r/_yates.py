@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from numbers import Real
-from typing import Any
+from typing import Any, TypedDict
 
 from .. import _survival as _core
 from ._coerce import (
@@ -35,6 +35,7 @@ from ._types import (
     _FormulaDesign,
     _InteractionDesignTerm,
     _InteractionTerm,
+    _SingleDesignTerm,
 )
 from ._yates_model import YatesModel
 from ._yates_setup import (
@@ -43,6 +44,14 @@ from ._yates_setup import (
     _yates_survival_summary,
     yates_setup,
 )
+
+
+class _SimulationOptions(TypedDict):
+    estimable: list[bool] | None
+    nsim: int
+    seed: int
+    test: str
+    term: str
 
 
 @dataclass(frozen=True)
@@ -55,10 +64,10 @@ class _YatesTerm:
     estimate_names: list[str]
 
 
-def _design_factors(design: _FormulaDesign) -> list[Any]:
+def _design_factors(design: _FormulaDesign) -> list[_SingleDesignTerm]:
     """Every single (non-interaction) design term, interaction factors included."""
 
-    factors: list[Any] = []
+    factors: list[_SingleDesignTerm] = []
     for spec in design.covariates:
         factors.extend(spec.factors if isinstance(spec, _InteractionDesignTerm) else [spec])
     return factors
@@ -81,12 +90,12 @@ def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _Yates
         if any(not isinstance(value, Real) or isinstance(value, bool) for value in values):
             raise TypeError("the term must be a character string or integer term numbers")
         assignments = design.term_assignments or tuple(range(1, len(design.covariates) + 1))
-        selected = [_integer_scalar(value, "term") for value in values]
-        if any(value not in assignments for value in selected):
+        selected_terms = [_integer_scalar(value, "term") for value in values]
+        if any(value not in assignments for value in selected_terms):
             raise ValueError("numeric term must select a fitted covariate term (1-based)")
         parts = [
             part.term
-            for value in selected
+            for value in selected_terms
             for assignment, item in zip(assignments, design.covariates, strict=True)
             if assignment == value
             for part in (item.factors if isinstance(item, _InteractionDesignTerm) else [item])
@@ -96,7 +105,7 @@ def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _Yates
     )
     if not columns:
         raise ValueError("the term must select variables from the fitted formula")
-    factors = {}
+    factors: dict[str, _SingleDesignTerm] = {}
     for spec in _design_factors(design):
         factors.setdefault(spec.term.column, spec)
     missing = [column for column in columns if column not in factors]
@@ -105,12 +114,11 @@ def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _Yates
     level_names = _data_column_names(levels)
     if levels is not None and level_names is None and len(columns) > 1:
         raise ValueError("levels should be a data frame or mapping for multiple variables")
-    selected = {}
+    selected: dict[str, list[Any]] = {}
     for column in columns:
         spec = factors[column]
-        categorical = isinstance(spec, _CategoricalDesignTerm)
         if levels is None or (level_names is not None and column not in level_names):
-            if not categorical:
+            if not isinstance(spec, _CategoricalDesignTerm):
                 raise ValueError(
                     "continuous variables require the levels argument"
                     if levels is None
@@ -123,7 +131,9 @@ def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _Yates
                 raise ValueError("levels data frame has duplicates")
         else:
             values = _unique_in_order(_materialize_1d(levels, "levels"))
-        if categorical and any(value not in spec.levels for value in values):
+        if isinstance(spec, _CategoricalDesignTerm) and any(
+            value not in spec.levels for value in values
+        ):
             raise ValueError(f"invalid level for term {column}")
         if not values:
             raise ValueError(f"levels for {column} must not be empty")
@@ -236,9 +246,9 @@ def _yates_sgtt(
 
     external = isinstance(fit, YatesModel)
     full_intercept = design.intercept or not external
-    factors = {}
-    for spec in _design_factors(design):
-        factors.setdefault(_covariate_term_name(spec.term), spec)
+    factors: dict[str, _SingleDesignTerm] = {}
+    for factor in _design_factors(design):
+        factors.setdefault(_covariate_term_name(factor.term), factor)
     factor_order = [
         name for name, spec in factors.items() if isinstance(spec, _CategoricalDesignTerm)
     ]
@@ -264,7 +274,7 @@ def _yates_sgtt(
     )
     assignments = design.term_assignments or tuple(range(1, len(design.covariates) + 1))
     nterms = max(assignments, default=0)
-    variables = [set() for _ in range(nterms)]
+    variables: list[set[str]] = [set() for _ in range(nterms)]
     categorical = [False] * nterms
     assign = [0] if full_intercept else []
     original_assign = [0] if design.intercept else []
@@ -503,10 +513,15 @@ def yates(
     design_names = _yates_design_names(design)
     names = [design_names[idx] for idx in columns]
     beta = [beta[idx] for idx in kept]
-    means = [0.0] * len(beta) if external else [engine.means[idx] for idx in kept]
+    if external:
+        means = [0.0] * len(beta)
+    else:
+        if engine is None:
+            raise ValueError("Cox population means require a fitted model")
+        means = [engine.means[idx] for idx in kept]
     summary = None
     sas = None
-    sas_names = []
+    sas_names: list[str] = []
     if setup.predict == "linear":
         result = _core.yates(
             _columns(_core.yates_population_means(xmatlist, weights), columns),
@@ -522,7 +537,7 @@ def yates(
         if method_value == "sgtt":
             sas, sas_names = _yates_sgtt(fit, design, yates_term, kept, beta, vmat)
     else:
-        simulation = {
+        simulation: _SimulationOptions = {
             "estimable": estimable,
             "nsim": _integer_scalar(nsim, "nsim"),
             "seed": setup.seed,
@@ -544,7 +559,7 @@ def yates(
                 baseline.time,
                 baseline.cumhaz,
                 setup.rmean,
-                conf_int=baseline.conf_int,
+                conf_int=baseline.conf_int if baseline.conf_int is not None else 0.95,
                 **simulation,
             )
             if result.summary is not None:

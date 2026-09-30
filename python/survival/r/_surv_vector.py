@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from itertools import chain
-from typing import Any
+from typing import Any, cast
 
 from ._coerce import (
     _normalize_bool_option,
@@ -40,11 +40,19 @@ def concat_surv(*objects: Surv) -> Surv:
         raise ValueError("all elements must be of the same Surv type")
     if any(x.states != first.states for x in objects[1:]):
         raise ValueError("all elements must have the same list of states")
+    # Matching censoring types have matching time columns; verify before flattening.
+    for x in objects:
+        if (x.start is None) != (first.start is None) or (x.time2 is None) != (first.time2 is None):
+            raise ValueError("all elements must have the same Surv columns")
     return Surv._from_normalized(
         time=tuple(chain.from_iterable(x.time for x in objects)),
         event=tuple(chain.from_iterable(x.event for x in objects)),
-        start=None if first.start is None else tuple(chain.from_iterable(x.start for x in objects)),
-        time2=None if first.time2 is None else tuple(chain.from_iterable(x.time2 for x in objects)),
+        start=None
+        if first.start is None
+        else tuple(chain.from_iterable(cast(tuple[float, ...], x.start) for x in objects)),
+        time2=None
+        if first.time2 is None
+        else tuple(chain.from_iterable(cast(tuple[float, ...], x.time2) for x in objects)),
         surv_type=first.type,
         states=first.states,
         clabel=first.clabel,

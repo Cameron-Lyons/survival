@@ -68,6 +68,7 @@ from ._formula import (
     _data_row_count,
     _data_rows,
     _design_rows_from_spec,
+    _design_term_name,
     _formula_data_rows,
     _formula_design_row_count,
     _response_arg_columns,
@@ -258,7 +259,9 @@ class CoxphModel:
     def predict(self, newdata: Any | None = None, **kwargs: Any) -> Any:
         return predict_coxph(self, newdata, **kwargs)
 
-    def survfit(self, newdata: Any | None = None, **kwargs: Any) -> CoxSurvfitResult:
+    def survfit(
+        self, newdata: Any | None = None, **kwargs: Any
+    ) -> CoxSurvfitResult | CoxSurvfitMultiStateResult:
         return survfit_coxph(self, newdata, **kwargs)
 
     def summary(
@@ -386,10 +389,10 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
 
     y = frame.y
     if y.start is None:
-        counts = _core.coxcount1(_core.SurvivalData(list(y.time), list(y.event)), frame.strata)
+        counts = _core.coxcount1(_core.SurvivalData(list(y.time), y._event_codes()), frame.strata)
     else:
         counts = _core.coxcount2(
-            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)),
+            _core.CountingProcessData(list(y.start), list(y.time), y._event_codes()),
             frame.strata,
         )
     tindex = [int(idx) for idx in counts.index]
@@ -633,7 +636,8 @@ def _coxph_fit_frame(
             raise ValueError("one of cluster or id is needed")
     # without events coxph() returns before checking the predictors or init and
     # before fitting anything, penalized terms included
-    no_events = not any(int(value) for value in data.y.event)
+    events = data.y._event_codes()
+    no_events = not any(events)
     if not no_events and any(not math.isfinite(value) for row in data.x for value in row):
         raise ValueError("data contains an infinite predictor")
     init_values = None if init is None or no_events else _check_init(init, data.x, data.offset)
@@ -657,10 +661,10 @@ def _coxph_fit_frame(
             use_robust = False
         penalized = _core.coxpenal_fit(
             list(data.y.time),
-            [int(value) for value in data.y.event],
+            events,
             data.x,
             penalties=[term.penalty for term in penalized_terms],
-            pcols=[list(frame.assign[term.term.call]) for term in penalized_terms],
+            pcols=[list(frame.assign[_design_term_name(term)]) for term in penalized_terms],
             assign=[list(columns) for columns in frame.assign.values()],
             entry=None if data.y.start is None else list(data.y.start),
             strata=data.strata,
@@ -690,7 +694,7 @@ def _coxph_fit_frame(
     else:
         fit = _core.coxph_fit(
             list(data.y.time),
-            [int(value) for value in data.y.event],
+            events,
             data.x,
             entry=None if data.y.start is None else list(data.y.start),
             strata=data.strata,
@@ -773,7 +777,7 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
         raise ValueError("the columns of x must have syntactic names")
     data: dict[str, Any] = {
         "survival_time_": list(response.time),
-        "survival_status_": [int(value) for value in response.event],
+        "survival_status_": response._event_codes(),
     }
     surv = "Surv(survival_time_, survival_status_)"
     if response.start is not None:
@@ -1285,12 +1289,14 @@ def _pspline_print(
     test1 = coxph_wtest(var, coef).test[0]
     # xmat = cbind(1, cbase) and xsig = V X, for V a g-inverse of var
     xmat = [[1.0, centre] for centre in cbase]
-    xsig = coxph_wtest(var, xmat).solve
+    xsig = _as_rows(coxph_wtest(var, xmat).solve, "spline solution")
     # the slope's weights: the second row of [X' V X]^- X' V
     xvx = [
         [sum(x[a] * v[b] for x, v in zip(xmat, xsig, strict=True)) for b in (0, 1)] for a in (0, 1)
     ]
-    cmat = coxph_wtest(xvx, [list(row) for row in zip(*xsig, strict=True)]).solve[1]
+    cmat = _as_rows(
+        coxph_wtest(xvx, [list(row) for row in zip(*xsig, strict=True)]).solve, "spline weights"
+    )[1]
     linear = sum(c * b for c, b in zip(cmat, coef, strict=True))
     lvar1 = _quadratic_form(cmat, var)
     test2 = linear * linear / lvar1 if lvar1 > 0.0 else math.nan
@@ -1472,7 +1478,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
         var_length = len(matrix) * (len(matrix[0]) if matrix else 0)
     nvar = len(b_rows)
     ntest = len(b_rows[0]) if b_rows else 1
-    b_values = [[float(value) for value in row] for row in b_rows]
+    b_values = [[value for value in row if value is not None] for row in b_rows]
     if var_length == 0:
         if nvar == 0:
             return CoxPHWTestResult(test=[], df=0, solve=0.0)
@@ -1722,6 +1728,8 @@ def _frailty_prediction(
     if new is not None:
         return [0.0] * new.n, [0.0] * new.n if se_fit else None
     penalized = fit.penalized
+    if penalized is None:
+        raise ValueError("frailty prediction requires a penalized fit")
     se = [math.sqrt(penalized.fvar[group]) for group in penalized.frail_index]
     return fit.linear_predictors, se if se_fit else None
 
@@ -1755,6 +1763,8 @@ def _predict_terms(
     columns = [column for column, idx in enumerate(selected) if idx == position]
     if columns:
         penalized = fit.penalized
+        if penalized is None:
+            raise ValueError("sparse frailty terms require a penalized fit")
         for i, row in enumerate(rows):
             group = penalized.frail_index[i] if new is None else None
             value = 0.0 if group is None else penalized.frail[group]
@@ -1804,10 +1814,10 @@ def _collapse_codes(fit: CoxphModel, collapse: Any, n: int) -> list[int] | None:
     if collapse is None or collapse is False:
         return None
     if collapse is True:
-        labels = fit.cluster if fit.cluster is not None else fit.id
-        if labels is None:
+        source_labels = fit.cluster if fit.cluster is not None else fit.id
+        if source_labels is None:
             return None
-        labels = list(labels)
+        labels = list(source_labels)
     else:
         labels = _materialize_labels(collapse, "collapse")
         if len(labels) != n:
@@ -2525,6 +2535,8 @@ def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[fl
     ]
     position = _sparse_term(fit)
     if position is not None:
+        if fit.penalized is None:
+            raise ValueError("sparse frailty terms require a penalized fit")
         codes = [float(group + 1) for group in fit.penalized.frail_index]
         blocks.insert(position, ([_term_labels(fit)[position]], [codes]))
     return blocks
