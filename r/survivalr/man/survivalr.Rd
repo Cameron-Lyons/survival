@@ -1278,11 +1278,13 @@ R-compatible names and methods.
 their level ordering, while transforming continuous terms within each event
 risk set.
 
-Formula \code{finegray} calls use the Python formula engine and Rust interval
-expansion directly. The bridge supports weights, subsets, missing-data actions,
-strata, counting-process histories, and delayed entry; computes censoring risk
-sets with sorted sweeps; and restores factor and \code{I(...)} column classes
-on the returned data frame.
+Formula \code{finegray} calls evaluate the model frame once in R and use shared
+Rust preparation for subject histories, censoring and delayed-entry curves,
+and interval expansion. Arbitrary R transformations, matrix-valued terms,
+formula environments, weights, subsets, and missing-data actions are supported.
+Covariate classes and columns are retained by indexing the model frame with
+returned source rows. Bulk NumPy snapshots avoid per-element result conversion.
+The direct interval-expansion interface remains available.
 
 \code{coxsurv.fit} and \code{survfitcoxph.fit} use a Rust risk-set sweep for
 weighted right-censored and counting-process baselines, including strata and

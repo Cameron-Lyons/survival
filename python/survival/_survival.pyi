@@ -4293,6 +4293,7 @@ class FederatedSurvivalResult:
     def round_metrics(self) -> list[float]: ...
 
 class FineGrayOutput:
+    def to_arrays(self) -> dict[str, Any]: ...
     @property
     def add(self) -> list[int]: ...
     @property
@@ -12401,6 +12402,16 @@ def finegray(
     cprob: ArrayLike,
     extend: ArrayLike,
     keep: ArrayLike,
+) -> FineGrayOutput: ...
+def finegray_expand(
+    time: ArrayLike,
+    status: ArrayLike,
+    event_type: int = 1,
+    start: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    id: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    timefix: bool = True,
 ) -> FineGrayOutput: ...
 def finegray_regression(
     time: Sequence[float],

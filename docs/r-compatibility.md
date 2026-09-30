@@ -830,6 +830,83 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Fine–Gray expansion
+
+`regression.finegray_expand` prepares a multi-state response without evaluating
+formulas. It accepts times, non-negative integer status codes (zero denotes
+censoring), a positive selected endpoint, and optional start times, strata,
+subject codes and weights. Counting histories require subject ids and contiguous
+intervals; a transition may appear only on a subject's last row. Near ties are
+resolved before these checks when `timefix=True` (the default). Stratum and
+subject codes may be arbitrary integers, including nonconsecutive levels.
+
+Rust callers use `regression::finegray_expand` with `FineGrayInput`. The kernel
+uses the shared Kaplan–Meier implementation for censoring and reversed entry
+curves, then the existing Fine–Gray interval kernel. Rows are grouped once by
+stratum; output follows ascending strata, original row order within each group,
+and then added interval order. The returned `FineGrayOutput.row` contains
+one-based source rows in the full input and `wt` includes supplied weights.
+The existing `finegray` kernel still accepts a caller-supplied censoring curve.
+Both results offer `to_arrays()` with independent writable NumPy snapshots.
+Native preparation accepts NumPy layouts and runs without the GIL.
+
+Python's formula interface retains formula evaluation and result assembly;
+subject checks, time grids, censoring/entry curves and all interval expansion
+now run in one native call. R evaluates its model frame once, retains arbitrary
+transformed and matrix-valued columns, and indexes that frame with the returned
+source rows. R formula environments work without a data argument. Neither R
+formula parsing nor numerical expansion delegates to stock `survival::finegray`.
+
+The existing R weight convention is preserved: censoring/entry fits are
+unweighted, and user weights multiply each output row using its source position
+*within the stratum*, indexing the full weight vector. Consequently a stratified
+result's `(weights)` column need not equal its initial `fgwt`. The corrected
+subject-first-row delayed-entry check and rejection of a zero censoring
+probability before a selected event remain as documented above. A selected
+endpoint with no events is rejected. Covariate missing values can be retained
+with `na.pass`; missing responses, strata or ids cannot be used.
+
+Sixty reproducible stock-R numerical cases cover right/counting responses,
+multiple intervals per subject, shuffled rows, negative times, delayed entry,
+strata, both endpoints and weights. The reference corrects only R's documented delayed-entry
+row index. Cases with non-finite R weights assert the explicit zero-probability
+error instead. Additional checks cover hand-computed censoring weights, malformed
+input, NumPy ownership/layouts, concurrency, GIL release and single formula
+evaluation. R tests exercise arbitrary transformations, matrix columns, column
+classes, missing-data actions, subsets and disabled reference functions.
+
+`scripts/benchmark_finegray.R` times complete R-facing calls after verifying
+results against stock R; `scripts/benchmark_finegray.py` measures complete
+Python formula calls on separate generated data. Its optional `--baseline-source`
+compares a previous repository `_finegray.py`, checking every output column
+before timing. For the measurements below that file came from commit `1560ea23`.
+Both scripts include preparation, conversion and output assembly, with three
+warmup calls, seven alternating measurements and explicit garbage collection
+outside measured calls. Allocation and automatic collection remain included;
+peak memory is not measured.
+
+With 5,000 input rows on an Intel Core Ultra 5 325, R 4.5.3 / survival 3.8-12
+and Python 3.14.7, complete R-facing calls measured:
+
+| Workload | Expanded rows | Stock R median (range) | R/Rust median (range) |
+| --- | ---: | ---: | ---: |
+| Right censored | 388,463 | 175 ms (164–272) | 161 ms (140–305) |
+| 100 strata | 11,217 | 67 ms (59–173) | 14 ms (11–31) |
+| Two intervals per subject | 142,723 | 34 ms (32–40) | 31 ms (29–46) |
+| Polynomial and factor columns | 388,463 | 173 ms (156–288) | 138 ms (134–225) |
+
+Median improvements are 1.09×, 4.79×, 1.10× and 1.25×. The broad ranges include
+outliers; ordinary and counting cases show modest improvements compared with
+the larger gain for many strata. The counting case has 2,500 subjects; the
+polynomial case retains a three-column matrix and a factor in its output.
+
+On its separate 5,000-row dataset, complete Python calls changed from
+139.2 ms (125.7–306.4) to 60.7 ms (54.9–136.1) for 399,370 expanded rows, and
+from 20.4 ms (18.9–23.7) to 4.17 ms (4.14–6.08) for 11,450 expanded rows in
+100 strata. These are 2.29× and 4.91× median improvements over the prior Python
+preparation. Python and R use different generated data, so these tables are
+not a direct cross-language comparison.
+
 ## O'Brien risk-set expansion
 
 `survobrien` expands right-censored or counting-process observations into one
