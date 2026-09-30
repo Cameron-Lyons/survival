@@ -449,12 +449,17 @@ def _time_transform_design(
     values = _coerce_array_like(source, "tt result")
     if len(values) != n:
         raise ValueError("the tt function must return one value per expanded row")
-    if (
-        metadata.get("_survival_tt_kind") == "factor"
-        or _categories(source) is not None
-        or (
-            any(not _is_missing_value(v) for v in values)
-            and all(isinstance(v, str) or _is_bool_like(v) or _is_missing_value(v) for v in values)
+    kind = metadata.get("_survival_tt_kind")
+    if kind == "factor" or (
+        kind != "matrix"
+        and (
+            _categories(source) is not None
+            or (
+                any(not _is_missing_value(v) for v in values)
+                and all(
+                    isinstance(v, str) or _is_bool_like(v) or _is_missing_value(v) for v in values
+                )
+            )
         )
     ):
         declared = metadata.get("levels")
@@ -498,7 +503,7 @@ def _time_transform_design(
             ), values
         return _CategoricalDesignTerm(term, levels), values
     matrix = (
-        metadata.get("_survival_tt_kind") == "matrix"
+        kind == "matrix"
         or isinstance(source, Mapping)
         or (getattr(source, "ndim", None) == 2)
         or (values and isinstance(values[0], (list, tuple)))

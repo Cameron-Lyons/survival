@@ -252,6 +252,36 @@ def test_sparse_callback_without_formatter_has_a_group_wald_summary():
     close(row["df"], fit.df[-1])
 
 
+def test_boolean_penalty_basis_keeps_its_numeric_penalty():
+    value = core.CoxPenalty.ridge(theta=2, scale=False)
+    formula = "Surv(futime,fustat) ~ x + tt(rx)"
+    fit = r.coxph(
+        formula, REFERENCE["data"], tt=lambda x, *args: r.CoxPenaltyBasis(np.asarray(x) > 1, value)
+    )
+    expected = r.coxph(
+        formula,
+        REFERENCE["data"],
+        tt=lambda x, *args: r.CoxPenaltyBasis((np.asarray(x) > 1).astype(float), value),
+    )
+    assert fit.penalized is not None
+    assert fit.coef_names == ("x", "tt(rx)")
+    close(fit.coefficients, expected.coefficients)
+    close(fit.var, expected.var)
+
+
+def test_categorical_penalty_basis_is_rejected_before_the_penalty_callback():
+    def penalty(*args, **kwargs):
+        pytest.fail("a nonnumeric basis reached the penalty callback")
+
+    value = core.CoxPenalty.callback(penalty)
+    with pytest.raises(ValueError, match="could not convert string to float"):
+        r.coxph(
+            "Surv(futime,fustat) ~ tt(rx)",
+            REFERENCE["data"],
+            tt=lambda x, *args: r.CoxPenaltyBasis(["group"] * len(x), value),
+        )
+
+
 def test_stored_matrix_keeps_ordinary_sparse_frailty_column():
     data = survival.datasets.load_kidney()
     fit = r.coxph("Surv(time,status) ~ age + frailty(id,theta=.4)", data)

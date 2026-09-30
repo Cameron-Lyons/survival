@@ -28,7 +28,9 @@ fit = r.coxph("Surv(time, status) ~ age + tt(group)", data, tt=group_penalty)
 ```
 
 `CoxPenaltyBasis.column_names` optionally supplies the complete fitted labels,
-one per basis column. A sparse penalty requires one numeric group column.
+one per basis column. Boolean penalty bases use numeric zero/one values;
+nonnumeric bases fail before penalty callbacks run. A sparse penalty requires
+one numeric group column.
 The callback can also return `r.pspline()` directly:
 
 ```python
@@ -66,7 +68,7 @@ residuals, degrees of freedom, frailties, summaries and formatted history.
 Live R tests exercise both frailty constructors, custom numeric penalty
 vectors, sparse formatter signatures and saved models.
 
-The full Python suite passes 15,237 tests (48 skipped and 37 documented
+The full Python suite passes 15,239 tests (48 skipped and 37 documented
 expected differences). The R source archive passes 8,629 checks with zero
 errors, warnings or notes. Pinned lint/format checks, Mypy across 47 files,
 generated interface checks and byte-exact fixture regeneration pass. Three
