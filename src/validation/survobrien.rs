@@ -1,16 +1,15 @@
-//! O'Brien's logit-rank transformation of a survival data set.
+//! O'Brien's logit-rank expansion, with risk sets restricted to each stratum.
 //!
-//! Port of R survival `R/survobrien.R`: the data set is expanded into one
-//! block per event time containing everybody at risk, and within each block
-//! every continuous covariate is replaced by the logit of its (mid-)rank
-//! percentile.  A Cox model on the expanded data, stratified on the block,
-//! gives O'Brien's test.  Formula handling (which terms are continuous,
-//! keeper columns, cluster terms) belongs to the caller: it passes the
-//! continuous columns and copies its keeper columns with [`SurvObrienExpansion::row`].
+//! Formula evaluation and keeper columns belong to the caller. Events retain
+//! R's ordering: chronological without strata, first appearance with strata.
+//! A sweep maintains active rows and ordered covariates within each stratum;
+//! output is written directly into precomputed block slices.
+
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::step::rank_average;
+use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use pyo3::prelude::*;
 
@@ -23,7 +22,8 @@ pub struct SurvObrienInput<'a> {
     pub status: &'a [i32],
     /// Strata codes; risk sets are formed within a stratum.
     pub strata: Option<&'a [i32]>,
-    /// The continuous covariates to transform, one column each.
+    /// Continuous columns. NaN stays missing; infinities participate in ranks.
+    /// May be empty for [`survobrien_expand`], which computes only risk sets.
     pub continuous: &'a [Vec<f64>],
 }
 
@@ -39,25 +39,50 @@ pub struct SurvObrienExpansion {
     pub status: Vec<i32>,
     /// R's `.strata.`: 1-based index of the risk set.
     pub strata: Vec<usize>,
-    /// The transformed continuous columns, in input order.
+    /// Transformed columns; empty for [`survobrien_expand`].
     pub transformed: Vec<Vec<f64>>,
     /// The event time defining each risk set, in block order.
     pub event_times: Vec<f64>,
+    /// Half-open output slices: block i occupies `offsets[i]..offsets[i + 1]`.
+    pub block_offsets: Vec<usize>,
 }
 
-/// O'Brien's default transform: logits of the mid-rank percentiles.
-fn logit_rank_transform(values: &[f64]) -> Vec<f64> {
-    let n = values.len();
-    rank_average(values)
-        .iter()
-        .map(|&rank| {
-            let percentile = (rank - 0.5) / n as f64;
-            (percentile / (1.0 - percentile)).ln()
-        })
-        .collect()
+#[cfg(feature = "python")]
+#[pymethods]
+impl SurvObrienExpansion {
+    /// Owned NumPy snapshots, avoiding per-element conversion in an R bridge.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let result = pyo3::types::PyDict::new(py);
+        let indices = |values: &[usize]| {
+            values
+                .iter()
+                .map(|&v| v as i64)
+                .collect::<Vec<_>>()
+                .into_pyarray(py)
+        };
+        result.set_item("row", indices(&self.row))?;
+        result.set_item(
+            "start",
+            self.start.as_ref().map(|v| v.clone().into_pyarray(py)),
+        )?;
+        result.set_item("time", self.time.clone().into_pyarray(py))?;
+        result.set_item("status", self.status.clone().into_pyarray(py))?;
+        result.set_item("strata", indices(&self.strata))?;
+        result.set_item("event_times", self.event_times.clone().into_pyarray(py))?;
+        result.set_item("block_offsets", indices(&self.block_offsets))?;
+        result.set_item(
+            "transformed",
+            self.transformed
+                .iter()
+                .map(|v| v.clone().into_pyarray(py))
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(result)
+    }
 }
 
-fn validate(input: &SurvObrienInput<'_>) -> SurvivalResult<()> {
+fn validate(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<()> {
     let n = input.time.len();
     if n == 0 {
         return Err(SurvivalError::invalid_input(
@@ -75,131 +100,303 @@ fn validate(input: &SurvObrienInput<'_>) -> SurvivalResult<()> {
     if let Some(strata) = input.strata {
         validate_length(n, strata.len(), "strata")?;
     }
-    if input.continuous.is_empty() {
+    if transform && input.continuous.is_empty() {
         return Err(SurvivalError::invalid_input(
             "No continuous variables to modify",
         ));
     }
     for (column, values) in input.continuous.iter().enumerate() {
         validate_length(n, values.len(), &format!("continuous[{column}]"))?;
-        validate_finite(values, "continuous")?;
     }
     Ok(())
 }
 
-/// The risk sets: one `(event time, stratum, rows at risk)` per distinct
-/// event time (per stratum), in R's order.
-fn risk_sets(input: &SurvObrienInput<'_>) -> Vec<(f64, Vec<usize>)> {
-    let n = input.time.len();
-    let at_risk = |i: usize, at: f64| match input.start {
-        Some(start) => start[i] < at && input.time[i] >= at,
-        None => input.time[i] >= at,
-    };
-    match input.strata {
-        None => {
-            // etime <- sort(unique(y[event, time]))
-            let mut event_times: Vec<f64> = (0..n)
-                .filter(|&i| input.status[i] == 1)
-                .map(|i| input.time[i])
-                .collect();
-            event_times.sort_by(f64::total_cmp);
-            event_times.dedup();
-            event_times
-                .into_iter()
-                .map(|at| (at, (0..n).filter(|&i| at_risk(i, at)).collect()))
-                .collect()
+struct Group {
+    /// Global row numbers, in original order.
+    rows: Vec<usize>,
+    /// Local row indices, ordered by stop and start respectively.
+    stops: Vec<usize>,
+    starts: Vec<usize>,
+    /// Output block numbers, ordered by event time for the sweep.
+    events: Vec<usize>,
+}
+
+fn groups(input: &SurvObrienInput<'_>) -> (Vec<Group>, Vec<f64>) {
+    let mut groups: Vec<Group> = Vec::new();
+    let mut codes = HashMap::new();
+    let mut seen = HashSet::new();
+    let mut events = Vec::new();
+    for row in 0..input.time.len() {
+        let code = input.strata.map_or(0, |s| s[row]);
+        let next = groups.len();
+        let group = *codes.entry(code).or_insert_with(|| {
+            groups.push(Group {
+                rows: Vec::new(),
+                stops: Vec::new(),
+                starts: Vec::new(),
+                events: Vec::new(),
+            });
+            next
+        });
+        groups[group].rows.push(row);
+        let at = input.time[row];
+        // IEEE -0 and +0 denote the same event time, as in R's unique().
+        let bits = if at == 0.0 { 0 } else { at.to_bits() };
+        if input.status[row] == 1 && seen.insert((code, bits)) {
+            groups[group].events.push(events.len());
+            events.push(at);
         }
-        Some(strata) => {
-            // unique(data.frame(time, strata)[event, ]): first-appearance
-            // order of the (time, stratum) pairs among the events.  R's own
-            // stratified branches compare the status column with the time
-            // (right-censored data) and select the *other* strata for
-            // (start, stop] data; both are typos, the intent — everybody
-            // at risk in the same stratum — is implemented here.
-            let mut pairs: Vec<(f64, i32)> = Vec::new();
-            for i in (0..n).filter(|&i| input.status[i] == 1) {
-                let pair = (input.time[i], strata[i]);
-                if !pairs.contains(&pair) {
-                    pairs.push(pair);
+    }
+    if input.strata.is_none() {
+        events.sort_by(f64::total_cmp);
+        groups[0].events = (0..events.len()).collect();
+    }
+    for group in &mut groups {
+        group
+            .events
+            .sort_by(|&i, &j| events[i].total_cmp(&events[j]));
+        group.stops = (0..group.rows.len()).collect();
+        group
+            .stops
+            .sort_by(|&i, &j| input.time[group.rows[i]].total_cmp(&input.time[group.rows[j]]));
+        if let Some(start) = input.start {
+            group.starts = (0..group.rows.len()).collect();
+            group
+                .starts
+                .sort_by(|&i, &j| start[group.rows[i]].total_cmp(&start[group.rows[j]]));
+        }
+    }
+    (groups, events)
+}
+
+struct OrderedColumn {
+    /// Local rows sorted by value; missing values have no position.
+    rows: Vec<usize>,
+    position: Vec<usize>,
+    active: BTreeSet<usize>,
+}
+
+impl OrderedColumn {
+    fn new(values: &[f64], rows: &[usize]) -> Self {
+        let mut order: Vec<usize> = (0..rows.len())
+            .filter(|&i| !values[rows[i]].is_nan())
+            .collect();
+        order.sort_by(|&i, &j| values[rows[i]].total_cmp(&values[rows[j]]));
+        let mut position = vec![usize::MAX; rows.len()];
+        for (rank, &row) in order.iter().enumerate() {
+            position[row] = rank;
+        }
+        Self {
+            rows: order,
+            position,
+            active: BTreeSet::new(),
+        }
+    }
+
+    fn enter(&mut self, row: usize) {
+        let rank = self.position[row];
+        if rank != usize::MAX {
+            self.active.insert(rank);
+        }
+    }
+
+    fn leave(&mut self, row: usize) {
+        self.active.remove(&self.position[row]);
+    }
+
+    fn transform(
+        &self,
+        values: &[f64],
+        rows: &[usize],
+        output_rows: &[usize],
+        output: &mut [f64],
+        tied: &mut Vec<usize>,
+    ) {
+        let mut ordered = self.active.iter().peekable();
+        let mut rank = 1;
+        let n = self.active.len() as f64;
+        while let Some(&position) = ordered.next() {
+            let first = rank;
+            let local = self.rows[position];
+            let value = values[rows[local]];
+            tied.clear();
+            tied.push(output_rows[local]);
+            rank += 1;
+            while let Some(&&next) = ordered.peek() {
+                let local = self.rows[next];
+                if values[rows[local]] != value {
+                    break;
+                }
+                tied.push(output_rows[local]);
+                ordered.next();
+                rank += 1;
+            }
+            let percentile = ((first + rank - 1) as f64 / 2.0 - 0.5) / n;
+            let logit = (percentile / (1.0 - percentile)).ln();
+            for &row in tied.iter() {
+                output[row] = logit;
+            }
+        }
+    }
+}
+
+/// Expand risk sets and apply the logit of each continuous column's mid-rank
+/// percentile. Missing values are retained and excluded from the denominator.
+pub fn survobrien(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
+    expand(input, true)
+}
+
+/// Expand only the risk sets, for callers supplying their own transformation.
+/// No covariate sorting or rank work is performed; `continuous` may be empty.
+pub fn survobrien_expand(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
+    expand(input, false)
+}
+
+fn expand(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<SurvObrienExpansion> {
+    validate(input, transform)?;
+    let (groups, event_times) = groups(input);
+    let mut counts = vec![0; event_times.len()];
+    // Determine output slices without materializing any risk-set row lists.
+    for group in &groups {
+        let mut entered = if input.start.is_none() {
+            group.rows.len()
+        } else {
+            0
+        };
+        let mut exited = 0;
+        for &block in &group.events {
+            let at = event_times[block];
+            if let Some(start) = input.start {
+                while entered < group.starts.len() && start[group.rows[group.starts[entered]]] < at
+                {
+                    entered += 1;
                 }
             }
-            pairs
-                .into_iter()
-                .map(|(at, stratum)| {
-                    (
-                        at,
-                        (0..n)
-                            .filter(|&i| at_risk(i, at) && strata[i] == stratum)
-                            .collect(),
-                    )
-                })
-                .collect()
+            while exited < group.stops.len() && input.time[group.rows[group.stops[exited]]] < at {
+                exited += 1;
+            }
+            counts[block] = entered - exited;
         }
     }
-}
-
-/// Expand the data into risk sets with the logit-rank transform applied
-/// to every continuous covariate within each risk set.
-pub fn survobrien(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
-    validate(input)?;
-    let sets = risk_sets(input);
-    let total: usize = sets.iter().map(|(_, rows)| rows.len()).sum();
-    let mut row = Vec::with_capacity(total);
-    let mut time = Vec::with_capacity(total);
-    let mut status = Vec::with_capacity(total);
-    let mut strata = Vec::with_capacity(total);
-    let mut start = input.start.map(|_| Vec::with_capacity(total));
-    let mut transformed: Vec<Vec<f64>> = input
-        .continuous
-        .iter()
-        .map(|_| Vec::with_capacity(total))
-        .collect();
-    let mut event_times = Vec::with_capacity(sets.len());
-    for (set_index, (at, rows)) in sets.iter().enumerate() {
-        event_times.push(*at);
-        for &i in rows {
-            row.push(i);
-            time.push(input.time[i]);
-            status.push(i32::from(input.time[i] == *at && input.status[i] == 1));
-            strata.push(set_index + 1);
-            if let (Some(start_values), Some(out)) = (input.start, start.as_mut()) {
-                out.push(start_values[i]);
+    let mut offsets = Vec::with_capacity(counts.len() + 1);
+    offsets.push(0usize);
+    for count in counts {
+        let next = offsets.last().unwrap().checked_add(count).ok_or_else(|| {
+            SurvivalError::invalid_input("expanded row count exceeds addressable memory")
+        })?;
+        offsets.push(next);
+    }
+    let total = *offsets.last().unwrap();
+    let mut output = SurvObrienExpansion {
+        row: vec![0; total],
+        start: input.start.map(|_| vec![0.0; total]),
+        time: vec![0.0; total],
+        status: vec![0; total],
+        strata: vec![0; total],
+        transformed: if transform {
+            vec![vec![f64::NAN; total]; input.continuous.len()]
+        } else {
+            Vec::new()
+        },
+        event_times,
+        block_offsets: offsets,
+    };
+    for group in groups {
+        if group.events.is_empty() {
+            continue;
+        }
+        let mut columns: Vec<OrderedColumn> = if transform {
+            input
+                .continuous
+                .iter()
+                .map(|values| OrderedColumn::new(values, &group.rows))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut active = BTreeSet::new();
+        let mut entered = 0;
+        let mut exited = 0;
+        let mut output_rows = vec![0; group.rows.len()];
+        let mut tied = Vec::new();
+        for block in group.events {
+            let at = output.event_times[block];
+            while entered < group.rows.len() {
+                let local = if input.start.is_some() {
+                    group.starts[entered]
+                } else {
+                    entered
+                };
+                if input
+                    .start
+                    .is_some_and(|start| start[group.rows[local]] >= at)
+                {
+                    break;
+                }
+                active.insert(local);
+                for column in &mut columns {
+                    column.enter(local);
+                }
+                entered += 1;
+            }
+            while exited < group.stops.len() && input.time[group.rows[group.stops[exited]]] < at {
+                let local = group.stops[exited];
+                active.remove(&local);
+                for column in &mut columns {
+                    column.leave(local);
+                }
+                exited += 1;
+            }
+            for (index, &local) in active.iter().enumerate() {
+                let position = output.block_offsets[block] + index;
+                let row = group.rows[local];
+                output_rows[local] = position;
+                output.row[position] = row;
+                output.time[position] = input.time[row];
+                output.status[position] =
+                    i32::from(input.time[row] == at && input.status[row] == 1);
+                output.strata[position] = block + 1;
+                if let (Some(values), Some(start)) = (input.start, &mut output.start) {
+                    start[position] = values[row];
+                }
+            }
+            for (index, column) in columns.iter().enumerate() {
+                column.transform(
+                    &input.continuous[index],
+                    &group.rows,
+                    &output_rows,
+                    &mut output.transformed[index],
+                    &mut tied,
+                );
             }
         }
-        for (column, values) in input.continuous.iter().enumerate() {
-            let block: Vec<f64> = rows.iter().map(|&i| values[i]).collect();
-            transformed[column].extend(logit_rank_transform(&block));
-        }
     }
-    Ok(SurvObrienExpansion {
-        row,
-        start,
-        time,
-        status,
-        strata,
-        transformed,
-        event_times,
-    })
+    Ok(output)
 }
 
-/// Python entry point: `survobrien(time, status, continuous, start=None,
-/// strata=None)`; `continuous` is a list of columns.
+/// Python entry point. `continuous` is a list of columns; `transform=False`
+/// skips ranking for custom transforms. Input conversion occurs once and the
+/// expansion runs without the GIL.
 #[pyfunction(name = "survobrien")]
-#[pyo3(signature = (time, status, continuous, start=None, strata=None))]
+#[pyo3(signature = (time, status, continuous, start=None, strata=None, transform=true))]
 pub fn survobrien_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    continuous: Vec<Vec<f64>>,
-    start: Option<Vec<f64>>,
-    strata: Option<Vec<i32>>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    continuous: Vec<FloatVec>,
+    start: Option<FloatVec>,
+    strata: Option<IntVec>,
+    transform: bool,
 ) -> PyResult<SurvObrienExpansion> {
-    Ok(survobrien(&SurvObrienInput {
+    let continuous: Vec<_> = continuous.into_iter().map(FloatVec::into_inner).collect();
+    let input = SurvObrienInput {
         start: start.as_deref(),
         time: &time,
         status: &status,
         strata: strata.as_deref(),
         continuous: &continuous,
-    })?)
+    };
+    Ok(py.detach(|| expand(&input, transform))?)
 }
 
 #[cfg(test)]
@@ -287,5 +484,49 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn missing_values_and_infinities_keep_ranks_within_each_event_block() {
+        let input = SurvObrienInput {
+            start: None,
+            time: &[3.0, 1.0, 2.0, 3.0],
+            status: &[1, 1, 0, 1],
+            strata: Some(&[1, 2, 1, 2]),
+            continuous: &[vec![
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::INFINITY,
+            ]],
+        };
+        let result = survobrien(&input).unwrap();
+        assert_eq!(result.event_times, vec![3.0, 1.0, 3.0]);
+        assert_eq!(result.row, vec![0, 1, 3, 3]);
+        assert_eq!(result.block_offsets, vec![0, 1, 3, 4]);
+        assert!(result.transformed[0][0].is_nan());
+        assert_eq!(&result.transformed[0][1..], &[0.0, 0.0, 0.0]);
+        let mut geometry = input;
+        geometry.continuous = &[];
+        let expanded = survobrien_expand(&geometry).unwrap();
+        assert_eq!(expanded.row, result.row);
+        assert_eq!(expanded.block_offsets, result.block_offsets);
+        assert!(expanded.transformed.is_empty());
+    }
+
+    #[test]
+    fn no_events_return_empty_columns_and_one_offset() {
+        let result = survobrien(&SurvObrienInput {
+            start: Some(&[0.0, 1.0]),
+            time: &[1.0, 2.0],
+            status: &[0, 0],
+            strata: None,
+            continuous: &[vec![1.0, 2.0]],
+        })
+        .unwrap();
+        assert_eq!(result.block_offsets, vec![0]);
+        assert!(result.row.is_empty());
+        assert_eq!(result.start, Some(vec![]));
+        assert_eq!(result.transformed, vec![Vec::<f64>::new()]);
     }
 }

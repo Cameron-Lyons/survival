@@ -1293,6 +1293,18 @@ The legacy wrapper requires \code{newrisk}; its \code{vartype} argument is unuse
 Terminal Kalbfleisch--Prentice increments are bounded to avoid a fractional
 power of a negative floating-point rounding residue.
 
+\code{survobrien} evaluates formulas in R and constructs all risk sets with
+the shared Rust kernel. It preserves factors, protected terms, column names,
+formula environments and custom transformations, with keeper and cluster
+columns aligned after subset and missing-data removal. Default ranks exclude
+missing covariates and retain them as missing; infinite covariates participate
+in ranking. Counting intervals are open on the left and closed on the right.
+Stratified blocks follow the first appearance of event-time/stratum pairs.
+Custom transforms receive one column of one risk set and must return the
+same number of values. Data without events return an empty data frame.
+R's documented strata-selection and keeper-indexing defects are corrected;
+interactions and unsupported survival response types remain rejected.
+
 \code{yates} prepares formulas and population designs in R and uses shared
 Rust kernels for marginal means, estimability, covariance, contrasts and SAS
 type III tests. Nonlinear simulations use R's global \code{rnorm} stream,

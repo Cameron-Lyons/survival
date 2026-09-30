@@ -213,8 +213,8 @@ def test_expected_events_rejects_invalid_parameters(call, message):
             "time contains non-finite",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1, 0], [[0.1, float("nan")]]),
-            "continuous contains non-finite",
+            lambda: survival.validation.survobrien([1.0, 2.0], [1, 0], []),
+            "No continuous variables to modify",
         ),
     ],
 )
