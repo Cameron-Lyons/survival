@@ -8803,6 +8803,13 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
+  if (!inherits(y, c("Surv", "survival_py_surv"))) {
+    if (is.factor(y) && (is.ordered(y) || nlevels(y) == 2L)) {
+      y <- as.numeric(y)
+    } else if (!is.numeric(y) || !is.null(dim(y))) {
+      stop("left hand side of the formula must be a numeric vector, survival object, or an orderable factor", call. = FALSE)
+    }
+  }
   input_score_names <- if (is.matrix(x) || is.data.frame(x)) colnames(x) else NULL
   timewt <- match.arg(timewt)
   influence <- as.integer(influence)
@@ -8811,9 +8818,9 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     influence <- 0L
   }
   result <- .call_r_api(
-    "concordance",
+    "concordancefit",
     .as_python_surv(y),
-    scores = .as_python_optional_vector(x),
+    x = .as_python_optional_vector(x),
     strata = if (missing(strata) || length(strata) == 0L) NULL else .as_python_vector(strata),
     weights = if (missing(weights)) NULL else .as_python_vector(weights),
     ymin = ymin,
@@ -8824,7 +8831,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
     ranks = ranks,
     reverse = isTRUE(reverse),
     timefix = timefix,
-    keepstrata = keepstrata
+    keepstrata = keepstrata,
+    std_err = isTRUE(std.err)
   )
   out <- .as_concordance_list(result, input_score_names)
   if (!isTRUE(std.err)) {

@@ -11,6 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
@@ -34,14 +36,17 @@ from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import (
     _column_source,
     _data_column_names,
+    _design_rows_from_spec,
     _formula_name,
     _response_arg_columns,
     _response_arg_values,
     _strata_specs,
+    model_frame,
 )
 from ._surv import Surv
 from ._survreg import SurvregModelResult, predict_survreg
 from ._types import ConcordanceResult, SurvConcordanceResult, _StrataSpec
+from ._yates_model import YatesModel
 
 _TIMEWT_CHOICES = ("n", "S", "S/G", "n/G2", "I")
 _COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
@@ -173,8 +178,14 @@ def concordancefit(
     std_err = _pop_dotted_keyword(kwargs, "std.err", "std_err", std_err, True)
     if kwargs:
         raise TypeError(f"concordancefit got unexpected argument(s): {', '.join(sorted(kwargs))}")
-    if not isinstance(y, Surv):
-        y = Surv(_float_vector(y, "y"))
+    numeric_response = not isinstance(y, Surv)
+    if numeric_response:
+        if _categories(y) is not None:
+            codes, response_levels = _factor(y, "y")
+            if not _is_ordered(y) and len(response_levels) != 2:
+                raise ValueError(_RESPONSE_ERROR)
+            y = [math.nan if code is None else code + 1.0 for code in codes]
+        y = Surv(y)
     if y.type in {"left", "interval"}:
         raise ValueError("left or interval censored data is not supported")
     if y.type in {"mright", "mcounting"}:
@@ -233,7 +244,7 @@ def concordancefit(
         "influence": influence_value,
         "ranks": _normalize_bool_option(ranks, "ranks"),
         "reverse": _normalize_bool_option(reverse, "reverse"),
-        "timefix": _normalize_bool_option(timefix, "timefix"),
+        "timefix": _normalize_bool_option(timefix, "timefix") and not numeric_response,
         "keepstrata": keep,
         "std_err": _normalize_bool_option(std_err, "std_err"),
     }
@@ -373,12 +384,15 @@ class _FitData:
     strata_levels: tuple[str, ...]
     weights: list[float] | None
     cluster: Sequence[Any] | None
+    timefix: bool | None = None
 
 
 def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | None) -> _FitData:
     """``cord.getdata``.  An explicit ``cluster`` replaces the fit's own; a survreg
     fit's ``cluster()`` term is not used, as in R."""
 
+    if isinstance(fit, YatesModel):
+        return _external_fit_data(fit, newdata, need_weights, cluster)
     if isinstance(fit, CoxphmsModel):
         # R fails with "x and y are not the same length"
         raise ValueError(
@@ -413,6 +427,44 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
             cluster=cluster,
         )
     raise TypeError("object is not an appropriate fit object")
+
+
+def _external_fit_data(
+    fit: YatesModel, newdata: Any | None, need_weights: bool, cluster: Any | None
+) -> _FitData:
+    """Linear predictors of an external lm/GLM; inverse links are unused."""
+    frame = model_frame(
+        fit.formula,
+        fit.model if newdata is None else newdata,
+        na_action="na.fail" if newdata is None else "na.omit",
+    )
+    if frame.y is None or frame.spec is None or np.asarray(frame.y).ndim != 1:
+        raise ValueError("a linear model concordance response must be a numeric vector")
+    raw = _response_arg_values(frame.data, frame.spec.arguments[0], frame.n)
+    if np.asarray(raw).dtype.kind == "b":
+        raise ValueError("a linear model concordance response must be a numeric vector")
+    if newdata is None and fit.linear_predictors is not None:
+        predictor = list(fit.linear_predictors)
+    else:
+        x = np.asarray(_design_rows_from_spec(frame.data, fit.design, frame.n), dtype=float)
+        # lm predictions omit aliased columns. The caller supplies coefficients in
+        # the full formula-column order, including NaN for those aliases.
+        beta = np.asarray(fit.coefficients, dtype=float)
+        values = x @ np.where(np.isnan(beta), 0.0, beta)
+        if frame.offset is not None:
+            values += frame.offset
+        predictor = values.tolist()
+    return _FitData(
+        y=Surv(frame.y),
+        x=predictor,
+        strata=None,
+        strata_levels=(),
+        weights=fit.weights if newdata is None and need_weights else None,
+        cluster=cluster,
+        # R scores a training lm response as a numeric vector, without aeqSurv.
+        # Its new-data path explicitly creates a Surv before scoring.
+        timefix=False if newdata is None else None,
+    )
 
 
 def _newdata_fit_data(
@@ -450,6 +502,8 @@ def _newdata_fit_data(
 
 
 def _fit_concordance(data: _FitData, options: dict[str, Any]) -> ConcordanceResult:
+    if data.timefix is not None:
+        options = {**options, "timefix": data.timefix}
     return concordancefit(
         data.y,
         data.x,
@@ -478,14 +532,33 @@ def _concordance_fits(
     """R's ``concordance.coxph``/``concordance.survreg`` and ``cord.work``: each fit is
     scored with its own response, strata, weights and clusters."""
 
-    is_cox = isinstance(fits[0], CoxphModel)
-    for fit in fits[1:]:
-        if isinstance(fit, CoxphModel) != is_cox:
-            raise TypeError("argument is not an appropriate fit object")
+    family = next(
+        (
+            kind
+            for kind in (CoxphModel, SurvregModelResult, YatesModel)
+            if isinstance(fits[0], kind)
+        ),
+        None,
+    )
+    if family is None or any(not isinstance(fit, family) for fit in fits):
+        raise TypeError("argument is not an appropriate fit object")
     need_weights = any(getattr(fit, "weights", None) is not None for fit in fits)
     data = [_fit_data(fit, newdata, need_weights, cluster) for fit in fits]
     formula = getattr(fits[0], "formula", None)
-    options = {**options, "reverse": is_cox}
+    options = {**options, "reverse": family is CoxphModel}
+    return _concordance_from_data(data, options=options, formula=formula)
+
+
+def _concordance_from_data(
+    data: Sequence[_FitData],
+    *,
+    options: dict[str, Any],
+    formula: str | None = None,
+    names: list[str] | None = None,
+) -> ConcordanceResult:
+    """Shared model comparison after each model has prepared its own rows."""
+    if not data:
+        raise ValueError("at least one model is required")
     if len(data) == 1:
         return _fit_concordance(data[0], {**options, "_formula": formula})
 
@@ -510,7 +583,7 @@ def _concordance_fits(
     dfbeta = [result.dfbeta for result in results]
     if any(len(column) != len(dfbeta[0]) for column in dfbeta[1:]):
         raise ValueError("models must have identical clustering")
-    names = [f"fit{idx + 1}" for idx in range(len(fits))]
+    names = [f"fit{idx + 1}" for idx in range(len(data))] if names is None else names
     ranks: dict[str, list[Any]] | None = None
     if results[0].ranks is not None:
         ranks = {"fit": [], **{column: [] for column in _RANK_NAMES}}
@@ -556,8 +629,9 @@ def concordance(
     **kwargs: Any,
 ) -> ConcordanceResult:
     """R's ``concordance``: for a formula (``Surv(time, status) ~ x + strata(g)``),
-    for one or more ``coxph``/``survreg`` fits (their linear predictors, with
-    ``reverse=TRUE`` for Cox models), or for a ``Surv`` plus ``scores``."""
+    for one or more ``coxph``/``survreg`` fits or external linear models supplied
+    as ``YatesModel`` (their linear predictors, with ``reverse=TRUE`` for Cox
+    models), or for a ``Surv`` plus ``scores``."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     object = _pop_dotted_keyword(kwargs, "response", "object", object, None)  # noqa: A001

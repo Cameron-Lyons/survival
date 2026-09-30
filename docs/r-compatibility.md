@@ -19,7 +19,7 @@ This page records every known difference from R:
   the intended result;
 - [Other deliberate differences](#other-deliberate-differences): versions,
   numerics, messages, labels, sort orders and Python-specific representations;
-- [Not yet implemented](#not-yet-implemented): R entry points without a port.
+- [Reference limitations](#reference-limitations): operations refused by R itself.
 
 ## Formula and population interfaces
 
@@ -152,6 +152,13 @@ the additional R 3.8-12 differential fixtures.
 
 `blogit`, `bprobit`, `bcloglog` and `blog` accept `inverse=True` for the inverse
 link, with scalar or vector input.
+
+`concordance` also accepts external linear models and GLMs through `YatesModel`,
+including optional stored linear predictors, new data and joint comparisons.
+The R bridge exposes the corresponding `lm` method. Plain numeric responses
+retain near ties; survival-time responses apply `timefix`. See
+[external-model concordance](linear-model-concordance.md) for input contracts,
+R differences, numerical references and complete-call benchmarks.
 
 `yates(..., predict="risk", nsim=200, options={"seed": 123})` uses Rust simulation
 with R's default Mersenne-Twister/inversion normal stream. An explicit seed gives
