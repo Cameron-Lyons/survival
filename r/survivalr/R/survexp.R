@@ -33,7 +33,7 @@
   if (inherits(fit, "survival_py_coxph")) {
     if (!ncol(data)) data[[".row"]] <- seq_len(nrow(data))
     raw <- .pybridge_attr("_survexp_cox_fit")(
-      fit, .as_python_data(data), array(as.integer(groups) - 1L), array(as.numeric(weights)),
+      .restore_python(fit), .as_python_data(data), array(as.integer(groups) - 1L), array(as.numeric(weights)),
       if (is.null(response)) NULL else array(as.numeric(response)),
       if (is.null(times)) NULL else array(as.numeric(times)), method)
     if (individual) return(as.numeric(raw))

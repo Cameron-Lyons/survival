@@ -17,6 +17,68 @@ __all__ = bind_names(
 )
 
 
+def _serialize_r_object(value: Any) -> dict[str, Any]:
+    """Capture current model state when R serializes its lazy state handle."""
+    import io
+    import pickle
+    from types import FunctionType
+
+    callbacks: list[Any] = []
+    indices: dict[Callable[..., Any], int] = {}
+
+    class RPickler(pickle.Pickler):
+        def persistent_id(self, obj: Any) -> Any:
+            # Reticulate wraps each R function around an r_object capsule.
+            # Returning that capsule to R recovers the original R closure,
+            # which R serializes with its environment instead of a live pointer.
+            if (
+                isinstance(obj, FunctionType)
+                and obj.__module__ == "rpytools.call"
+                and obj.__qualname__ == "make_python_function.<locals>.python_function"
+                and obj.__code__.co_freevars == ("f",)
+                and obj.__closure__ is not None
+                and type(obj.__closure__[0].cell_contents).__name__ == "PyCapsule"
+            ):
+                if obj not in indices:
+                    indices[obj] = len(callbacks)
+                    callbacks.append(obj.__closure__[0].cell_contents)
+                return ("r_callback", indices[obj])
+            return None
+
+    stream = io.BytesIO()
+    RPickler(stream, protocol=pickle.HIGHEST_PROTOCOL).dump(value)
+    return {"version": 1, "pickle": bytearray(stream.getvalue()), "callbacks": callbacks}
+
+
+def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
+    """Restore a model from the embedded pickle in a trusted R model file."""
+    import io
+    import pickle
+
+    if not isinstance(state, Mapping) or state.get("version") != 1:
+        raise ValueError("unsupported survival model serialization version")
+    payload = state.get("pickle")
+    callbacks = state.get("callbacks")
+    if not isinstance(payload, (bytes, bytearray, memoryview)):
+        raise ValueError("survival model serialization requires a byte payload")
+    if not isinstance(callbacks, (list, tuple)) or not all(callable(f) for f in callbacks):
+        raise ValueError("survival model serialization requires R callbacks")
+
+    class RUnpickler(pickle.Unpickler):
+        def persistent_load(self, key: Any) -> Any:
+            if (
+                not isinstance(key, tuple)
+                or len(key) != 2
+                or key[0] != "r_callback"
+                or type(key[1]) is not int
+                or not 0 <= key[1] < len(callbacks)
+            ):
+                raise pickle.UnpicklingError("invalid R callback reference")
+            return callbacks[key[1]]
+
+    return RUnpickler(io.BytesIO(payload)).load()  # noqa: S301 - trusted model files
+
+
 def _call_fit_with_warnings(
     function: Callable[..., Any], arguments: Mapping[str, Any]
 ) -> dict[str, Any]:
