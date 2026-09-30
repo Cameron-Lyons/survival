@@ -1813,7 +1813,7 @@ ridge <- function(..., theta, df = nvar / 2, eps = 0.1, scale = TRUE) {
     temp <- list(
       pfun = pfun,
       diag = TRUE,
-      cfun = get("frailty.controldf", envir = asNamespace("survival")),
+      cfun = .frailty_controldf,
       cargs = "df",
       cparm = list(df = df, eps = eps, thetas = 0, dfs = nvar, guess = 1),
       pparm = vars,
@@ -1888,37 +1888,6 @@ ridge <- function(..., theta, df = nvar / 2, eps = 0.1, scale = TRUE) {
   list(theta = parms$theta, done = TRUE)
 }
 
-.frailty_gamma_adjust_cfun <- function(control_name, needs_df = FALSE) {
-  force(control_name)
-  force(needs_df)
-  control <- get(control_name, envir = asNamespace("survival"))
-  add_correction <- function(temp, iter, old, group, status, loglik) {
-    if (iter > 0) {
-      if (old$theta == 0) {
-        correct <- 0
-      } else {
-        if (is.matrix(group)) {
-          group <- c(group %*% seq_len(ncol(group)))
-        }
-        deaths <- tapply(status, group, sum)
-        correct <- get("frailty.gammacon", envir = asNamespace("survival"))(deaths, 1 / old$theta)
-      }
-      temp$c.loglik <- loglik + correct
-    }
-    temp
-  }
-  if (needs_df) {
-    return(function(opt, iter, old, df, group, status, loglik) {
-      temp <- control(opt, iter, old, df)
-      add_correction(temp, iter, old, group, status, loglik)
-    })
-  }
-  function(opt, iter, old, group, status, loglik, ...) {
-    temp <- control(opt, iter, old, ...)
-    add_correction(temp, iter, old, group, status, loglik)
-  }
-}
-
 frailty <- function(x, distribution = "gamma", ...) {
   dlist <- c("gamma", "gaussian", "t")
   index <- pmatch(distribution, dlist)
@@ -1988,7 +1957,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       diag = TRUE,
       sparse = sparse,
       cargs = c("x", "status", "loglik"),
-      cfun = get("frailty.controlgam", envir = asNamespace("survival")),
+      cfun = .frailty_controlgam,
       cparm = c(list(theta = theta), dots)
     )
   } else if (method == "em") {
@@ -1998,7 +1967,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       diag = TRUE,
       sparse = sparse,
       cargs = c("x", "status", "loglik"),
-      cfun = get("frailty.controlgam", envir = asNamespace("survival")),
+      cfun = .frailty_controlgam,
       cparm = c(list(eps = eps), dots)
     )
   } else if (method == "aic") {
@@ -2009,7 +1978,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = c("x", "status", "loglik", "neff", "df", "plik"),
       cparm = c(list(eps = eps, lower = 0, init = c(0.1, 1)), dots),
-      cfun = .frailty_gamma_adjust_cfun("frailty.controlaic")
+      cfun = .frailty_gamma_aic_cfun
     )
   } else {
     if (missing(eps)) {
@@ -2022,7 +1991,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = c("df", "x", "status", "loglik"),
       cparm = c(list(df = df, thetas = 0, dfs = 0, eps = eps, guess = 3 * df / length(unclass(x))), dots),
-      cfun = .frailty_gamma_adjust_cfun("frailty.controldf", needs_df = TRUE)
+      cfun = .frailty_gamma_df_cfun
     )
   }
   if (!sparse) {
@@ -2091,7 +2060,7 @@ frailty.gaussian <- function(x, sparse = (nclass > 5), theta, df,
       diag = TRUE,
       sparse = sparse,
       cargs = c("coef", "trH", "loglik"),
-      cfun = get("frailty.controlgauss", envir = asNamespace("survival")),
+      cfun = .frailty_controlgauss,
       cparm = dots
     )
   } else if (method == "fixed") {
@@ -2111,7 +2080,7 @@ frailty.gaussian <- function(x, sparse = (nclass > 5), theta, df,
       sparse = sparse,
       cargs = c("neff", "df", "plik"),
       cparm = c(list(lower = 0, init = c(0.1, 1)), dots),
-      cfun = get("frailty.controlaic", envir = asNamespace("survival"))
+      cfun = .frailty_controlaic
     )
   } else {
     temp <- list(
@@ -2121,7 +2090,7 @@ frailty.gaussian <- function(x, sparse = (nclass > 5), theta, df,
       sparse = sparse,
       cargs = "df",
       cparm = c(list(df = df, thetas = 0, dfs = 0, guess = 3 * df / length(unclass(x))), dots),
-      cfun = get("frailty.controldf", envir = asNamespace("survival"))
+      cfun = .frailty_controldf
     )
   }
   if (!sparse) {
@@ -2207,7 +2176,7 @@ frailty.t <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = c("neff", "df", "plik"),
       cparm = c(list(lower = 0, init = c(0.1, 1), eps = eps), dots),
-      cfun = get("frailty.controlaic", envir = asNamespace("survival"))
+      cfun = .frailty_controlaic
     )
   } else {
     if (missing(eps)) {
@@ -2221,7 +2190,7 @@ frailty.t <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = "df",
       cparm = c(list(df = df, eps = eps, thetas = 0, dfs = 0, guess = 3 * df / length(unclass(x))), dots),
-      cfun = get("frailty.controldf", envir = asNamespace("survival"))
+      cfun = .frailty_controldf
     )
   }
   if (!sparse) {
@@ -2343,7 +2312,7 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
       cparm = c(list(df = df, eps = eps, thetas = c(1, 0), dfs = c(1, nterm), guess = 1 - df / nterm), dots),
       pparm = dmat,
       varname = paste("ps(", xname, ")", if (intercept) seq_len(nvar) else 1L + 2L:(nvar + 1L), sep = ""),
-      cfun = get("frailty.controldf", envir = asNamespace("survival"))
+      cfun = .frailty_controldf
     )
   } else {
     temp <- list(
@@ -2354,7 +2323,7 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
       cargs = c("neff", "df", "plik"),
       cparm = c(list(eps = eps, init = c(0.5, 0.95), lower = 0, upper = 1), dots),
       varname = paste("ps(", xname, ")", if (intercept) seq_len(nvar) else 1L + 2L:(nvar + 1L), sep = ""),
-      cfun = get("frailty.controlaic", envir = asNamespace("survival"))
+      cfun = .frailty_controlaic
     )
   }
 

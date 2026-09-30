@@ -40,6 +40,32 @@ PENALTY_FUNCTIONS = (
 _FRAILTY_PREFIX = {"gamma": "gamma", "gaussian": "gauss", "t": "t"}
 
 
+def _penalty_control(
+    options: Mapping[str, Any],
+    iteration: int,
+    old: Mapping[str, Any] | None = None,
+    inputs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One R/Python crossing per search step; all numerical work stays in Rust."""
+    controller = _core.PenaltyController(**options)
+    if iteration == 0:
+        state = controller.initial()
+    else:
+        if old is None:
+            raise ValueError("old state is required after iteration zero")
+        state = controller.step(_core.PenaltyControlState(**old), iteration, **(inputs or {}))
+    history = state.history
+    return {
+        "theta": state.theta,
+        "done": state.done,
+        "row": history[-1] if history else None,
+        "columns": controller.columns,
+        "c_loglik": state.c_loglik,
+        "half": state.half,
+        "theta_history_index": state.theta_history_index,
+    }
+
+
 def fit_penalty(
     term: _CovariateTerm,
     columns: Sequence[str],

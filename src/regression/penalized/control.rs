@@ -13,27 +13,33 @@
 //! back as `old` on the next call and ends up in the fit's `history`.
 
 use crate::error::{SurvivalError, SurvivalResult};
+use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// What a `cfun` returns: R's `iterlist[[i]]`.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ControlState {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[pyclass(module = "survival._survival", frozen, get_all, skip_from_py_object)]
+pub struct PenaltyControlState {
     /// The next `theta` to fit (the final entry is the proposal made when
     /// the search declared itself done).
     pub theta: f64,
     pub done: bool,
     /// The search history, one row per outer iteration (columns as in
-    /// [`Control::history_columns`]); the `df` searches start from the
+    /// [`super::PenaltyController::columns`]); the `df` searches start from the
     /// known `(theta, df)` pairs of the term.
     pub history: Vec<Vec<f64>>,
     /// The corrected log likelihood of a gamma frailty.
     pub c_loglik: Option<f64>,
     /// `frailty.controldf`'s bisection counter.
     pub half: Option<i64>,
+    /// Zero-based df history row whose label the next theta inherits in R.
+    /// Bisection proposals have no source label.
+    pub theta_history_index: Option<usize>,
 }
 
 /// The fit quantities a `cfun` may ask for through `cargs`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ControlInput<'a> {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PenaltyControlInput<'a> {
     /// Outer iteration number (1-based).
     pub iter: usize,
     /// R's `plik`: the partial likelihood without the penalty.
@@ -53,8 +59,8 @@ pub(crate) struct ControlInput<'a> {
 }
 
 /// A term's `cfun` together with its `cparm`.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Control {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PenaltyControl {
     /// `list(theta = parms$theta, done = TRUE)`.
     Fixed { theta: f64 },
     /// `frailty.controlgam`: the gamma likelihood search, or a fixed theta
@@ -87,6 +93,10 @@ pub(crate) enum Control {
     Gauss { eps: f64, init: Option<Vec<f64>> },
 }
 
+pub(crate) type Control = PenaltyControl;
+pub(crate) type ControlState = PenaltyControlState;
+pub(crate) type ControlInput<'a> = PenaltyControlInput<'a>;
+
 impl Control {
     /// Column names of the history matrix.
     pub(crate) fn history_columns(&self) -> &'static [&'static str] {
@@ -115,6 +125,7 @@ impl Control {
             history: Vec::new(),
             c_loglik: None,
             half: None,
+            theta_history_index: None,
         };
         match self {
             Self::Fixed { theta } => state(*theta, true),
@@ -130,6 +141,7 @@ impl Control {
                 history: thetas.iter().zip(dfs).map(|(&t, &d)| vec![t, d]).collect(),
                 c_loglik: None,
                 half: None,
+                theta_history_index: None,
             },
             Self::Aic { init, .. } => state(init.first().copied().unwrap_or(0.005), false),
             Self::Gauss { init, .. } => state(init.as_ref().map_or(1.0, |i| i[0]), false),
@@ -150,6 +162,7 @@ impl Control {
                 history: Vec::new(),
                 c_loglik: None,
                 half: None,
+                theta_history_index: None,
             }),
             Self::Gamma { theta, eps, init } => {
                 control_gamma(theta.is_some(), *eps, init.as_deref(), old, input)
@@ -213,6 +226,7 @@ fn control_gamma(
             history: Vec::new(),
             c_loglik: Some(c_loglik),
             half: None,
+            theta_history_index: None,
         });
     }
     let iter = input.iter;
@@ -248,6 +262,7 @@ fn control_gamma(
         history,
         c_loglik: Some(c_loglik),
         half: None,
+        theta_history_index: None,
     })
 }
 
@@ -280,6 +295,7 @@ fn control_df(
             history,
             c_loglik: None,
             half: Some(0),
+            theta_history_index: Some(0),
         });
     }
     let done = iter > 1 && (dfs[nx - 1] - target_df).abs() < eps;
@@ -301,6 +317,13 @@ fn control_df(
             .rev()
             .find(|&i| y[i] <= target)
             .expect("some y <= target");
+        if b1 + 1 == nx {
+            // No point exists above an exact boundary match. R proposes NA;
+            // report the unusable bracket instead of indexing past its end.
+            return Err(SurvivalError::computation(
+                "degrees-of-freedom search has no upper bracket",
+            ));
+        }
         if !doing_well && old.half.is_none_or(|half| half < 2) {
             return Ok(ControlState {
                 theta: (x[b1] + x[b1 + 1]) / 2.0,
@@ -308,6 +331,7 @@ fn control_df(
                 history,
                 c_loglik: None,
                 half: Some(old.half.unwrap_or(0).max(0) + 1),
+                theta_history_index: None,
             });
         }
         // Use b1, b1+1, b1+2 or b1-1, b1, b1+1, whichever puts the target
@@ -332,6 +356,7 @@ fn control_df(
         history,
         c_loglik: None,
         half: Some(0),
+        theta_history_index: Some(ord[b1]),
     })
 }
 
@@ -361,6 +386,7 @@ fn control_aic(
             history,
             c_loglik: None,
             half: None,
+            theta_history_index: None,
         });
     }
     if iter == 2 {
@@ -371,6 +397,7 @@ fn control_aic(
             history,
             c_loglik: None,
             half: None,
+            theta_history_index: None,
         });
     }
     let column = if caic { 4 } else { 3 };
@@ -392,6 +419,7 @@ fn control_aic(
         history,
         c_loglik: None,
         half: None,
+        theta_history_index: None,
     })
 }
 
@@ -416,6 +444,7 @@ fn control_gauss(
         history,
         c_loglik: None,
         half: None,
+        theta_history_index: None,
     };
     if iter == 1 {
         let next = match init {

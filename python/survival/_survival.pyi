@@ -7355,6 +7355,65 @@ class PatternMixtureResult:
     @property
     def pattern_weights(self) -> list[float]: ...
 
+class PenaltyControlState:
+    def __init__(
+        self,
+        theta: float,
+        *,
+        done: bool = False,
+        history: ArrayLike | None = None,
+        c_loglik: float | None = None,
+        half: int | None = None,
+    ) -> None: ...
+    @property
+    def c_loglik(self) -> float | None: ...
+    @property
+    def done(self) -> bool: ...
+    @property
+    def half(self) -> int | None: ...
+    @property
+    def history(self) -> list[list[float]]: ...
+    @property
+    def theta(self) -> float: ...
+    @property
+    def theta_history_index(self) -> int | None: ...
+
+class PenaltyController:
+    def __init__(
+        self,
+        method: str,
+        *,
+        theta: float | None = None,
+        eps: float = 1e-05,
+        init: ArrayLike | None = None,
+        target_df: float | None = None,
+        thetas: ArrayLike | None = None,
+        dfs: ArrayLike | None = None,
+        guess: float | None = None,
+        lower: float = 0.0,
+        upper: float | None = None,
+        caic: bool = False,
+        gamma_correction: bool = False,
+    ) -> None: ...
+    def initial(self) -> PenaltyControlState: ...
+    def step(
+        self,
+        old: PenaltyControlState,
+        iter: int,
+        *,
+        plik: float = 0.0,
+        loglik: float = 0.0,
+        neff: float = 0.0,
+        df: float = 0.0,
+        trh: float = 0.0,
+        events_by_group: ArrayLike | None = None,
+        coef: ArrayLike | None = None,
+    ) -> PenaltyControlState: ...
+    @property
+    def columns(self) -> list[str]: ...
+    @property
+    def needs_df(self) -> bool: ...
+
 class PenaltyHistory:
     @property
     def c_loglik(self) -> float | None: ...
