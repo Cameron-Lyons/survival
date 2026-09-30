@@ -1892,6 +1892,14 @@ stock fits provide 2,592 matrix references, checked with list, NumPy, nullable
 pandas and live R inputs. See [logical covariates and matrix metadata](logical-model-matrices.md)
 for validation, stored-fit limits and complete-call measurements.
 
+AFT model matrices omit standalone scale strata before evaluating new data,
+while strata interactions and ordinary uses of the same variables remain
+required. Missing or absent unused strata no longer omit rows or reject the
+frame; offsets continue to affect omission, and prediction retains its scale
+strata requirements. Another 216 stock fits provide 4,080 matrices and 456
+validation failures. See [AFT model-matrix inputs](aft-model-matrix-inputs.md)
+for validation, persistence, warning conventions and complete-call measurements.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

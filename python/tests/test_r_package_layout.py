@@ -132,7 +132,7 @@ def test_r_bridge_defines_exported_functions():
     assert '.call_r_api("extract_aic", fit' in bridge
     assert '.call_r_api("model_formula", x)' in bridge
     assert '.call_r_api("model_weights", object)' in bridge
-    assert '.call_r_api("model_matrix", object' in bridge
+    assert '.call_r_api("model_matrix", fit = object' in bridge
     assert '.call_r_api("model_frame", formula' in bridge
     assert '"fitted",\n    fit = object' in bridge
     assert '.call_r_api("as_data_frame", x)' in bridge

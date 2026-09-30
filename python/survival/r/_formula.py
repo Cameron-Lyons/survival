@@ -2778,6 +2778,8 @@ def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     columns = _formula_design_columns(design)
     if columns:
         return len(_column(data, columns[0]))
+    if isinstance(data, _FormulaRows) or hasattr(data, "columns"):
+        return _data_row_count(data)
     if isinstance(data, Mapping) and data:
         name, values = next(iter(data.items()))
         return len(_materialize_1d(values, str(name)))

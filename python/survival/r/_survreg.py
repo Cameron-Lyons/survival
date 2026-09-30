@@ -1571,7 +1571,25 @@ def model_matrix_survreg(
 
     strata_names = {spec.call for spec in fit.strata_terms}
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
-    new = None if data is None else _newdata_inputs(fit, data, "na.omit")
+    new = None
+    if data is not None:
+        if fit.design is None:
+            new = _newdata_inputs(fit, data, "na.omit")
+        else:
+            if not (isinstance(data, Mapping) or hasattr(data, "columns")):
+                raise TypeError("data must be a data frame with the model's columns")
+            # model.matrix.survreg drops standalone scale strata before model.frame.
+            # Prediction still needs them to choose scales; the matrix only needs
+            # strata that remain as factors in covariate interactions.
+            new = _newdata_frame(
+                fit.design,
+                (),
+                (),
+                data,
+                need_strata=False,
+                need_response=False,
+                na_action="na.omit",
+            )
     result = {
         "data": [[float(value) for value in row] for row in fit.fit.covariates]
         if new is None
