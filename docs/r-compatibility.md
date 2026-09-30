@@ -1840,8 +1840,11 @@ predictions. R term column names follow fitted covariate assignments separately
 from the full formula's strata labels. The 656-call reference retains stock
 AFT strata-label displacement and penalized Cox survival errors alongside
 independent corrections; see [prediction term selections](prediction-term-selections.md).
-Ungrouped R prediction row labels are not consistently restored and remain an
-audit item; grouped labels are covered separately above.
+Ungrouped Cox and AFT prediction row labels now follow the numerical row mask,
+including repeated subsets, excluded rows, intentionally unnamed fits/errors,
+and scalar/multiple quantile scale labels. Another 1,680 independent R calls
+check complete values and metadata; see [prediction row labels](prediction-row-labels.md).
+Grouped labels are covered separately above.
 
 ## Reference limitations
 

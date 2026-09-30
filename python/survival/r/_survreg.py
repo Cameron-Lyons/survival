@@ -51,6 +51,8 @@ from ._fit import (
     _NewData,
     _newdata_frame,
     _pad_rows,
+    _prediction_row_labels,
+    _prediction_row_result,
     _r_factor_design,
     _rowsum_excluded,
 )
@@ -59,6 +61,8 @@ from ._formula import (
     _column,
     _column_or_values,
     _column_source,
+    _data_row_count,
+    _data_row_labels,
     _design_rows_from_spec,
     _design_term_name,
     _design_term_output_names,
@@ -151,6 +155,7 @@ class SurvregModelResult:
     na_action: NaAction | None = field(default=None, repr=False)
     penalized: Any | None = field(default=None, repr=False)
     assign2_labels: tuple[str, ...] = field(default=(), repr=False)
+    _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_penalized(self) -> bool:
@@ -504,6 +509,7 @@ class _SurvregFrame:
     cluster: list[Any] | None = None
     model: dict[str, Any] | None = None
     na_action: NaAction | None = None
+    row_names: tuple[str, ...] | None = None
 
 
 def _term_structure(
@@ -551,6 +557,7 @@ def _formula_frame(
     aligned = {"weights": weights, "offset": offset, "cluster": cluster}
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
+    row_names = _data_row_labels(data, _data_row_count(data, formula))
     data, aligned, removed = _apply_formula_na_action(formula, data, na_action, **aligned)
     weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
     response, terms = _parse_formula(formula, data)
@@ -613,6 +620,7 @@ def _formula_frame(
         if keep_model
         else None,
         na_action=_na_action_record(na_action, removed),
+        row_names=row_names,
     )
 
 
@@ -807,6 +815,7 @@ def survreg(
         na_action=frame.na_action,
         penalized=penalized,
         assign2_labels=assign2_labels,
+        _prediction_rows=frame.row_names,
     )
 
 
@@ -1013,6 +1022,8 @@ def predict_survreg(
     terms: Any | None = None,
     p: Any = (0.1, 0.9),
     na_action: str | None = "na.pass",
+    *,
+    _with_row_names: bool = False,
 ) -> Any:
     """R's ``predict.survreg``: response, lp, terms, quantile and uquantile predictions.
 
@@ -1093,9 +1104,58 @@ def predict_survreg(
         width = 1
     keep_matrix = predict_type == "terms"
     fitted = _drop(_pad_rows(predictions, gaps, width), keep_matrix)
-    if not include_se:
-        return fitted
-    return PredictResult(fitted, _drop(_pad_rows(se_values, gaps, width), keep_matrix))
+    output = (
+        PredictResult(fitted, _drop(_pad_rows(se_values, gaps, width), keep_matrix))
+        if include_se
+        else fitted
+    )
+    if not _with_row_names:
+        return output
+    if new is None and not include_se and predict_type in {"response", "link", "lp", "linear"}:
+        return _prediction_row_result(output, None, None)
+    if new is None:
+        missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
+        labels = _prediction_row_labels(
+            fit._prediction_rows,
+            int(fit.fit.n) + len(missing),
+            missing,
+            bool(_excluded_rows(fit.na_action)),
+        )
+    else:
+        count = new.n + len(new.missing)
+        labels = _prediction_row_labels(
+            _data_row_labels(newdata, count), count, new.missing, action != "omit"
+        )
+    fit_labels: list[str] | None
+    se_labels: list[str] | None
+    if predict_type == "terms":
+        fit_labels = se_labels = labels
+    elif predict_type in {"quantile", "uquantile"}:
+        fixed_scale = _estimated_scale_count(fit.fit) == 0
+        fit_labels = labels if new is not None and width == 1 else None
+        se_labels = (
+            labels
+            if width == 1 and (fixed_scale or (new is not None and predict_type == "quantile"))
+            else None
+        )
+        if fixed_scale and width > 1 and len(labels) == 1:
+            se_labels = labels * width
+        elif _estimated_scale_count(fit.fit) > 1 and (
+            (width > 1 and len(labels) > 1) or (width == 1 and new is None)
+        ):
+            codes = fit.fit.strata if new is None else new.strata
+            if codes is not None:
+                scale_labels = iter(fit.strata_levels[code] for code in codes)
+                gaps_set = set(gaps)
+                fit_labels = [
+                    label if row in gaps_set else next(scale_labels)
+                    for row, label in enumerate(labels)
+                ]
+                se_labels = fit_labels if width > 1 or predict_type == "quantile" else None
+    else:
+        fit_labels = labels if new is not None else None
+        se_labels = labels
+    return _prediction_row_result(output, fit_labels, se_labels if include_se else None)
 
 
 # --- residuals.survreg -----------------------------------------------------------------------

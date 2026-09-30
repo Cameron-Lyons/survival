@@ -39,6 +39,7 @@ from ._coerce import (
     _subset_sequence,
     _warn_outside_package,
 )
+from ._names import _make_unique
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
 from ._surv import (
     Surv,
@@ -803,13 +804,32 @@ class _FormulaRows(dict[str, Any]):
     Like R's data frame it keeps its row count without any column, as for ``~ 1``.
     """
 
-    __slots__ = ("nrow", "strata_cache", "response_cache")
+    __slots__ = ("nrow", "strata_cache", "response_cache", "row_names")
 
-    def __init__(self, columns: dict[str, Any], nrow: int) -> None:
+    def __init__(
+        self, columns: dict[str, Any], nrow: int, row_names: tuple[str, ...] | None = None
+    ) -> None:
         super().__init__(columns)
         self.nrow = nrow
         self.strata_cache: dict[_StrataSpec, StrataFactor] = {}
         self.response_cache: tuple[_SurvResponseSpec, Surv] | None = None
+        self.row_names = row_names
+
+
+def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
+    """Explicit R row names or a valid data-frame index; None means automatic names."""
+    labels = getattr(data, "row_names", None)
+    if labels is not None:
+        return tuple(labels)
+    index = None if isinstance(data, Mapping) else getattr(data, "index", None)
+    if index is None or (
+        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+    ):
+        return None
+    labels = tuple(_as_character(value) for value in index)
+    if len(labels) == n and len(set(labels)) == n and not any(map(_is_missing_value, index)):
+        return labels
+    return None
 
 
 def _data_row_count(data: Any, formula: str | None = None) -> int:
@@ -1379,7 +1399,19 @@ def _data_rows(
         name: _column_rows(_column_source(data, name), name, rows, index, n)
         for name in _data_order(data, columns)
     }
-    selected = _FormulaRows(frame, len(rows))
+    labels = _data_row_labels(data, n)
+    selected = _FormulaRows(
+        frame,
+        len(rows),
+        tuple(
+            _make_unique(
+                [
+                    "NA" if row < 0 else str(row + 1) if labels is None else labels[row]
+                    for row in rows
+                ]
+            )
+        ),
+    )
     if isinstance(data, _FormulaRows):
         selected.strata_cache = {
             spec: _strata_rows(factor, rows)
@@ -1465,7 +1497,9 @@ def _with_response_cache(data: Any, spec: _SurvResponseSpec | None, n: int) -> A
     response = _surv_from_spec(data, spec)
     if not isinstance(data, _FormulaRows):
         data = _FormulaRows(
-            {name: _column_source(data, name) for name in _data_column_names(data) or ()}, n
+            {name: _column_source(data, name) for name in _data_column_names(data) or ()},
+            n,
+            _data_row_labels(data, n),
         )
     data.response_cache = (spec, response)
     return data
@@ -3146,7 +3180,9 @@ def _with_strata_cache(data: Any, specs: Sequence[_StrataSpec], n: int) -> Any:
         return data
     if not isinstance(data, _FormulaRows):
         data = _FormulaRows(
-            {name: _column_source(data, name) for name in _data_column_names(data) or ()}, n
+            {name: _column_source(data, name) for name in _data_column_names(data) or ()},
+            n,
+            _data_row_labels(data, n),
         )
     for spec in specs:
         _strata_term(data, spec)

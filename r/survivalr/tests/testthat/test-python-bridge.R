@@ -6387,7 +6387,8 @@ test_that("Cox bridge reports converged aliased coefficients like R survival", {
   term_predictions <- predict(bridged, type = "terms")
   expect_equal(colnames(term_predictions), c("x1", "x2"))
   expect_true(all(is.finite(term_predictions)))
-  expect_equal(term_predictions[, "x2"], rep(0, nrow(data)))
+  expect_identical(rownames(term_predictions), rownames(predict(reference, type = "terms")))
+  expect_equal(unname(term_predictions[, "x2"]), rep(0, nrow(data)))
 
   for (group_terms in c(TRUE, FALSE)) {
     bridged_zph <- as.data.frame(

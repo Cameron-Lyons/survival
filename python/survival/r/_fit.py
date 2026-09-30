@@ -32,6 +32,8 @@ from ._formula import (
     _column_or_values,
     _column_source,
     _covariate_term_name,
+    _data_row_count,
+    _data_row_labels,
     _data_rows,
     _design_rows_from_spec,
     _design_term_name,
@@ -106,6 +108,7 @@ class _ModelFrame:
     id: list[Any] | None
     # a factor keeps its levels (survcheck's states come from them)
     istate: Sequence[Any] | None
+    row_names: tuple[str, ...] | None = None
     extra: dict[str, list[Any]] = field(default_factory=dict)
     # the column names the weights= / id= arguments referred to (R keeps the call's
     # expressions, so brier's newdata can re-evaluate them); None for vector arguments
@@ -371,6 +374,7 @@ def _model_frame(
     }
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
+    row_names = _data_row_labels(data, _data_row_count(data, formula))
     data, aligned, removed = _apply_formula_na_action(formula, data, na_action, **aligned)
 
     y, terms = _parse_formula(formula, data)
@@ -487,6 +491,7 @@ def _model_frame(
         weights_column=weights if isinstance(weights, str) else None,
         id_column=id if isinstance(id, str) else None,
         na_action=_na_action_record(na_action, removed),
+        row_names=row_names,
     )
 
 
@@ -700,6 +705,30 @@ def _newdata_frame(
 # ---------------------------------------------------------------------------
 # naresid / napredict
 # ---------------------------------------------------------------------------
+
+
+def _prediction_row_labels(
+    labels: tuple[str, ...] | None, n: int, missing: Sequence[int], restore: bool
+) -> list[str]:
+    """Apply the numerical prediction's row mask to its original labels once."""
+    source = labels if labels is not None else tuple(str(row + 1) for row in range(n))
+    if restore or not missing:
+        return list(source)
+    omitted = set(missing)
+    return [label for row, label in enumerate(source) if row not in omitted]
+
+
+def _prediction_row_result(
+    values: Any, fit_names: list[str] | None, se_names: list[str] | None
+) -> dict[str, Any]:
+    """Transfer a shared fit/error label vector to R once."""
+    shared = fit_names is se_names
+    return {
+        "values": values,
+        "fit_names": fit_names,
+        "se_names": None if shared else se_names,
+        "shared_names": shared,
+    }
 
 
 def _na_entry(width: int | None) -> Any:

@@ -251,14 +251,16 @@ if (getRversion() >= "2.15.1") {
     return(NULL)
   }
   if (is.data.frame(data)) {
-    return(lapply(data, function(column) {
+    columns <- lapply(data, function(column) {
       value <- .as_python_vector(column)
       if (is.factor(column)) {
         value
       } else {
         as.list(value)
       }
-    }))
+    })
+    labels <- if (.row_names_info(data, 1L) < 0L) NULL else as.list(row.names(data))
+    return(.pybridge_attr("_r_data_frame")(columns, nrow(data), labels))
   }
   data
 }
@@ -8969,8 +8971,11 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     fit = object,
     type = type,
     `se.fit` = se.fit,
+    `_with_row_names` = TRUE,
     ...
   )
+  row_metadata <- result
+  result <- result[["values"]]
   value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
@@ -8980,6 +8985,7 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
     value <- .survreg_alias_prediction_missing(value)
   }
+  value <- .attach_prediction_row_names(value, row_metadata)
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
 }
 
@@ -9093,16 +9099,20 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
-  grouped <- inherits(object, "survival_py_coxph") && !.is_coxphms_fit(object) &&
+  with_row_names <- !.is_coxphms_fit(object)
+  grouped <- inherits(object, "survival_py_coxph") && with_row_names &&
     !is.null(dots[["collapse"]]) && !identical(dots[["collapse"]], FALSE)
   if (grouped) {
     dots$collapse <- .as_python_collapse(dots$collapse)
     dots[["_with_group_names"]] <- TRUE
+  } else if (with_row_names) {
+    dots[["_with_row_names"]] <- TRUE
   }
   result <- do.call(.call_r_api, c(list("predict", fit = object, newdata = .as_python_data(newdata),
                                     type = type, `se.fit` = se.fit), dots))
   group_names <- if (grouped) result[["group_names"]] else NULL
-  if (grouped) result <- result[["values"]]
+  row_metadata <- if (!grouped && with_row_names) result else NULL
+  if (grouped || !is.null(row_metadata)) result <- result[["values"]]
   value <- .as_prediction_result(
     result,
     matrix_result = .predict_matrix_result(type),
@@ -9116,7 +9126,25 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     value <- .excluded_rows_na(object, value)
   }
   value <- .attach_group_names(value, group_names)
+  value <- .attach_prediction_row_names(value, row_metadata)
   .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
+}
+
+.attach_prediction_row_names <- function(value, metadata) {
+  if (is.null(metadata)) return(value)
+  convert <- function(labels) if (is.null(labels)) NULL else as.character(unlist(labels, use.names = FALSE))
+  fit_names <- convert(metadata[["fit_names"]])
+  se_names <- if (isTRUE(metadata[["shared_names"]])) fit_names else convert(metadata[["se_names"]])
+  label <- function(x, labels) {
+    if (is.null(labels)) return(x)
+    if (is.matrix(x)) rownames(x) <- labels else names(x) <- labels
+    x
+  }
+  if (is.list(value) && all(c("fit", "se.fit") %in% names(value))) {
+    value$fit <- label(value$fit, fit_names)
+    value$se.fit <- label(value$se.fit, se_names)
+    value
+  } else label(value, fit_names)
 }
 
 .as_python_collapse <- function(value) {
