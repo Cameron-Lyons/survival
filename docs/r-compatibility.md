@@ -1005,6 +1005,39 @@ These compare input representations in the current implementation, not a
 previous-release speedup. Numeric matrices avoid `Surv` status preparation;
 timings vary with machine load and allocation.
 
+Direct Python `pyears` calls also use the formula preparation path. A time
+vector, `Surv` object, numeric matrix, or the `time`/`start`/`stop`/`event`
+keywords can supply the response. These calls honor `data`, `ratetable`,
+`rmap`, `expect`, weights and retention flags; previously rate-table options
+were silently omitted. For example:
+
+```python
+result = r.pyears(time=[2, 4], ratetable=table, rmap={"age": [40, 50]},
+                  expect="pyears", scale=1)
+```
+
+The rate positions must use the supplied table's units. Direct keywords may
+name columns in `data`; generated response/group columns never overwrite
+sources used by rate mappings or weights. Factor groups preserve declared
+levels, and `TcutResult` groups retain their time boundaries. Missing follow-up
+and mapped values pass through the same subset/NA handling as formula inputs.
+With `start`/`stop` and a rate table, positions advance to the entry time before
+accumulation; without a rate table and without events, the response is the
+follow-up duration. Complete `Surv` or matrix responses cannot be combined with
+separate start/event values, and supplying follow-up more than once is an error.
+Formula strings also reject direct response/group keywords instead of ignoring them.
+The R bridge's direct vector extension still requires formula calls for rate
+tables; this extension belongs to the Python interface.
+
+The `direct` case in `scripts/benchmark_pyears.py --baseline-source ...` compares
+complete current calls with the `_pyears.py` implementation at `be46466d`, using
+the same current formula helpers and native kernel. On 100,000 NumPy time/event
+rows with ten groups, the median falls from 57.2 ms (55.9–58.2) to 22.3 ms
+(21.5–23.1), or 2.56×. The adapter keeps arrays intact and enters formula
+preparation once. Numerical equality is checked before two warmups and seven
+alternating samples. Input construction and garbage collection are excluded;
+peak memory is not measured. Formula cases remain within the measured variation.
+
 Tests compare whole R results, including retained data, transformed terms,
 formula environments, subsets, scalar cells, rate tables and numeric responses.
 A reference-disabled check verifies native tabulation. Independent checks compare

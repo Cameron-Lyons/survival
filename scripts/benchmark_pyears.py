@@ -43,8 +43,14 @@ def main() -> None:
     for kind, formula in [
         ("fixed", "Surv(time, event) ~ group + sex"),
         ("tcut", "Surv(time, event) ~ group + tcut(age, c(0,50,60,70,100)*365.25)"),
+        ("direct", None),
     ]:
-        calls = {name: partial(function, formula, data) for name, function in functions.items()}
+        calls = {
+            name: partial(function, time=data["time"], event=data["event"], group=data["group"])
+            if formula is None
+            else partial(function, formula, data)
+            for name, function in functions.items()
+        }
         result = calls["current"]()
         for name, call in calls.items():
             if name != "current":

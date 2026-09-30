@@ -27,6 +27,7 @@ from .. import _survival as _core
 from ._coerce import (
     _as_character,
     _categories,
+    _coerce_array_like,
     _factor,
     _factor_levels,
     _finite_float,
@@ -998,69 +999,108 @@ def _population_match_summary(table: RateTable, positions: list[list[float]]) ->
     return text
 
 
-def _pyears_direct(
+def _pyears_direct_formula(
     response: Any,
+    data: Any,
     time: Any,
     start: Any,
     stop: Any,
     event: Any,
     group: Any,
-    weights: Any,
-    subset: Any,
-    na_action: Any,
-    scale: float,
-    data_frame: bool,
-    retention: tuple[bool, bool, bool],
-) -> PyearsResult:
-    """``pyears`` on vectors (the reticulate bridge's entry): one ``group`` category."""
+    has_ratetable: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Prepare vector inputs for the same formula, subset and rate-mapping path."""
 
+    source: dict[str, Any] = {}
+    if data is not None:
+        names = _data_column_names(data)
+        if names is None:
+            raise ValueError("data must provide named columns")
+        source = {str(name): _column_source(data, str(name)) for name in names}
     columns: dict[str, Any] = {}
+
+    def resolve(value: Any) -> Any:
+        return _column_source(source, value) if isinstance(value, str) else value
+
+    def add(name: str, value: Any) -> str:
+        # Formula inputs must not overwrite source columns read by rmap/weights.
+        while name in source or name in columns:
+            name = "_" + name
+        columns[name] = value
+        return name
+
+    if response is not None and (time is not None or stop is not None):
+        raise ValueError("supply follow-up as the response, time or stop, not more than one")
+    if time is not None and stop is not None:
+        raise ValueError("supply only one of time and stop")
     if isinstance(response, Surv):
+        if start is not None or event is not None:
+            raise ValueError("a Surv response already supplies its start and event values")
         if response.type not in {"right", "counting"}:
             raise ValueError(
                 "Only right-censored and counting process survival types are supported"
             )
-        columns["time"] = list(response.time)
-        columns["event"] = list(response.event)
-        if response.start is not None:
-            columns["start"] = list(response.start)
+        time_name = add("time", response.time)
+        event_name = add("event", response.event)
+        if response.start is None:
+            lhs = f"Surv({time_name}, {event_name})"
+        else:
+            start_name = add("start", response.start)
+            lhs = f"Surv({start_name}, {time_name}, {event_name})"
+        n = len(response)
     else:
-        follow_up = response if response is not None else (stop if stop is not None else time)
-        if follow_up is None:
+        followup = response if response is not None else stop if stop is not None else time
+        if followup is None:
             raise ValueError("Follow-up time must appear in the formula")
-        columns["time"] = _float_vector(follow_up, "time")
-        if start is not None and stop is not None:
-            columns["start"] = _float_vector(start, "start")
-        if event is not None:
-            columns["event"] = event
-    n = len(columns["time"])
-    if "event" in columns:
-        lhs = "Surv(start, time, event)" if "start" in columns else "Surv(time, event)"
-    else:
-        if "start" in columns:
-            columns["time"] = [
-                b - a for a, b in zip(columns["start"], columns["time"], strict=True)
-            ]
-        lhs = "time"
+        followup = resolve(followup)
+        if not isinstance(followup, np.ndarray):
+            followup = _coerce_array_like(followup, "time")
+        n = len(followup)
+        matrix = (
+            followup.ndim == 2
+            if isinstance(followup, np.ndarray)
+            else bool(followup and isinstance(followup[0], list | tuple))
+        )
+        if matrix:
+            if start is not None or event is not None:
+                raise ValueError("a matrix response cannot be combined with start or event")
+            lhs = add("Y", followup)
+        else:
+            time_name = add("time", followup)
+            start_name = None if start is None else add("start", resolve(start))
+            if event is not None:
+                event_name = add("event", resolve(event))
+                lhs = (
+                    f"Surv({time_name}, {event_name})"
+                    if start_name is None
+                    else f"Surv({start_name}, {time_name}, {event_name})"
+                )
+            elif start_name is not None:
+                # Rate positions advance from entry, not merely for the duration.
+                # Without a rate table, retain the historical duration response.
+                lhs = (
+                    f"cbind({start_name}, {time_name})"
+                    if has_ratetable
+                    else f"{time_name} - {start_name}"
+                )
+            else:
+                lhs = time_name
     if group is None:
         rhs = "1"
     else:
-        columns["group"] = _materialize_labels(group, "group")
-        if len(columns["group"]) != n:
+        values = resolve(group)
+        try:
+            size = len(values)
+        except TypeError:
+            materialized = _materialize_labels(values, "group")
+            size = len(materialized)
+            values = _rows_of(values, materialized)
+        if size != n:
             raise ValueError("group must have the same length as the response")
-        rhs = "group"
-    return pyears(
-        f"{lhs} ~ {rhs}",
-        columns,
-        weights=weights,
-        subset=subset,
-        na_action=na_action,
-        scale=scale,
-        data_frame=data_frame,
-        model=retention[0],
-        x=retention[1],
-        y=retention[2],
-    )
+        rhs = add("group", values)
+    # The response sets the population size even if data starts with an unused
+    # column of another length. Values are borrowed; model.frame owns selection.
+    return f"{lhs} ~ {rhs}", {**columns, **source}
 
 
 def pyears(
@@ -1088,9 +1128,12 @@ def pyears(
     """R's ``pyears``: person-years, events and expected events over a category table.
 
     ``formula`` is ``Surv(time, status) ~ tcut(...) + factor`` (or ``time ~ ...``);
-    ``rmap`` maps rate-table dimensions to columns or vectors.  A ``Surv`` object or
-    time vector as ``formula`` with ``group``/``time``/``start``/``stop``/``event``
-    keywords tabulates plain vectors (the reticulate bridge's call).
+    ``rmap`` maps rate-table dimensions to columns or vectors. A ``Surv`` object,
+    time vector or numeric matrix as ``formula``, or ``time``/``start``/``stop``/
+    ``event`` keywords, supplies a direct response. These calls also honor
+    ``ratetable``, ``rmap`` and ``expect``. Direct arguments may name columns in
+    ``data``; ``group`` retains factor levels and time cuts. Supply follow-up only
+    once, and do not add start/event arguments to a complete response object.
     ``model=True`` retains the evaluated model frame. Otherwise, ``x=True``
     retains the grouping codes and raw ``tcut`` times (ones without groups),
     and ``y=True`` retains the ``Surv`` response or a numeric matrix.
@@ -1111,24 +1154,15 @@ def pyears(
     expect_value = _match_string_arg(
         expect, "expect", ("event", "pyears"), "expect must be event or pyears"
     )
-    if not isinstance(formula, str):
-        return _pyears_direct(
-            formula,
-            time,
-            start,
-            stop,
-            event,
-            group,
-            weights,
-            subset,
-            na_action,
-            scale_value,
-            data_frame_value,
-            retention,
-        )
-    table = None if ratetable is None and rmap is None else _ratetable_argument(ratetable)
     if rmap is not None and ratetable is None:
         raise ValueError("No rate table specified")
+    table = None if ratetable is None else _ratetable_argument(ratetable)
+    if not isinstance(formula, str):
+        formula, data = _pyears_direct_formula(
+            formula, data, time, start, stop, event, group, table is not None
+        )
+    elif any(value is not None for value in (time, start, stop, event, group)):
+        raise ValueError("formula calls cannot be combined with direct response or group arguments")
     calls = _pyears_calls(formula, data)
     # the rate variables and the tcut()/cut() values go through subset and na.action
     # with the formula's variables, so a cut() value outside the breaks drops its row
