@@ -273,8 +273,8 @@ def _row_has_missing(value: Any) -> bool:
     return _is_missing_value(value)
 
 
-def _numeric_ndarray(values: Any) -> np.ndarray | None:
-    """*values* as a 1-D numpy array when it is a plain ndarray or a pandas/polars column
+def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
+    """*values* as an array of *ndim* dimensions (one by default), from a plain ndarray or column
     whose dtype kind is logical, integer or double, else ``None``.
 
     Masked arrays, object, string, datetime and nullable extension columns (which
@@ -294,7 +294,7 @@ def _numeric_ndarray(values: Any) -> np.ndarray | None:
             return None
     else:
         return None
-    if array.ndim != 1 or array.dtype.kind not in "biuf":
+    if array.ndim != ndim or array.dtype.kind not in "biuf":
         return None
     return array
 
@@ -303,11 +303,16 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
         array = _numeric_ndarray(values)
+        if array is None:
+            array = _numeric_ndarray(values, ndim=2)
         if array is not None:
             if len(array) != n:
                 raise ValueError(f"{name} must have length {n}")
             if array.dtype.kind == "f":
-                missing.update(np.flatnonzero(np.isnan(array)).tolist())
+                mask = np.isnan(array)
+                if array.ndim == 2:
+                    mask = mask.any(axis=1)
+                missing.update(np.flatnonzero(mask).tolist())
             continue
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:

@@ -26,6 +26,7 @@ from ._aareg import summary_aareg
 from ._cch import summary_cch
 from ._coerce import (
     _coefficient_selection,
+    _coerce_array_like,
     _integer_scalar,
     _materialize_1d,
     _materialize_labels,
@@ -490,6 +491,9 @@ def _model_frame_formula(
     if frame.response is not None:
         columns[frame.response_name or "response"] = frame.response
         response_columns = frame.response_columns
+    elif isinstance(frame.y, np.ndarray):
+        columns[frame.response_name or "response"] = frame.y.tolist()
+        response_columns = frame.response_columns
     for name in _formula_columns(formula, frame.data):
         if name not in response_columns:
             columns[name] = _formula_column(frame.data, name)
@@ -560,11 +564,14 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
         if isinstance(values, Mapping):
             continue
         text_name = str(name)
-        if text_name in {"group", "(id)", "(cluster)", "(strata)"}:
+        materialized = _coerce_array_like(values, text_name)
+        if text_name in {"group", "(id)", "(cluster)", "(strata)"} and (
+            not materialized or not isinstance(materialized[0], list)
+        ):
             columns[text_name] = _materialize_labels(values, text_name)
             continue
-        materialized = _materialize_1d(values, text_name)
         if materialized and isinstance(materialized[0], list | tuple):
+            columns[text_name] = [list(row) for row in materialized]
             continue
         columns[text_name] = list(materialized)
     return columns
