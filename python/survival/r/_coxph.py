@@ -1827,6 +1827,25 @@ def _rowsum(values: list[Any], codes: Sequence[int], *, squares: bool = False) -
     return result.tolist() if matrix else result[:, 0].tolist()
 
 
+def _restore_prediction_groups(
+    values: list[Any],
+    codes: Sequence[int],
+    fitted_codes: Sequence[int],
+    gaps: Sequence[int],
+    n_groups: int,
+    width: int | None,
+) -> list[Any]:
+    """Restore groups containing omitted rows after summing retained rows natively."""
+    if not gaps:
+        return values
+    missing = {codes[row] for row in gaps}
+    output: list[Any] = [math.nan if width is None else [math.nan] * width for _ in range(n_groups)]
+    for code, value in zip(sorted(set(fitted_codes)), values, strict=True):
+        if code not in missing:
+            output[code] = value
+    return output
+
+
 def predict_coxph(
     fit: CoxphModel,
     newdata: Any | None = None,
@@ -1934,16 +1953,40 @@ def predict_coxph(
     se: Any
     if predict_type == "terms":
         selected = _terms_selection(terms, _term_labels(fit))
+    sparse_only = (
+        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
+    )
+    width = len(selected) if predict_type == "terms" and not sparse_only else None
+    # Prepare groups against the padded output rows, then send only retained
+    # codes to the native predictor. Groups containing gaps are restored below.
+    if new is None:
+        gaps = _excluded_rows(fit.na_action)
+        nrows = fit.n
+    else:
+        gaps = [] if action == "omit" else list(new.missing)
+        nrows = new.n
+        if new.missing and action == "omit" and collapse is not None and collapse is not False:
+            missing = set(new.missing)
+            kept = [row for row in range(new.n + len(missing)) if row not in missing]
+            collapse = _subset_optional_sequence(collapse, kept, "collapse")
+    codes = fitted_codes = None
+    if collapse is not None and collapse is not False:
+        codes, group_names = _rowsum_groups(
+            collapse, nrows + len(gaps), "Collapse vector is the wrong length"
+        )
+        missing = set(gaps)
+        fitted_codes = [code for row, code in enumerate(codes) if row not in missing]
     if new is not None and new.n == 0:  # no complete newdata row
         pred, se = [], ([] if include_se else None)
-    elif (
-        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
-    ):
+    elif sparse_only:
         pred, se = _frailty_prediction(fit, new, include_se)
         if predict_type == "risk":
             pred = [math.exp(value) for value in pred]
+        if fitted_codes is not None:
+            pred = _rowsum(pred, fitted_codes)
+            se = None if se is None else _rowsum(se, fitted_codes, squares=True)
     elif predict_type == "terms":
-        pred, se = _predict_terms(fit, new, include_se, reference_name, selected)
+        pred, se = _predict_terms(fit, new, include_se, reference_name, selected, fitted_codes)
     else:
         result = fit.fit.predict(
             predict_type,
@@ -1956,30 +1999,19 @@ def predict_coxph(
             else list(new.y.start),
             se_fit=include_se,
             reference=reference_name,
+            collapse=fitted_codes,
         )
-        pred, se = list(result.fit), (None if result.se_fit is None else list(result.se_fit))
+        pred, se = result.fit, result.se_fit
 
-    # napredict restores omitted rows. Under na.pass the numeric kernel already
-    # propagated covariate/offset NaNs; gaps here need a missing stratum or time.
-    if new is None:
-        gaps = _excluded_rows(fit.na_action)
-    else:
-        gaps = [] if action == "omit" else list(new.missing)
-        if new.missing and action == "omit" and collapse is not None and collapse is not False:
-            missing = set(new.missing)
-            kept = [row for row in range(new.n + len(missing)) if row not in missing]
-            collapse = _subset_optional_sequence(collapse, kept, "collapse")
-    width = len(selected) if predict_type == "terms" else None
-    pred = _pad_rows(pred, gaps, width)
-    se = None if se is None else _pad_rows(se, gaps, width)
-
-    if collapse is not None and collapse is not False:
-        codes, group_names = _rowsum_groups(
-            collapse, len(pred), "Collapse vector is the wrong length"
-        )
-        pred = _rowsum(pred, codes)
+    if codes is not None and fitted_codes is not None and group_names is not None:
+        pred = _restore_prediction_groups(pred, codes, fitted_codes, gaps, len(group_names), width)
         if se is not None:
-            se = _rowsum(se, codes, squares=True)
+            se = _restore_prediction_groups(se, codes, fitted_codes, gaps, len(group_names), width)
+    else:
+        # Without grouping, napredict restores omitted rows. Numeric kernels
+        # propagate predictor NaNs directly under na.pass.
+        pred = _pad_rows(pred, gaps, width)
+        se = None if se is None else _pad_rows(se, gaps, width)
     output = PredictResult(pred, se) if include_se else pred
     return {"values": output, "group_names": group_names} if with_group_names else output
 
@@ -2001,7 +2033,12 @@ def _frailty_prediction(
 
 
 def _predict_terms(
-    fit: CoxphModel, new: _NewData | None, se_fit: bool, reference: str, selected: list[int]
+    fit: CoxphModel,
+    new: _NewData | None,
+    se_fit: bool,
+    reference: str,
+    selected: list[int],
+    collapse: list[int] | None = None,
 ) -> tuple[list[list[float]], list[list[float]] | None]:
     """The ``terms`` predictions of the ``selected`` model terms (positions among
     :func:`_model_terms`).  As in predict.coxph.penal, a sparse frailty's column holds
@@ -2023,6 +2060,7 @@ def _predict_terms(
         se_fit=se_fit,
         reference=reference,
         assign=[active[idx] for idx in engine_terms],
+        collapse=collapse,
     )
     rows, se_rows = result.fit, result.se_fit
     # the frailty column goes in at each place the selection names it, left to right
@@ -2031,14 +2069,21 @@ def _predict_terms(
         penalized = fit.penalized
         if penalized is None:
             raise ValueError("sparse frailty terms require a penalized fit")
+        if new is None:
+            frail, fvar = penalized.frail, penalized.fvar
+            values = [frail[group] for group in penalized.frail_index]
+            errors = [math.sqrt(fvar[group]) for group in penalized.frail_index] if se_fit else None
+        else:
+            values = [0.0] * new.n
+            errors = [0.0] * new.n if se_fit else None
+        if collapse is not None:
+            values = _rowsum(values, collapse)
+            errors = None if errors is None else _rowsum(errors, collapse, squares=True)
         for i, row in enumerate(rows):
-            group = penalized.frail_index[i] if new is None else None
-            value = 0.0 if group is None else penalized.frail[group]
-            se = 0.0 if group is None else math.sqrt(penalized.fvar[group])
             for column in columns:
-                row.insert(column, value)
-                if se_rows is not None:
-                    se_rows[i].insert(column, se)
+                row.insert(column, values[i])
+                if se_rows is not None and errors is not None:
+                    se_rows[i].insert(column, errors[i])
     return rows, se_rows
 
 

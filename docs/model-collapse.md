@@ -48,9 +48,10 @@ each group, validates the group length and retains empty dimensions. With
 The native Python binding accepts lists and C, Fortran or strided NumPy
 matrices, returns an owned NumPy matrix, and releases the interpreter lock
 during the calculation. Existing native residual sums use this same kernel.
-The prediction wrapper still materializes its existing list inputs as NumPy
-matrices and converts grouped results back to lists; this change makes no
-claim of lower peak memory.
+Grouped Cox predictions now sum inside the native prediction call; term
+outputs allocate one row per group. Sparse frailty additions use this kernel.
+See [native prediction grouping](cox-grouped-prediction-performance.md) for
+storage, omission behavior and subsequent performance measurements.
 
 ## Independent references
 
@@ -96,6 +97,10 @@ These references do not require copying or changing upstream functions.
 
 ## Complete-call timings
 
+These measurements record PR #702. The subsequent
+[native grouping change](cox-grouped-prediction-performance.md) removes full
+prediction output transfers before summation.
+
 `scripts/benchmark_model_collapse.R` measures public R calls on a prefit model
 with 20,000 rows, 16 dense covariates and 257 numeric groups. Each mode runs in
 a separate process with three warmups and nine samples. Times include bridge
@@ -106,7 +111,7 @@ are excluded. Complete numerical outputs agree with stock R before timing.
 On an Intel Core Ultra 5 325 with R 4.5.3, survival 3.8-12, Python 3.14.7,
 NumPy 2.4.6 and a release extension, median milliseconds (sample range) were:
 
-| Public call | Previous PR #701 | Current | Stock R |
+| Public call | Previous PR #701 | PR #702 | Stock R |
 | --- | --- | --- | --- |
 | Grouped linear predictor with errors | 11 (10–12) | 7 (6–8) | 7 (7–9) |
 | Grouped terms with errors | 59 (55–60) | 39 (38–41) | 15 (13–15) |

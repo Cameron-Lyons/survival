@@ -1828,6 +1828,10 @@ collapse labels contribute to omission, exclusion and failure policies; saved
 cluster/id factor groups retain their order. Schoenfeld residuals ignore
 collapse, as in R. See [grouped model outputs](model-collapse.md) for the 710
 independent references, documented stock failures and complete-call timings.
+Grouped Cox calls now sum predictions inside the native call, allocating term
+output rows per group and restoring omitted-only groups afterward. Empty R
+term predictions retain their column count. Another 146 R cases check these
+paths; see [native grouped prediction performance](cox-grouped-prediction-performance.md).
 
 ## Reference limitations
 

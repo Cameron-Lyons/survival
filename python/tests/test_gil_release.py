@@ -103,6 +103,14 @@ def test_grouped_sum_releases_the_gil():
     _assert_detaches(lambda: core.grouped_sum(values, groups, squares=True))
 
 
+def test_grouped_term_predictions_release_the_gil():
+    time_, status, x = _cox_data(2000, p=16)
+    fit = regression.coxph_fit(time_, status, x)
+    newdata = np.ones((400_000, 16))
+    groups = np.arange(len(newdata), dtype=np.int32) % 257
+    _assert_detaches(lambda: fit.predict_terms(newdata=newdata, se_fit=True, collapse=groups))
+
+
 def test_aft_constructor_releases_the_gil():
     n = 500_000
     x = np.ones((n, 8))

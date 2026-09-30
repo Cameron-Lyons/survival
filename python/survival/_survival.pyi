@@ -2245,6 +2245,8 @@ class CoxPHFit:
         new_entry: ArrayLike | None = None,
         se_fit: bool = False,
         reference: str = "strata",
+        *,
+        collapse: ArrayLike | None = None,
     ) -> CoxPrediction: ...
     def predict_survival_at(
         self,
@@ -2261,6 +2263,8 @@ class CoxPHFit:
         se_fit: bool = False,
         reference: str = "sample",
         assign: Sequence[Sequence[int]] | None = None,
+        *,
+        collapse: ArrayLike | None = None,
     ) -> CoxTermsPrediction: ...
     def scaled_schoenfeld_residuals(self, weighted: bool = False) -> SchoenfeldResiduals: ...
     def schoenfeld_residuals(self, weighted: bool = False) -> SchoenfeldResiduals: ...
