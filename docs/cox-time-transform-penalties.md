@@ -105,12 +105,13 @@ current libraries use the same native extension.
 
 | Callback | Predecessor median (range), ms | Current median (range), ms | R median (range), ms |
 | --- | ---: | ---: | ---: |
-| Two-column ridge | 19 (18–20) | 19 (18–20) | 19 (18–19) |
-| Spline | 35 (34–36) | 35 (34–36) | 26 (25–27) |
-| Sparse gamma frailty | Penalty discarded | 18 (18–24) | 13 (13–14) |
-| Dense gamma frailty | Unsupported | 31 (30–32) | 19 (18–19) |
+| Two-column ridge | 19 (18–20) | 18 (17–18) | 19 (18–19) |
+| Spline | 35 (34–36) | 35 (34–35) | 26 (25–27) |
+| Sparse gamma frailty | Penalty discarded | 18 (18–25) | 13 (13–14) |
+| Dense gamma frailty | Unsupported | 31 (30–31) | 19 (18–19) |
 
-Supported predecessor workloads show no measured regression or speedup.
+An earlier current run measured ridge at 19 ms (18–20 ms). Supported
+predecessor workloads show no measured regression or established speedup.
 Spline and frailty complete calls remain slower than stock R in this workload.
 Timing the predecessor's unpenalized sparse result would compare different
 models, so it is excluded.
