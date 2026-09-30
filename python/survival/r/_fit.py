@@ -64,7 +64,7 @@ from ._types import (
     _FormulaDesign,
     _FormulaTerms,
     _InteractionDesignTerm,
-    _NumericDesignTerm,
+    _MatrixDesignTerm,
     _PenaltyDesignTerm,
     _SingleDesignTerm,
     _StrataSpec,
@@ -225,10 +225,12 @@ def _r_factor_design(
 def _column_names(term: _SingleDesignTerm) -> list[str]:
     """``colnames(model.matrix)`` for one term: ``factor(x)level`` with R's labels."""
 
-    if isinstance(term, _PenaltyDesignTerm):
+    if isinstance(term, _PenaltyDesignTerm | _MatrixDesignTerm):
         return list(term.names)
     prefix = _covariate_term_name(term.term)
     if isinstance(term, _CategoricalDesignTerm):
+        if term.contrasts and not term.full:
+            return [f"{prefix}{name}" for name in term.contrast_names]
         levels = term.levels if term.full else term.levels[1:]
         return [f"{prefix}{_strata_value_label(level)}" for level in levels]
     return [prefix]
@@ -264,6 +266,7 @@ def _model_frame(
     istate: Any | None = None,
     extra: Mapping[str, Any] | None = None,
     deferred_na: bool = False,
+    defer_tt: bool = False,
 ) -> _ModelFrame:
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
@@ -379,7 +382,12 @@ def _model_frame(
         formula=formula,
         data=data,
         y=y,
-        x=_design_rows_from_spec(data, design, n),
+        x=_design_rows_from_spec(
+            data,
+            design,
+            n,
+            evaluated={term: [0.0] * n for term in _tt_terms(design)} if defer_tt else None,
+        ),
         design=design,
         terms=terms,
         names=names,
@@ -404,13 +412,17 @@ def _model_frame(
 
 
 def _tt_terms(design: _FormulaDesign) -> list[_CovariateTerm]:
-    """The ``tt(x)`` terms of a design, in model-matrix column order."""
+    """The distinct ``tt(x)`` variables, in formula variable order."""
 
-    return [
-        term.term
-        for term in design.covariates
-        if isinstance(term, _NumericDesignTerm) and term.term.transform == "tt"
-    ]
+    used = list(
+        dict.fromkeys(
+            factor.term
+            for term in design.covariates
+            for factor in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+            if factor.term.transform == "tt"
+        )
+    )
+    return [term for term in design.variables if term in used] if design.variables else used
 
 
 # ---------------------------------------------------------------------------

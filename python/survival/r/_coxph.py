@@ -24,6 +24,7 @@ from ._coerce import (
     _as_character,
     _as_matrix_rows,
     _as_rows,
+    _categories,
     _coerce_array_like,
     _control_mapping,
     _cox_tie_method,
@@ -54,6 +55,7 @@ from ._fit import (
     _design_names_and_assign,
     _excluded_rows,
     _model_frame,
+    _model_frame_levels,
     _ModelFrame,
     _NewData,
     _newdata_columns,
@@ -65,13 +67,17 @@ from ._fit import (
 from ._formula import (
     _column,
     _column_or_values,
+    _column_source,
+    _covariate_term_name,
     _data_row_count,
     _data_rows,
+    _design_contrasts,
     _design_rows_from_spec,
     _design_term_name,
     _formula_data_rows,
     _formula_design_row_count,
     _response_arg_columns,
+    _strata_covariate,
     _strata_specs,
     _timeline_counting,
     _timeline_model_frame,
@@ -89,14 +95,19 @@ from ._types import (
     CoxZPHResult,
     NaAction,
     PredictResult,
+    _CategoricalDesignTerm,
     _CovariateTerm,
     _DesignTerm,
     _FormulaDesign,
     _FormulaTerms,
     _InteractionDesignTerm,
     _InteractionTerm,
+    _MatrixDesignTerm,
     _ModelCovariateTerm,
+    _ModelStrataTerm,
+    _NumericDesignTerm,
     _PenaltyDesignTerm,
+    _SingleDesignTerm,
 )
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
@@ -148,6 +159,17 @@ class CoxphModel:
     cluster_levels: tuple[Any, ...] | None = None
 
     def __getattr__(self, name: str) -> Any:
+        if name == "history" and self.penalized is not None:
+            terms = [
+                term
+                for _, term in _model_terms(self)
+                if isinstance(term, _PenaltyDesignTerm) and term.penalized
+            ]
+            if any(term.controller_history is not None for term in terms):
+                return [
+                    term.controller_history() if term.controller_history is not None else history
+                    for term, history in zip(terms, self.penalized.history, strict=True)
+                ]
         if self.penalized is not None and name in {
             "df",
             "var2",
@@ -342,10 +364,12 @@ def _obrien_time_transform(
     del time, weights
     out = [0.0] * len(x)
     groups: dict[int, list[int]] = {}
+    categories = _categories(x)
+    ranks = x if categories is None else [categories.index(value) for value in x]
     for idx, group in enumerate(riskset):
         groups.setdefault(group, []).append(idx)
     for members in groups.values():
-        order = sorted(members, key=lambda idx: x[idx])
+        order = sorted(members, key=lambda idx: ranks[idx])
         size = len(order)
         pos = 0
         while pos < size:  # average ranks over ties, as R's rank()
@@ -383,6 +407,100 @@ class _CoxData:
     offset: list[float] | None
     cluster: list[Any] | None
     id: list[Any] | None
+    design: _FormulaDesign | None = None
+
+
+def _time_transform_design(
+    term: _CovariateTerm, value: Any, n: int
+) -> tuple[_SingleDesignTerm, Any]:
+    """Keep the callback's matrix columns or factor levels until model-matrix coding."""
+    metadata = value if isinstance(value, Mapping) and "_survival_tt_kind" in value else {}
+    source = metadata.get("values", value)
+    values = _coerce_array_like(source, "tt result")
+    if len(values) != n:
+        raise ValueError("the tt function must return one value per expanded row")
+    if (
+        metadata.get("_survival_tt_kind") == "factor"
+        or _categories(source) is not None
+        or (
+            any(not _is_missing_value(v) for v in values)
+            and all(isinstance(v, str) or _is_bool_like(v) or _is_missing_value(v) for v in values)
+        )
+    ):
+        declared = metadata.get("levels")
+        levels = (
+            tuple(declared)
+            if declared is not None
+            else _model_frame_levels(
+                source, tuple(dict.fromkeys(v for v in values if not _is_missing_value(v)))
+            )
+        )
+        if len(levels) < 2:
+            raise ValueError("contrasts can be applied only to factors with 2 or more levels")
+        contrast = metadata.get("contrasts")
+        contrast_names = metadata.get("contrast_names")
+        ordered = getattr(
+            source, "ordered", getattr(getattr(source, "dtype", None), "ordered", False)
+        )
+        if contrast is None and ordered:
+            import numpy as np
+
+            scores = np.arange(1, len(levels) + 1, dtype=float)
+            basis, _ = np.linalg.qr(np.vander(scores - scores.mean(), increasing=True))
+            basis *= np.where(basis[-1] < 0, -1.0, 1.0)
+            contrast = basis[:, 1:].tolist()
+            contrast_names = [".L", ".Q", ".C"][: len(levels) - 1] + [
+                f"^{j}" for j in range(4, len(levels))
+            ]
+        if contrast is not None:
+            rows = _as_matrix_rows(contrast, "tt factor contrasts", allow_empty_columns=False)
+            if (
+                len(rows) != len(levels)
+                or contrast_names is None
+                or len(contrast_names) != len(rows[0])
+            ):
+                raise ValueError("tt factor contrasts must match the levels and column names")
+            return _CategoricalDesignTerm(
+                term,
+                levels,
+                contrasts=tuple(tuple(row) for row in rows),
+                contrast_names=tuple(contrast_names),
+            ), values
+        return _CategoricalDesignTerm(term, levels), values
+    matrix = (
+        metadata.get("_survival_tt_kind") == "matrix"
+        or isinstance(source, Mapping)
+        or (getattr(source, "ndim", None) == 2)
+        or (values and isinstance(values[0], (list, tuple)))
+    )
+    if matrix:
+        rows = _as_matrix_rows(values, "tt result", allow_empty_columns=False)
+        width = len(rows[0])
+        suffixes = metadata.get("names") or _matrix_input_column_names(source)
+        if width == 1:
+            suffixes = ("",)
+        if suffixes is None:
+            suffixes = tuple(str(j + 1) for j in range(width)) if width > 1 else ("",)
+        if len(suffixes) != width:
+            raise ValueError("tt matrix column names must match its width")
+        names = tuple(_covariate_term_name(term) + str(name) for name in suffixes)
+        penalty = metadata.get("penalty")
+        if penalty is not None:
+            names = tuple(metadata.get("penalty_names") or names)
+            if len(names) == 1:
+                names *= width
+            if len(names) != width:
+                raise ValueError("tt penalty column names must match its width")
+            return _PenaltyDesignTerm(
+                term,
+                (term.column,),
+                names,
+                penalty,
+                report=metadata.get("report"),
+                controller_history=metadata.get("history"),
+            ), rows
+        return _MatrixDesignTerm(term, names), rows
+    return _NumericDesignTerm(term), [float(v) for v in values]
 
 
 def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _CoxData:
@@ -403,22 +521,60 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
     data = _formula_data_rows(frame.formula, frame.data, tindex, frame.n)
     weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
-    transformed: dict[_CovariateTerm, list[float]] = {}
+    transformed: dict[_CovariateTerm, Any] = {}
+    replacements: dict[_CovariateTerm, _SingleDesignTerm] = {}
+    categorical: dict[_CovariateTerm, list[Any]] = {}
     for term, function in zip(tt_terms, _tt_functions(tt, len(tt_terms)), strict=True):
-        values = [float(value) for value in _column(data, term.column)]
-        transformed[term] = [
-            float(value) for value in function(values, list(new_y.time), riskset, weights)
-        ]
-        if len(transformed[term]) != len(tindex):
-            raise ValueError("the tt function must return one value per expanded row")
+        source = _column_source(data, term.column)
+        values = source if _categories(source) is not None else _column(data, term.column)
+        args = (values, list(new_y.time), [group + 1 for group in riskset], weights)
+        result = (
+            function(*args, status=new_y._event_codes())
+            if getattr(function, "_survival_tt_r_callback", False)
+            else function(*args)
+        )
+        replacement, result = _time_transform_design(term, result, len(tindex))
+        replacements[term] = replacement
+        if isinstance(replacement, _CategoricalDesignTerm):
+            categorical[term] = result
+        else:
+            transformed[term] = result
+    covariates: list[_DesignTerm] = []
+    for spec in frame.design.covariates:
+        if isinstance(spec, _InteractionDesignTerm):
+            factors = tuple(replacements.get(factor.term, factor) for factor in spec.factors)
+            if any(
+                isinstance(factor, _PenaltyDesignTerm) and factor.penalized for factor in factors
+            ):
+                raise ValueError("Penalty terms cannot be in an interaction")
+            covariates.append(replace(spec, factors=factors))
+        else:
+            covariates.append(replacements.get(spec.term, spec))
+    design = replace(
+        frame.design,
+        covariates=tuple(
+            _design_contrasts(
+                covariates,
+                True,
+                (
+                    _strata_covariate(item.spec)
+                    for item in frame.terms.model_terms
+                    if isinstance(item, _ModelStrataTerm)
+                ),
+            )
+        ),
+    )
     return _CoxData(
         y=new_y,
-        x=_design_rows_from_spec(data, frame.design, len(tindex), evaluated=transformed),
+        x=_design_rows_from_spec(
+            data, design, len(tindex), evaluated=transformed, factor_values=categorical
+        ),
         strata=riskset,
         weights=weights,
         offset=None if frame.offset is None else [frame.offset[idx] for idx in tindex],
         cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
         id=None if frame.id is None else [frame.id[idx] for idx in tindex],
+        design=design,
     )
 
 
@@ -601,6 +757,10 @@ def _coxph_fit_frame(
         if keep_model:
             raise ValueError("'model=TRUE' not supported for models with tt terms")
         data = _tt_expand(replace(frame, y=y), tt, tt_terms)
+        if data.design is None:
+            raise RuntimeError("time transformation did not produce a design")
+        names, assign = _design_names_and_assign(data.design)
+        frame = replace(frame, design=data.design, names=names, assign=assign)
     else:
         data = _CoxData(
             y=y,
@@ -734,14 +894,16 @@ def _coxph_fit_frame(
         terms=frame.terms,
         coef_names=tuple(names),
         assign=dict(assign),
-        y=y,
-        strata_levels=frame.strata_levels,
+        y=data.y,
+        strata_levels=tuple(str(i + 1) for i in range(max(data.strata or [-1]) + 1))
+        if tt_terms
+        else frame.strata_levels,
         concordance=_concordance_summary(fit.concordance),
         n=frame.n,
         timefix=timefix,
         tt=bool(tt_terms),
-        id=None if frame.id is None else tuple(frame.id),
-        cluster=None if frame.cluster is None else tuple(frame.cluster),
+        id=None if data.id is None else tuple(data.id),
+        cluster=None if data.cluster is None else tuple(data.cluster),
         cluster_levels=frame.cluster_levels,
         model=frame.model_frame() if keep_model else None,
         weights_column=frame.weights_column,
@@ -999,6 +1161,7 @@ def coxph(
         id=arguments["id"],
         istate=arguments["istate"],
         deferred_na=formulas is not None,
+        defer_tt=True,
     )
     if weights_column is not None or id_column is not None:
         frame = replace(
@@ -1384,7 +1547,18 @@ def summary_coxph_penal(
         columns, df = penalized.assign2[i], penalized.df[i]
         penalty = term.kind if isinstance(term, _PenaltyDesignTerm) and term.penalized else None
         coef = [] if penalized.pterms[i] == 2 else [beta[col] for col in columns]
-        if penalty == "pspline" and isinstance(term, _PenaltyDesignTerm):
+        if isinstance(term, _PenaltyDesignTerm) and term.report is not None:
+            report = term.report(
+                coef, _block(var, columns), _block(var2, columns), df, _print_digits
+            )
+            names = report["names"]
+            report_rows = report["coefficients"]
+            rows.extend(
+                _penal_row(label if name is None else f"{label}, {name}", *values)
+                for name, values in zip(names, report_rows, strict=True)
+            )
+            print2.extend(report["history"] or [])
+        elif penalty == "pspline" and isinstance(term, _PenaltyDesignTerm):
             spline_rows, text = _pspline_print(
                 label,
                 term,

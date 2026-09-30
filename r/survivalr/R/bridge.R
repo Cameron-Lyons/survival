@@ -778,7 +778,7 @@ attrassign <- function(object, tt) {
     iter = as.integer(.as_numeric_vector(result$iter)),
     df = .as_numeric_vector(result$df),
     coefficients = coefficients,
-    print2 = as.character(unlist(result$print2))
+    print2 = if (length(result$print2)) as.character(unlist(result$print2)) else NULL
   )
   rows <- result$conf_int
   if (length(rows) > 0L) {
@@ -8015,6 +8015,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id", "istate")
   )
+  if (!is.null(evaluated_dots$tt)) evaluated_dots$tt <- .time_transform_functions(evaluated_dots$tt)
   if (!is.null(dots$weights) && is.name(dots$weights)) {
     evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
   }
