@@ -16,6 +16,7 @@ import numpy as np
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _NA_REAL,
     _as_character,
     _coerce_array_like,
     _finite_float,
@@ -120,7 +121,7 @@ def _as_numeric_column(data: Any, name: str) -> list[Any]:
     if categories is None:
         return values
     codes = {value: i + 1 for i, value in enumerate(categories)}
-    return [math.nan if _is_missing_value(value) else codes[value] for value in values]
+    return [_NA_REAL if _is_missing_value(value) else codes[value] for value in values]
 
 
 def _formula_name(name: str) -> tuple[str, bool]:
@@ -985,7 +986,9 @@ def _r_divide(numerator: float, denominator: float) -> float:
     try:
         return numerator / denominator
     except ZeroDivisionError:
-        if numerator == 0.0 or math.isnan(numerator):
+        if math.isnan(numerator):
+            return numerator
+        if numerator == 0.0:
             return math.nan
         return math.copysign(math.inf, numerator) * math.copysign(1.0, denominator)
 
@@ -2148,6 +2151,8 @@ def _parse_formula(formula: str, data: Any) -> tuple[Surv, _FormulaTerms]:
 def _r_log(value: float) -> float:
     """R's ``log``: ``-Inf`` at zero and NaN below it."""
 
+    if math.isnan(value):
+        return value
     if value > 0.0:
         return math.log(value)
     return -math.inf if value == 0.0 else math.nan
@@ -2156,7 +2161,7 @@ def _r_log(value: float) -> float:
 def _r_sqrt(value: float) -> float:
     """R's ``sqrt``: NaN below zero."""
 
-    return math.sqrt(value) if value >= 0.0 else math.nan
+    return math.sqrt(value) if math.isnan(value) or value >= 0.0 else math.nan
 
 
 def _apply_numeric_transform(values: list[float], transform: str | None, term: str) -> list[float]:
@@ -2491,7 +2496,7 @@ def _single_design_columns(
             if missing_penalty_rows:
                 kept = [row for row in range(n) if row not in missing_penalty_rows]
                 if not kept:
-                    return [[math.nan] * n for _ in spec.names]
+                    return [[_NA_REAL] * n for _ in spec.names]
                 complete = penalty_columns(
                     spec,
                     {
@@ -2499,7 +2504,7 @@ def _single_design_columns(
                         for name, column in penalty_values.items()
                     },
                 )
-                result = [[math.nan] * n for _ in complete]
+                result = [[_NA_REAL] * n for _ in complete]
                 for source, target in zip(complete, result, strict=True):
                     for row, penalty_value in zip(kept, source, strict=True):
                         target[row] = penalty_value
@@ -2547,13 +2552,13 @@ def _single_design_columns(
     if spec.contrasts and not spec.full:
         lookup = dict(zip(levels, spec.contrasts, strict=True))
         return [
-            [math.nan if _is_missing_value(value) else lookup[value][j] for value in values]
+            [_NA_REAL if _is_missing_value(value) else lookup[value][j] for value in values]
             for j in range(len(spec.contrast_names))
         ]
     columns = [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
     for column in columns:
         for row in missing:
-            column[row] = math.nan
+            column[row] = _NA_REAL
     return columns
 
 

@@ -8,6 +8,7 @@
   expect_identical(names(actual), names(expected), info = info)
   expect_identical(dimnames(actual), dimnames(expected), info = info)
   expect_identical(is.na(actual), is.na(expected), ignore_attr = TRUE, info = info)
+  expect_identical(is.nan(actual), is.nan(expected), ignore_attr = TRUE, info = info)
   expect_equal(as.numeric(actual), as.numeric(expected), tolerance = 3e-7, info = info)
 }
 

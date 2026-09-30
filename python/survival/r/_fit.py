@@ -15,6 +15,7 @@ import numpy as np
 
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _NA_REAL,
     _categories,
     _float_vector,
     _floats_or_nan,
@@ -742,7 +743,7 @@ def _prediction_row_result(
 def _na_entry(width: int | None) -> Any:
     """``NA`` for one entry of a vector (``width`` None) or one row of a matrix."""
 
-    return math.nan if width is None else [math.nan] * width
+    return _NA_REAL if width is None else [_NA_REAL] * width
 
 
 def _row_width(values: list[Any]) -> int | None:
@@ -773,7 +774,7 @@ def _pad_rows(values: Any, rows: Sequence[int], width: int | None = None) -> Any
         count = len(values) + len(gap_indices)
         retained = np.ones(count, dtype=bool)
         retained[gap_indices] = False
-        output = np.full((count, *values.shape[1:]), math.nan)
+        output = np.full((count, *values.shape[1:]), _NA_REAL)
         output[retained] = values
         return output
     if values:

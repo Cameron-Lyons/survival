@@ -1846,9 +1846,10 @@ and scalar/multiple quantile scale labels. Another 1,680 independent R calls
 check complete values and metadata; see [prediction row labels](prediction-row-labels.md).
 Grouped labels are covered separately above.
 
-Complete, unclassed numeric R data-frame columns cross the bridge in bulk as
-one-dimensional NumPy arrays, retaining single-row and empty shapes. Missing,
-categorical and classed columns retain their existing conversion. Lifetime and
+Unclassed double R data-frame columns, including NA and NaN, and complete
+integer columns cross the bridge in bulk as one-dimensional NumPy arrays,
+retaining single-row and empty shapes. Missing integers, categorical and
+classed columns retain their existing conversion. Lifetime and
 mixed-model checks pass, and complete public predictions on 20,000 numeric rows
 take 21–58 ms versus 47–87 ms in the predecessor; see
 [numeric data-frame conversion](r-numeric-data-columns.md) for stock R timings
@@ -1872,6 +1873,16 @@ pandas columns. Complete 20,000-row calls take 7–10 ms versus 19–22 ms in th
 predecessor, and 7–11 ms versus 36–39 ms with interactions. See
 [numeric prediction designs](numeric-prediction-designs.md) for validation,
 stock R comparisons and measured scope.
+
+Cox and AFT predictions preserve R's NA versus numerical NaN distinction,
+including source values, formula domain errors, selected missing terms and
+excluded-row restoration. AFT drops single-row quantile dimensions before
+restoring excluded rows; frailty-only new-data predictions use the row count
+without evaluating missing frailty values. Another 4,704 independent references
+check complete outputs and missing kinds through list/array and live R paths.
+See [missing values and omitted prediction rows](prediction-missing-values.md)
+for recorded stock failures, stored-model compatibility and complete-call
+measurements with missing data.
 
 ## Reference limitations
 

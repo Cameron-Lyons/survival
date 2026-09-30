@@ -25,6 +25,7 @@ import numpy as np
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _NA_REAL,
     _as_matrix_rows,
     _as_rows,
     _coefficient_selection,
@@ -1040,8 +1041,9 @@ def predict_survreg(
 ) -> Any:
     """R's ``predict.survreg``: response, lp, terms, quantile and uquantile predictions.
 
-    Vectors for lp/response (and single-``p`` quantiles), row-per-observation matrices for
-    terms and several ``p``; with ``se_fit`` a ``PredictResult(fit, se_fit)``.  Without
+    Vectors for lp/response, matrices for terms; quantiles drop one-row/one-column
+    dimensions before omitted rows are restored. With ``se_fit`` a
+    ``PredictResult(fit, se_fit)``. Without
     ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
     (``naresid``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
     (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
@@ -1103,14 +1105,14 @@ def predict_survreg(
 
         def missing_columns(rows: Any) -> Any:
             if isinstance(rows, np.ndarray):
-                output = np.full((len(rows), len(selection)), math.nan)
+                output = np.full((len(rows), len(selection)), _NA_REAL)
                 retained = [column for column, value in enumerate(selection) if value is not None]
                 output[:, retained] = rows
                 return output
             result = []
             for row in rows:
                 values = iter(row)
-                result.append([math.nan if value is None else next(values) for value in selection])
+                result.append([_NA_REAL if value is None else next(values) for value in selection])
             return result
 
         predictions = missing_columns(predictions)
@@ -1122,15 +1124,16 @@ def predict_survreg(
     else:
         gaps = [] if action == "omit" else list(new.missing)
     keep_matrix = predict_type == "terms"
-    fitted = _drop(_pad_rows(predictions, gaps, width), keep_matrix)
+    pad_width = None if not keep_matrix and width == 1 else width
+    fitted = _pad_rows(_drop(predictions, keep_matrix), gaps, pad_width)
     output = (
-        PredictResult(fitted, _drop(_pad_rows(se_values, gaps, width), keep_matrix))
+        PredictResult(fitted, _pad_rows(_drop(se_values, keep_matrix), gaps, pad_width))
         if include_se
         else fitted
     )
     if not _with_row_names:
         return output
-    if new is not None and new.n == 0 and predict_type != "terms":
+    if new is not None and new.n == 0:
         return _prediction_row_result(
             output,
             None,
@@ -1160,6 +1163,18 @@ def predict_survreg(
         fit_labels = se_labels = labels
     elif predict_type in {"quantile", "uquantile"}:
         fixed_scale = _estimated_scale_count(fit.fit) == 0
+        retained = int(fit.fit.n) if new is None else new.n
+        if width > 1 and retained == 1:
+            fit_labels = se_labels = None
+            if fixed_scale:
+                gaps_set = set(gaps)
+                retained_labels = [label for row, label in enumerate(labels) if row not in gaps_set]
+                names = iter(retained_labels * width)
+                se_labels = [
+                    labels[row] if row in gaps_set else next(names)
+                    for row in range(width + len(gaps))
+                ]
+            return _prediction_row_result(output, fit_labels, se_labels if include_se else None)
         fit_labels = labels if new is not None and width == 1 else None
         se_labels = (
             labels

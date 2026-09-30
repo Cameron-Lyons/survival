@@ -5,6 +5,7 @@ repeats <- if (length(args) > 1L) as.integer(args[[2L]]) else 9L
 mode <- if (length(args) > 2L) args[[3L]] else "current"
 include_transport <- length(args) > 3L && args[[4L]] == "transport"
 include_interactions <- length(args) > 4L && args[[5L]] == "interactions"
+include_missing <- length(args) > 5L && args[[6L]] == "missing"
 suppressPackageStartupMessages(library(survival))
 if (mode != "stock") suppressPackageStartupMessages(library(survivalr))
 set.seed(719)
@@ -14,6 +15,10 @@ for (j in seq_len(16)) {
   name <- paste0("x", j)
   data[[name]] <- rnorm(nrow(data))
   newdata[[name]] <- rnorm(n)
+}
+if (include_missing) {
+  gaps <- seq.int(17L, n, by = 47L)
+  newdata$x1[gaps] <- rep(c(NA_real_, NaN), length.out = length(gaps))
 }
 formula <- as.formula(paste("Surv(time,status)~", paste(paste0("x", seq_len(16)), collapse = "+")))
 if (include_interactions) formula <- update(formula, . ~ . + x1:x2 + x3:x4 + x5:x6:x7)
@@ -52,12 +57,14 @@ results <- lapply(workloads, function(workload) {
       stopifnot(identical(names(actual[[name]]), names(expected[[name]])),
                 identical(dimnames(actual[[name]]), dimnames(expected[[name]])))
     }
+    if (mode %in% c("current", "stock")) stopifnot(identical(is.nan(actual[[name]]), is.nan(expected[[name]])))
   }
   measure(function() call(fit))
 })
 cat(jsonlite::toJSON(list(rows = n, columns = 16L, training_rows = 2000L,
   repeats = repeats, warmups = 3L, mode = mode,
   interactions = include_interactions,
+  missing_rows = sum(is.na(newdata$x1)),
   r = as.character(getRversion()), survival = as.character(packageVersion("survival")),
   reticulate = if (mode != "stock") as.character(packageVersion("reticulate")) else NULL,
   transport = transport,

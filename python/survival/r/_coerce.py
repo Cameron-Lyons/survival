@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import numbers
 import os
+import struct
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
@@ -19,6 +20,9 @@ from .. import _survival as _core
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
 _PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+# R recognizes NA by the low-word payload 1954, including after arithmetic
+# quiets the NaN. Keep that marker distinct from genuine numerical NaNs.
+_NA_REAL = struct.unpack("=d", struct.pack("=Q", 0x7FF80000000007A2))[0]
 
 
 def _numeric_design_matrix(
@@ -261,7 +265,12 @@ def _is_missing_value(value: Any) -> bool:
 def _float_or_nan(value: Any) -> float:
     """``float(value)``, with NaN for a missing value (R's ``NA``)."""
 
-    return math.nan if _is_missing_value(value) else float(value)
+    if _is_missing_value(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return _NA_REAL
+    return float(value)
 
 
 def _floats_or_nan(values: Sequence[Any]) -> list[float]:
