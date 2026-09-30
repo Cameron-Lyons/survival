@@ -68,10 +68,16 @@ pub struct CoxpenalData {
 
 impl CoxpenalData {
     pub fn try_new(cox: CoxphData, terms: Vec<ModelTerm>) -> SurvivalResult<Self> {
-        // coxpenal.fit is reached only for data with events
-        cox.check_fit_input()?;
-        validate_terms(cox.x.ncols(), &terms)?;
-        Ok(Self { cox, terms })
+        let data = Self { cox, terms };
+        data.validate()?;
+        Ok(data)
+    }
+
+    fn validate(&self) -> SurvivalResult<()> {
+        self.cox.validate()?;
+        // coxpenal.fit is reached only for data with events.
+        self.cox.check_fit_input()?;
+        validate_terms(self.cox.x.ncols(), &self.terms)
     }
 }
 
@@ -180,6 +186,7 @@ impl CoxpenalFit {
     /// `coxpenal.fit` at the centred offset, followed by the `coxph()`
     /// post-processing.
     pub fn fit(data: CoxpenalData, options: CoxpenalOptions) -> SurvivalResult<Self> {
+        data.validate()?;
         let CoxpenalData {
             cox: data,
             terms: model_terms,
@@ -950,18 +957,18 @@ pub fn coxpenal_fit(
         pcols,
         assign,
     )?;
-    let data = CoxpenalData::try_new(
-        CoxphData::try_new(
-            time.into_inner(),
-            entry.map(FloatVec::into_inner),
-            status.into_inner(),
+    let data = CoxpenalData {
+        cox: CoxphData {
+            time: time.into_inner(),
+            entry: entry.map(FloatVec::into_inner),
+            status: status.into_inner(),
             x,
-            weights.map(FloatVec::into_inner),
-            strata.map(IntVec::into_inner),
-            offset.map(FloatVec::into_inner),
-        )?,
+            weights: weights.map(FloatVec::into_inner),
+            strata: strata.map(IntVec::into_inner),
+            offset: offset.map(FloatVec::into_inner),
+        },
         terms,
-    )?;
+    };
     let defaults = CoxpenalOptions::default();
     let options = CoxpenalOptions {
         method: TieMethod::parse(Some(method))?,

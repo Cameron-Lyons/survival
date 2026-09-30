@@ -66,33 +66,7 @@ impl CoxphData {
         strata: Option<Vec<i32>>,
         offset: Option<Vec<f64>>,
     ) -> SurvivalResult<Self> {
-        let n = time.len();
-        if n == 0 {
-            return Err(SurvivalError::invalid_input(
-                "No (non-missing) observations",
-            ));
-        }
-        validate_finite(&time, "time")?;
-        validate_length(n, status.len(), "status")?;
-        validate_binary_i32(&status, "status")?;
-        validate_length(n, x.nrows(), "x")?;
-        if let Some(entry) = &entry {
-            validate_length(n, entry.len(), "entry")?;
-            validate_finite(entry, "entry")?;
-            validate_intervals(entry, &time)?;
-        }
-        if let Some(weights) = &weights {
-            validate_length(n, weights.len(), "weights")?;
-            validate_finite(weights, "weights")?;
-        }
-        if let Some(strata) = &strata {
-            validate_length(n, strata.len(), "strata")?;
-        }
-        if let Some(offset) = &offset {
-            validate_length(n, offset.len(), "offset")?;
-            validate_finite(offset, "offset")?;
-        }
-        Ok(Self {
+        let data = Self {
             time,
             entry,
             status,
@@ -100,7 +74,41 @@ impl CoxphData {
             weights,
             strata,
             offset,
-        })
+        };
+        data.validate()?;
+        Ok(data)
+    }
+
+    /// Structural checks run again at fitting boundaries because callers may
+    /// construct or modify the public fields after using `try_new`.
+    pub(crate) fn validate(&self) -> SurvivalResult<()> {
+        let n = self.n();
+        if n == 0 {
+            return Err(SurvivalError::invalid_input(
+                "No (non-missing) observations",
+            ));
+        }
+        validate_finite(&self.time, "time")?;
+        validate_length(n, self.status.len(), "status")?;
+        validate_binary_i32(&self.status, "status")?;
+        validate_length(n, self.x.nrows(), "x")?;
+        if let Some(entry) = &self.entry {
+            validate_length(n, entry.len(), "entry")?;
+            validate_finite(entry, "entry")?;
+            validate_intervals(entry, &self.time)?;
+        }
+        if let Some(weights) = &self.weights {
+            validate_length(n, weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+        }
+        if let Some(strata) = &self.strata {
+            validate_length(n, strata.len(), "strata")?;
+        }
+        if let Some(offset) = &self.offset {
+            validate_length(n, offset.len(), "offset")?;
+            validate_finite(offset, "offset")?;
+        }
+        Ok(())
     }
 
     pub fn n(&self) -> usize {
@@ -382,13 +390,28 @@ impl CoxNewData {
         entry: Option<Vec<f64>>,
         allow_missing: bool,
     ) -> SurvivalResult<Self> {
-        let m = x.nrows();
+        let data = Self {
+            x,
+            strata,
+            offset,
+            time,
+            entry,
+        };
+        data.validate(allow_missing)?;
+        Ok(data)
+    }
+
+    /// Every consuming method validates public fields under its own missing-value
+    /// policy. A permissive prediction input cannot bypass curve validation.
+    fn validate(&self, allow_missing: bool) -> SurvivalResult<()> {
+        let m = self.nrows();
         if m == 0 {
             return Err(SurvivalError::invalid_input(
                 "newdata must have at least one row",
             ));
         }
-        if let Some(value) = x
+        if let Some(value) = self
+            .x
             .iter()
             .find(|value| value.is_infinite() || (!allow_missing && value.is_nan()))
         {
@@ -396,10 +419,10 @@ impl CoxNewData {
                 "newdata contains non-finite value {value}"
             )));
         }
-        if let Some(strata) = &strata {
+        if let Some(strata) = &self.strata {
             validate_length(m, strata.len(), "newdata strata")?;
         }
-        if let Some(offset) = &offset {
+        if let Some(offset) = &self.offset {
             validate_length(m, offset.len(), "newdata offset")?;
             if let Some(value) = offset
                 .iter()
@@ -410,21 +433,18 @@ impl CoxNewData {
                 )));
             }
         }
-        if let Some(time) = &time {
+        if let Some(time) = &self.time {
             validate_length(m, time.len(), "newdata time")?;
             validate_finite(time, "newdata time")?;
         }
-        if let Some(entry) = &entry {
+        if let Some(entry) = &self.entry {
             validate_length(m, entry.len(), "newdata entry")?;
             validate_finite(entry, "newdata entry")?;
         }
-        Ok(Self {
-            x,
-            strata,
-            offset,
-            time,
-            entry,
-        })
+        if let (Some(entry), Some(time)) = (&self.entry, &self.time) {
+            validate_intervals(entry, time)?;
+        }
+        Ok(())
     }
 
     fn nrows(&self) -> usize {
@@ -637,6 +657,7 @@ impl CoxPHFit {
     /// `agexact.fit` at the centred offset, followed by the post-processing
     /// of `coxph()`.
     pub fn fit(data: CoxphData, options: CoxphOptions) -> SurvivalResult<Self> {
+        data.validate()?;
         let n = data.n();
         let nvar = data.x.ncols();
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
@@ -1009,7 +1030,8 @@ impl CoxPHFit {
         }
     }
 
-    fn check_newdata(&self, newdata: &CoxNewData) -> SurvivalResult<()> {
+    fn check_newdata(&self, newdata: &CoxNewData, allow_missing: bool) -> SurvivalResult<()> {
+        newdata.validate(allow_missing)?;
         if newdata.x.ncols() != self.nvar() {
             return Err(SurvivalError::invalid_input(format!(
                 "newdata has {} columns but the model has {}",
@@ -1056,6 +1078,25 @@ impl CoxPHFit {
             })
             .collect();
         (x2c, risk2)
+    }
+
+    /// Relative risks without an nrow-by-nvar centered matrix. Reusing one
+    /// contiguous row preserves the same subtraction and dot product as the
+    /// full curve path while bounding temporary covariate storage by nvar.
+    fn prediction_risks(&self, x: ArrayView2<'_, f64>, offset: Option<&[f64]>) -> Vec<f64> {
+        let coefficients = self.coefficients_or_zero();
+        let coef = ArrayView1::from(&coefficients);
+        let offset_mean = self.offset_mean();
+        let mut centered = Array1::<f64>::zeros(self.nvar());
+        x.outer_iter()
+            .enumerate()
+            .map(|(i, row)| {
+                for ((target, &value), &mean) in centered.iter_mut().zip(row).zip(&self.means) {
+                    *target = value - mean;
+                }
+                (centered.dot(&coef) + offset.map_or(0.0, |values| values[i]) - offset_mean).exp()
+            })
+            .collect()
     }
 
     /// `basehaz(fit, centered)`.
@@ -1107,7 +1148,7 @@ impl CoxPHFit {
         });
         let survtype = CoxSurvType::from_stype_ctype(options.stype, ctype)?;
         if let Some(newdata) = newdata {
-            self.check_newdata(newdata)?;
+            self.check_newdata(newdata, false)?;
         }
         let curves = self.curves_for(survtype, options.start_time)?;
         let (x2c, risk2) = match newdata {
@@ -1163,7 +1204,7 @@ impl CoxPHFit {
         validate_finite(times, "times")?;
         let (x, strata, offset) = match newdata {
             Some(newdata) => {
-                self.check_newdata(newdata)?;
+                self.check_newdata(newdata, false)?;
                 if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
                     return Err(SurvivalError::invalid_input(
                         "newdata must carry the strata for survival predictions",
@@ -1185,7 +1226,7 @@ impl CoxPHFit {
         if times.is_empty() {
             return Ok(result);
         }
-        let (_, risk) = self.centered_rows(x, offset);
+        let risk = self.prediction_risks(x, offset);
         let curves = self.baseline_curves()?;
         let mut rows_by_stratum = vec![Vec::new(); curves.len()];
         for row in 0..x.nrows() {
@@ -1229,13 +1270,13 @@ impl CoxPHFit {
         method: &str,
     ) -> SurvivalResult<crate::population::SurvExpResult> {
         use crate::population::{CoxExpectedBaseline, survexp_cox_prepared};
-        self.check_newdata(newdata)?;
+        self.check_newdata(newdata, false)?;
         if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
             return Err(SurvivalError::invalid_input(
                 "newdata must carry the strata for expected survival",
             ));
         }
-        let (_, risk) = self.centered_newdata(newdata);
+        let risk = self.prediction_risks(newdata.x.view(), newdata.offset.as_deref());
         let strata: Vec<usize> = (0..newdata.nrows())
             .map(|i| {
                 newdata.strata.as_ref().map_or(0, |codes| {
@@ -1266,14 +1307,15 @@ impl CoxPHFit {
     }
 
     /// `survfit(fit, newdata, id)`: one curve per subject whose covariates
-    /// change over the (entry, time] intervals of `newdata`.
+    /// change over the (entry, time] intervals of `newdata`. As in R, omitting
+    /// strata selects the first fitted stratum for an individual path.
     pub fn survfit_individual(
         &self,
         newdata: &CoxNewData,
         id: &[i32],
         options: SurvfitOptions,
     ) -> SurvivalResult<Vec<CoxSurvfitCurve>> {
-        self.check_newdata(newdata)?;
+        self.check_newdata(newdata, false)?;
         let (Some(entry), Some(time)) = (&newdata.entry, &newdata.time) else {
             return Err(SurvivalError::invalid_input(
                 "Individual=TRUE is only valid for counting process data",
@@ -1380,7 +1422,7 @@ impl CoxPHFit {
                 self.sorted.stratum_index.clone(),
             ),
             Some(newdata) => {
-                self.check_newdata(newdata)?;
+                self.check_newdata(newdata, true)?;
                 let m = newdata.nrows();
                 let offset = newdata.offset.as_ref().map_or_else(
                     || vec![-offset_mean; m],
@@ -1499,7 +1541,8 @@ impl CoxPHFit {
 
     /// `predict(type = "expected")`: the expected number of events over each
     /// observation's follow-up.  `newdata` needs `time` (and `entry` for a
-    /// counting-process fit).
+    /// counting-process fit). Multiple fitted strata require an explicit stratum
+    /// for every new row.
     pub fn predict_expected(
         &self,
         newdata: Option<&CoxNewData>,
@@ -1538,7 +1581,12 @@ impl CoxPHFit {
                 se_fit: Some(se),
             });
         };
-        self.check_newdata(newdata)?;
+        self.check_newdata(newdata, true)?;
+        if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
+            return Err(SurvivalError::invalid_input(
+                "newdata must carry the strata for expected predictions",
+            ));
+        }
         let Some(new_time) = newdata.time.as_deref() else {
             return Err(SurvivalError::invalid_input(
                 "newdata must contain the follow-up time for type = 'expected'",
@@ -1549,7 +1597,7 @@ impl CoxPHFit {
                 "New data has a different survival type than the model",
             ));
         }
-        let (x2c, risk2) = self.centered_newdata(newdata);
+        let risk2 = self.prediction_risks(newdata.x.view(), newdata.offset.as_deref());
         let curves = self.baseline_curves()?;
         let stratum_index: Vec<usize> = match &newdata.strata {
             Some(strata) => strata
@@ -1571,8 +1619,8 @@ impl CoxPHFit {
             .collect();
         let se = if se_fit {
             Some(self.expected_se(
-                x2c.view(),
-                None,
+                newdata.x.view(),
+                Some(&self.means),
                 &risk2,
                 &stratum_index,
                 newdata.entry.as_deref(),
@@ -1762,34 +1810,15 @@ fn finish_curve(
     }
 }
 
-/// A `CoxNewData` from the binding arguments; `None` without `x`.
+/// Package owned Python buffers without scanning them under the GIL. The
+/// receiving Rust method validates the rows, including its missing-value policy.
+/// Extra row arguments without a design matrix are always an error.
 pub(crate) fn newdata_from_python(
     x: Option<FloatMatrix>,
     strata: Option<IntVec>,
     offset: Option<FloatVec>,
     time: Option<FloatVec>,
     entry: Option<FloatVec>,
-) -> SurvivalResult<Option<CoxNewData>> {
-    newdata_from_python_impl(x, strata, offset, time, entry, false)
-}
-
-pub(crate) fn prediction_from_python(
-    x: Option<FloatMatrix>,
-    strata: Option<IntVec>,
-    offset: Option<FloatVec>,
-    time: Option<FloatVec>,
-    entry: Option<FloatVec>,
-) -> SurvivalResult<Option<CoxNewData>> {
-    newdata_from_python_impl(x, strata, offset, time, entry, true)
-}
-
-fn newdata_from_python_impl(
-    x: Option<FloatMatrix>,
-    strata: Option<IntVec>,
-    offset: Option<FloatVec>,
-    time: Option<FloatVec>,
-    entry: Option<FloatVec>,
-    allow_missing: bool,
 ) -> SurvivalResult<Option<CoxNewData>> {
     let Some(x) = x else {
         if strata.is_some() || offset.is_some() || time.is_some() || entry.is_some() {
@@ -1799,14 +1828,13 @@ fn newdata_from_python_impl(
         }
         return Ok(None);
     };
-    Ok(Some(CoxNewData::validated(
-        x.into_inner(),
-        strata.map(IntVec::into_inner),
-        offset.map(FloatVec::into_inner),
-        time.map(FloatVec::into_inner),
-        entry.map(FloatVec::into_inner),
-        allow_missing,
-    )?))
+    Ok(Some(CoxNewData {
+        x: x.into_inner(),
+        strata: strata.map(IntVec::into_inner),
+        offset: offset.map(FloatVec::into_inner),
+        time: time.map(FloatVec::into_inner),
+        entry: entry.map(FloatVec::into_inner),
+    }))
 }
 
 #[pymethods]
@@ -1864,7 +1892,7 @@ impl CoxPHFit {
         se_fit: bool,
         reference: &str,
     ) -> PyResult<CoxPrediction> {
-        let newdata = prediction_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
         let reference = PredictReference::parse(reference)?;
         let newdata = newdata.as_ref();
         Ok(match r#type {
@@ -1895,7 +1923,7 @@ impl CoxPHFit {
         reference: &str,
         assign: Option<Vec<Vec<usize>>>,
     ) -> PyResult<CoxTermsPrediction> {
-        let newdata = prediction_from_python(newdata, new_strata, new_offset, None, None)?;
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
         let reference = PredictReference::parse(reference)?;
         let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
         Ok(py.detach(|| self.predict_terms(newdata.as_ref(), se_fit, reference, &assign))?)
@@ -2143,15 +2171,15 @@ pub fn coxph_fit(
         ))
         .into());
     }
-    let data = CoxphData::try_new(
-        time.into_inner(),
-        entry.map(FloatVec::into_inner),
-        status.into_inner(),
-        x.into_inner(),
-        weights.map(FloatVec::into_inner),
-        strata.map(IntVec::into_inner),
-        offset.map(FloatVec::into_inner),
-    )?;
+    let data = CoxphData {
+        time: time.into_inner(),
+        entry: entry.map(FloatVec::into_inner),
+        status: status.into_inner(),
+        x: x.into_inner(),
+        weights: weights.map(FloatVec::into_inner),
+        strata: strata.map(IntVec::into_inner),
+        offset: offset.map(FloatVec::into_inner),
+    };
     let defaults = CoxphOptions::default();
     let options = CoxphOptions {
         method: TieMethod::parse(Some(method))?,
@@ -2165,6 +2193,9 @@ pub fn coxph_fit(
     };
     Ok(py.detach(move || CoxPHFit::fit(data, options))?)
 }
+
+#[cfg(test)]
+mod input_tests;
 
 #[cfg(test)]
 mod tests {

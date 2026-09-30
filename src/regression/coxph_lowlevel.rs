@@ -62,6 +62,7 @@ impl CoxphFitResult {
     /// Fit at the original offsets. `options.cluster` and robust variance belong
     /// to `CoxPHFit` and are refused here. `resid=false` skips martingale work.
     pub fn fit(data: CoxphData, mut options: CoxphOptions, resid: bool) -> SurvivalResult<Self> {
+        data.validate()?;
         if options.cluster.is_some() || options.robust == Some(true) {
             return Err(SurvivalError::invalid_input(
                 "bare Cox fits do not compute robust variance",
@@ -185,15 +186,15 @@ pub fn coxph_fit_raw(
     nocenter: Option<Vec<f64>>,
     resid: bool,
 ) -> PyResult<CoxphFitResult> {
-    let data = CoxphData::try_new(
-        time.into_inner(),
-        entry.map(FloatVec::into_inner),
-        status.into_inner(),
-        x.into_inner(),
-        weights.map(FloatVec::into_inner),
-        strata.map(IntVec::into_inner),
-        offset.map(FloatVec::into_inner),
-    )?;
+    let data = CoxphData {
+        time: time.into_inner(),
+        entry: entry.map(FloatVec::into_inner),
+        status: status.into_inner(),
+        x: x.into_inner(),
+        weights: weights.map(FloatVec::into_inner),
+        strata: strata.map(IntVec::into_inner),
+        offset: offset.map(FloatVec::into_inner),
+    };
     let defaults = CoxphOptions::default();
     let options = CoxphOptions {
         method: TieMethod::parse(Some(method))?,

@@ -656,6 +656,18 @@ this does not show.
   routine. Cox, Aalen, curve, log-rank, survival-check and redistribution calls
   raise `ValueError("missing values in the response")` for such rows. Use
   `na.omit` or `na.exclude` to apply the model frame's row-removal policy.
+- Native Cox fitting and prediction methods validate their inputs even when a
+  Rust caller constructs or modifies public data fields directly. Row-aligned
+  vectors must match the design, statuses must be binary, and follow-up intervals
+  require `entry < time`. An invalid interval raises an error rather than producing
+  a negative expected count or a survival probability above one. Prediction
+  covariates and offsets may still contain NaN where the corresponding R method
+  propagates missing values; curve construction requires finite values.
+- Native expected-count predictions require a stratum per new row when the model
+  has multiple baselines. Without it, selecting the first baseline would be
+  ambiguous. Ordinary `survfit(newdata)` can omit strata because it returns a
+  separate block for every baseline. Individual covariate paths retain R's
+  default of using the first stratum when none is supplied.
 - For ordinary Cox and AFT models under `na.pass` (predict's default), a missing
   covariate affects only the predictions that use it. Term predictions retain
   unaffected contributions and standard errors; an unknown offset leaves the linear-predictor standard
@@ -1674,6 +1686,52 @@ The wrapper also accepts Python-backed Cox and AFT fits and handles joint
 level matrices, reversed variable order, matrix-valued SAS adjusters and
 empty adjustment sets. These cases correct stock-R preparation failures;
 explicit population designs also retain the fit's custom contrasts.
+
+## Native Cox prediction memory and performance
+
+Expected-event predictions, survival at requested times, and cohort expected
+survival compute relative risks with one reusable centered row. Temporary
+covariate storage is O(p), replacing an O(n × p) centered copy; the owned
+input matrix, risk vector and result storage remain. Expected-event standard
+errors also center covariates as needed. Full survival curves retain their
+centered matrix because subsequent curve assembly uses it.
+
+The reproducible benchmark is
+[`bench_cox_prediction_inputs.py`](../benches/python/bench_cox_prediction_inputs.py).
+On Python 3.14.7 / NumPy 2.4.6 with a release build, 100,000 population rows,
+32 covariates, two strata and offsets gave these complete native Python-call
+times (milliseconds, median and range of seven samples after three warmups):
+
+| Input layout | Prediction | Before | After |
+| --- | --- | --- | --- |
+| C | Survival at four times | 28.546 (28.254–29.378) | 9.490 (9.390–9.647) |
+| C | Expected events | 28.901 (28.599–29.714) | 9.517 (9.382–10.027) |
+| C | Cohort expected survival | 106.443 (105.449–107.655) | 87.429 (87.051–87.772) |
+| Fortran | Survival at four times | 29.832 (29.470–30.557) | 11.867 (11.691–12.173) |
+| Fortran | Expected events | 29.783 (29.282–30.469) | 11.955 (11.663–12.187) |
+| Fortran | Cohort expected survival | 106.030 (105.636–107.015) | 87.821 (87.454–88.004) |
+
+The baseline is the native implementation used by #688. Each build and layout
+runs in a separate process; routine order alternates within each process.
+Timing includes buffer conversion, validation and result materialization,
+excluding fitting, input creation and baseline-cache warmup. Whole output arrays
+agree across builds at `rtol=5e-14, atol=1e-15`. These timings cover predictions
+without standard errors. With three covariates, C-layout medians were
+6.486→6.438 ms, 6.534→6.473 ms and 83.622→83.264 ms, respectively;
+the sample ranges overlap.
+
+Peak process RSS for the combined three- and 32-covariate runs fell from
+140.7 to 122.9 MiB for C inputs and 161.3 to 122.6 MiB for Fortran inputs.
+This includes the interpreter, NumPy, training/input buffers, caches and
+results; it is not an isolated measurement of temporary matrix allocation.
+
+```sh
+PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py \
+  --extension /tmp/previous-survival.so --output /tmp/cox-before
+PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py \
+  --output /tmp/cox-after --compare /tmp/cox-before.npz
+# Add --order F to both commands for Fortran-layout inputs.
+```
 
 ## Reference limitations
 
