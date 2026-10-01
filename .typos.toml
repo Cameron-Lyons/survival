@@ -1,3 +1,7 @@
+[default]
+# Hexadecimal commit references in documentation are not prose.
+extend-ignore-re = ['`[0-9a-f]{7,40}`']
+
 [default.extend-words]
 cdf = "cdf"
 nvar = "nvar"
