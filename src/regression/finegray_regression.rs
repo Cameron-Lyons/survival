@@ -855,6 +855,8 @@ mod tests {
 
     #[test]
     fn test_finegray_public_api_rejects_malformed_inputs() {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
         assert!(
             finegray_regression(vec![], vec![], vec![], 1, 25, 1e-9)
                 .unwrap_err()
@@ -883,6 +885,8 @@ mod tests {
 
     #[test]
     fn test_competing_risks_cif_public_api_rejects_malformed_inputs() {
+        #[cfg(feature = "python")]
+        pyo3::Python::initialize();
         assert!(
             competing_risks_cif(vec![1.0], vec![], 1, 0.95)
                 .unwrap_err()

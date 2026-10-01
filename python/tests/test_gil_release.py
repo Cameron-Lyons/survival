@@ -108,6 +108,14 @@ def test_cox_fits_on_four_threads_overlap():
     assert threaded_time < 0.75 * sequential_time, (sequential_time, threaded_time)
 
 
+def test_finegray_preparation_releases_the_gil():
+    n = 20000
+    times = np.arange(1, n + 1, dtype=float)
+    status = np.arange(n, dtype=np.int32) % 3
+    strata = np.arange(n, dtype=np.int32) % 100
+    _assert_detaches(lambda: regression.finegray_expand(times, status, strata=strata))
+
+
 def test_heavy_kernels_release_the_gil():
     time_, status, x = _cox_data(50_000)
     fit = regression.coxph_fit(time_, status, x)

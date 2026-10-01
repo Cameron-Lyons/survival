@@ -39,6 +39,7 @@ __all__ = bind_names(
         "coxph_detail",
         "FineGrayOutput",
         "finegray",
+        "finegray_expand",
         "CompetingRisksCIF",
         "FineGrayResult",
         "competing_risks_cif",

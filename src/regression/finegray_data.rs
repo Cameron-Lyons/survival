@@ -28,6 +28,30 @@ pub struct FineGrayOutput {
     pub add: Vec<usize>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl FineGrayOutput {
+    /// Independent writable NumPy snapshots for bulk conversion.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let result = pyo3::types::PyDict::new(py);
+        for (name, values) in [("row", &self.row), ("add", &self.add)] {
+            result.set_item(
+                name,
+                values
+                    .iter()
+                    .map(|&v| v as i64)
+                    .collect::<Vec<_>>()
+                    .into_pyarray(py),
+            )?;
+        }
+        for (name, values) in [("start", &self.start), ("end", &self.end), ("wt", &self.wt)] {
+            result.set_item(name, values.clone().into_pyarray(py))?;
+        }
+        Ok(result)
+    }
+}
+
 /// `finegray.c`: the `(tstart, tstop]` rows, the censoring curve (the
 /// interval that ends at `ctime[j]` has probability `cprob[j]`), which rows
 /// to `extend` and which curve intervals to `keep`.
@@ -65,11 +89,13 @@ pub fn finegray(
             "censoring probability is zero before a selected event",
         ));
     }
-    let total = tstart.len()
-        + plans
-            .iter()
-            .map(|&(_, first_kept)| kept.len() - first_kept)
-            .sum::<usize>();
+    let total = plans
+        .iter()
+        .try_fold(tstart.len(), |total, &(_, first_kept)| {
+            total.checked_add(kept.len() - first_kept).ok_or_else(|| {
+                SurvivalError::invalid_input("expanded row count exceeds addressable memory")
+            })
+        })?;
     let mut out = FineGrayOutput {
         row: Vec::with_capacity(total),
         start: Vec::with_capacity(total),

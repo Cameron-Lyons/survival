@@ -131,3 +131,11 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     # were ``survival`` unresolvable, --ignore-missing-imports would make every r.* above
     # Any and those assertions vacuous; this one, against a concrete type, would still fail
     assert_type(r.cluster(data["inst"]), list[Any])
+
+
+# Prepared Fine–Gray numerics and bulk snapshots.
+finegray_prepared: _survival.FineGrayOutput = _survival.finegray_expand(
+    [1.0, 2.0], [1, 2], strata=[10, 10]
+)
+finegray_source: list[int] = finegray_prepared.row
+finegray_arrays: dict[str, Any] = finegray_prepared.to_arrays()

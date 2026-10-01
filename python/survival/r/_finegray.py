@@ -9,94 +9,22 @@ from __future__ import annotations
 
 import math
 import warnings
-from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from .. import _survival as _core
 from ._coerce import (
     _finite_float,
+    _int_vector,
+    _is_missing_value,
     _materialize_1d,
     _normalize_bool_option,
     _pop_dotted_keyword,
 )
-from ._data_prep import aeqSurv
 from ._formula import _model_variables, _strata_keep, _strata_specs, model_frame
 from ._names import _make_names
 from ._surv import Surv, _complete_codes
 from ._types import FineGrayFrame, ModelFrame
-
-
-@dataclass(frozen=True)
-class _CensoringCurve:
-    """One stratum of R's ``Gsurv``/``Hsurv``: the event times and survival of a KM fit."""
-
-    time: list[float]
-    surv: list[float]
-
-
-def _censoring_curves(
-    start: Sequence[float], stop: Sequence[float], event: Sequence[bool], group: Sequence[int]
-) -> list[_CensoringCurve]:
-    """``survfit(Surv(start, stop, event) ~ group)`` restricted to its event times."""
-
-    fit = _core.survfitkm(
-        list(stop),
-        [int(flag) for flag in event],
-        start=list(start),
-        strata=list(group),
-        se_fit=False,
-        timefix=False,
-    )
-    times, survs, events = fit.time, fit.surv, fit.n_event
-    curves: list[_CensoringCurve] = []
-    offset = 0
-    for count in fit.strata or [len(times)]:
-        rows = [row for row in range(offset, offset + count) if events[row] > 0]
-        curves.append(
-            _CensoringCurve(time=[times[row] for row in rows], surv=[survs[row] for row in rows])
-        )
-        offset += count
-    return curves
-
-
-def _subject_layout(
-    response: Surv, id_values: Sequence[Any] | None
-) -> tuple[list[bool], list[bool], bool]:
-    """R's ``first``/``last`` row flags of each subject and whether entry is delayed."""
-
-    n = len(response)
-    if response.type != "mcounting":
-        return [False] * n, [True] * n, False
-    if id_values is None:
-        raise ValueError("(start, stop] data requires a subject id")
-    order = sorted(range(n), key=lambda idx: (str(id_values[idx]), response.time[idx]))
-    first = [False] * n
-    last = [False] * n
-    start = response.start or ()
-    delay = False
-    minimum_stop = min(response.time)
-    previous: int | None = None
-    for position, idx in enumerate(order):
-        subject_start = previous is None or str(id_values[order[position - 1]]) != str(
-            id_values[idx]
-        )
-        if subject_start:
-            first[idx] = True
-            if start[idx] > minimum_stop:
-                delay = True
-            if previous is not None:
-                last[previous] = True
-        else:
-            if response.event[previous] != 0:
-                raise ValueError("a subject has a transition before their last time point")
-            if response.time[previous] != start[idx]:
-                raise ValueError("a subject has gaps in time")
-        previous = idx
-    if previous is not None:
-        last[previous] = True
-    return first, last, delay
 
 
 def _etype_index(states: Sequence[str], etype: Any) -> int:
@@ -115,11 +43,11 @@ def _etype_index(states: Sequence[str], etype: Any) -> int:
     return int(index[0] or 1)
 
 
-def _finegray_inputs(mf: ModelFrame, timefix: bool) -> tuple[Surv, list[int], list[float]]:
+def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, list[int], list[float] | None]:
     """The checked response, the stratum of each row and the user weights."""
 
     response = mf.response
-    if response is None:
+    if not isinstance(response, Surv):
         raise ValueError("Response must be a survival object")
     if response.type not in {"mright", "mcounting"}:
         raise ValueError("Fine-Gray model requires a multi-state survival")
@@ -129,8 +57,6 @@ def _finegray_inputs(mf: ModelFrame, timefix: bool) -> tuple[Surv, list[int], li
         math.isnan(value) for value in (*response.time, *(response.start or ()))
     ):
         raise ValueError("missing values in the response")
-    if timefix:
-        response = aeqSurv(response)
     if mf.terms.clusters:
         raise ValueError("a cluster() term is not valid")
     if mf.terms.strata:
@@ -138,59 +64,8 @@ def _finegray_inputs(mf: ModelFrame, timefix: bool) -> tuple[Surv, list[int], li
         istrat = _complete_codes(factor, "strata must not contain missing values")
     else:
         istrat = [0] * mf.n
-    weights = (
-        [1.0] * mf.n if mf.weights is None else [_finite_float(v, "weights") for v in mf.weights]
-    )
+    weights = None if mf.weights is None else [_finite_float(v, "weights") for v in mf.weights]
     return response, istrat, weights
-
-
-def _stratum_split(
-    rows: list[int],
-    start: Sequence[float],
-    stop: Sequence[float],
-    status: Sequence[int],
-    last: Sequence[bool],
-    censoring: _CensoringCurve,
-    entry: _CensoringCurve | None,
-    utime: Sequence[float],
-    enum: int,
-) -> Any | None:
-    """R's ``stratfun``: the ``finegray`` kernel call for one stratum, or ``None``."""
-
-    times = sorted({stop[idx] for idx in rows if status[idx] == enum})
-    if not times:
-        return None
-    maxtime = max(stop[idx] for idx in rows)
-    if entry is not None:
-        dtime = [-value for value in reversed(entry.time)]
-        dprob = [*list(reversed(entry.surv))[1:], 1.0]
-        combined = sorted(set(dtime) | set(censoring.time))
-        gprob = [1.0, *censoring.surv]
-        ctime = [utime[int(value) - 1] for value in combined]
-        cprob = [
-            dprob[max(bisect_right(dtime, value) - 1, 0)]
-            * gprob[bisect_right(censoring.time, value)]
-            for value in combined
-        ]
-    else:
-        ctime = [utime[int(value) - 1] for value in censoring.time]
-        cprob = list(censoring.surv)
-    ct2 = [*ctime, maxtime]
-    cp2 = [1.0, *cprob]
-    keep = [False] * len(ct2)
-    for value in times:
-        position = bisect_left(ct2, value)
-        if position < len(keep):
-            keep[position] = True
-    keep[0] = True
-    return _core.finegray(
-        [start[idx] for idx in rows],
-        [stop[idx] for idx in rows],
-        ct2,
-        cp2,
-        [status[idx] != 0 and status[idx] != enum and last[idx] for idx in rows],
-        keep,
-    )
 
 
 def finegray(
@@ -224,79 +99,46 @@ def finegray(
     mf = model_frame(formula, data, subset=subset, na_action=na_action, weights=weights, id=id)
     if mf.n == 0:
         raise ValueError("No (non-missing) observations")
-    response, istrat, user_weights = _finegray_inputs(mf, fix_time)
-    first, last, delay = _subject_layout(response, mf.id)
+    response, istrat, user_weights = _finegray_inputs(mf)
     enum = _etype_index(list(response.states), etype)
     count_name = None if count is None else _make_names(str(count))
     output_names = [f"{prefix}{suffix}" for suffix in ("start", "stop", "status", "wt")]
 
-    stop = list(response.time)
-    if response.start is not None:
-        start = list(response.start)
-    else:
-        minimum = min(stop)
-        start = [0.0 if minimum > 0.0 else 2.0 * minimum - 1.0] * len(stop)
-    status = [int(value) for value in response.event]
-    utime = sorted(set(start) | set(stop))
-    rank1 = [float(bisect_right(utime, value)) for value in start]
-    rank2 = [
-        float(bisect_right(utime, value)) - (0.2 if code != 0 else 0.0)
-        for value, code in zip(stop, status, strict=True)
-    ]
-    censoring = _censoring_curves(
-        rank1,
-        rank2,
-        [is_last and code == 0 for is_last, code in zip(last, status, strict=True)],
-        istrat,
+    # Preserve the existing subject-label convention; only compact integer codes
+    # cross the native boundary. Covariate objects remain in Python.
+    ids = None
+    if mf.id is not None:
+        if any(_is_missing_value(value) for value in mf.id):
+            raise ValueError("id must not contain missing values")
+        labels = [str(value) for value in mf.id]
+        codes = {value: i for i, value in enumerate(dict.fromkeys(labels))}
+        ids = [codes[value] for value in labels]
+    status = _int_vector(response.event, "status")
+    split = _core.finegray_expand(
+        response.time,
+        status,
+        enum,
+        start=response.start,
+        strata=istrat,
+        id=ids,
+        weights=user_weights,
+        timefix=fix_time,
     )
-    entry = (
-        _censoring_curves([-v for v in rank2], [-v for v in rank1], first, istrat)
-        if delay
-        else None
-    )
-
+    source = [row - 1 for row in split.row]
     variables = [
         (name, values) for name, values in _model_variables(mf) if not name.startswith("strata(")
     ]
     if mf.weights is not None:
         variables.append(("(weights)", list(mf.weights)))
-    columns: dict[str, list[Any]] = {name: [] for name, _values in variables}
-    for name in output_names:
-        columns[name] = []
+    columns: dict[str, list[Any]] = {
+        name: [values[idx] for idx in source] for name, values in variables
+    }
+    columns[output_names[0]] = split.start
+    columns[output_names[1]] = split.end
+    columns[output_names[2]] = [int(status[idx] == enum) for idx in source]
+    columns[output_names[3]] = split.wt
     if count_name is not None:
-        columns[count_name] = []
-    for stratum in range(max(istrat) + 1):
-        rows = [idx for idx, value in enumerate(istrat) if value == stratum]
-        split = _stratum_split(
-            rows,
-            start,
-            stop,
-            status,
-            last,
-            censoring[stratum],
-            None if entry is None else entry[stratum],
-            utime,
-            enum,
-        )
-        if split is None:
-            continue
-        source = [rows[int(row) - 1] for row in split.row]
-        for name, values in variables:
-            columns[name].extend(values[idx] for idx in source)
-        columns[output_names[0]].extend(float(value) for value in split.start)
-        columns[output_names[1]].extend(float(value) for value in split.end)
-        columns[output_names[2]].extend(1 if status[idx] == enum else 0 for idx in source)
-        # R indexes the user weights by the row number within the stratum
-        # (``user.weights[split$row]``), so with strata the weights follow the
-        # position of the row in the whole data set; reproduced as is.
-        columns[output_names[3]].extend(
-            float(weight) * user_weights[int(row) - 1]
-            for weight, row in zip(split.wt, split.row, strict=True)
-        )
-        if count_name is not None:
-            columns[count_name].extend(int(value) for value in split.add)
-    if not columns[output_names[0]]:
-        raise ValueError("selected endpoint has no events")
+        columns[count_name] = split.add
     return FineGrayFrame(columns, event=response.states[enum - 1])
 
 

@@ -36,6 +36,7 @@ pub(crate) mod exact_ties;
 #[path = "fast_cox/mod.rs"]
 pub(crate) mod fast_cox_module;
 pub(crate) mod finegray_data;
+pub(crate) mod finegray_expand;
 #[path = "finegray_regression.rs"]
 pub(crate) mod finegray_regression_module;
 pub(crate) mod functional_survival;
@@ -105,6 +106,7 @@ pub use fast_cox_module::{
     FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
 pub use finegray_data::{FineGrayOutput, finegray, finegray_py};
+pub use finegray_expand::{FineGrayInput, finegray_expand, finegray_expand_py};
 pub use finegray_regression_module::{
     CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
 };
