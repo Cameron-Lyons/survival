@@ -115,8 +115,8 @@ Rscript -e 'library(survival); print(getS3method("model.matrix", "coxph")); prin
 The broader compatibility and performance audit remains open. The next formula
 evaluation audit has reproduced suppressed domain warnings when a different
 missing covariate already excludes the same row under omission; matrix values
-agree, but the warning differs from R. A separate R-list input probe reproduces
-lost logical NA values during automatic conversion, retaining an incomplete
-row that a data frame correctly omits. Inputs that are already evaluated R
-model frames and stored-method argument overrides also remain outside these
-checks. These results do not establish full package parity.
+agree, but the warning differs from R. The subsequent
+[R list data-column change](r-list-data-columns.md) resolves logical NA loss
+during automatic list conversion. Inputs that are already evaluated R model
+frames and stored-method argument overrides remain outside these checks.
+These results do not establish full package parity.

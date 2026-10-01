@@ -246,31 +246,34 @@ if (getRversion() >= "2.15.1") {
   .as_python_vector(value)
 }
 
-.as_python_data <- function(data) {
-  if (is.null(data)) {
-    return(NULL)
+.as_python_data_column <- function(column) {
+  if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
+      is.null(dim(column)) && length(column) <= .Machine$integer.max &&
+      (typeof(column) == "double" || !anyNA(column))) {
+    # A one-dimensional R array crosses in bulk as a NumPy array, including
+    # empty and single-row columns. Double arrays retain R's NA payload;
+    # missing integers keep their source type and scalar missing markers.
+    value <- as.vector(column)
+    dim(value) <- length(value)
+    return(value)
   }
+  value <- .as_python_vector(column)
+  if (is.factor(column)) value else as.list(value)
+}
+
+.as_python_data <- function(data) {
   if (is.data.frame(data)) {
-    columns <- lapply(data, function(column) {
-      if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
-          is.null(dim(column)) && length(column) <= .Machine$integer.max &&
-          (typeof(column) == "double" || !anyNA(column))) {
-        # A one-dimensional R array crosses in bulk as a NumPy array, including
-        # empty and single-row columns. Double arrays retain R's NA payload;
-        # missing integers keep their source type and scalar missing markers.
-        value <- as.vector(column)
-        dim(value) <- length(value)
-        return(value)
-      }
-      value <- .as_python_vector(column)
-      if (is.factor(column)) {
-        value
-      } else {
-        as.list(value)
-      }
-    })
+    columns <- lapply(data, .as_python_data_column)
     labels <- if (.row_names_info(data, 1L) < 0L) NULL else as.list(row.names(data))
     return(.pybridge_attr("_r_data_frame")(columns, nrow(data), labels))
+  }
+  if (is.list(data)) {
+    if (!length(data)) return(reticulate::dict())
+    return(lapply(data, function(column) {
+      # Keep nested/dimensioned inputs on their established conversion path.
+      if (is.null(column) || !is.atomic(column) || !is.null(dim(column))) return(column)
+      .as_python_data_column(column)
+    }))
   }
   data
 }

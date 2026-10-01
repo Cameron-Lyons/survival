@@ -663,7 +663,8 @@ def _newdata_frame(
             ]
         )
     )
-    n = _formula_design_row_count(newdata, design)
+    # Response/strata-only frames still derive their size from evaluated terms.
+    n = len(_column(newdata, columns[0])) if columns else _formula_design_row_count(newdata, design)
     strata_specs = dict.fromkeys(
         [spec for spec in strata_terms if strata_columns]
         + [
