@@ -7,6 +7,8 @@
 //! number of events or expected person-years in each cell are accumulated
 //! from the table's hazards.  Cells are stored in R's column-major order.
 
+use std::borrow::Cow;
+
 use super::match_ratetable::align_us_year_axis;
 use super::pystep::{PystepTable, pystep};
 use super::ratetable::RateTable;
@@ -75,6 +77,13 @@ impl PyearsCategories {
                 self.data.ncols()
             )));
         }
+        let n_cells = self.dims.iter().try_fold(1usize, |size, &dim| {
+            size.checked_mul(dim)
+                .filter(|&cells| cells <= isize::MAX as usize / size_of::<f64>())
+                .ok_or_else(|| {
+                    SurvivalError::invalid_input("category dimensions exceed addressable memory")
+                })
+        })?;
         for (d, (&factor, &dim)) in self.factors.iter().zip(&self.dims).enumerate() {
             if dim == 0 {
                 return Err(SurvivalError::invalid_input(
@@ -112,7 +121,7 @@ impl PyearsCategories {
                 }
             }
         }
-        Ok(self.dims.iter().product())
+        Ok(n_cells)
     }
 }
 
@@ -162,6 +171,37 @@ pub struct PyearsResult {
     /// Number of observations tabulated.
     #[pyo3(get)]
     pub observations: usize,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyearsResult {
+    /// Independent writable NumPy snapshots of the column-major cell tables.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let result = pyo3::types::PyDict::new(py);
+        result.set_item("pyears", self.pyears.clone().into_pyarray(py))?;
+        result.set_item("n", self.n.clone().into_pyarray(py))?;
+        result.set_item(
+            "event",
+            self.event.as_ref().map(|v| v.clone().into_pyarray(py)),
+        )?;
+        result.set_item(
+            "expected",
+            self.expected.as_ref().map(|v| v.clone().into_pyarray(py)),
+        )?;
+        result.set_item("offtable", self.offtable)?;
+        result.set_item("observations", self.observations)?;
+        result.set_item(
+            "dims",
+            self.dims
+                .iter()
+                .map(|&v| v as i64)
+                .collect::<Vec<_>>()
+                .into_pyarray(py),
+        )?;
+        Ok(result)
+    }
 }
 
 /// A rate table together with the matched starting positions of every
@@ -225,6 +265,32 @@ fn pyears1(
         pexpect: vec![0.0; n_cells],
         offtable: 0.0,
     };
+    // With only fixed categories and no expected rates, every row contributes
+    // to one cell. Avoid the interval stepper and its scratch positions.
+    if expected.is_none() && categories.factors.iter().all(|&factor| factor == 1) {
+        let mut strides = Vec::with_capacity(odim);
+        let mut stride = 1;
+        for &dim in &categories.dims {
+            strides.push(stride);
+            stride *= dim;
+        }
+        for i in 0..n {
+            let cell: usize = strides
+                .iter()
+                .enumerate()
+                .map(|(j, &stride)| (categories.data[[i, j]] as usize - 1) * stride)
+                .sum();
+            let elapsed = timeleft_of(i);
+            if elapsed > eps {
+                cells.pyears[cell] += elapsed * weights[i];
+                cells.pn[cell] += 1.0;
+            }
+            if let Some(event) = &followup.event {
+                cells.pcount[cell] += event[i] * weights[i];
+            }
+        }
+        return cells;
+    }
     let mut data = vec![0.0; odim];
     let mut data2 = vec![0.0; edim];
     for i in 0..n {
@@ -328,9 +394,9 @@ pub fn pyears(
         Some(values) => {
             validate_length(n, values.len(), "weights")?;
             validate_finite(values, "weights")?;
-            values.to_vec()
+            Cow::Borrowed(values)
         }
-        None => vec![1.0; n],
+        None => Cow::Owned(vec![1.0; n]),
     };
     let n_cells = categories.validate(n)?;
 
@@ -486,6 +552,68 @@ mod tests {
             start: None,
             stop,
             event: Some(event),
+        }
+    }
+
+    #[test]
+    fn fixed_categories_match_the_general_interval_stepper() {
+        let data = ndarray::arr2(&[[1., 1.], [2., 2.], [3., 1.], [1., 2.], [3., 2.]]);
+        let fixed = PyearsCategories {
+            factors: vec![1, 1],
+            dims: vec![3, 2],
+            cuts: vec![vec![], vec![]],
+            data: data.clone(),
+        };
+        let mut with_time = Array2::zeros((5, 3));
+        for i in 0..5 {
+            for j in 0..2 {
+                with_time[[i, j]] = data[[i, j]];
+            }
+        }
+        let stepped = PyearsCategories {
+            factors: vec![1, 1, 0],
+            dims: vec![3, 2, 1],
+            cuts: vec![vec![], vec![], vec![-1000., 1000.]],
+            data: with_time,
+        };
+        let followup = PyearsFollowup {
+            start: Some(vec![0., 2., 3., 1., 8.]),
+            stop: vec![10., 5., 3., 7., 9.],
+            event: Some(vec![1., 0., 1., 2., 1.]),
+        };
+        for weights in [None, Some([2., 0., 3., -1., 0.5].as_slice())] {
+            let expected =
+                pyears(&followup, weights, &stepped, None, PyearsExpect::Event, 2.).unwrap();
+            let actual = pyears(&followup, weights, &fixed, None, PyearsExpect::Event, 2.).unwrap();
+            assert_eq!(actual.pyears, expected.pyears);
+            assert_eq!(actual.n, expected.n);
+            assert_eq!(actual.event, expected.event);
+            assert_eq!(actual.offtable, 0.);
+        }
+    }
+
+    #[test]
+    fn oversized_category_tables_fail_before_allocation() {
+        for dims in [
+            vec![usize::MAX, 2],
+            vec![isize::MAX as usize / size_of::<f64>() + 1, 1],
+        ] {
+            let categories = PyearsCategories {
+                factors: vec![1, 1],
+                dims,
+                cuts: vec![vec![], vec![]],
+                data: ndarray::arr2(&[[1., 1.]]),
+            };
+            let error = pyears(
+                &right(vec![1.], vec![1.]),
+                None,
+                &categories,
+                None,
+                PyearsExpect::Event,
+                1.,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("addressable memory"));
         }
     }
 

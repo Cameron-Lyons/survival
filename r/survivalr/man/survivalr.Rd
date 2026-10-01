@@ -1044,7 +1044,7 @@ currently \code{mean} is supported.}
 compatibility arguments. The tabular bridge summary uses \code{dosum} for
 interval event/censor counts when explicit \code{times} are supplied.}
 \item{rmap}{Optional rate-table variable mapping for formula
-\code{survexp} and \code{pyears} calls delegated to \pkg{survival}.}
+\code{survexp} and \code{pyears} formula calls.}
 \item{expect}{Expected-count scale selector accepted by \code{pyears}.}
 \item{header}{Logical control for the heading in a \code{pyears} summary.}
 \item{pyears, expected, rate, rr, ci.r, ci.rr}{Logical controls for the
@@ -1065,7 +1065,16 @@ for \code{cipoisson}. Direct Python \code{survexp} calls accept
 \code{"ederer"}, \code{"hakulinen"}, \code{"conditional"},
 \code{"individual.h"}, and \code{"individual.s"}. For \code{yates}, method
 selects the direct or SGTT contrast path.}
-\item{etype, prefix, count}{Formula \code{finegray} endpoint and output-column
+\item{etype, prefix, count}{Formula \code{pyears} calls evaluate R terms once and pass complete category
+and matched rate-position matrices to Rust. Formulas work without a data
+argument, with ordinary grouping terms or \code{tcut}, and with a native R
+rate table. Retained models, X/Y components, factor levels and output classes
+follow R. Without a rate table, a two-column numeric response means time and
+event; with a rate table it means start and stop, without events. Fixed
+categories without expected rates use direct cell accumulation. No formula
+call delegates tabulation to stock \code{survival::pyears}.
+
+Formula \code{finegray} endpoint and output-column
 options handled by the native bridge.}
 \item{transform}{Formula \code{survobrien} option delegated to
 \code{survival::survobrien}, or the time-axis transform for \code{cox.zph}.}

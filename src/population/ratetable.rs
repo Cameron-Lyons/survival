@@ -11,6 +11,7 @@
 //! R's column-major order (the first index varies fastest).
 
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::FloatVec;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::fmt;
@@ -360,7 +361,7 @@ impl RateTable {
         dimnames: Vec<Vec<String>>,
         cutpoints: Vec<Option<Vec<f64>>>,
         types: Vec<i64>,
-        rates: Vec<f64>,
+        rates: FloatVec,
     ) -> PyResult<Self> {
         let types = types
             .iter()
@@ -371,7 +372,12 @@ impl RateTable {
             })
             .collect::<SurvivalResult<Vec<_>>>()?;
         Ok(Self::try_new(
-            dims, dimid, dimnames, cutpoints, types, rates,
+            dims,
+            dimid,
+            dimnames,
+            cutpoints,
+            types,
+            rates.into_inner(),
         )?)
     }
 

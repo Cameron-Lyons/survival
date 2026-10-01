@@ -139,3 +139,7 @@ finegray_prepared: _survival.FineGrayOutput = _survival.finegray_expand(
 )
 finegray_source: list[int] = finegray_prepared.row
 finegray_arrays: dict[str, Any] = finegray_prepared.to_arrays()
+
+# Person-years cell tables preserve list getters and expose owned array snapshots.
+pyears_cells: _survival.PyearsResult = _survival.pyears([1.0, 2.0], scale=1.0)
+pyears_snapshots: dict[str, Any] = pyears_cells.to_arrays()

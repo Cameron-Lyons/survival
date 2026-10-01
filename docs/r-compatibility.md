@@ -830,6 +830,81 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## Person-years formula preparation
+
+R `pyears` formulas now use one native tabulation path for fixed categories,
+`tcut` terms and rate tables, including formula environments without a data
+argument. Formulas and the response are evaluated once in R; prepared category
+and matched rate-position matrices cross the boundary as NumPy arrays.
+Categorical codes and labels are prepared together. R rate-table conversion
+also supplies its flattened rates as a numeric array. This removes the former
+per-row nested lists, extra Python formula call for ordinary groups, and
+stock-R formula fallback.
+
+The fixed-category Rust path accumulates directly into a cell when no expected
+rate table is supplied. Other inputs retain the shared interval stepper.
+Category products are checked against addressable array storage before allocation,
+and supplied weights are borrowed during tabulation. In fixed categories,
+zero-time rows retain observed events without adding exposure or contributing
+observation counts.
+Python prepares category columns with NumPy instead of constructing a Python
+list for every input row; retained `x` values remain ordinary nested lists.
+
+Native `PyearsResult.to_arrays()` returns independent writable NumPy snapshots
+of the column-major cell tables, dimension lengths, observation count and
+off-table exposure. The optional event/expected tables are `None` when absent.
+`RateTable` construction accepts NumPy rate vectors through the same typed
+conversion used by numerical inputs and owns its copied rates.
+
+The R wrapper retains model-frame metadata, X/Y components, missing-data actions,
+unused factor levels, category classes and table labels. It corrects numeric
+categories being converted to strings in data-frame output, scalar dimensions
+for a one-cell table, and rate-table summary/event field ordering. A no-term
+formula can return a data frame with person-years and counts; R's no-term
+`data.frame=TRUE` branch fails while assembling that result.
+
+R's two-column numeric-response convention depends on the kernel: without a
+rate table the columns are time and event; with a rate table they are start
+and stop, without events. These conventions are supported by the R bridge;
+Python's high-level formula parser still accepts scalar numeric or `Surv`
+responses. Numeric matrices with more than two columns are rejected. Zero-time
+right-censored events produce R's warning, and missing responses or invalid
+rate tables fail explicitly. Cox rate tables remain unsupported for `pyears`,
+as described below; there is no numerical fallback for them.
+
+Tests compare whole R results, including retained data, transformed terms,
+formula environments, subsets, scalar cells, rate tables and numeric responses.
+A reference-disabled check verifies native tabulation. Independent checks compare
+fixed-category results with the general interval stepper, and cover array
+layouts, ownership, zero exposure and oversized category products. The R and
+Python benchmark scripts time complete formula calls after checking outputs;
+the Python script can load the previous `_pyears.py` with `--baseline-source`.
+Explicit garbage collection is outside measured calls; allocation and any
+automatic collection are included. Peak memory is not measured.
+
+On an Intel Core Ultra 5 325 with R 4.5.3 / survival 3.8-12 and Python 3.14.7,
+100,000 input rows, three warmups and seven alternating samples gave:
+
+| Complete R call | Stock R median (range) | R/Rust median (range) |
+| --- | ---: | ---: |
+| Fixed categories | 36 ms (30–37) | 40 ms (39–43) |
+| Counting response | 31 ms (29–34) | 39 ms (37–44) |
+| `tcut` categories | 44 ms (42–45) | 52 ms (51–55) |
+| US rate table | 294 ms (287–302) | 62 ms (61–64) |
+
+The US rate-table call is 4.74× faster. The other R calls are 11–26% slower
+than stock R; these measurements include the bridge and formula overhead.
+The fixed/counting tables have 20 cells, `tcut` has 40, and the rate table
+case has 10 output cells.
+
+On its separate 100,000-row dataset, complete Python calls with fixed
+categories took 32.6 ms (31.6–36.3), compared with 48.3 ms (46.5–49.2) using
+the previous facade from `02a20158`. With `tcut`, calls took 41.3 ms
+(40.7–42.4), compared with 55.9 ms (54.8–58.6). These are 1.48× and 1.35×
+improvements. Both Python paths use the current native kernel, so this
+comparison isolates the category-conversion change. Python and R generate
+different data and their timings are not a direct cross-language comparison.
+
 ## Fine–Gray expansion
 
 `regression.finegray_expand` prepares a multi-state response without evaluating
