@@ -39,6 +39,7 @@ from ._coerce import (
     _r_format_numbers,
     _subset_sequence,
 )
+from ._surv_ops import _SurvivalOperations
 from ._types import _MISSING, StrataFactor, Timeline
 
 # ---------------------------------------------------------------------------
@@ -188,8 +189,8 @@ def _is_factor_like(values: Any) -> bool:
     return _categories(values) is not None
 
 
-@dataclass(frozen=True, init=False)
-class Surv:
+@dataclass(frozen=True, init=False, eq=False)
+class Surv(_SurvivalOperations):
     """R's ``Surv`` response object.
 
     ``time`` and ``event`` are the last two R columns (``NaN``/``None`` for ``NA``);
@@ -737,8 +738,8 @@ def cluster(x: _T) -> _T:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, init=False)
-class Surv2:
+@dataclass(frozen=True, init=False, eq=False)
+class Surv2(_SurvivalOperations):
     """R's ``Surv2``: a timeline response of ``(time, event)`` rows per subject."""
 
     time: tuple[float, ...]
@@ -773,6 +774,10 @@ class Surv2:
 
     def __len__(self) -> int:
         return len(self.time)
+
+    def as_matrix(self) -> list[list[float | int | None]]:
+        """Extract the time and normalized status columns for explicit numeric use."""
+        return [list(row) for row in zip(self.time, self.status, strict=True)]
 
     def replace_times(self, *, time: Sequence[float]) -> Surv2:
         """The same response with its time column replaced (``aeqSurv``)."""

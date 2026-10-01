@@ -464,7 +464,13 @@ def test_model_frame_is_rebuilt_without_model_true(ovarian):
     kept = r.coxph(formula, ovarian, subset=subset, model=True)
     assert fit.model is None
     assert _coxph._coxph_model_frame(kept) is kept.model
-    assert _coxph._coxph_model_frame(fit) == kept.model
+    rebuilt = _coxph._coxph_model_frame(fit)
+    assert list(rebuilt) == list(kept.model)
+    for name, expected in kept.model.items():
+        if isinstance(expected, r.Surv):
+            assert rebuilt[name].equals(expected)
+        else:
+            assert rebuilt[name] == expected
     assert "_frame" not in repr(fit)
     # the fit does not keep the n x p design rows for it
     assert fit._frame.x == []

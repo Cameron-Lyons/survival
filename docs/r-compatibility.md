@@ -1320,6 +1320,27 @@ precision and leading padding of the time columns. `transpose_surv`
 returns a plain matrix with one row per response column, and `levels_surv`
 returns event-state names or `None` for an ordinary response.
 
+`Surv` and `Surv2` reject arithmetic, comparisons (including `==` and `!=`),
+logical operations and reductions with `TypeError("Invalid operation on a
+survival time")`, matching R's `Math`, `Ops` and `Summary` groups. NumPy
+ufuncs, high-level numeric operations and implicit array conversion are
+also rejected. Previously, NumPy could treat a response as one opaque scalar
+and return it unchanged from `sum` or `min`.
+
+Use `left.equals(right)` for an explicit structural comparison of response
+columns and metadata. Matching missing values compare equal. This replaces
+the former dataclass `==` behavior; response objects are now unhashable.
+`copy.copy`, `copy.deepcopy`, pickling, row methods, `len`, and
+survival-aware `median`/`quantile` remain available. For ordinary numeric work, extract `response.as_matrix()`
+or a specific time/status column before calling NumPy; `Surv2.as_matrix()`
+returns time and normalized status. Truth-value tests on a response are
+invalid: test `len(response)` or `response is None` explicitly.
+
+`scripts/generate_surv_operations_reference.R` records 38 rejected R
+operations across nine ordinary, interval, multistate, timeline and empty
+responses. Python tests cover those reference errors, NumPy coercion and
+dispatch paths, structural equality, retained metadata and serialization.
+
 `scripts/generate_surv_vector_reference.R` records 144 operations across
 right, left, counting-process, interval, and multistate responses, plus
 concatenations. Run `scripts/benchmark_surv_vectors.py` to measure duplicate
@@ -1650,14 +1671,7 @@ level matrices, reversed variable order, matrix-valued SAS adjusters and
 empty adjustment sets. These cases correct stock-R preparation failures;
 explicit population designs also retain the fit's custom contrasts.
 
-## Not yet implemented
-
-These R entry points have no port. Calls that reach them raise an explicit
-error; none silently falls back to other behaviour.
-
-- **R operator groups**: `Surv` arithmetic, comparisons and reductions do
-  not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
-  operations). Python's ordinary object equality remains structural.
+## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and

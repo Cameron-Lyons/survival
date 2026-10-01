@@ -227,7 +227,7 @@ def test_factor_response_wrappers_preserve_multistate_labels():
     assert dropped.y.states == ("ill",)
     assert dropped.y.clabel == "well"
     nested = r.survcheck("Surv(time,I(as.factor(event)))~1", data, id=[1, 2, 3, 4])
-    assert nested.y == converted.y
+    assert nested.y.equals(converted.y)
 
 
 def test_built_in_match_summaries_do_not_appear_on_custom_tables():
