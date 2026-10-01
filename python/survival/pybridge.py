@@ -1,7 +1,7 @@
 """Internal hooks for R interoperability and native-result reconstruction."""
 
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from ._binding_utils import bind_names
@@ -80,7 +80,12 @@ def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
 
 
 def _call_fit_with_warnings(
-    function: Callable[..., Any], arguments: Mapping[str, Any], *, user_warnings: bool = False
+    function: Callable[..., Any],
+    arguments: Mapping[str, Any],
+    *,
+    positional: Sequence[Any] = (),
+    user_warnings: bool = False,
+    capture_error: bool = False,
 ) -> dict[str, Any]:
     """Return a model call and its warnings for R's condition system."""
     with warnings.catch_warnings(record=True) as recorded:
@@ -89,14 +94,28 @@ def _call_fit_with_warnings(
         warnings.simplefilter("always", RuntimeWarning)
         if user_warnings:
             warnings.simplefilter("always", UserWarning)
-        if "fit" in arguments:
-            # singledispatch model methods require their model positionally.
-            keywords = dict(arguments)
-            fit = keywords.pop("fit")
-            result = function(fit, **keywords)
-        else:
-            result = function(**arguments)
+        try:
+            if "fit" in arguments:
+                # singledispatch model methods require their model positionally.
+                keywords = dict(arguments)
+                fit = keywords.pop("fit")
+                result = function(fit, *positional, **keywords)
+            else:
+                result = function(*positional, **arguments)
+        except Exception as error:
+            if not capture_error:
+                raise
+            return {
+                "result": None,
+                "error": error,
+                "warnings": [str(issue.message) for issue in recorded],
+            }
     return {"result": result, "warnings": [str(issue.message) for issue in recorded]}
+
+
+def _raise_captured_error(error: Exception) -> None:
+    """R re-signals a captured Python error after emitting its preceding warnings."""
+    raise error
 
 
 def _r_time_transform(callback: Callable[..., Any]) -> Callable[..., Any]:
