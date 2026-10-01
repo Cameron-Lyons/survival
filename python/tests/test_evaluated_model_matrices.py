@@ -175,3 +175,60 @@ def test_evaluated_inputs_and_results_do_not_change_fitted_or_later_matrices(con
             case["references"][0]["altered_values"]["value"],
         )
         assert r.model_matrix(fit, _with_metadata=True) == stored
+
+
+@pytest.mark.parametrize(
+    "case",
+    [case for case in REFERENCE["cases"] if case["named"] and not case["cached"]],
+    ids=lambda case: case["name"],
+)
+@pytest.mark.parametrize("layout", ["strided", "big_endian", "readonly", "integer"])
+def test_evaluated_numeric_array_layouts_match_stock_without_kind_metadata(case, layout):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit = getattr(r, case["kind"])(
+            "Surv(futime,fustat)~" + case["rhs"], training_data(case, "numpy"), model=True
+        )
+    for input_name, value in case["inputs"].items():
+        if not value["tagged"]:
+            continue
+        data = evaluated_frame(value, "numpy")
+        for name, source in data.items():
+            if not isinstance(source, np.ndarray) or source.ndim != 1:
+                continue
+            if (
+                data.column_metadata[name].get("kind") == "logical"
+                and len(source)
+                and all(isinstance(item, bool | np.bool_) for item in source)
+            ):
+                data[name] = np.asarray(source, dtype=bool)
+                data.column_metadata[name].pop("kind")
+            if source.dtype.kind not in "iuf":
+                continue
+            data.column_metadata[name].pop("kind", None)
+            if layout == "strided":
+                storage = np.empty(len(source) * 2, dtype=source.dtype)
+                storage[::2] = source
+                data[name] = storage[::2]
+            elif layout == "big_endian":
+                data[name] = source.astype(source.dtype.newbyteorder(">"))
+            elif layout == "readonly":
+                source.flags.writeable = False
+            elif np.all(np.isfinite(source)) and np.all(source == np.floor(source)):
+                data[name] = source.astype(np.int64)
+        expected = case["references"][0][input_name]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            if "error" in expected["value"]:
+                with pytest.raises(ValueError, match=re.escape(expected["value"]["error"][0])):
+                    r.model_matrix(fit, data, na_action="na.fail", _with_metadata=True)
+            else:
+                actual = r.model_matrix(fit, data, na_action="na.fail", _with_metadata=True)
+                compare_matrix(actual, expected["value"])
+                group = expected["value"].get("strata")
+                assert actual.get("strata") == (None if group is None else group["labels"])
+                if group is not None:
+                    assert actual["strata_levels"] == group["levels"]
+        assert warning_messages([str(w.message) for w in caught]) == warning_messages(
+            expected["warnings"]
+        ), (case["name"], layout, input_name)
