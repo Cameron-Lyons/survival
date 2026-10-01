@@ -830,6 +830,94 @@ this does not show.
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
 
+## O'Brien risk-set expansion
+
+`survobrien` expands right-censored or counting-process observations into one
+block per event time, and applies the logit of each continuous variable's
+mid-rank percentile within that block. With strata, blocks follow the first
+appearance of distinct event-time/stratum pairs; without strata, they follow
+time order. Rows inside a block retain their input order. Counting intervals
+are open on the left and closed on the right. Tied covariates receive average
+ranks; missing covariates remain missing and do not enter the rank denominator.
+Infinite covariates participate in ranking, while interval times must be finite.
+
+The Rust implementation partitions observations by stratum, sorts each
+covariate once, and maintains ordered active rows while moving through event
+times. It writes directly to precomputed output slices instead of storing
+every risk set. For N input rows, P continuous columns and M expanded rows,
+the transformation takes O(P N log N + P M) work with O(P N + N) scratch
+storage, in addition to the returned columns. Sparse counting intervals and
+many small strata avoid scans of the full input at every event.
+
+Python's native `validation.survobrien` accepts NumPy vectors and a sequence of
+continuous columns, converts inputs once, and releases the GIL during expansion.
+Its existing list-valued result properties remain available. `block_offsets`
+contains the half-open slices of consecutive blocks, beginning at zero and
+ending at the expanded row count. `to_arrays()` returns independent, writable
+NumPy snapshots, including a list of transformed column arrays; changing or
+retaining a snapshot does not modify or retain the native result.
+
+Use `transform=False` to construct only the risk sets, with `continuous=[]`
+allowed. Rust callers have the corresponding `validation::survobrien_expand`;
+the ordinary `survobrien` function retains the default rank transformation.
+The Python formula interface uses this geometry-only path for a custom
+transformation and retrieves the source row list once, avoiding repeated
+copies of the full expansion inside the callback loop. Each callback receives
+one column of one risk set, after the initial ten-value shape check.
+
+The R `survivalr::survobrien` wrapper evaluates formulas in R and uses the shared
+kernel for every expansion. It no longer forwards unsupported formula shapes
+to stock R. This includes user-defined transformations, protected `I()` terms,
+factor/strata/cluster combinations, formula environments without a data argument,
+subsets, and custom transformations. The response is evaluated once; original
+row indices align protected and cluster columns after subset and missing-data
+removal. R column classes and names are retained. Character continuous terms
+follow R's rank ordering; Python continues treating plain strings as factors.
+As in R, a matrix-valued continuous term uses its first column. Interaction
+terms and unsupported survival response types are rejected.
+
+The documented stock-R corrections for strata selection and keeper columns
+also apply here. Cluster terms are removed by their fitted term numbers,
+and data with no events return an empty frame with the expected columns.
+Custom transforms must return one value per risk-set row. Native snapshots
+avoid per-element conversion when returning large expansions to R.
+
+Independent tests reconstruct risk sets and ranks by pairwise comparisons over
+80 randomized right/counting, stratified/unstratified cases. Additional checks
+cover signed zero, infinities, missing values, no events, owned NumPy results,
+concurrent calls, GIL release and custom callback batches. R tests compare
+general formulas and custom transforms against stock R, with explicit
+corrections for its documented strata/indexing defects, and disable the R
+reference to verify the native path.
+
+`scripts/benchmark_survobrien.R` compares complete R-facing calls with stock R,
+including formula preparation, numerical expansion, conversion and frame
+assembly. Only the documented strata typos are corrected in the reference.
+`scripts/benchmark_survobrien.py` measures complete Python formula calls with
+default and custom transforms. Both scripts verify results before timing,
+warm their paths and exclude explicit garbage collection. Returned expansion
+allocation and any garbage collection triggered inside a measured call are
+included. Neither script measures peak memory.
+
+With 2,000 input rows, two continuous columns, three warmup calls and seven
+alternating R measurements on an Intel Core Ultra 5 325 (R 4.5.3,
+survival 3.8-12, Python 3.14.7), the complete-call results were:
+
+| Workload | Expanded rows | Stock R median (range) | R/Rust median (range) |
+| --- | ---: | ---: | ---: |
+| Right censored | 674,400 | 282 ms (276–286) | 98 ms (92–103) |
+| 100 strata | 7,068 | 91 ms (89–93) | 6 ms (5–6) |
+| Counting intervals | 2,639 | 33 ms (32–34) | 3 ms (2–3) |
+| Custom centering transform | 674,400 | 143 ms (142–144) | 82 ms (81–83) |
+
+Each R case has 666 event blocks. These medians improved by 2.88×, 15.17×,
+11.00× and 1.74× respectively. The separate Python benchmark, with 2,000
+rows producing 665,809 rows in 667 blocks, measured 90.4 ms (87.8–92.1) for
+default ranks and 136.8 ms (135.4–137.5) for a NumPy centering callback across
+seven samples. Its generated data differ from the R benchmark, so these
+Python timings are not a direct comparison with the R table. Results depend
+on risk-set sizes, covariate counts, callback work and conversion costs.
+
 ## SAS-style Yates tests
 
 `yates(method="sgtt")` computes SAS-style type III tests for selected

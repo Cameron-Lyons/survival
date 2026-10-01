@@ -82,6 +82,14 @@ def _assert_detaches(call: Callable[[], object]) -> None:
     )
 
 
+def test_survobrien_releases_the_gil():
+    n = 1800
+    times = np.arange(n, dtype=float)
+    events = np.ones(n, dtype=np.int32)
+    columns = [np.sin(times), np.cos(times)]
+    _assert_detaches(lambda: survival.validation.survobrien(times, events, columns))
+
+
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
 def test_cox_fits_on_four_threads_overlap():
     time_, status, x = _cox_data(100_000)

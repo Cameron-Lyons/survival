@@ -114,7 +114,9 @@ pub use survcheck::{
     SurvCheckEvents, SurvCheckFlags, SurvCheckInput, SurvCheckIstate, SurvCheckProblem,
     SurvCheckResult, SurvCheckTransitions, survcheck, survcheck_py,
 };
-pub use survobrien::{SurvObrienExpansion, SurvObrienInput, survobrien, survobrien_py};
+pub use survobrien::{
+    SurvObrienExpansion, SurvObrienInput, survobrien, survobrien_expand, survobrien_py,
+};
 pub use time_dependent_auc_module::{
     CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,

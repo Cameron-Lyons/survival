@@ -8862,6 +8862,9 @@ class SurvExpResult:
     def time(self) -> list[float]: ...
 
 class SurvObrienExpansion:
+    def to_arrays(self) -> dict[str, Any]: ...
+    @property
+    def block_offsets(self) -> list[int]: ...
     @property
     def event_times(self) -> list[float]: ...
     @property
@@ -13896,11 +13899,12 @@ def survmean_curves(
     scale: float = 1.0,
 ) -> list[SurvfitSummaryRow]: ...
 def survobrien(
-    time: Sequence[float],
-    status: Sequence[int],
-    continuous: Sequence[Sequence[float]],
-    start: Sequence[float] | None = None,
-    strata: Sequence[int] | None = None,
+    time: ArrayLike,
+    status: ArrayLike,
+    continuous: Sequence[ArrayLike],
+    start: ArrayLike | None = None,
+    strata: ArrayLike | None = None,
+    transform: bool = True,
 ) -> SurvObrienExpansion: ...
 def survpenal_fit(
     data: SurvregData,

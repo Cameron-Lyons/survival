@@ -26,6 +26,7 @@ from ._coerce import (
     _coerce_array_like,
     _finite_float,
     _float_vector,
+    _floats_or_nan,
     _int_vector,
     _integer_scalar,
     _is_missing_value,
@@ -769,7 +770,7 @@ def _survobrien_columns(
         numeric = None
         if term.transform != "I" and not term.categorical:
             try:
-                numeric = [float(value) for value in _term_values(data, term, n)]
+                numeric = _floats_or_nan(_term_values(data, term, n))
             except (TypeError, ValueError):
                 numeric = None
         if numeric is None:
@@ -785,6 +786,7 @@ def _survobrien_transformed(
     transform: Callable[..., Any] | None,
     continuous: list[tuple[str, list[float]]],
     expansion: Any,
+    rows: Sequence[int],
 ) -> list[tuple[str, list[float]]]:
     """The transformed columns: the Rust logit-rank default, or ``transform`` applied to the
     values of every risk set (R's ``lapply(indx, function(x) transform(z[x]))``)."""
@@ -794,22 +796,19 @@ def _survobrien_transformed(
             (name, list(column))
             for (name, _values), column in zip(continuous, expansion.transformed, strict=True)
         ]
-    blocks: dict[int, list[int]] = {}
-    for position, block in enumerate(expansion.strata):
-        blocks.setdefault(block, []).append(position)
+    offsets = expansion.block_offsets
     out: list[tuple[str, list[float]]] = []
     for name, values in continuous:
-        column = [0.0] * len(expansion.row)
-        for positions in blocks.values():
-            transformed = transform([values[expansion.row[p]] for p in positions])
+        column = [0.0] * len(rows)
+        for start, end in zip(offsets[:-1], offsets[1:], strict=True):
+            transformed = transform([values[row] for row in rows[start:end]])
             if isinstance(transformed, int | float):
                 # a length-one R vector comes back from reticulate as a scalar
                 transformed = [transformed]
             result = _float_vector(transformed, "transform")
-            if len(result) != len(positions):
+            if len(result) != end - start:
                 raise ValueError("Transform function must be 1 to 1")
-            for position, value in zip(positions, result, strict=True):
-                column[position] = value
+            column[start:end] = result
         out.append((name, column))
     return out
 
@@ -854,9 +853,10 @@ def survobrien(
     expansion = _core.survobrien(
         list(response.time),
         [int(event) for event in response.event],
-        [values for _name, values in continuous],
+        [values for _name, values in continuous] if transform is None else [],
         start=None if response.start is None else list(response.start),
         strata=strata_codes,
+        transform=transform is None,
     )
     rows = list(expansion.row)
     columns: list[tuple[str, list[Any]]] = []
@@ -875,7 +875,7 @@ def survobrien(
     ]
     if not terms.clusters:
         columns.append((".id.", [row + 1 for row in rows]))
-    columns += _survobrien_transformed(transform, continuous, expansion)
+    columns += _survobrien_transformed(transform, continuous, expansion, rows)
     columns.append((".strata.", list(expansion.strata)))
     # data.frame()'s check.names: make.names(unique = TRUE)
     names = _make_names_unique([name for name, _values in columns])

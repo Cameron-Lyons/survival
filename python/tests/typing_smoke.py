@@ -25,6 +25,13 @@ def _check_yates_prediction_types() -> None:
     assert_type(result.prediction_variance, list[list[float]] | None)
 
 
+def _check_obrien_expansion_types() -> None:
+    result = _survival.survobrien([1, 2, 3], [1, 1, 0], [[2, 1, 3]])
+    assert_type(result, _survival.SurvObrienExpansion)
+    assert_type(result.block_offsets, list[int])
+    assert_type(result.to_arrays(), dict[str, Any])
+
+
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:
     cox = r.coxph("Surv(time, status) ~ age", data)
     assert_type(cox, r.CoxphModel)
