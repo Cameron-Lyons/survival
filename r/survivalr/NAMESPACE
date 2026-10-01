@@ -1,4 +1,8 @@
 export(Surv)
+useDynLib(survivalr, .registration = TRUE, .fixes = "C_")
+S3method("$", survival_py_object)
+S3method("[[", survival_py_object)
+S3method("$<-", survival_py_object)
 export(Surv2)
 export(aareg)
 S3method("[", aareg)

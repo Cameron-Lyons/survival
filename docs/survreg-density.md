@@ -145,6 +145,10 @@ provide their own callback reconstruction. Python pickle serializes metadata
 and Python callables separately. Pickle data is tied to the package's binary
 state format, as for the other fitted models.
 
+The R facade's standard serialization saves the original R functions and their
+environments alongside that Python state. This includes local custom
+distribution callbacks. See [R model persistence](r-model-persistence.md).
+
 ## Evaluation contract
 
 Each likelihood evaluation calls the source once with all standardized lower

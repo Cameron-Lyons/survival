@@ -407,7 +407,7 @@ attrassign <- function(object, tt) {
 
 .as_python_surv <- function(value) {
   if (inherits(value, "survival_py_surv")) {
-    return(value)
+    return(.restore_python(value))
   }
   if (!inherits(value, "Surv") || !is.matrix(value)) {
     return(value)
@@ -1110,6 +1110,7 @@ attrassign <- function(object, tt) {
   } else {
     NULL
   }
+  curve <- .restore_python(curve)
   if (!inherits(curve, "python.builtin.object") || !reticulate::py_has_attr(curve, "model")) {
     return(NULL)
   }
@@ -1314,6 +1315,7 @@ attrassign <- function(object, tt) {
 }
 
 .as_prediction_result <- function(value, matrix_result = FALSE, col.names = NULL) {
+  value <- .restore_python(value)
   if (inherits(value, "python.builtin.object") &&
       reticulate::py_has_attr(value, "fit") &&
       reticulate::py_has_attr(value, "se_fit")) {
@@ -1545,7 +1547,7 @@ attrassign <- function(object, tt) {
     return(value)
   }
   class(value) <- unique(c(classes, class(value)))
-  value
+  .snapshot_python(value)
 }
 
 # `id = id` names a column of the data: pass the name, so the Python fit records
@@ -1585,30 +1587,35 @@ attrassign <- function(object, tt) {
 .split_survfit_strata <- function(result) {
   curves <- .python_attr("_survfit_strata_curves")(result)
   if (is.list(curves) && !inherits(curves, "python.builtin.object")) {
-    attr(curves, "python_survfit") <- result
+    curves <- lapply(curves, .snapshot_python)
+    attr(curves, "python_survfit") <- .snapshot_python(result)
   }
   curves
 }
 
 .unwrap_grouped_survfit <- function(value) {
   python_object <- attr(value, "python_survfit", exact = TRUE)
-  if (!is.null(python_object)) python_object else value
+  if (!is.null(python_object)) return(.restore_python(python_object))
+  if (inherits(value, "survival_py_survfit") && is.list(value)) {
+    return(lapply(unclass(value), .restore_python))
+  }
+  .restore_python(value)
 }
 
 .call_data_prep <- function(name, ...) {
-  do.call(.data_prep_attr(name), .compact_null(list(...)))
+  do.call(.data_prep_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .call_pybridge <- function(name, ...) {
-  do.call(.pybridge_attr(name), .compact_null(list(...)))
+  do.call(.pybridge_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .call_regression <- function(name, ...) {
-  do.call(.regression_attr(name), .compact_null(list(...)))
+  do.call(.regression_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .call_survival_analysis <- function(name, ...) {
-  do.call(.survival_analysis_attr(name), .compact_null(list(...)))
+  do.call(.survival_analysis_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .core_nsk_basis <- function(x, df, knots, intercept, boundary_knots) {
@@ -3244,11 +3251,12 @@ blog <- function(edge = 0.05) {
 }
 
 .result_field <- function(result, name) {
+  result <- .restore_python(result)
   if (is.list(result) && !is.null(result[[name]])) {
     return(result[[name]])
   }
   if (inherits(result, "python.builtin.object") && reticulate::py_has_attr(result, name)) {
-    return(reticulate::py_to_r(reticulate::py_get_attr(result, name)))
+    return(.snapshot_python(reticulate::py_to_r(reticulate::py_get_attr(result, name))))
   }
   NULL
 }
@@ -6428,7 +6436,7 @@ model.frame.formula <- function(formula, ...) {
     stop("argument is not a Surv object", call. = FALSE)
   }
 
-  columns <- .pybridge_attr("_surv_columns")(x)
+  columns <- .pybridge_attr("_surv_columns")(.restore_python(x))
   surv_type <- columns$type
   # a missing time is NaN on the Python side and NA in an R Surv
   time <- .surv_na_times(.as_numeric_vector(columns$time))
@@ -9170,6 +9178,7 @@ summary.survival_py_anova <- function(object, ...) {
 }
 
 .is_survival_py_multistate_curve <- function(x) {
+  x <- .restore_python(x)
   inherits(x, "python.builtin.object") &&
     reticulate::py_has_attr(x, "states") &&
     reticulate::py_has_attr(x, "pstate")
@@ -9320,7 +9329,7 @@ summary.survival_py_anova <- function(object, ...) {
 
 .as_survival_py_survfit_curve <- function(x) {
   class(x) <- unique(c("survival_py_survfit", "survival_py_object", class(x)))
-  x
+  .snapshot_python(x)
 }
 
 .survival_py_survfit_group_indices <- function(i, targets, dimension = "strata") {
@@ -9750,7 +9759,7 @@ print.survival_py_object <- function(x, ...) {
   if (!inherits(x, "python.builtin.object")) {
     return(NextMethod())
   }
-  cat(as.character(reticulate::py_str(x)), "\n")
+  cat(as.character(reticulate::py_str(.restore_python(x))), "\n")
   invisible(x)
 }
 

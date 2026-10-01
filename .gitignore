@@ -19,3 +19,6 @@ Cargo.lock
 *.swo
 *~
 python/survival/*.so
+r/survivalr/src/*.o
+r/survivalr/src/*.so
+r/survivalr/src/*.dll

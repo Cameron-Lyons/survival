@@ -1,6 +1,9 @@
 \name{survivalr}
 \alias{survivalr}
 \alias{survivalr-package}
+\alias{$.survival_py_object}
+\alias{[[.survival_py_object}
+\alias{$<-.survival_py_object}
 \alias{Surv}
 \alias{Surv2}
 \alias{aareg}
@@ -1271,6 +1274,13 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
+Fitted models and responses support \code{saveRDS}/\code{readRDS},
+\code{save}/\code{load}, and \code{serialize}/\code{unserialize} with
+serialization version 3. Saving captures the current Python state and original
+R callbacks with their environments. Loading defers Python reconstruction until
+first use. Compatible installed R and Python packages are required, and model
+files must be trusted because their state uses Python pickle. Files created
+before this support must be recreated from the original data before saving.
 Response conventions follow \pkg{survival} 3.8-12: \code{Surv2} statuses
 must be logical, numeric, or factors; missing binary statuses remain missing.
 Multistate responses and transition tables preserve the censoring factor level.

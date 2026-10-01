@@ -9,6 +9,8 @@ Description: Experimental R facade for the Rust-backed Python survival package.
     computation to the Python survival.r_api module through reticulate.
 License: MIT + file LICENSE
 Encoding: UTF-8
+Depends: R (>= 3.6.0)
+NeedsCompilation: yes
 SystemRequirements: Python (>= 3.11) with the survival Python package
 Imports:
     graphics,

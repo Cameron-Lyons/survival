@@ -13,6 +13,16 @@ Common result objects such as `survfit`, `basehaz`, `survdiff`, `concordance`,
 `cox.zph`, `coxph.detail`, and `anova` outputs can also be converted with
 `as.data.frame`.
 
+Models and response objects support `saveRDS`/`readRDS`, `save`/`load`, and
+`serialize`/`unserialize` with R's default serialization version 3. Saved files
+contain the complete Python model state; Python is restored on first use in a
+new session. Custom AFT distributions keep their R functions and captured
+environments. Saving captures the current state, without copying the fitted
+model during fitting. Install a compatible `survivalr` and Python `survival`
+package before loading, and read only trusted model files because the state
+uses Python pickle. See [model persistence](../../docs/r-model-persistence.md)
+for the format and verification details.
+
 Response semantics and the bridge's CI reference follow survival 3.8-12.
 `Surv2` accepts binary numeric/logical statuses or explicit factors and keeps
 missing statuses missing. Multistate responses and transition tables preserve

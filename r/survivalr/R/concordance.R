@@ -81,7 +81,7 @@ concordance.survival_py_model <- function(object, ..., newdata, cluster, ymin, y
                                           influence = 0, ranks = FALSE, timefix = TRUE,
                                           keepstrata = 10) {
   Call <- match.call()
-  fits <- list(object, ...)
+  fits <- lapply(list(object, ...), .restore_python)
   nfit <- length(fits)
   fit_names <- as.character(Call)[1L + seq_len(nfit)]
   fit_class <- if (inherits(object, "survival_py_coxph")) {

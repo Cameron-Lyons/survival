@@ -37,6 +37,12 @@ pickle retain these callbacks. Native Rust callers implement
 `regression::SurvregCallbacks`. See [AFT distribution callbacks](survreg-density.md)
 for the batch contract, examples, and serialization requirements.
 
+The R facade also supports saving fitted models and responses with the standard
+R serialization functions. It embeds Python pickle state and saves original
+R callbacks with their environments, restoring Python objects on first use.
+See [R model persistence](r-model-persistence.md) for the version and installation
+requirements.
+
 Cox and AFT formulas support stratum-specific effects such as
 `age * strata(sex)`, `age:strata(sex)`, and interactions with compound strata
 or categorical covariates. The strata still determine the Cox baseline hazards
