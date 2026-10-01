@@ -2212,6 +2212,17 @@ class CoxPHFit:
         weighted: bool = True,
         collapse: ArrayLike | None = None,
     ) -> list[list[float]]: ...
+    def expected_survival(
+        self,
+        newdata: ArrayLike,
+        group: ArrayLike,
+        weights: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+        y: ArrayLike | None = None,
+        times: ArrayLike | None = None,
+        method: str = "ederer",
+    ) -> SurvExpResult: ...
     def hazard_ratios(self) -> list[float]: ...
     def martingale_residuals(
         self,
@@ -2575,6 +2586,17 @@ class CoxZphTest:
 
 class CoxpenalFit:
     def basehaz(self, centered: bool = True) -> Basehaz: ...
+    def expected_survival(
+        self,
+        newdata: ArrayLike,
+        group: ArrayLike,
+        weights: ArrayLike,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+        y: ArrayLike | None = None,
+        times: ArrayLike | None = None,
+        method: str = "ederer",
+    ) -> SurvExpResult: ...
     def survfit(
         self,
         newdata: ArrayLike | None = None,
@@ -8854,6 +8876,7 @@ class SurvDiffResult:
     def var(self) -> list[list[float]]: ...
 
 class SurvExpResult:
+    def to_arrays(self) -> dict[str, Any]: ...
     @property
     def method(self) -> str: ...
     @property
@@ -13765,6 +13788,18 @@ def survexp_cox(
     weights: Sequence[float],
     y: Sequence[float] | None = None,
     times: Sequence[float] | None = None,
+    method: str = "ederer",
+) -> SurvExpResult: ...
+def survexp_cox_prepared(
+    time: ArrayLike,
+    cumhaz: ArrayLike,
+    lengths: ArrayLike,
+    risk: ArrayLike,
+    strata: ArrayLike,
+    group: ArrayLike,
+    weights: ArrayLike,
+    y: ArrayLike | None = None,
+    times: ArrayLike | None = None,
     method: str = "ederer",
 ) -> SurvExpResult: ...
 def survexp_mn() -> RateTable: ...

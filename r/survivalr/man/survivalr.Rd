@@ -1091,8 +1091,13 @@ matrices. Use at most one of these.}
 \item{ratetable}{Optional Python-backed rate table for direct
 \code{survexp} calls, or a native R reference table for
 \code{match.ratetable}. Omit it in direct \code{survexp} calls to use the
-bundled Python US table. Formula calls are delegated to
-\code{survival::survexp}.}
+bundled Python US table. Formula calls accept native R rate tables and
+single-state Cox models fitted by R or Python. R evaluates the model frame;
+shared Rust kernels compute the baselines and expected survival. Cohort Cox
+predictions aggregate baseline hazards directly without allocating a curve for
+every subject. Individual Cox methods use the response of the fitted model.
+Subsets and missing rows remain aligned, and new-data offsets enter relative
+risk multiplicatively.}
 \item{times}{Optional \code{rttright} output times or requested
 \code{summary.survival_py_survfit} times. Multiple \code{rttright} times
 return a numeric matrix with one row per input observation and one column per

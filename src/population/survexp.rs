@@ -111,6 +111,27 @@ pub struct SurvExpResult {
     pub method: String,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl SurvExpResult {
+    /// Independent writable NumPy snapshots; curve matrices are time by group.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let output = pyo3::types::PyDict::new(py);
+        output.set_item("time", self.time.clone().into_pyarray(py))?;
+        for (name, values) in [("surv", &self.surv), ("n_risk", &self.n_risk)] {
+            output.set_item(
+                name,
+                FloatMatrix::from_rows(values.clone())?
+                    .into_inner()
+                    .into_pyarray(py),
+            )?;
+        }
+        output.set_item("method", &self.method)?;
+        Ok(output)
+    }
+}
+
 /// R's `survexp` for a rate table.
 pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult<SurvExpResult> {
     let n = input.positions.nrows();
