@@ -57,6 +57,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(yates_sgtt_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_risk_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_survival_py, m)?)?;
+    m.add_function(wrap_pyfunction!(yates_survival_summary_py, m)?)?;
     m.add_function(wrap_pyfunction!(population_means_py, m)?)?;
     m.add_function(wrap_pyfunction!(yates_estimable_py, m)?)?;
     m.add_function(wrap_pyfunction!(uno_c_index, m)?)?;
@@ -160,6 +161,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         YatesEstimate,
         YatesContrast,
         YatesCurves,
+        YatesPrediction,
         UnoCIndexResult,
         ConcordanceComparisonResult,
         CIndexDecompositionResult,

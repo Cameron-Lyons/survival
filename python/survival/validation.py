@@ -209,6 +209,7 @@ __all__ = bind_names(
         "uno_c_index",
         "YatesContrast",
         "YatesCurves",
+        "YatesPrediction",
         "YatesEstimate",
         "YatesResult",
         "YatesSgttResult",
@@ -217,6 +218,7 @@ __all__ = bind_names(
         "yates_estimable",
         "yates_risk",
         "yates_survival",
+        "yates_survival_summary",
         "yates_population_means",
     ],
 )

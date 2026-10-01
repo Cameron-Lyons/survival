@@ -235,8 +235,12 @@ from ._types import (
 )
 from ._yates import yates
 from ._yates_model import YatesModel
+from ._yates_setup import YatesLinkPrediction, YatesSurvivalSetup, yates_setup
 
 __all__ = [
+    "YatesLinkPrediction",
+    "YatesSurvivalSetup",
+    "yates_setup",
     "TermMetadata",
     "SpecialTerms",
     "attrassign",

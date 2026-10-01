@@ -11165,6 +11165,15 @@ class YatesEstimate:
     @property
     def std(self) -> float: ...
 
+class YatesPrediction:
+    def __init__(
+        self,
+        time: ArrayLike | None = None,
+        cumhaz: ArrayLike | None = None,
+        rmean: float = ...,
+    ) -> None: ...
+    def predict(self, eta: ArrayLike) -> NDArray[np.float64]: ...
+
 class YatesResult:
     @property
     def cmat(self) -> list[list[float]]: ...
@@ -14217,3 +14226,8 @@ def yates_survival(
     test: str = "global",
     term: str | None = None,
 ) -> YatesResult: ...
+def yates_survival_summary(
+    mean: ArrayLike,
+    variance: ArrayLike,
+    conf_int: float = 0.95,
+) -> YatesCurves: ...

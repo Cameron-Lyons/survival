@@ -22,10 +22,11 @@ use std::collections::HashSet;
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
-use crate::internal::numpy_utils::{FloatRows, FloatVec};
+use crate::internal::numpy_utils::{FloatMatrix, FloatRows, FloatVec};
 use crate::internal::qr::LinpackQr;
 use crate::internal::simd::dot_product;
 use crate::internal::validation::{validate_finite, validate_length};
+use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 mod rng;
@@ -518,6 +519,7 @@ pub struct YatesSimulation<'a> {
 
 /// A [`YatesPredictor`] ready to evaluate: the risk, or the restricted mean
 /// followed by the survival curve from time 0 on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum Prediction {
     Risk,
     /// `cumhaz = c(0, baseline$cumhaz)`; `widths = c(diff(c(0, pmin(rmean,
@@ -539,11 +541,6 @@ impl Prediction {
         else {
             return Ok(Self::Risk);
         };
-        if time.is_empty() {
-            return Err(SurvivalError::invalid_input(
-                "the baseline curve has no times",
-            ));
-        }
         validate_length(time.len(), cumhaz.len(), "cumhaz")?;
         validate_finite(time, "time")?;
         validate_finite(cumhaz, "cumhaz")?;
@@ -611,6 +608,68 @@ impl Prediction {
                 out
             })
             .collect()
+    }
+}
+
+/// Prepared nonlinear Yates prediction. Baseline work is done once; evaluating
+/// N predictors allocates only the N-by-output-width result matrix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[pyclass(frozen, module = "survival._survival", skip_from_py_object)]
+pub struct YatesPrediction {
+    prediction: Prediction,
+}
+
+impl YatesPrediction {
+    pub fn new(predictor: YatesPredictor<'_>) -> SurvivalResult<Self> {
+        Ok(Self {
+            prediction: Prediction::new(predictor)?,
+        })
+    }
+
+    /// One row per eta. Risk has one column; survival has restricted mean,
+    /// time-zero survival, then one column per original baseline time.
+    /// Nonfinite eta values follow floating-point exponential arithmetic.
+    pub fn evaluate(&self, eta: &[f64]) -> Array2<f64> {
+        let mut output = Array2::zeros((eta.len(), self.prediction.width()));
+        for (&value, mut row) in eta.iter().zip(output.rows_mut()) {
+            self.prediction
+                .accumulate(value, row.as_slice_mut().expect("standard layout"));
+        }
+        output
+    }
+}
+
+#[pymethods]
+impl YatesPrediction {
+    #[new]
+    #[pyo3(signature = (time=None, cumhaz=None, rmean=f64::INFINITY))]
+    fn new_py(time: Option<FloatVec>, cumhaz: Option<FloatVec>, rmean: f64) -> PyResult<Self> {
+        let predictor = match (&time, &cumhaz) {
+            (None, None) => YatesPredictor::Risk,
+            (Some(time), Some(cumhaz)) => YatesPredictor::Survival {
+                time,
+                cumhaz,
+                rmean,
+                conf_int: 0.95,
+            },
+            _ => {
+                return Err(SurvivalError::invalid_input(
+                    "time and cumhaz must be supplied together",
+                )
+                .into());
+            }
+        };
+        Ok(Self::new(predictor)?)
+    }
+
+    #[pyo3(name = "predict")]
+    fn predict_py(&self, py: Python<'_>, eta: FloatVec) -> FloatMatrix {
+        FloatMatrix::new(py.detach(|| self.evaluate(&eta)))
+    }
+
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
     }
 }
 
@@ -758,7 +817,9 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
                 .into_iter()
                 .map(|row| row.into_iter().map(|value| value / denominator).collect())
                 .collect();
-            result.summary = Some(survival_curves(&mean, &variance, conf_int));
+            result.summary = Some(survival_curves(nlev, width - 2, conf_int, |level, time| {
+                (mean[level][time + 2], variance[level][time + 2])
+            }));
         }
     }
     Ok(result)
@@ -768,15 +829,21 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
 /// and variances of each level's curve (the columns after the restricted
 /// mean and the time-0 value), `surv`, `chaz = -log(surv)`,
 /// `std.err = std / surv` and the limits `exp(-(chaz -/+ z * std))`.
-fn survival_curves(mean: &[Vec<f64>], variance: &[Vec<f64>], conf_int: f64) -> YatesCurves {
+fn survival_curves(
+    nlevel: usize,
+    ntime: usize,
+    conf_int: f64,
+    read: impl Fn(usize, usize) -> (f64, f64),
+) -> YatesCurves {
     let z = -qnorm((1.0 - conf_int) / 2.0, true, false);
-    let ntime = mean[0].len() - 2;
     let per_time = |f: &dyn Fn(f64, f64) -> f64| -> Vec<Vec<f64>> {
         (0..ntime)
             .map(|t| {
-                mean.iter()
-                    .zip(variance)
-                    .map(|(m, v)| f(m[t + 2], v[t + 2].sqrt()))
+                (0..nlevel)
+                    .map(|level| {
+                        let (mean, variance) = read(level, t);
+                        f(mean, variance.sqrt())
+                    })
                     .collect()
             })
             .collect()
@@ -788,6 +855,43 @@ fn survival_curves(mean: &[Vec<f64>], variance: &[Vec<f64>], conf_int: f64) -> Y
         lower: per_time(&|surv, std| (-(-surv.ln() + z * std)).exp()),
         upper: per_time(&|surv, std| (-(-surv.ln() - z * std)).exp()),
     }
+}
+
+/// Convert population means and variances of prepared survival predictions
+/// to curves at the baseline times. Drop restricted mean and time zero,
+/// and recompute cumulative hazard, correcting R's summary metadata defects.
+pub fn yates_survival_summary(
+    mean: ArrayView2<'_, f64>,
+    variance: ArrayView2<'_, f64>,
+    conf_int: f64,
+) -> SurvivalResult<YatesCurves> {
+    if mean.nrows() == 0 || mean.ncols() < 2 || mean.dim() != variance.dim() {
+        return Err(SurvivalError::invalid_input(
+            "mean and variance need matching matrices with at least one row and two columns",
+        ));
+    }
+    if !(conf_int > 0.0 && conf_int < 1.0) {
+        return Err(SurvivalError::invalid_input(
+            "conf_int must be between 0 and 1",
+        ));
+    }
+    Ok(survival_curves(
+        mean.nrows(),
+        mean.ncols() - 2,
+        conf_int,
+        |level, time| (mean[(level, time + 2)], variance[(level, time + 2)]),
+    ))
+}
+
+#[pyfunction(name = "yates_survival_summary")]
+#[pyo3(signature = (mean, variance, conf_int=0.95))]
+pub fn yates_survival_summary_py(
+    py: Python<'_>,
+    mean: FloatMatrix,
+    variance: FloatMatrix,
+    conf_int: f64,
+) -> PyResult<YatesCurves> {
+    Ok(py.detach(|| yates_survival_summary(mean.view(), variance.view(), conf_int))?)
 }
 
 /// Python entry point: `yates(cmat, beta, vmat, offset=0.0, sigma2=None,
@@ -936,6 +1040,60 @@ pub fn yates_estimable_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_prediction_has_risk_and_restricted_survival_layouts() {
+        let risk = YatesPrediction::new(YatesPredictor::Risk).unwrap();
+        let values = risk.evaluate(&[f64::NEG_INFINITY, 0.0, 2.0_f64.ln(), f64::NAN]);
+        assert_eq!(values.dim(), (4, 1));
+        assert_eq!(values[(0, 0)], 0.0);
+        assert_eq!(values[(1, 0)], 1.0);
+        assert!((values[(2, 0)] - 2.0).abs() < 1e-14);
+        assert!(values[(3, 0)].is_nan());
+        let survival = YatesPrediction::new(YatesPredictor::Survival {
+            time: &[1.0, 3.0],
+            cumhaz: &[2.0_f64.ln(), 4.0_f64.ln()],
+            rmean: 2.0,
+            conf_int: 0.95,
+        })
+        .unwrap();
+        let values = survival.evaluate(&[0.0, 2.0_f64.ln()]);
+        let expected = ndarray::arr2(&[[1.5, 1.0, 0.5, 0.25], [1.25, 1.0, 0.25, 0.0625]]);
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        assert_eq!(survival.evaluate(&[]).dim(), (0, 4));
+        let empty = YatesPrediction::new(YatesPredictor::Survival {
+            time: &[],
+            cumhaz: &[],
+            rmean: f64::NEG_INFINITY,
+            conf_int: 0.95,
+        })
+        .unwrap();
+        assert_eq!(empty.evaluate(&[0.0]), ndarray::arr2(&[[0.0, 1.0]]));
+    }
+
+    #[test]
+    fn prepared_summary_aligns_times_and_handles_strided_input() {
+        use ndarray::{arr2, s};
+        let mean = arr2(&[
+            [1.5, -1., 1., -1., 0.5, -1., 0.25, -1.],
+            [1.25, -1., 1., -1., 0.25, -1., 0.0625, -1.],
+        ]);
+        let variance = arr2(&[
+            [0., -1., 0., -1., 0.01, -1., 0.0025, -1.],
+            [0., -1., 0., -1., 0.04, -1., 0.01, -1.],
+        ]);
+        let curves =
+            yates_survival_summary(mean.slice(s![.., ..;2]), variance.slice(s![.., ..;2]), 0.95)
+                .unwrap();
+        assert_eq!(curves.surv, vec![vec![0.5, 0.25], vec![0.25, 0.0625]]);
+        assert_eq!(curves.std_err, vec![vec![0.2, 0.8], vec![0.2, 1.6]]);
+        assert!((curves.cumhaz[0][0] - 2.0_f64.ln()).abs() < 1e-14);
+        assert!((curves.lower[0][0] - 0.5 * (-1.959963984540054_f64 * 0.1).exp()).abs() < 1e-14);
+        assert!(yates_survival_summary(mean.view(), variance.slice(s![..1, ..]), 0.95).is_err());
+        assert!(yates_survival_summary(mean.view(), variance.view(), 1.0).is_err());
+    }
 
     #[test]
     fn jacobi_eigen_recovers_a_known_spectrum() {

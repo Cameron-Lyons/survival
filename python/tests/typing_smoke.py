@@ -13,6 +13,10 @@ from survival import r
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:
     cox = r.coxph("Surv(time, status) ~ age", data)
     assert_type(cox, r.CoxphModel)
+    setup = r.yates_setup(cox, "survival")
+    assert_type(setup, r.YatesLinkPrediction | r.YatesSurvivalSetup | None)
+    if isinstance(setup, r.YatesSurvivalSetup):
+        assert_type(setup.summary([[1.0, 1.0]], [[0.0, 0.0]]), r.CoxSurvfitResult)
     terms = r.TermMetadata(["age"])
     assert_type(r.attrassign(r.model_matrix(cox), terms), dict[str, list[int]])
     assert_type(r.untangle_specials(terms, "strata"), r.SpecialTerms)

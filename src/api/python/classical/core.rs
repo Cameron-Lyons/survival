@@ -74,6 +74,7 @@ fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<P
         crate::validation::AnovaRow,
         crate::validation::AnovaCoxphResult,
         crate::validation::YatesContrast,
+        crate::validation::YatesPrediction,
         crate::validation::SurvCheckFlags,
         crate::validation::SurvCheckTransitions,
         crate::validation::SurvCheckEvents,
