@@ -91,6 +91,17 @@ def _call_fit_with_warnings(
     return {"result": result, "warnings": [str(issue.message) for issue in recorded]}
 
 
+def _r_time_transform(callback: Callable[..., Any]) -> Callable[..., Any]:
+    """Pass an R callback its input factor levels without per-row bridge calls."""
+    from .r._coerce import _categories
+
+    def transform(values: Any, time: Any, riskset: Any, weights: Any, *, status: Any = None) -> Any:
+        return callback(list(values), time, riskset, weights, _categories(values), status)
+
+    transform._survival_tt_r_callback = True  # type: ignore[attr-defined]
+    return transform
+
+
 def _surv_columns(response: Any) -> dict[str, Any]:
     """Bulk normalized response columns for R's native model-frame adapter."""
     import numpy as np

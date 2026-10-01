@@ -66,6 +66,7 @@ from ._types import (
     _FormulaTerms,
     _InteractionDesignTerm,
     _InteractionTerm,
+    _MatrixDesignTerm,
     _ModelClusterTerm,
     _ModelCovariateTerm,
     _ModelOffsetTerm,
@@ -2157,7 +2158,7 @@ def _numeric_variable(
     data: Any,
     term: _CovariateTerm,
     n: int,
-    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, Any] | None = None,
 ) -> list[float]:
     """The numeric formula variable ``term`` at the rows of *data*, taken from
     ``evaluated`` (variables already evaluated at those rows) when it is there."""
@@ -2228,6 +2229,10 @@ def _fit_single_design_term(
     n: int,
     full_data: Any,
 ) -> _SingleDesignTerm:
+    if term.transform == "tt":
+        # The callback, after risk-set expansion, determines this variable's
+        # type and width. Its input need not be a numeric design column.
+        return _NumericDesignTerm(term)
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         columns, options = _penalty_arguments(term.call)
         penalty_values = {column: _column(full_data, column) for column in columns}
@@ -2239,7 +2244,7 @@ def _fit_single_design_term(
         or term.arithmetic is not None
         or _mstate_categories(_column_source(data, term.column)) is None
     ):
-        if term.transform is not None:
+        if term.transform is not None and term.transform != "tt":
             _numeric_term_values(values, term)
             return _NumericDesignTerm(term)
         try:
@@ -2298,19 +2303,11 @@ def _set_full_categorical_factors(
     full_factors: set[_CovariateTerm],
 ) -> _DesignTerm:
     if isinstance(spec, _CategoricalDesignTerm):
-        return _CategoricalDesignTerm(
-            spec.term,
-            spec.levels,
-            full=spec.term in full_factors,
-        )
+        return replace(spec, full=spec.term in full_factors)
     if isinstance(spec, _InteractionDesignTerm):
         return _InteractionDesignTerm(
             tuple(
-                _CategoricalDesignTerm(
-                    factor.term,
-                    factor.levels,
-                    full=factor.term in full_factors,
-                )
+                replace(factor, full=factor.term in full_factors)
                 if isinstance(factor, _CategoricalDesignTerm)
                 else factor
                 for factor in spec.factors
@@ -2368,18 +2365,46 @@ def _fit_formula_design(
     for term_index, model_term in enumerate(ordered_model_terms, start=1):
         if isinstance(model_term, _ModelCovariateTerm):
             term_assignments[model_term.term] = term_index
-    contrast_intercept = terms.intercept if include_intercept else True
-    covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if contrast_intercept else set()
-    covered_terms.update(
-        frozenset([_strata_covariate(item.spec)])
+    covered_strata = (
+        _strata_covariate(item.spec)
         for item in terms.model_terms
         if strata_margins and isinstance(item, _ModelStrataTerm)
     )
-    promoted_no_intercept_factor = contrast_intercept
+    fitted = [_fit_design_term(data, term, n, full_data, factor_order) for term in ordered_terms]
+    design_terms = _design_contrasts(
+        fitted, terms.intercept if include_intercept else True, covered_strata
+    )
+    return _FormulaDesign(
+        response=response_spec,
+        covariates=tuple(design_terms),
+        offsets=tuple(terms.offsets),
+        term_assignments=tuple(term_assignments[term] for term in ordered_terms),
+        strata=tuple(terms.strata),
+        intercept=include_intercept and terms.intercept,
+        variables=tuple(
+            replace(term, special=None) if term.special == "offset" else term
+            for term in terms.variables
+        ),
+    )
+
+
+def _design_contrasts(
+    fitted: Sequence[_DesignTerm],
+    intercept: bool,
+    covered_strata: Iterable[_CovariateTerm] = (),
+) -> list[_DesignTerm]:
+    """R's categorical margin coding, also after a time transform changes type."""
+    covered_terms: set[frozenset[_CovariateTerm]] = {frozenset()} if intercept else set()
+    covered_terms.update(frozenset([term]) for term in covered_strata)
+    promoted_no_intercept_factor = intercept
     design_terms: list[_DesignTerm] = []
-    for term in ordered_terms:
-        fitted_term = _fit_design_term(data, term, n, full_data, factor_order)
-        raw_factors = frozenset(_covariate_factors(term))
+    for fitted_term in fitted:
+        factors = (
+            fitted_term.factors
+            if isinstance(fitted_term, _InteractionDesignTerm)
+            else (fitted_term,)
+        )
+        raw_factors = frozenset(factor.term for factor in factors)
         categorical_factors = _categorical_design_factors(fitted_term)
         # R's TermCode accepts a margin contained in an earlier term, even
         # when that margin has no standalone term of its own.
@@ -2400,28 +2425,24 @@ def _fit_formula_design(
         ):
             covered_terms.add(frozenset())
         covered_terms.add(raw_factors)
-    return _FormulaDesign(
-        response=response_spec,
-        covariates=tuple(design_terms),
-        offsets=tuple(terms.offsets),
-        term_assignments=tuple(term_assignments[term] for term in ordered_terms),
-        strata=tuple(terms.strata),
-        intercept=include_intercept and terms.intercept,
-        variables=tuple(
-            replace(term, special=None) if term.special == "offset" else term
-            for term in terms.variables
-        ),
-    )
+    return design_terms
 
 
 def _single_design_columns(
     data: Any,
     spec: _SingleDesignTerm,
     n: int,
-    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
     allow_missing: bool = False,
 ) -> list[list[float]]:
+    if isinstance(spec, _MatrixDesignTerm) or (
+        isinstance(spec, _PenaltyDesignTerm) and evaluated is not None and spec.term in evaluated
+    ):
+        if evaluated is None or spec.term not in evaluated:
+            raise ValueError("an evaluated matrix is required for a matrix time transform")
+        rows = evaluated[spec.term]
+        return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _PenaltyDesignTerm):
         penalty_values = {column: _column(data, column) for column in spec.columns}
         if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
@@ -2464,6 +2485,12 @@ def _single_design_columns(
                 )
             missing.append(row)
     encoded_levels = levels if spec.full else levels[1:]
+    if spec.contrasts and not spec.full:
+        lookup = dict(zip(levels, spec.contrasts, strict=True))
+        return [
+            [math.nan if _is_missing_value(value) else lookup[value][j] for value in values]
+            for j in range(len(spec.contrast_names))
+        ]
     columns = [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
     for column in columns:
         for row in missing:
@@ -2475,7 +2502,7 @@ def _design_term_columns(
     data: Any,
     spec: _DesignTerm,
     n: int,
-    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
     allow_missing: bool = False,
 ) -> list[list[float]]:
@@ -2499,7 +2526,7 @@ def _design_rows_from_spec(
     design: _FormulaDesign,
     n: int,
     *,
-    evaluated: Mapping[_CovariateTerm, list[float]] | None = None,
+    evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
     allow_missing: bool = False,
 ) -> list[list[float]]:
@@ -2544,11 +2571,13 @@ def _design_term_name(spec: _DesignTerm) -> str:
 
 
 def _single_design_term_output_names(spec: _SingleDesignTerm) -> list[str]:
-    if isinstance(spec, _PenaltyDesignTerm):
+    if isinstance(spec, _PenaltyDesignTerm | _MatrixDesignTerm):
         return list(spec.names)
     term = spec.term
     if isinstance(spec, _CategoricalDesignTerm):
         prefix = _covariate_term_name(term)
+        if spec.contrasts and not spec.full:
+            return [f"{prefix}{name}" for name in spec.contrast_names]
         levels = spec.levels if spec.full else spec.levels[1:]
         return [f"{prefix}{_strata_value_label(level)}" for level in levels]
     return [_covariate_term_name(term)]

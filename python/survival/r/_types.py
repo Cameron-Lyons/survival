@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from operator import index
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -132,10 +132,20 @@ class _NumericDesignTerm:
 
 
 @dataclass(frozen=True)
+class _MatrixDesignTerm:
+    """An evaluated numeric matrix variable, with one name per design column."""
+
+    term: _CovariateTerm
+    names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _CategoricalDesignTerm:
     term: _CovariateTerm
     levels: tuple[Any, ...]
     full: bool = False
+    contrasts: tuple[tuple[float, ...], ...] = ()
+    contrast_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -157,6 +167,8 @@ class _PenaltyDesignTerm:
     intercept: bool = False
     nterm: int = 0
     combine: tuple[int, ...] | None = None
+    report: Callable[..., Any] | None = None
+    controller_history: Callable[[], Any] | None = None
 
     @property
     def penalized(self) -> bool:
@@ -169,7 +181,9 @@ class _PenaltyDesignTerm:
         return self.penalty.kind if self.penalized else "pspline"
 
 
-_SingleDesignTerm = _NumericDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
+_SingleDesignTerm = (
+    _NumericDesignTerm | _MatrixDesignTerm | _CategoricalDesignTerm | _PenaltyDesignTerm
+)
 
 
 @dataclass(frozen=True)
