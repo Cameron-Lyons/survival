@@ -113,10 +113,13 @@ jobs:
       - name: Lint code
         run: uv run --no-sync ruff check python/ test/
 
-      - name: Type check stubs
-        # survival.r has no stub: typing_smoke.py checks its inline annotations, and
-        # --follow-imports=silent keeps the check on the public types, not the package internals
-        run: uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent
+      - name: Type check stubs and R-style facade
+        # Check the facade implementation explicitly, including unannotated bodies.
+        # The smoke assertions protect public return types from regressing to Any.
+        run: >-
+          uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi
+          python/survival/r python/tests/typing_smoke.py
+          --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 
       # `python3 scripts/generate_stubs.py --check` needs the built extension (with the ml
       # feature) and runs in coverage.yml next to the binding-manifest check.

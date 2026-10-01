@@ -1078,7 +1078,7 @@ Format and lint:
 cargo fmt
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 ```
 
 The codebase is organized with:

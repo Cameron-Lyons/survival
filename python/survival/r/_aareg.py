@@ -81,9 +81,10 @@ def aareg(
     if qrtol_value <= 0.0:
         raise ValueError("qrtol must be positive")
     nmin_value = None if nmin is None else _integer_scalar(nmin, "nmin")
+    events = response._event_codes()
     raw = _core.aareg_fit(
         list(response.time),
-        [int(value) for value in response.event],
+        events,
         frame.x,
         start=None if response.start is None else list(response.start),
         weights=frame.weights,
@@ -99,9 +100,7 @@ def aareg(
     if influences is not None:
         # R's rowsum(reorder=FALSE) labels clusters in their first appearance
         # after sorting by stop time, with events before censors at a tie.
-        order = sorted(
-            range(len(response.time)), key=lambda i: (response.time[i], -response.event[i])
-        )
+        order = sorted(range(len(response.time)), key=lambda i: (response.time[i], -events[i]))
         codes = list(range(len(order))) if cluster_codes is None else cluster_codes
         cluster_order = list(dict.fromkeys(codes[i] for i in order))
         influences = [influences[i] for i in cluster_order]

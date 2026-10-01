@@ -157,7 +157,7 @@ def cch(
     id_rank = {value: rank for rank, value in enumerate(sorted_ids)}
     id_codes = [id_rank[value] for value in id_values]
     start = None if y.start is None else list(y.start)
-    status = [int(value) for value in y.event]
+    status = y._event_codes()
     stratum_labels: tuple[Any, ...] | None = None
     if stratified:
         factor = _strata([("stratum", frame.extra["stratum"])], shortlabel=True)

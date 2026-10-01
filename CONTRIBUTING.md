@@ -81,10 +81,15 @@ cargo test --lib --all-features
 cargo bench -- --test
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi --ignore-missing-imports
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 python3 scripts/generate_binding_manifest.py --check
 ```
+
+The type check covers the native binding stubs, all `survival.r` modules (including
+unannotated function bodies), and assertions about public return types. The facade
+uses inline annotations; its nullable responses and vector/matrix result shapes
+must be narrowed before calling native routines.
 
 The important feature combinations are:
 

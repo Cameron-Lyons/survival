@@ -76,6 +76,8 @@ def fit_penalty(
     """Evaluate a penalty function on its data *values* before ``subset`` and ``na.action``;
     *levels* are the categories of a factor frailty column."""
 
+    if term.call is None:
+        raise ValueError("a penalty term must have a function call")
     kind = term.call.split("(", 1)[0]
     kwargs = dict(options)
     if kind == "ridge":
@@ -107,6 +109,8 @@ def _fit_pspline(
     penalty = _core.CoxPenalty.pspline(intercept=intercept, **kwargs)
     knots = _pspline_boundary(boundary, _observed(x))
     nterm = penalty.nterm
+    if nterm is None:
+        raise RuntimeError("native pspline penalty has no basis dimension")
     groups = None if combine is None else _pspline_combine(combine, nterm + degree, intercept)
     nvar = nterm + degree if groups is None else len(set(groups))
     ncol = nvar if intercept else nvar - 1
@@ -158,10 +162,15 @@ def _fit_frailty(
         # frailty.controlaic reads init[1] and init[2]; a single value is refused
         kwargs["init"] = _float_vector(_scalar_or_vector(kwargs["init"], "init"), "init")
     penalty = _core.CoxPenalty.frailty(n=len(x), **kwargs)
+    if term.call is None:
+        raise ValueError("a penalty term must have a function call")
+    distribution = penalty.distribution
+    if distribution is None:
+        raise RuntimeError("native frailty penalty has no distribution")
     if penalty.sparse:
         names: tuple[str, ...] = (term.call,)
     else:
-        prefix = _FRAILTY_PREFIX[penalty.distribution]
+        prefix = _FRAILTY_PREFIX[distribution]
         names = tuple(f"{prefix}:{_strata_value_label(level)}" for level in groups)
     return _PenaltyDesignTerm(term, (column,), names, penalty, levels=groups)
 
@@ -247,6 +256,8 @@ def penalty_columns(
         return [[float(value) for value in values[column]] for column in spec.columns]
     x = values[spec.columns[0]]
     if spec.kind == "pspline":
+        if spec.boundary is None:
+            raise ValueError("spline prediction requires basis boundaries")
         basis = _core.pspline_basis(
             [float(value) for value in x], spec.nterm, spec.degree, spec.boundary
         ).basis

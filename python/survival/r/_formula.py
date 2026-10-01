@@ -1540,7 +1540,7 @@ def _apply_formula_na_action(
     data: Any,
     na_action: str | None,
     *,
-    exclude_columns: Sequence[str] = (),
+    exclude_columns: Iterable[str] = (),
     missing_rows: Iterable[int] = (),
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any], list[int]]:
@@ -1654,7 +1654,7 @@ def _data_column_names(data: Any) -> list[Any] | None:
     return list(columns)
 
 
-def _dot_terms(data: Any, response_terms: list[str]) -> list[str] | None:
+def _dot_terms(data: Any, response_terms: Sequence[str]) -> list[str] | None:
     names = _data_column_names(data)
     if names is None:
         return None
@@ -1676,7 +1676,7 @@ def _dot_terms(data: Any, response_terms: list[str]) -> list[str] | None:
     return terms
 
 
-def _append_unique(target: list[Any], values: list[Any]) -> None:
+def _append_unique(target: list[Any], values: Iterable[Any]) -> None:
     for value in values:
         if value not in target:
             target.append(value)
@@ -1816,7 +1816,7 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
     """Parse data-column arguments and literal penalty options without eval."""
 
     columns = []
-    options = {}
+    options: dict[str, Any] = {}
     for argument in _formula_response_parts(call.split("(", 1)[1][:-1]):
         named = _formula_named_option(argument)
         if named is None:
@@ -1925,7 +1925,7 @@ class _FormulaExpansion:
             _dot_covariate_terms(self.dot_terms) if term == "." else [_parse_covariate_atom(term)]
         )
         _append_unique(self.variables, atoms)
-        return atoms
+        return list(atoms)
 
     def expand(self, expression: str, *, negative: bool = False) -> list[_CovariateSpec]:
         term = _strip_outer_formula_parentheses(expression)
@@ -2232,9 +2232,9 @@ def _fit_single_design_term(
 ) -> _SingleDesignTerm:
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         columns, options = _penalty_arguments(term.call)
-        values = {column: _column(full_data, column) for column in columns}
+        penalty_values = {column: _column(full_data, column) for column in columns}
         levels = _mstate_categories(_column_source(full_data, columns[0]))
-        return fit_penalty(term, columns, values, options, levels)
+        return fit_penalty(term, columns, penalty_values, options, levels)
     values = _term_raw_values(data, term, n)
     if not term.categorical and (
         term.transform is not None
@@ -2323,7 +2323,7 @@ def _set_full_categorical_factors(
 
 def _fit_formula_design(
     data: Any,
-    response_spec: _SurvResponseSpec,
+    response_spec: _SurvResponseSpec | None,
     terms: _FormulaTerms,
     n: int,
     *,
@@ -2425,24 +2425,28 @@ def _single_design_columns(
     allow_missing: bool = False,
 ) -> list[list[float]]:
     if isinstance(spec, _PenaltyDesignTerm):
-        values = {column: _column(data, column) for column in spec.columns}
-        if any(len(value) != n for value in values.values()):
+        penalty_values = {column: _column(data, column) for column in spec.columns}
+        if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
         if allow_missing:
-            missing = _missing_row_indices(list(values.items()), n)
-            if missing:
-                kept = [row for row in range(n) if row not in missing]
+            missing_penalty_rows = _missing_row_indices(list(penalty_values.items()), n)
+            if missing_penalty_rows:
+                kept = [row for row in range(n) if row not in missing_penalty_rows]
                 if not kept:
                     return [[math.nan] * n for _ in spec.names]
                 complete = penalty_columns(
-                    spec, {name: [column[row] for row in kept] for name, column in values.items()}
+                    spec,
+                    {
+                        name: [column[row] for row in kept]
+                        for name, column in penalty_values.items()
+                    },
                 )
                 result = [[math.nan] * n for _ in complete]
                 for source, target in zip(complete, result, strict=True):
-                    for row, value in zip(kept, source, strict=True):
-                        target[row] = value
+                    for row, penalty_value in zip(kept, source, strict=True):
+                        target[row] = penalty_value
                 return result
-        return penalty_columns(spec, values)
+        return penalty_columns(spec, penalty_values)
     if isinstance(spec, _NumericDesignTerm):
         return [_numeric_variable(data, spec.term, n, evaluated)]
 
@@ -2590,6 +2594,8 @@ def _formula_model_frame(
     id: Any | None = None,
     istate: Any | None = None,
 ) -> dict[str, Any]:
+    if design.response is None:
+        raise ValueError("survival model frame requires a response specification")
     frame: dict[str, Any] = {design.response.name: response}
     columns: list[str] = []
     _append_unique(columns, design.response.columns)
@@ -2723,8 +2729,9 @@ def _timeline_counting(
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
     spec = _formula_response_spec(formula)
+    response: Surv | Surv2
     if spec.timeline:
-        response: Surv | Surv2 = _surv2_from_spec(data, spec)
+        response = _surv2_from_spec(data, spec)
         time, status = response.time, response.status
         if repeated is None:
             repeated = response.repeated
@@ -2899,10 +2906,11 @@ def model_frame(
     extra_names = [] if extra is None else [str(name) for name in extra]
     if set(extra_names) & set(_MODEL_FRAME_ARGUMENTS):
         raise ValueError("extra columns must not be named like a model.frame argument")
-    for name in extra_names:
-        value = extra[name]
-        # Rate-table matching validates declared levels, including unused ones.
-        arguments[name] = _column_source(data, value) if isinstance(value, str) else value
+    if extra is not None:
+        for name in extra_names:
+            value = extra[name]
+            # Rate-table matching validates declared levels, including unused ones.
+            arguments[name] = _column_source(data, value) if isinstance(value, str) else value
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
     data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
@@ -2967,7 +2975,7 @@ def _parse_strata(call: str) -> _StrataSpec:
     """
 
     arguments = []
-    options = {}
+    options: dict[str, Any] = {}
     named_group = False
     for part in _formula_response_parts(call[7:-1]):
         named = _formula_named_option(part)

@@ -716,11 +716,11 @@ def survcheck(
     raw = _core.survcheck(
         [id_codes[value] for value in id_values],
         list(response.time),
-        [int(event) for event in response.event],
+        response._event_codes(),
         states,
         time1=None if response.start is None else list(response.start),
         istate=None
-        if istate_levels is None
+        if istate_levels is None or istate_values is None
         else [istate_levels.index(value) + 1 for value in istate_values],
         istate_levels=None if istate_levels is None else [str(v) for v in istate_levels],
         istate0=istate0,
@@ -852,7 +852,7 @@ def survobrien(
         )
     expansion = _core.survobrien(
         list(response.time),
-        [int(event) for event in response.event],
+        response._event_codes(),
         [values for _name, values in continuous] if transform is None else [],
         start=None if response.start is None else list(response.start),
         strata=strata_codes,
@@ -914,7 +914,7 @@ def royston(
         eta = list(
             _core.coxph_fit(
                 list(response.time),
-                [int(event) for event in response.event],
+                response._event_codes(),
                 [[value] for value in eta],
                 entry=None if response.start is None else list(response.start),
             ).linear_predictors
@@ -922,7 +922,7 @@ def royston(
     result = _core.royston(
         eta,
         list(response.time),
-        [int(event) for event in response.event],
+        response._event_codes(),
         list(engine.loglik),
         engine.nevent,
         len(engine.coefficients),
@@ -966,7 +966,7 @@ def _brier_is_simple(response: Surv, id_values: Sequence[Any] | None) -> bool:
     check = _core.survcheck(
         [codes[value] for value in id_values],
         list(response.time),
-        [int(event) for event in response.event],
+        response._event_codes(),
         list(response.states) or ["event"],
         time1=None if response.start is None else list(response.start),
     )
@@ -1058,7 +1058,7 @@ def brier(
 
     use_efron = _normalize_bool_option(efron, "efron") and engine.method == _core.TieMethod.Efron
     dtime = list(response.time)
-    dstat = [int(event) for event in response.event]
+    dstat = response._event_codes()
     if times is None:
         null_curve = _core.survfitkm(
             dtime,

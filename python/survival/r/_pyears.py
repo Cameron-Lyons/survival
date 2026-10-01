@@ -28,6 +28,7 @@ from ._coerce import (
     _as_character,
     _categories,
     _coerce_array_like,
+    _curve_matrix,
     _factor,
     _factor_levels,
     _finite_float,
@@ -837,6 +838,8 @@ def _population_term_labels(mf: ModelFrame) -> list[str]:
     labels = []
     for term in mf.terms.model_terms:
         if isinstance(term, _ModelCovariateTerm):
+            if isinstance(term.term, _InteractionTerm):
+                raise ValueError("Population tables cannot have interaction terms")
             labels.append(_covariate_term_name(term.term))
         elif isinstance(term, _ModelStrataTerm):
             labels.append(term.spec.call)
@@ -1033,6 +1036,7 @@ def _pyears_direct_formula(
         raise ValueError("supply follow-up as the response, time or stop, not more than one")
     if time is not None and stop is not None:
         raise ValueError("supply only one of time and stop")
+    start_name: str | None
     if isinstance(response, Surv):
         if start is not None or event is not None:
             raise ValueError("a Surv response already supplies its start and event values")
@@ -1417,7 +1421,7 @@ def _survexp_times(times: Any | None) -> list[float] | None:
 
 def _survexp_response(mf: ModelFrame) -> list[float] | None:
     if mf.response is not None:
-        if mf.response.type != "right":
+        if not isinstance(mf.response, Surv) or mf.response.type != "right":
             raise ValueError("Illegal response value")
         values = list(mf.response.time)
     elif mf.y is not None:
@@ -1560,9 +1564,8 @@ def summary_survexp(
 
     if not isinstance(object, SurvExpResult):
         raise TypeError("Invalid data")
-    matrix = bool(object.surv and isinstance(object.surv[0], list))
-    surv = object.surv if matrix else [[value] for value in object.surv]
-    n_risk = object.n_risk if matrix else [[value] for value in object.n_risk]
+    surv = _curve_matrix(object.surv)
+    n_risk = _curve_matrix(object.n_risk)
     requested = None if times is None else _floats_or_nan(_scalar_or_vector(times, "times"))
     result = _core.summary_survexp(
         object.time,
@@ -1586,7 +1589,11 @@ def _survexp_frame(result: SurvExpResult | SurvExpSummary) -> dict[str, list[Any
     """Expected curves as one row per (curve, time)."""
 
     matrix = bool(result.surv and isinstance(result.surv[0], list))
-    ncols = len(result.surv[0]) if matrix else len(result.strata or [""])
+    ncols = (
+        len(result.surv[0])
+        if result.surv and isinstance(result.surv[0], list)
+        else len(result.strata or [""])
+    )
     if result.strata is not None and len(result.strata) != ncols:
         raise ValueError("curve labels must match the survival columns")
     frame: dict[str, list[Any]] = {"time": result.time * ncols, "surv": [], "n_risk": []}

@@ -10,6 +10,7 @@ import math
 import pytest
 
 from .helpers import setup_survival_import
+from .r_api_support import _toy_data
 
 survival = setup_survival_import()
 r = survival.r_api
@@ -18,6 +19,27 @@ r_coerce = importlib.import_module("survival.r._coerce")
 
 def _factor(values, levels):
     return r_coerce._RFactorVector(values, levels)
+
+
+@pytest.mark.parametrize("missing", [None, math.nan], ids=["none", "nan"])
+@pytest.mark.parametrize("row", [0, 3, 7], ids=["first", "middle", "last"])
+@pytest.mark.parametrize(
+    ("name", "rhs", "options"),
+    [
+        ("coxph", "x1", {}),
+        ("survfit", "group", {}),
+        ("survdiff", "group", {}),
+        ("aareg", "x1", {}),
+        ("survcheck", "1", {"id": "id"}),
+        ("rttright", "1", {}),
+    ],
+)
+def test_missing_status_is_rejected_before_native_fit(name, rhs, options, row, missing):
+    data = _toy_data()
+    data["id"] = list(range(len(data["time"])))
+    data["status"][row] = missing
+    with pytest.raises(ValueError, match="^missing values in the response$"):
+        getattr(r, name)(f"Surv(time, status) ~ {rhs}", data, na_action="na.pass", **options)
 
 
 # --- Surv ------------------------------------------------------------------

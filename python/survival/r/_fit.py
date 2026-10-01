@@ -343,6 +343,7 @@ def _model_frame(
         if len(istate_values) != n:
             raise ValueError("istate must have the same length as the Surv response")
 
+    weight_values: list[float] | None
     if deferred_na and aligned["weights"] is not None:
         weight_values = _floats_or_nan(_materialize_1d(aligned["weights"], "weights"))
         if len(weight_values) != n:
@@ -436,10 +437,10 @@ def _newdata_columns(newdata: Any) -> list[Any]:
     return list(columns)
 
 
-def _newdata_response(newdata: Any, spec: _SurvResponseSpec) -> Surv | None:
+def _newdata_response(newdata: Any, spec: _SurvResponseSpec | None) -> Surv | None:
     """The response evaluated on ``newdata`` when all of its columns are present."""
 
-    if not set(spec.columns) <= set(_newdata_columns(newdata)):
+    if spec is None or not set(spec.columns) <= set(_newdata_columns(newdata)):
         return None
     args = _formula_response_values(newdata, spec)
     return Surv(*args, type=spec.type, origin=spec.origin)
@@ -480,7 +481,7 @@ def _newdata_frame(
         strata_columns = []
     response_columns = (
         list(design.response.columns)
-        if need_response and set(design.response.columns) <= present
+        if need_response and design.response is not None and set(design.response.columns) <= present
         else []
     )
     pass_missing = _normalize_na_action(na_action) == "pass"
@@ -543,6 +544,8 @@ def _newdata_frame(
         if response_columns:
             # Expected counts use follow-up, not the event indicator.
             response = _newdata_response(newdata, design.response)
+            if response is None:
+                raise ValueError("newdata does not contain a survival response")
             missing.update(i for i, value in enumerate(response.time) if math.isnan(value))
             if response.start is not None:
                 missing.update(i for i, value in enumerate(response.start) if math.isnan(value))

@@ -652,6 +652,10 @@ this does not show.
 
 ### Missing values and newdata
 
+- Fitting with `na.pass` cannot send an unknown event status to a numerical
+  routine. Cox, Aalen, curve, log-rank, survival-check and redistribution calls
+  raise `ValueError("missing values in the response")` for such rows. Use
+  `na.omit` or `na.exclude` to apply the model frame's row-removal policy.
 - For ordinary Cox and AFT models under `na.pass` (predict's default), a missing
   covariate affects only the predictions that use it. Term predictions retain
   unaffected contributions and standard errors; an unknown offset leaves the linear-predictor standard

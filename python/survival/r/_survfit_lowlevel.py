@@ -215,7 +215,7 @@ def survfitKM(
 
     # R treats empty id/cluster vectors as absent. Alignment and missing-value
     # checks remain explicit because no formula model frame runs here.
-    def optional(value: Any, name: str) -> list[Any] | None:
+    def optional(value: Any, name: str) -> Sequence[Any] | None:
         return None if value is None or len(value) == 0 else _aligned(value, n, name)
 
     frame = _SurvfitData(

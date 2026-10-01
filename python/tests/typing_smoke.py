@@ -32,6 +32,20 @@ def _check_obrien_expansion_types() -> None:
     assert_type(result.to_arrays(), dict[str, Any])
 
 
+def _check_survival_summary_types(
+    km: r.SurvfitResult,
+    aj: r.SurvfitMultiStateResult,
+    cox: r.CoxSurvfitResult,
+    cox_multistate: r.CoxSurvfitMultiStateResult,
+    mixed: r.CoxSurvfitResult | r.CoxSurvfitMultiStateResult,
+) -> None:
+    assert_type(r.summary_survfit(km), r.SummarySurvfitResult)
+    assert_type(r.summary_survfit(aj), r.SummarySurvfitResult)
+    assert_type(r.summary_survfit(cox), r.SummarySurvfitResult)
+    assert_type(r.summary_survfit(cox_multistate), r.SummarySurvfitCoxmsResult)
+    assert_type(r.summary_survfit(mixed), r.SummarySurvfitResult | r.SummarySurvfitCoxmsResult)
+
+
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:
     cox = r.coxph("Surv(time, status) ~ age", data)
     assert_type(cox, r.CoxphModel)

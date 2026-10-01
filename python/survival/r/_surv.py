@@ -327,6 +327,13 @@ class Surv(_SurvivalOperations):
 
         return 2 if self.start is None and self.time2 is None else 3
 
+    def _event_codes(self) -> list[int]:
+        """Owned, complete status codes for kernels that cannot accept missing rows."""
+        if None in self.event:
+            raise ValueError("missing values in the response")
+        # Surv normalizes observed statuses to integers during construction.
+        return list(cast(tuple[int, ...], self.event))
+
     def as_matrix(self) -> list[list[Any]]:
         """R's ``as.matrix(Surv)``: one row per observation in R's column order."""
 

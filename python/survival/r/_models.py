@@ -17,7 +17,7 @@ import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -1036,11 +1036,15 @@ def _survfit_multistate_structure(
     n_enter = combined_matrix("n_enter")
     if n_enter is not None:
         structure["n.enter"] = n_enter
-    p0_rows = [
-        [float(value) for value in (curve.p0[0] if grouped_p0 else curve.p0)]
-        for _label, curve in curves
-        for grouped_p0 in [bool(curve.p0) and isinstance(curve.p0[0], list | tuple)]
-    ]
+    p0_rows = []
+    for _label, curve in curves:
+        # A homogeneous p0 is either one state vector or one vector per stratum.
+        initial = (
+            curve.p0[0]
+            if curve.p0 and isinstance(curve.p0[0], list | tuple)
+            else cast(list[float], curve.p0)
+        )
+        p0_rows.append([float(value) for value in initial])
     structure["p0"] = p0_rows if grouped else p0_rows[0]
     if grouped:
         structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
@@ -1057,16 +1061,20 @@ def _survfit_multistate_structure(
             structure[field_name] = values
     structure["logse"] = bool(first.logse)
     if first.transitions is not None:
-        totals = [[0.0] * len(first.transitions.colnames) for _row in first.transitions.rownames]
+        transition_names = first.transitions.rownames
+        if transition_names is None:
+            raise ValueError("multi-state transition counts require row names")
+        totals = [[0.0] * len(first.transitions.colnames) for _row in transition_names]
         for _label, curve in curves:
             if curve.transitions is None:
                 continue
-            for row_index, row in enumerate(curve.transitions.values):
+            transition_rows: Sequence[Sequence[float]] = curve.transitions.values
+            for row_index, row in enumerate(transition_rows):
                 for col_index, value in enumerate(row):
                     totals[row_index][col_index] += float(value)
         structure["transitions"] = {
             "values": totals,
-            "rows": list(first.transitions.rownames),
+            "rows": list(transition_names),
             "columns": list(first.transitions.colnames),
         }
     for field_name, attribute in (("lower", "lower"), ("upper", "upper")):
@@ -1098,7 +1106,7 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
         states = next(iter(result.values())).states
         if any(curve.states != states for curve in result.values()):
             raise ValueError("grouped multi-state results must share state columns")
-        frame = {
+        frame: dict[str, list[Any]] = {
             name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
         }
         for state in states:
@@ -1267,6 +1275,8 @@ def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
         )
     else:
         concordance = [result.concordance] * len(rows)
+        if isinstance(result.var, list):
+            raise ValueError("a scalar concordance requires a scalar variance")
         var = [math.nan if result.var is None else float(result.var)] * len(rows)
     frame: dict[str, list[Any]] = {
         "score": list(names[: len(rows)]),
