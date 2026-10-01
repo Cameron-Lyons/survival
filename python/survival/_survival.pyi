@@ -12741,6 +12741,12 @@ def group_variables(
     n_times: int,
     config: VariableGroupingConfig,
 ) -> VariableGroupingResult: ...
+def grouped_sum(
+    values: ArrayLike,
+    group: ArrayLike,
+    *,
+    squares: bool = False,
+) -> NDArray[np.float64]: ...
 def hazard_ratio(
     time: Sequence[float],
     status: Sequence[int],

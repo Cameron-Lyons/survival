@@ -46,6 +46,7 @@ from ._coerce import (
     _normalize_optional_bool_option,
     _pop_dotted_keyword,
     _r_format_number,
+    _rowsum_groups,
     _start_time_value,
     _subset_indices,
     _subset_optional_sequence,
@@ -160,6 +161,7 @@ class CoxphModel:
     # dropped, since model.frame() does not use them
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
     cluster_levels: tuple[Any, ...] | None = None
+    id_levels: tuple[Any, ...] | None = None
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
@@ -963,6 +965,7 @@ def _coxph_fit_frame(
         id=None if data.id is None else tuple(data.id),
         cluster=None if data.cluster is None else tuple(data.cluster),
         cluster_levels=frame.cluster_levels,
+        id_levels=frame.id_levels,
         model=frame.model_frame() if keep_model else None,
         weights_column=frame.weights_column,
         id_column=frame.id_column,
@@ -1777,6 +1780,7 @@ def _prediction_newdata(
     need_response: bool,
     na_action: str,
     allow_missing_predictors: bool = False,
+    extra_missing: Sequence[int] = (),
 ) -> _NewData:
     return _newdata_frame(
         fit.design,
@@ -1787,6 +1791,7 @@ def _prediction_newdata(
         need_response=need_response,
         na_action=na_action,
         allow_missing_predictors=allow_missing_predictors,
+        extra_missing=extra_missing,
     )
 
 
@@ -1810,24 +1815,16 @@ def _terms_selection(terms: Any | None, names: Sequence[str]) -> list[int]:
     return selected
 
 
-def _rowsum(values: list[Any], groups: Sequence[Any], *, squares: bool = False) -> list[Any]:
-    """R's ``rowsum``: sums per group, groups in sorted order."""
+def _rowsum(values: list[Any], codes: Sequence[int], *, squares: bool = False) -> list[Any]:
+    """Sum already encoded groups with the shared Rust kernel."""
+    import numpy as np
 
-    labels = _materialize_labels(groups, "collapse")
-    if len(labels) != len(values):
-        raise ValueError("Collapse vector is the wrong length")
-    order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
-    index = {label: idx for idx, label in enumerate(order)}
     matrix = bool(values) and isinstance(values[0], list)
-    width = len(values[0]) if matrix else 1
-    sums = [[0.0] * width for _ in order]
-    for value, label in zip(values, labels, strict=True):
-        row = value if matrix else [value]
-        for col, item in enumerate(row):
-            sums[index[label]][col] += item * item if squares else item
-    if squares:
-        sums = [[math.sqrt(item) for item in row] for row in sums]
-    return sums if matrix else [row[0] for row in sums]
+    array = np.asarray(values, dtype=float)
+    if not matrix:
+        array = array.reshape(-1, 1)
+    result = _core.grouped_sum(array, codes, squares=squares)
+    return result.tolist() if matrix else result[:, 0].tolist()
 
 
 def predict_coxph(
@@ -1855,6 +1852,7 @@ def predict_coxph(
     from ._coxphms import CoxphmsModel, predict_coxphms
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
+    with_group_names = kwargs.pop("_with_group_names", False)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
@@ -1892,7 +1890,18 @@ def predict_coxph(
 
     action = _normalize_na_action(na_action)
     new: _NewData | None = None
+    group_names = None
     if newdata is not None:
+        collapse_missing: list[int] = []
+        if collapse is not None and collapse is not False:
+            collapse_values = _materialize_labels(collapse, "collapse")
+            n = _formula_design_row_count(newdata, fit.design)
+            if len(collapse_values) != n:
+                raise ValueError("Collapse vector is the wrong length")
+            if action != "pass":
+                collapse_missing = [
+                    i for i, value in enumerate(collapse_values) if _is_missing_value(value)
+                ]
         need_response = predict_type in {"expected", "survival"}
         # predict.coxph keeps the strata in Terms2 only when the prediction uses them
         need_strata = _has_strata(fit) and (
@@ -1908,6 +1917,7 @@ def predict_coxph(
             need_response=need_response,
             na_action=action,
             allow_missing_predictors=True,
+            extra_missing=collapse_missing,
         )
         if (
             _has_strata(fit)
@@ -1964,10 +1974,14 @@ def predict_coxph(
     se = None if se is None else _pad_rows(se, gaps, width)
 
     if collapse is not None and collapse is not False:
-        pred = _rowsum(pred, collapse)
+        codes, group_names = _rowsum_groups(
+            collapse, len(pred), "Collapse vector is the wrong length"
+        )
+        pred = _rowsum(pred, codes)
         if se is not None:
-            se = _rowsum(se, collapse, squares=True)
-    return PredictResult(pred, se) if include_se else pred
+            se = _rowsum(se, codes, squares=True)
+    output = PredictResult(pred, se) if include_se else pred
+    return {"values": output, "group_names": group_names} if with_group_names else output
 
 
 def _frailty_prediction(
@@ -2059,7 +2073,9 @@ _RESIDUAL_TYPES = (
 )
 
 
-def _collapse_codes(fit: CoxphModel, collapse: Any, n: int) -> list[int] | None:
+def _collapse_groups(
+    fit: CoxphModel, collapse: Any, n: int
+) -> tuple[list[int], list[str | None]] | None:
     """The groups of R's ``rowsum(rr, collapse)``: ``TRUE`` means the fit's cluster
     (or id), and a vector must have the ``n`` rows of the residuals."""
 
@@ -2068,15 +2084,10 @@ def _collapse_codes(fit: CoxphModel, collapse: Any, n: int) -> list[int] | None:
     if collapse is True:
         source_labels = fit.cluster if fit.cluster is not None else fit.id
         if source_labels is None:
-            return None
-        labels = list(source_labels)
-    else:
-        labels = _materialize_labels(collapse, "collapse")
-        if len(labels) != n:
-            raise ValueError("Wrong length for 'collapse'")
-    order = sorted(_label_levels(labels, "collapse"), key=lambda v: (isinstance(v, str), v))
-    index = {label: idx for idx, label in enumerate(order)}
-    return [index[label] for label in labels]
+            raise ValueError("no cluster or id is available for collapse=TRUE")
+        levels = fit.cluster_levels if fit.cluster is not None else fit.id_levels
+        return _rowsum_groups(source_labels, len(source_labels), levels=levels)
+    return _rowsum_groups(collapse, n)
 
 
 def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
@@ -2132,6 +2143,8 @@ def residuals_coxph(
 
     from ._coxphms import CoxphmsModel, residuals_coxphms
 
+    with_group_names = kwargs.pop("_with_group_names", False)
+
     if isinstance(fit, CoxphmsModel):
         # residuals.coxphms's na.action overrides the kind of the fit's na.action
         na_action = _pop_dotted_keyword(
@@ -2160,18 +2173,18 @@ def residuals_coxph(
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
         raise ValueError(f"{otype} residuals are not available for the exact method")
     excluded = _excluded_rows(fit.na_action)
-    codes = _collapse_codes(fit, collapse, len(fit.residuals) + len(excluded))
     engine = fit.fit
     nvar = fit.nvar
     if otype in {"schoenfeld", "scaledsch"}:
-        if codes is not None:
-            raise ValueError("collapse is not defined for Schoenfeld residuals")
         residuals = (
             engine.schoenfeld_residuals(weighted=weighted_value)
             if otype == "schoenfeld"
             else engine.scaled_schoenfeld_residuals(weighted=weighted_value)
         )
-        return _schoenfeld_result(fit, residuals)
+        result = _schoenfeld_result(fit, residuals)
+        return {"values": result, "group_names": None} if with_group_names else result
+    groups = _collapse_groups(fit, collapse, len(fit.residuals) + len(excluded))
+    codes, group_names = (None, None) if groups is None else groups
     # naresid comes before the collapse: the engine sums the fit's rows, and a group
     # holding a row na.exclude removed sums to NA
     padded_codes = codes if excluded and collapse is not True else None
@@ -2200,9 +2213,12 @@ def residuals_coxph(
         values = _pad_rows(values, excluded)
     elif padded_codes is not None:
         values = _rowsum_excluded(values, padded_codes, excluded)
-    if otype in {"martingale", "deviance", "partial"}:
-        return values
-    return _drop_single_column(values, nvar)
+    output = (
+        values
+        if otype in {"martingale", "deviance", "partial"}
+        else _drop_single_column(values, nvar)
+    )
+    return {"values": output, "group_names": group_names} if with_group_names else output
 
 
 # ---------------------------------------------------------------------------

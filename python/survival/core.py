@@ -35,5 +35,6 @@ __all__ = bind_names(
         "nsk",
         "PsplineBasis",
         "pspline_basis",
+        "grouped_sum",
     ],
 )

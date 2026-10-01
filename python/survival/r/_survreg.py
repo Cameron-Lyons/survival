@@ -42,6 +42,7 @@ from ._coerce import (
     _optional_float_vector,
     _pop_dotted_keyword,
     _quantile_vector,
+    _rowsum_groups,
 )
 from ._fit import (
     _excluded_rows,
@@ -1088,20 +1089,12 @@ _RESIDUAL_TYPES = (
 )
 
 
-def _collapse_codes(collapse: Any, n: int) -> list[int] | None:
+def _collapse_groups(collapse: Any, n: int) -> tuple[list[int], list[str | None]] | None:
     """``rowsum(rr, collapse)`` groups, in R's sorted-unique order."""
 
     if collapse is None or collapse is False:
         return None
-    values = _materialize_labels(collapse, "collapse")
-    if len(values) != n:
-        raise ValueError("Wrong length for 'collapse'")
-    try:
-        levels = sorted(set(values))
-    except TypeError:
-        levels = list(dict.fromkeys(values))
-    position = {level: idx for idx, level in enumerate(levels)}
-    return [position[value] for value in values]
+    return _rowsum_groups(collapse, n)
 
 
 def residuals_survreg(
@@ -1110,6 +1103,8 @@ def residuals_survreg(
     rsigma: bool = True,
     collapse: Any = False,
     weighted: bool = False,
+    *,
+    _with_group_names: bool = False,
 ) -> Any:
     """R's ``residuals.survreg``: the nine residual types, optionally weighted and collapsed."""
 
@@ -1118,7 +1113,8 @@ def residuals_survreg(
     # naresid comes before the collapse: the engine sums the fit's rows, and a group
     # holding a row na.exclude removed sums to NA
     excluded = _excluded_rows(fit.na_action)
-    codes = _collapse_codes(collapse, int(model.n) + len(excluded))
+    groups = _collapse_groups(collapse, int(model.n) + len(excluded))
+    codes, group_names = (None, None) if groups is None else groups
     fit_codes = codes
     if codes is not None and excluded:
         gaps = set(excluded)
@@ -1134,7 +1130,8 @@ def residuals_survreg(
         values = _pad_rows(values, excluded)
     elif excluded:
         values = _rowsum_excluded(values, codes, excluded)
-    return _drop(values, residual_type in {"dfbeta", "dfbetas", "matrix"})
+    result = _drop(values, residual_type in {"dfbeta", "dfbetas", "matrix"})
+    return {"values": result, "group_names": group_names} if _with_group_names else result
 
 
 # --- anova.survreg ---------------------------------------------------------------------------

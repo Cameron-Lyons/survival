@@ -97,6 +97,12 @@ def test_penalty_controller_releases_the_gil():
     _assert_detaches(lambda: controller.step(old, 1, loglik=-100, events_by_group=events))
 
 
+def test_grouped_sum_releases_the_gil():
+    values = np.ones((1_000_000, 8))
+    groups = np.arange(len(values), dtype=np.int32) % 1000
+    _assert_detaches(lambda: core.grouped_sum(values, groups, squares=True))
+
+
 def test_aft_constructor_releases_the_gil():
     n = 500_000
     x = np.ones((n, 8))

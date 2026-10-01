@@ -1819,6 +1819,16 @@ PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py
 # Add --order F to both commands for Fortran-layout inputs.
 ```
 
+## Grouped model outputs
+
+Grouped ordinary Cox predictions and Cox/AFT residuals preserve declared
+factor order, logical and missing groups, numeric NaN versus NA, and R output
+labels. A shared Rust sum combines prediction errors in quadrature. New-data
+collapse labels contribute to omission, exclusion and failure policies; saved
+cluster/id factor groups retain their order. Schoenfeld residuals ignore
+collapse, as in R. See [grouped model outputs](model-collapse.md) for the 710
+independent references, documented stock failures and complete-call timings.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on
