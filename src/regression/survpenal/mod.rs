@@ -60,6 +60,7 @@ pub struct SurvpenalData {
 
 impl SurvpenalData {
     pub fn try_new(survreg: SurvregData, terms: Vec<ModelTerm>) -> SurvivalResult<Self> {
+        survreg.validate()?;
         validate_terms(survreg.nvar(), &terms)?;
         Ok(Self { survreg, terms })
     }
@@ -201,7 +202,16 @@ impl SurvpenalFit {
         distribution: &SurvregDistribution,
         options: &SurvpenalOptions,
     ) -> SurvivalResult<Self> {
-        let result = Self::fit_engine(&data.survreg, &data.terms, distribution, options, None)?;
+        Self::fit_inputs(&data.survreg, &data.terms, distribution, options)
+    }
+
+    fn fit_inputs(
+        data: &SurvregData,
+        terms: &[ModelTerm],
+        distribution: &SurvregDistribution,
+        options: &SurvpenalOptions,
+    ) -> SurvivalResult<Self> {
+        let result = Self::fit_engine(data, terms, distribution, options, None)?;
         let raw = result.fit;
         let nfrail = raw.frail.as_ref().map_or(0, Vec::len);
         let df_total: f64 = raw.df.iter().sum();
@@ -232,18 +242,18 @@ impl SurvpenalFit {
             status: result.response.status,
             covariates: result.covariates,
             strata: result.strata,
-            weights: data.survreg.weights.clone(),
+            weights: data.weights.clone(),
             offset: result.offset,
-            cluster: data.survreg.cluster.clone(),
+            cluster: data.cluster.clone(),
             score: raw.score[nfrail..].to_vec(),
         };
-        if options.robust || data.survreg.cluster.is_some() {
+        if options.robust || data.cluster.is_some() {
             if raw.frail.is_some() {
                 return Err(SurvivalError::invalid_input(
                     "robust variance is not available with a sparse frailty term",
                 ));
             }
-            let sandwich = robust_variance(&survreg, data.survreg.cluster.as_deref())?;
+            let sandwich = robust_variance(&survreg, data.cluster.as_deref())?;
             survreg.naive_variance_matrix =
                 Some(std::mem::replace(&mut survreg.variance_matrix, sandwich));
         }
@@ -273,6 +283,7 @@ impl SurvpenalFit {
         options: &SurvpenalOptions,
         nstrata: Option<usize>,
     ) -> SurvivalResult<SurvpenalEngineResult> {
+        survreg_data.validate()?;
         validate_terms(survreg_data.nvar(), model_terms)?;
         let control = &options.control;
         distribution.validate()?;
@@ -281,11 +292,7 @@ impl SurvpenalFit {
             return Err(SurvivalError::invalid_input("invalid value for outer.max"));
         }
         let n = survreg_data.n();
-        let observed_strata = survreg_data.nstrata();
-        let nstrata = nstrata.unwrap_or(observed_strata);
-        if nstrata == 0 || observed_strata > nstrata {
-            return Err(SurvivalError::invalid_input("Invalid strata variable"));
-        }
+        let nstrata = survreg_data.fitting_strata(nstrata)?;
         let eps = control.rel_tolerance;
         let tol_chol = control.toler_chol;
         let scale = distribution.scale.unwrap_or(options.scale);
@@ -733,20 +740,21 @@ pub fn survpenal_fit(
     control: Option<SurvregControl>,
     robust: Option<bool>,
 ) -> PyResult<SurvpenalFit> {
-    let terms = model_terms(
-        data.nvar(),
-        penalties.into_iter().map(|penalty| penalty.term).collect(),
-        pcols,
-        assign,
-    )?;
-    let data = SurvpenalData::try_new(data.clone(), terms)?;
     let options = SurvpenalOptions {
         init,
         scale,
         control: control.unwrap_or_default(),
         robust: robust.unwrap_or(false),
     };
-    Ok(py.detach(|| SurvpenalFit::fit(&data, distribution, &options))?)
+    Ok(py.detach(|| {
+        let terms = model_terms(
+            data.nvar(),
+            penalties.into_iter().map(|penalty| penalty.term).collect(),
+            pcols,
+            assign,
+        )?;
+        SurvpenalFit::fit_inputs(data, &terms, distribution, &options)
+    })?)
 }
 
 /// Rebuilds a pickled [`SurvpenalFit`] from its `__reduce__` state.

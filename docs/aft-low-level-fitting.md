@@ -80,6 +80,27 @@ fitting releases the GIL; custom Python callbacks reacquire it for each
 vectorized call. The common Python matrix converter avoids creating lists
 for every NumPy row and is shared with the bare Cox interfaces.
 
+Both ordinary and penalized fitters validate the response, design, weights,
+offsets and grouping vectors at the fitting boundary. Rust callers can change
+the public fields of `SurvregData` after construction, so constructor checks
+alone are insufficient. A mismatched offset length or a design with no columns
+returns an input error before initialization or matrix rescaling. Interval
+upper endpoints need to be finite and at least the lower endpoint only for
+status 3; the other rows' upper endpoints remain unused.
+
+Scale-stratum counts are checked before callbacks or parameter allocation.
+Unused strata remain supported, but dimensions whose dense covariance matrix
+cannot be represented by the platform's array indexing are refused. This check
+does not impose a memory budget or guarantee that every representable matrix
+will fit in memory. Native strata are zero-based; cluster codes are opaque
+labels and do not set array dimensions.
+
+Python's `SurvregData` constructor owns its converted input buffers and releases
+the GIL during validation. The full penalized binding borrows this prepared
+data during fitting, avoiding an extra copy of all training buffers before
+entering the solver. The fitted model still retains the data required for
+prediction and residuals.
+
 `scripts/benchmark_aft_lowlevel.py` measures both native binding calls using
 the same prepared data and checks numerical agreement. It reports serialized
 result sizes as a reproducible measure of retained output, not peak memory.
@@ -96,6 +117,48 @@ Runtime was similar (the bare median was 1.7% higher); serialized output was
 about 89% smaller. Both modes perform the same numerical fitting work.
 Data construction, copying result properties and serialization are excluded
 from these times. Results depend on workload and hardware.
+
+### Input validation and copy benchmark
+
+[`bench_aft_inputs.py`](../benches/python/bench_aft_inputs.py) measures native
+data construction, prepared fitting and construction plus fitting for ordinary
+and penalized full/bare models. It also compares coefficients, initial values,
+covariance, scores, linear predictors, likelihoods, iteration counts and
+penalty outputs across saved extension builds.
+
+On Python 3.14.7 / NumPy 2.4.6 with release builds and 20,000 weighted Gaussian
+observations with offsets, these are medians and ranges in milliseconds from
+seven samples after two warmups. Columns include the intercept. The baseline
+is the extension used by #690, before fitting-boundary validation and removal
+of the full penalized binding's extra training-data copy.
+
+| Layout | Columns | Complete call | Before | After |
+| --- | ---: | --- | --- | --- |
+| C | 3 | Construct + ordinary full fit | 9.438 (9.380–9.466) | 9.797 (9.755–9.875) |
+| C | 3 | Construct + penalized full fit | 17.451 (17.403–17.632) | 17.443 (17.401–17.580) |
+| C | 16 | Construct + ordinary full fit | 21.796 (21.547–23.296) | 22.076 (21.496–23.213) |
+| C | 16 | Construct + penalized full fit | 23.859 (23.598–24.153) | 22.661 (22.533–22.763) |
+| Fortran | 3 | Construct + ordinary full fit | 9.641 (9.603–9.699) | 10.492 (10.356–10.541) |
+| Fortran | 3 | Construct + penalized full fit | 17.738 (17.621–18.121) | 18.521 (18.224–18.757) |
+| Fortran | 16 | Construct + ordinary full fit | 23.391 (23.241–23.603) | 23.703 (23.488–25.332) |
+| Fortran | 16 | Construct + penalized full fit | 25.246 (24.485–25.658) | 24.218 (24.103–24.648) |
+
+These measurements show modest, workload-dependent changes, including slower
+small fits; they do not establish a general fitting speedup. Each build and
+layout runs in a separate process, alternating routine order within each run.
+Calls include conversion, validation, fitting and native result construction;
+random input generation and copying result properties are excluded. Outputs
+agree across builds at `rtol=5e-14, atol=1e-15`. This benchmark does not measure
+peak memory; removing the binding copy avoids one duplicate of the training
+buffers, while the solver's working storage and retained model remain.
+
+```sh
+PYTHONPATH=python .venv/bin/python benches/python/bench_aft_inputs.py \
+  --extension /tmp/previous-survival.so --output /tmp/aft-before
+PYTHONPATH=python .venv/bin/python benches/python/bench_aft_inputs.py \
+  --output /tmp/aft-after --compare /tmp/aft-before.npz
+# Add --order F to both commands for Fortran-layout inputs.
+```
 
 ## R references
 
