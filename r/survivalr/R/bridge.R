@@ -2424,6 +2424,29 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   values
 }
 
+.surv_response_from_args <- function(args, type, origin) {
+  if (is.null(names(args))) names(args) <- c("time", "time2", "event")[seq_along(args)]
+  args <- lapply(args, function(value) if (inherits(value, "difftime")) as.numeric(value) else value)
+  if (!is.numeric(args$time)) stop("Time variable is not numeric", call. = FALSE)
+  # Preserve scalar vectors and bulk numeric arrays, including missing statuses.
+  args <- lapply(args, function(value) {
+    if (is.factor(value)) {
+      .as_python_factor(value)
+    } else if (is.numeric(value) || is.logical(value) && !anyNA(value)) {
+      if (is.integer(value) && anyNA(value)) value <- as.numeric(value)
+      array(value)
+    } else if (is.logical(value)) {
+      .as_python_vector(value)
+    } else {
+      as.list(value)
+    }
+  })
+  args <- c(args, .compact_null(list(type = type, origin = origin)))
+  captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr("Surv"), args)
+  for (message in captured$warnings) warning(message, call. = FALSE)
+  .wrap_python(captured$result, c("survival_py_surv", "survival_py_object"))
+}
+
 .surv_factor_response <- function(args, type = NULL, origin = 0) {
   if (!(length(args) %in% c(2L, 3L)) || !is.factor(args[[length(args)]])) {
     return(NULL)
@@ -2442,85 +2465,15 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
     return(NULL)
   }
 
-  event <- args[[length(args)]]
-  status <- as.integer(event) - 1L
-  states <- levels(event)[-1L]
-  input_attributes <- list(event = attributes(event))
-  if (length(args) == 2L) {
-    out <- cbind(
-      time = as.numeric(args[[1L]]) - origin,
-      status = status
-    )
-    attr(out, "type") <- "mright"
-  } else {
-    out <- cbind(
-      start = as.numeric(args[[1L]]) - origin,
-      stop = as.numeric(args[[2L]]) - origin,
-      status = status
-    )
-    attr(out, "type") <- "mcounting"
-  }
-  attr(out, "states") <- states
-  attr(out, "clabel") <- levels(event)[1L]
-  attr(out, "inputAttributes") <- input_attributes
+  out <- .as_native_surv(.surv_response_from_args(args, type, origin))
+  class(out) <- NULL
+  attr(out, "inputAttributes") <- list(event = attributes(args[[length(args)]]))
   class(out) <- "Surv"
   out
 }
 
-.native_model_frame_surv <- function(time, time2, event, type = NULL,
-                                     origin = 0, time1, start, stop, status) {
-  .warn_deprecated_surv_mstate_type(type)
-  use_named_response <- !missing(time1) || !missing(start) ||
-    !missing(stop) || !missing(status)
-
-  if (use_named_response) {
-    # time1/start, stop and status are this package's aliases for R's time, time2, event
-    if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
-      base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
-    }
-    if ((!missing(time2)) + (!missing(stop)) > 1L) {
-      base::stop("multiple time2= arguments given (time2, stop)", call. = FALSE)
-    }
-    if ((!missing(event)) + (!missing(status)) > 1L) {
-      base::stop("multiple event= arguments given (event, status)", call. = FALSE)
-    }
-    args <- list()
-    if (!missing(time)) {
-      args$time <- time
-    }
-    if (!missing(time1)) {
-      args$time <- time1
-    }
-    if (!missing(start)) {
-      args$time <- start
-    }
-    if (!missing(time2)) {
-      args$time2 <- time2
-    }
-    if (!missing(stop)) {
-      args$time2 <- stop
-    }
-    if (!missing(event)) {
-      args$event <- event
-    }
-    if (!missing(status)) {
-      args$event <- status
-    }
-  } else {
-    args <- list(time)
-    if (!missing(time2)) {
-      args <- c(args, list(time2))
-    }
-    if (!missing(event)) {
-      args <- c(args, list(event))
-    }
-  }
-  factor_response <- .surv_factor_response(args, type = type, origin = origin)
-  if (!is.null(factor_response)) {
-    return(factor_response)
-  }
-  args <- c(args, .compact_null(list(type = type, origin = origin)))
-  .survsplit_minimal_surv(args)
+.native_model_frame_surv <- function(...) {
+  .as_native_surv(Surv(...))
 }
 
 Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop, status) {
@@ -2574,8 +2527,7 @@ Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop
   if (!is.null(factor_response)) {
     return(factor_response)
   }
-  args <- c(args, .compact_null(list(type = type, origin = origin)))
-  .wrap_python(do.call(.python_attr("Surv"), args), c("survival_py_surv", "survival_py_object"))
+  .surv_response_from_args(args, type, origin)
 }
 
 Surv2 <- function(time, event, repeated = FALSE) {
@@ -6476,12 +6428,13 @@ model.frame.formula <- function(formula, ...) {
     stop("argument is not a Surv object", call. = FALSE)
   }
 
-  surv_type <- as.character(.result_field(x, "type"))
+  columns <- .pybridge_attr("_surv_columns")(x)
+  surv_type <- columns$type
   # a missing time is NaN on the Python side and NA in an R Surv
-  time <- .surv_na_times(.as_numeric_vector(.result_field(x, "time")))
-  status <- as.integer(.as_nullable_numeric_vector(.result_field(x, "event")))
-  start <- .result_field(x, "start")
-  time2 <- .result_field(x, "time2")
+  time <- .surv_na_times(.as_numeric_vector(columns$time))
+  status <- as.integer(columns$event)
+  start <- columns$start
+  time2 <- columns$time2
   if (!is.null(start)) {
     start <- .surv_na_times(.as_numeric_vector(start))
   }
@@ -6521,8 +6474,8 @@ model.frame.formula <- function(formula, ...) {
     attr(out, "type") <- surv_type
   }
   if (surv_type %in% c("mright", "mcounting")) {
-    attr(out, "states") <- as.character(.result_field(x, "states"))
-    attr(out, "clabel") <- .result_field(x, "clabel")
+    attr(out, "states") <- as.character(columns$states)
+    attr(out, "clabel") <- columns$clabel
   }
   class(out) <- "Surv"
   out

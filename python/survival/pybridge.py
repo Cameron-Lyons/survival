@@ -29,6 +29,27 @@ def _call_fit_with_warnings(
     return {"result": result, "warnings": [str(issue.message) for issue in recorded]}
 
 
+def _surv_columns(response: Any) -> dict[str, Any]:
+    """Bulk normalized response columns for R's native model-frame adapter."""
+    import numpy as np
+
+    from .r._surv import Surv
+
+    if not isinstance(response, Surv):
+        raise TypeError("argument is not a Surv object")
+    return {
+        **{
+            name: None
+            if (values := getattr(response, name)) is None
+            else np.asarray(values, dtype=float)
+            for name in ("time", "event", "start", "time2")
+        },
+        "type": response.type,
+        "states": list(response.states),
+        "clabel": response.clabel,
+    }
+
+
 def _r_subset(rows: list[int]) -> Any:
     """Preserve R's missing selected rows until the shared na.action step."""
     from .r._coerce import _RSubset

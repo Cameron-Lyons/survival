@@ -33,9 +33,7 @@ from ._coerce import (
     _match_string_arg,
     _materialize_1d,
     _materialize_labels,
-    _missing_row_indices,
     _normalize_bool_option,
-    _normalize_na_action,
     _r_factor_levels,
     _scalar_or_vector,
     _subset_indices,
@@ -48,10 +46,8 @@ from ._formula import (
     _apply_formula_na_action,
     _column,
     _column_or_values,
-    _column_source,
     _covariate_term_columns,
     _covariate_term_name,
-    _formula_columns,
     _parse_formula,
     _strata_keep,
     _strata_specs,
@@ -60,10 +56,13 @@ from ._formula import (
     _timeline_counting,
     _timeline_response,
 )
+from ._formula import (
+    model_frame as _shared_model_frame,
+)
 from ._models import model_formula
 from ._names import _make_names_unique, _make_unique
 from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
-from ._surv import Surv, _complete_codes, _subset_surv
+from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._types import (
     _MISSING,
     BrierResult,
@@ -528,82 +527,42 @@ class _ModelFrame:
     omitted: list[int]
 
 
-def _missing_rows(frame: Mapping[str, Any], n: int) -> set[int]:
-    """Rows with a missing value in any column; a ``Surv`` column is missing where R's ``Surv``
-    made it ``NA`` (missing time or status)."""
-
-    rows: set[int] = set()
-    for name, values in frame.items():
-        if isinstance(values, Surv):
-            rows.update(idx for idx, event in enumerate(values.event) if event is None)
-            rows.update(idx for idx, time in enumerate(values.time) if math.isnan(time))
-            if values.start is not None:
-                rows.update(idx for idx, time in enumerate(values.start) if math.isnan(time))
-        else:
-            rows.update(_missing_row_indices([(name, values)], n))
-    return rows
-
-
-def _take_rows(frame: Mapping[str, Any], rows: list[int]) -> dict[str, Any]:
-    return {
-        name: _subset_surv(values, rows)
-        if isinstance(values, Surv)
-        else _subset_sequence(values, rows, name)
-        for name, values in frame.items()
-    }
-
-
 def _model_frame(
     formula: Any, data: Any, subset: Any, na_action: Any, **extras: Any
 ) -> _ModelFrame:
-    """R's ``model.frame`` for a formula with a ``Surv`` response (or a ``Surv`` object) plus
-    row-aligned arguments such as ``id`` and ``istate``, given as vectors or column names.
+    """Shared formula/response preparation with survcheck's original-row mapping."""
 
-    ``subset`` is applied first, then ``na.action`` to the formula variables, the response and
-    the extras; ``kept`` and ``omitted`` record the 0-based rows of the subset that ``na.omit``
-    kept and dropped.
-    """
-
-    action = _normalize_na_action(na_action)
     if isinstance(formula, Surv):
-        frame: dict[str, Any] = {"(response)": formula}
-        n = len(formula)
+        response = formula
+        aligned = {name: _column_or_values(data, value, name) for name, value in extras.items()}
+        for name, values in aligned.items():
+            if values is not None and len(_materialize_labels(values, name)) != len(response):
+                raise ValueError(f"wrong length for {name}")
+        if subset is not None:
+            rows = _subset_indices(subset, len(response))
+            response = _subset_surv(response, rows)
+            aligned = {
+                name: None if value is None else _subset_sequence(value, rows, name)
+                for name, value in aligned.items()
+            }
+        response, aligned, omitted = _apply_surv_na_action(response, na_action, "object", **aligned)
+        aligned = {
+            name: None if value is None else _materialize_labels(value, name)
+            for name, value in aligned.items()
+        }
     else:
-        if data is None:
-            raise ValueError("a data argument is required to evaluate the formula")
-        frame = {name: _column_source(data, name) for name in _formula_columns(formula, data)}
-        n = len(_column(data, next(iter(frame))))
-    for name in [name for name, values in extras.items() if values is not None]:
-        frame[name] = _column_or_values(data, extras[name], name)
-        if len(_materialize_labels(frame[name], name)) != n:
-            raise ValueError(f"wrong length for {name}")
-    if subset is not None:
-        if not isinstance(formula, Surv):
-            frame["(response)"] = _parse_formula(formula, frame)[0]
-        frame = _take_rows(frame, _subset_indices(subset, n))
-        n = len(next(iter(frame.values())))
-    omitted: list[int] = []
-    kept = list(range(n))
-    # na.omit before building the response (a missing variable), then on the response itself
-    for build_response in (True, False):
-        missing = _missing_rows(frame, len(kept))
-        if missing and action == "fail":
-            raise ValueError("missing values in object")
-        if missing and action in {"omit", "exclude"}:
-            rows = [idx for idx in range(len(kept)) if idx not in missing]
-            omitted.extend(kept[idx] for idx in missing)
-            kept = [kept[idx] for idx in rows]
-            frame = _take_rows(frame, rows)
-        if build_response and "(response)" not in frame:
-            frame["(response)"] = _parse_formula(formula, frame)[0]
+        frame = _shared_model_frame(formula, data, subset=subset, na_action=na_action, **extras)
+        if not isinstance(frame.response, Surv):
+            raise ValueError("response must be a survival object")
+        response = frame.response
+        aligned = {name: getattr(frame, name) for name in extras}
+        omitted = [] if frame.na_action is None else [row - 1 for row in frame.na_action.rows]
+    removed = set(omitted)
     return _ModelFrame(
-        response=frame["(response)"],
-        extras={
-            name: None if name not in frame else _materialize_labels(frame[name], name)
-            for name in extras
-        },
-        kept=kept,
-        omitted=sorted(omitted),
+        response=response,
+        extras=aligned,
+        kept=[row for row in range(len(response) + len(removed)) if row not in removed],
+        omitted=omitted,
     )
 
 

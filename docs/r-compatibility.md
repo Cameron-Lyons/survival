@@ -57,6 +57,10 @@ subsetting. R-facing subset arguments now use R row indexing and data/formula
 environments, while Python positions remain zero-based. Missing selected rows
 reach the shared missing-data action, and response status coding is preserved
 before selection; see [formula subsets](formula-subsets.md).
+Responses are also normalized before missing-row removal without a subset;
+invalid statuses and interval endpoints share the constructor's missingness rules.
+R native model frames use the same constructor and bulk response conversion;
+see [response normalization](response-normalization.md).
 `scripts/generate_strata_expression_reference.R` checks model fits,
 predictions, missing-value actions, survival curves, and log-rank tests.
 On the local 100,000-row NumPy benchmark, constructing the model frame for

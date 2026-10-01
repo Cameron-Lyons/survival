@@ -64,7 +64,6 @@ from ._formula import (
     _formula_model_frame,
     _formula_model_term_degree,
     _formula_response_spec,
-    _formula_response_values,
     _na_action_record,
     _offset_vector,
     _parse_formula,
@@ -72,7 +71,7 @@ from ._formula import (
     _strata_specs,
     _subset_formula_inputs,
 )
-from ._surv import Surv, _complete_codes, _survreg_response_arrays, is_na_surv
+from ._surv import Surv, _complete_codes, _survreg_response_arrays
 from ._survpenal import fit_penalized, penalty_terms
 from ._types import (
     NaAction,
@@ -549,22 +548,7 @@ def _formula_frame(
     aligned = {"weights": weights, "offset": offset, "cluster": cluster}
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
-    # an interval-censored response is missing where is.na(Surv) says so: a missing
-    # endpoint can be a censoring code, and an unused time2 does not count
-    response_columns: Sequence[str] = ()
-    missing_response: list[int] = []
-    if spec.type in {"interval", "interval2"}:
-        response_columns = spec.columns
-        interval = Surv(*_formula_response_values(data, spec), type=spec.type)
-        missing_response = [row for row, missing in enumerate(is_na_surv(interval)) if missing]
-    data, aligned, removed = _apply_formula_na_action(
-        formula,
-        data,
-        na_action,
-        exclude_columns=response_columns,
-        missing_rows=missing_response,
-        **aligned,
-    )
+    data, aligned, removed = _apply_formula_na_action(formula, data, na_action, **aligned)
     weights, offset, cluster = aligned["weights"], aligned["offset"], aligned["cluster"]
     response, terms = _parse_formula(formula, data)
     n = len(response)

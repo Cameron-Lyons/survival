@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import combinations, compress, product
-from operator import add, ge, mul, sub, truediv
+from operator import add, mul, sub, truediv
 from typing import Any
 
 import numpy as np
@@ -49,7 +49,7 @@ from ._surv import (
     _repeated_option,
     _strata,
     _subset_surv,
-    _time_column,
+    is_na_surv,
 )
 from ._types import (
     _MISSING,
@@ -1447,16 +1447,7 @@ def _subset_formula_inputs(
 ) -> tuple[_FormulaRows, dict[str, Any]]:
     n = _data_row_count(data, formula)
     data = _with_strata_cache(data, _strata_specs(_formula_rhs_terms(formula, data)), n)
-    spec = _response_spec(formula)
-    if spec is not None and spec.surv and not spec.timeline:
-        # R builds Surv before row selection. Reconstructing after selection can
-        # reinterpret 1/2 status codes when every selected event is censored.
-        response = _surv_from_spec(data, spec)
-        if not isinstance(data, _FormulaRows):
-            data = _FormulaRows(
-                {name: _column_source(data, name) for name in _data_column_names(data) or ()}, n
-            )
-        data.response_cache = (spec, response)
+    data = _with_response_cache(data, _response_spec(formula), n)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
@@ -1465,33 +1456,18 @@ def _subset_formula_inputs(
     return _formula_data_rows(formula, data, indices, n), filtered
 
 
-def _backwards_interval_rows(formula: str, data: Any, n: int) -> list[int]:
-    """The rows of a ``Surv(start, stop, event)`` response with ``start >= stop``.
+def _with_response_cache(data: Any, spec: _SurvResponseSpec | None, n: int) -> Any:
+    """Evaluate Surv before subset/na.action, then carry its normalized rows forward."""
 
-    R's ``Surv`` turns their start into ``NA`` (with its warning) while ``model.frame``
-    evaluates the response, so ``na.action`` treats them as missing.  A ``NaN``
-    endpoint compares false; ``None``/``pd.NA`` go through ``Surv``'s conversion.
-    """
-
-    spec = _response_spec(formula)
-    if (
-        spec is None
-        or not spec.surv
-        or len(spec.arguments) != 3
-        or spec.type not in {None, "counting", "mstate"}
-    ):
-        return []
-    start = _materialize_1d(_response_arg_values(data, spec.arguments[0], n), "time")
-    stop = _materialize_1d(_response_arg_values(data, spec.arguments[1], n), "time2")
-    try:
-        rows = list(compress(range(n), map(ge, start, stop)))
-    except TypeError:
-        start = _time_column(start, "time", "Time variable is not numeric")
-        stop = _time_column(stop, "time2", "Stop time is not numeric")
-        rows = list(compress(range(n), map(ge, start, stop)))
-    if rows:
-        _warn_outside_package("Stop time must be > start time, NA created")
-    return rows
+    if spec is None or not spec.surv or spec.timeline:
+        return data
+    response = _surv_from_spec(data, spec)
+    if not isinstance(data, _FormulaRows):
+        data = _FormulaRows(
+            {name: _column_source(data, name) for name in _data_column_names(data) or ()}, n
+        )
+    data.response_cache = (spec, response)
+    return data
 
 
 def _response_variables(spec: _SurvResponseSpec | None) -> list[_CovariateTerm]:
@@ -1559,51 +1535,49 @@ def _apply_formula_na_action(
     formula: str,
     data: Any,
     na_action: str | None,
-    *,
-    exclude_columns: Iterable[str] = (),
-    missing_rows: Iterable[int] = (),
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any], list[int]]:
     """``na.action`` on the formula's variables and the row-aligned arguments together:
     the data and arguments at the kept rows, and the 0-based rows it removed.
 
-    ``exclude_columns`` are not scanned; ``missing_rows`` are rows the caller found
-    missing otherwise (``is.na`` of an interval-censored response).
+    A survival response is evaluated once before omission. Its normalized columns
+    determine missingness, including invalid statuses and unused interval endpoints.
     """
 
     action = _normalize_na_action(na_action)
     terms = _formula_rhs_terms(formula, data)
     n = _data_row_count(data, formula)
     data = _with_strata_cache(data, _strata_specs(terms), n)
+    response_spec = _response_spec(formula)
+    data = _with_response_cache(data, response_spec, n)
     if action == "pass":
         return data, row_aligned, []
 
-    excluded = set(exclude_columns)
-    sources = {
-        column: _column_source(data, column)
-        for column in _formula_columns(formula, data)
-        if column not in excluded
-    }
-    response_spec = _response_spec(formula)
+    normalized = response_spec is not None and response_spec.surv and not response_spec.timeline
     variables = [
-        *_response_variables(response_spec),
+        *([] if normalized else _response_variables(response_spec)),
         *terms.variables,
         *(item.term for item in terms.model_terms if isinstance(item, _ModelClusterTerm)),
         *(factor for term in terms.covariates for factor in _covariate_factors(term)),
         *terms.offsets,
     ]
+    columns = (
+        list(dict.fromkeys(_covariate_columns(variables) + terms.clusters))
+        if normalized
+        else _formula_columns(formula, data)
+    )
     required = set(terms.clusters)
-    if response_spec is not None:
-        required.update(set(response_spec.columns) - excluded)
-    missing = _formula_missing_rows(data, list(sources), variables, n, required=required)
+    if response_spec is not None and not normalized:
+        required.update(response_spec.columns)
+    missing = _formula_missing_rows(data, columns, variables, n, required=required)
+    if normalized and response_spec is not None:
+        missing.update(compress(range(n), is_na_surv(_surv_from_spec(data, response_spec))))
     missing.update(
         _missing_row_indices(
             [(name, values) for name, values in row_aligned.items() if values is not None],
             n,
         )
     )
-    missing.update(missing_rows)
-    missing.update(_backwards_interval_rows(formula, sources, n))
     made, _values = _made_nan_rows(data, variables, missing, n)
     missing.update(made)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
@@ -2912,8 +2886,9 @@ def model_frame(
     missing value removes like a formula variable.  ``subset`` (a mask or row indices)
     and then ``na_action`` (``"na.omit"``, R's default, ``"na.exclude"``,
     ``"na.pass"``, ``"na.fail"``, or ``None`` for none) are applied to the formula's
-    variables and the arguments together, after which the response and the terms
-    are evaluated.  A ``Surv2`` response is refused unless *timeline* says the caller
+    variables and the arguments together. A ``Surv`` response is constructed before
+    either selection so its status coding and missingness are retained. A ``Surv2``
+    response is refused unless *timeline* says the caller
     takes one.
     """
 
