@@ -578,6 +578,8 @@ def _model_frame(
         if len(_materialize_labels(frame[name], name)) != n:
             raise ValueError(f"wrong length for {name}")
     if subset is not None:
+        if not isinstance(formula, Surv):
+            frame["(response)"] = _parse_formula(formula, frame)[0]
         frame = _take_rows(frame, _subset_indices(subset, n))
         n = len(next(iter(frame.values())))
     omitted: list[int] = []
@@ -592,7 +594,7 @@ def _model_frame(
             omitted.extend(kept[idx] for idx in missing)
             kept = [kept[idx] for idx in rows]
             frame = _take_rows(frame, rows)
-        if build_response and not isinstance(formula, Surv):
+        if build_response and "(response)" not in frame:
             frame["(response)"] = _parse_formula(formula, frame)[0]
     return _ModelFrame(
         response=frame["(response)"],

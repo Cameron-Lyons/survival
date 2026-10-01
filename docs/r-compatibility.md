@@ -53,7 +53,11 @@ Strata arguments may be comparisons, arithmetic, numeric transforms, factors,
 NaN forms a distinct `NaN` level, following R's factor conversion; input NaN
 continues to represent R's NA. Evaluated strata are reused within a model frame
 and subsetted with its rows, so data-dependent cut points are determined before
-subsetting. `scripts/generate_strata_expression_reference.R` checks model fits,
+subsetting. R-facing subset arguments now use R row indexing and data/formula
+environments, while Python positions remain zero-based. Missing selected rows
+reach the shared missing-data action, and response status coding is preserved
+before selection; see [formula subsets](formula-subsets.md).
+`scripts/generate_strata_expression_reference.R` checks model fits,
 predictions, missing-value actions, survival curves, and log-rank tests.
 On the local 100,000-row NumPy benchmark, constructing the model frame for
 `age * strata(sex)` fell from 97.1 ms to 71.5 ms; ordinary additive strata stayed

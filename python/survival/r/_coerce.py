@@ -374,6 +374,10 @@ def _is_bool_like(value: Any) -> bool:
     )
 
 
+class _RSubset(list[int]):
+    """R-selected rows; -1 represents an all-missing model-frame row."""
+
+
 def _subset_indices(subset: Any, n: int) -> list[int]:
     values = _materialize_1d(subset, "subset")
     if values and all(_is_bool_like(value) for value in values):
@@ -387,13 +391,13 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
                 idx = index(value)
             except TypeError as exc:
                 raise TypeError("subset must contain booleans or integer row indices") from exc
-            if idx < 0 or idx >= n:
+            if idx < (-1 if isinstance(subset, _RSubset) else 0) or idx >= n:
                 raise ValueError("subset row indices must be between 0 and n - 1")
             indices.append(idx)
 
     if not indices:
         raise ValueError("subset selects no rows")
-    return indices
+    return _RSubset(indices) if isinstance(subset, _RSubset) else indices
 
 
 def _rows_of(source: Any, kept: list[Any]) -> Any:
@@ -411,7 +415,7 @@ def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")
-    return _rows_of(values, [materialized[idx] for idx in indices])
+    return _rows_of(values, [None if idx < 0 else materialized[idx] for idx in indices])
 
 
 def _subset_optional_sequence(

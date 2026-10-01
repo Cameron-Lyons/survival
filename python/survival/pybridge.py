@@ -29,6 +29,13 @@ def _call_fit_with_warnings(
     return {"result": result, "warnings": [str(issue.message) for issue in recorded]}
 
 
+def _r_subset(rows: list[int]) -> Any:
+    """Preserve R's missing selected rows until the shared na.action step."""
+    from .r._coerce import _RSubset
+
+    return _RSubset(rows)
+
+
 def _yates_model_metadata(fit: Any) -> dict[str, Any]:
     """Factor levels needed to rebuild a fitted Python model's R model frame."""
     from .r._fit import _formula_design_for_fit

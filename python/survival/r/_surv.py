@@ -546,8 +546,26 @@ def as_character_surv(x: Any) -> list[str]:
 
 
 def _subset_surv(response: Surv, indices: list[int]) -> Surv:
-    """Alias of :meth:`Surv.subset` kept for the modules that import it."""
+    """Internal row selection, with -1 for an R model-frame missing row."""
 
+    if any(row < 0 for row in indices):
+        return Surv._from_normalized(
+            time=[math.nan if row < 0 else response.time[row] for row in indices],
+            event=[None if row < 0 else response.event[row] for row in indices],
+            start=(
+                None
+                if response.start is None
+                else [math.nan if row < 0 else response.start[row] for row in indices]
+            ),
+            time2=(
+                None
+                if response.time2 is None
+                else [math.nan if row < 0 else response.time2[row] for row in indices]
+            ),
+            surv_type=response.type,
+            states=response.states,
+            clabel=response.clabel,
+        )
     return response.subset(indices)
 
 
