@@ -42,8 +42,9 @@ controlled-penalty fitter. The R controller's final history and formatting
 callback remain available for spline summaries and saved models. Fitted
 coefficients, variances, effective degrees of freedom, and linear/nonlinear
 summary rows agree with R for transformed splines. Penalties in interactions
-are rejected, as in R. Factor-valued penalties currently raise an explicit
-unsupported error instead of losing their penalty.
+are rejected, as in R. Numeric and factor penalty results, including sparse
+and dense frailties, are supported as described in
+[time-transform penalties](cox-time-transform-penalties.md).
 
 ## Reference checks
 

@@ -48,6 +48,9 @@ def _check_survival_summary_types(
 
 
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:
+    basis = r.CoxPenaltyBasis(data["age"], _survival.CoxPenalty.ridge(theta=1))
+    assert_type(basis, r.CoxPenaltyBasis)
+    assert_type(basis.penalty, _survival.CoxPenalty)
     cox = r.coxph("Surv(time, status) ~ age", data)
     assert_type(cox, r.CoxphModel)
     setup = r.yates_setup(cox, "survival")

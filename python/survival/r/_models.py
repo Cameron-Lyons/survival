@@ -37,8 +37,11 @@ from ._coxph import (
     CoxphModel,
     _coxph_df,
     _coxph_model_frame,
+    _fit_frame,
     _has_strata,
+    _model_matrix_by_term,
     _prediction_newdata,
+    _sparse_term,
     _term_labels,
     _terms_selection,
     predict_coxph,
@@ -446,7 +449,21 @@ def _model_matrix_cox(fit: CoxphModel, data: Any | None = None) -> dict[str, Any
         for col in columns:
             assign[col] = term_idx
     if data is None:
-        rows, strata = fit.x, fit.strata
+        strata = fit.strata
+        if _sparse_term(fit) is not None:
+            blocks = _model_matrix_by_term(fit)
+            names = [name for block_names, _ in blocks for name in block_names]
+            assign = [
+                term
+                for term, (block_names, _) in zip(
+                    _fit_frame(fit).design.term_assignments, blocks, strict=True
+                )
+                for _ in block_names
+            ]
+            full_columns = [column for _, block_columns in blocks for column in block_columns]
+            rows = [list(row) for row in zip(*full_columns, strict=True)]
+        else:
+            rows = fit.x
     else:
         new = _prediction_newdata(
             fit, data, need_strata=_has_strata(fit), need_response=False, na_action="na.omit"

@@ -1811,10 +1811,11 @@ ridge <- function(..., theta, df = nvar / 2, eps = 0.1, scale = TRUE) {
 }
 
 .frailty_encoded_x <- function(x, sparse) {
-  levels <- levels(factor(x))
+  groups <- factor(x)
+  levels <- levels(groups)
   result <- .call_r_api(
     "_frailty_encoding",
-    x = .as_python_vector(x),
+    x = .as_python_vector(as.character(groups)),
     levels = levels,
     sparse = sparse
   )

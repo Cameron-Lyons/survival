@@ -135,7 +135,7 @@ test_that("malformed transform results fail before reaching the fitter", {
   expect_error(coxph(Surv(time,status)~tt(x):z,d,
                     tt=function(x,t,...) survival::ridge(x*log(t),theta=1)),
                "Penalty terms cannot be in an interaction")
-  expect_error(coxph(Surv(time,status)~tt(x),d,
-                    tt=function(x,t,...) survival::frailty(as.integer(x>0))),
-               "factor-valued time-transform penalties")
+  fit <- coxph(Surv(time,status)~tt(x),d,
+               tt=function(x,t,...) survival::frailty(as.integer(x>0),theta=.4))
+  expect_false(is.null(fit$penalized))
 })
