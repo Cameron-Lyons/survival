@@ -1202,6 +1202,13 @@ read-only NumPy views and retain no original observations. See
 [direct Cox curves](cox-direct-curves.md) for prepared-input requirements,
 stratum indices, output layouts and the terminal-survival rounding guard.
 
+`attrassign` groups prepared model-matrix column codes by term in one pass;
+`untangle_specials` finds registered special variables and term positions in
+`TermMetadata`. These helpers preserve R's one-based indices and its single-term
+selection quirk. `model_term_names` includes strata labels for Cox and AFT models,
+matching R's fitted terms. See [term helpers](term-helpers.md) for metadata inputs,
+output conventions and column-grouping performance.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit
@@ -1210,11 +1217,9 @@ error; none silently falls back to other behaviour.
 - **R operator groups**: `Surv` arithmetic, comparisons and reductions do
   not dispatch through R's `Math`/`Ops`/`Summary` groups (which reject all
   operations). Python's ordinary object equality remains structural.
-- **Low-level R exports** that `survival.r` does not re-export:
-  `attrassign`, `untangle.specials`, `yates_setup`. Their computations are reachable
-  through the formula functions and domain modules such as `survival.regression.coxph_fit`,
-  `survival.regression.survreg_fit` and `survival.surv_analysis.survfitkm`.
-  The R bridge provides R-named wrappers for several of them.
+- **Low-level R export** that `survival.r` does not re-export: `yates_setup`.
+  Its computations are reachable through `yates` and the validation domain module.
+  The R bridge provides the R-named wrapper.
 
 Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and

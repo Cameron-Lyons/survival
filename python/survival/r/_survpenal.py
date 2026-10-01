@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
+from ._terms import _column_groups
 from ._types import _FormulaDesign, _PenaltyDesignTerm
 
 
@@ -43,17 +44,8 @@ def assign_list(
     is ``attr(X, "assign")`` per column and ``strata_term`` the 1-based strata term (0
     for none)."""
 
-    labels: list[str] = []
-    columns: list[list[int]] = []
-    if 0 in assign:
-        labels.append("(Intercept)")
-        columns.append([j for j, term in enumerate(assign) if term == 0])
-    for term_index, label in enumerate(term_labels, start=1):
-        term_columns = [j for j, term in enumerate(assign) if term == term_index]
-        if term_index != strata_term and term_columns:
-            labels.append(label)
-            columns.append(term_columns)
-    return labels, columns
+    groups = _column_groups(assign, ("(Intercept)", *term_labels), exclude=strata_term or None)
+    return list(groups), list(groups.values())
 
 
 def fit_penalized(

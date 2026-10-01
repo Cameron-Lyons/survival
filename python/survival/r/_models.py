@@ -49,7 +49,7 @@ from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._data_prep import summary_tmerge
 from ._finegray import _finegray_frame
 from ._formula import _column as _formula_column
-from ._formula import _formula_columns
+from ._formula import _formula_columns, _formula_model_term_degree
 from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
@@ -110,6 +110,8 @@ from ._types import (
     SurvfitResult,
     TMergeFrame,
     YatesPrint,
+    _ModelCovariateTerm,
+    _ModelStrataTerm,
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
@@ -375,6 +377,20 @@ def model_term_names(fit: Any, terms: Any | None = None) -> list[str]:
 @model_term_names.register(CoxphModel)
 def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str]:
     names = _term_labels(fit)
+    if fit.terms.model_terms:
+        covariates = iter(names)
+        ordered = sorted(
+            (
+                item
+                for item in fit.terms.model_terms
+                if isinstance(item, _ModelCovariateTerm | _ModelStrataTerm)
+            ),
+            key=_formula_model_term_degree,
+        )
+        names = [
+            item.spec.call if isinstance(item, _ModelStrataTerm) else next(covariates)
+            for item in ordered
+        ]
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 

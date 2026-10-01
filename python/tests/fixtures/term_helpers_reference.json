@@ -1,0 +1,6247 @@
+{
+  "r_version": "R version 4.5.3 (2026-03-11)",
+  "survival_version": "3.8.12",
+  "special_cases": [
+    {
+      "formula": "~ 1",
+      "metadata": {
+        "term_labels": [],
+        "variables": [],
+        "factors": null,
+        "order": [],
+        "response": 0,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ 1",
+      "metadata": {
+        "term_labels": [],
+        "variables": ["y"],
+        "factors": null,
+        "order": [],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "~ 0",
+      "metadata": {
+        "term_labels": [],
+        "variables": [],
+        "factors": null,
+        "order": [],
+        "response": 0,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x + strata(g)",
+      "metadata": {
+        "term_labels": ["x", "strata(g)"],
+        "variables": ["y", "x", "strata(g)"],
+        "factors": [
+          [0, 0],
+          [1, 0],
+          [0, 1]
+        ],
+        "order": [1, 1],
+        "response": 1,
+        "specials": {
+          "strata": [3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "~ strata(g) + x",
+      "metadata": {
+        "term_labels": ["strata(g)", "x"],
+        "variables": ["strata(g)", "x"],
+        "factors": [
+          [1, 0],
+          [0, 1]
+        ],
+        "order": [1, 1],
+        "response": 0,
+        "specials": {
+          "strata": [1],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ strata(g) + strata(h) + x:strata(g)",
+      "metadata": {
+        "term_labels": ["strata(g)", "strata(h)", "strata(g):x"],
+        "variables": ["y", "strata(g)", "strata(h)", "x"],
+        "factors": [
+          [0, 0, 0],
+          [1, 0, 2],
+          [0, 1, 0],
+          [0, 0, 1]
+        ],
+        "order": [1, 1, 2],
+        "response": 1,
+        "specials": {
+          "strata": [2, 3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": [3]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": [1, 2, 3]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ (x + strata(g) + cluster(id))^2",
+      "metadata": {
+        "term_labels": ["x", "strata(g)", "cluster(id)", "x:strata(g)", "x:cluster(id)", "strata(g):cluster(id)"],
+        "variables": ["y", "x", "strata(g)", "cluster(id)"],
+        "factors": [
+          [0, 0, 0, 0, 0, 0],
+          [1, 0, 0, 1, 1, 0],
+          [0, 1, 0, 1, 0, 1],
+          [0, 0, 1, 0, 1, 1]
+        ],
+        "order": [1, 1, 1, 2, 2, 2],
+        "response": 1,
+        "specials": {
+          "strata": [3],
+          "cluster": [4],
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": [4, 6]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": [2, 4, 6]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": [3]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": [5, 6]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": [3, 5, 6]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ strata(g):cluster(id)",
+      "metadata": {
+        "term_labels": ["strata(g):cluster(id)"],
+        "variables": ["y", "strata(g)", "cluster(id)"],
+        "factors": [
+          [0],
+          [2],
+          [2]
+        ],
+        "order": [2],
+        "response": 1,
+        "specials": {
+          "strata": [2],
+          "cluster": [3],
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [2],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [2],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x + strata(g) - strata(g)",
+      "metadata": {
+        "term_labels": ["x"],
+        "variables": ["y", "x", "strata(g)"],
+        "factors": [
+          [0],
+          [1],
+          [0]
+        ],
+        "order": [1],
+        "response": 1,
+        "specials": {
+          "strata": [3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x - strata(g)",
+      "metadata": {
+        "term_labels": ["x"],
+        "variables": ["y", "x", "strata(g)"],
+        "factors": [
+          [0],
+          [1],
+          [0]
+        ],
+        "order": [1],
+        "response": 1,
+        "specials": {
+          "strata": [3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x:strata(g) - x:strata(g)",
+      "metadata": {
+        "term_labels": [],
+        "variables": ["y", "x", "strata(g)"],
+        "factors": null,
+        "order": [],
+        "response": 1,
+        "specials": {
+          "strata": [3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x + offset(z)",
+      "metadata": {
+        "term_labels": ["x"],
+        "variables": ["y", "x", "offset(z)"],
+        "factors": [
+          [0],
+          [1],
+          [0]
+        ],
+        "order": [1],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": [3],
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x * offset(z)",
+      "metadata": {
+        "term_labels": ["x"],
+        "variables": ["y", "x", "offset(z)"],
+        "factors": [
+          [0],
+          [1],
+          [0]
+        ],
+        "order": [1],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": [3],
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": ["offset(z)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x:offset(z)",
+      "metadata": {
+        "term_labels": [],
+        "variables": ["y", "x", "offset(z)"],
+        "factors": null,
+        "order": [],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": [3],
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": null,
+          "error": "incorrect number of dimensions"
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ strata(g, h) + x:strata(g, h)",
+      "metadata": {
+        "term_labels": ["strata(g, h)", "strata(g, h):x"],
+        "variables": ["y", "strata(g, h)", "x"],
+        "factors": [
+          [0, 0],
+          [1, 2],
+          [0, 1]
+        ],
+        "order": [1, 2],
+        "response": 1,
+        "specials": {
+          "strata": [2],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g, h)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g, h)"],
+            "tvar": [1],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g, h)"],
+            "tvar": [1],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g, h)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x + foo(g)",
+      "metadata": {
+        "term_labels": ["x", "foo(g)"],
+        "variables": ["y", "x", "foo(g)"],
+        "factors": [
+          [0, 0],
+          [1, 0],
+          [0, 1]
+        ],
+        "order": [1, 1],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": [3],
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": ["foo(g)"],
+            "tvar": [2],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": ["foo(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["foo(g)"],
+            "tvar": [2],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": ["foo(g)"],
+            "tvar": [2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x:foo(g) + foo(h)",
+      "metadata": {
+        "term_labels": ["foo(h)", "x:foo(g)"],
+        "variables": ["y", "x", "foo(g)", "foo(h)"],
+        "factors": [
+          [0, 0],
+          [0, 2],
+          [0, 2],
+          [1, 0]
+        ],
+        "order": [1, 2],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": [3, 4],
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": ["foo(g)", "foo(h)"],
+            "tvar": [2, 3],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": ["foo(g)", "foo(h)"],
+            "tvar": [2, 3],
+            "terms": [2]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["foo(g)", "foo(h)"],
+            "tvar": [2, 3],
+            "terms": [1, 2]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": ["foo(g)", "foo(h)"],
+            "tvar": [2, 3],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ foo(strata(g)) + x",
+      "metadata": {
+        "term_labels": ["foo(strata(g))", "x"],
+        "variables": ["y", "foo(strata(g))", "x"],
+        "factors": [
+          [0, 0],
+          [1, 0],
+          [0, 1]
+        ],
+        "order": [1, 1],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": [2],
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": ["foo(strata(g))"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": ["foo(strata(g))"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["foo(strata(g))"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": ["foo(strata(g))"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ survival::strata(g) * x",
+      "metadata": {
+        "term_labels": ["survival::strata(g)", "x", "survival::strata(g):x"],
+        "variables": ["y", "survival::strata(g)", "x"],
+        "factors": [
+          [0, 0, 0],
+          [1, 0, 1],
+          [0, 1, 1]
+        ],
+        "order": [1, 1, 2],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": [2]
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": ["survival::strata(g)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": ["survival::strata(g)"],
+            "tvar": [1],
+            "terms": [3]
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["survival::strata(g)"],
+            "tvar": [1],
+            "terms": [1, 3]
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": ["survival::strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ x + log(z)",
+      "metadata": {
+        "term_labels": ["x", "log(z)"],
+        "variables": ["y", "x", "log(z)"],
+        "factors": [
+          [0, 0],
+          [1, 0],
+          [0, 1]
+        ],
+        "order": [1, 1],
+        "response": 1,
+        "specials": {
+          "strata": null,
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "Surv(time, status) ~ strata(g) * x + cluster(id)",
+      "metadata": {
+        "term_labels": ["strata(g)", "x", "cluster(id)", "strata(g):x"],
+        "variables": ["Surv(time, status)", "strata(g)", "x", "cluster(id)"],
+        "factors": [
+          [0, 0, 0, 0],
+          [1, 0, 0, 1],
+          [0, 1, 0, 1],
+          [0, 0, 1, 0]
+        ],
+        "order": [1, 1, 1, 2],
+        "response": 1,
+        "specials": {
+          "strata": [2],
+          "cluster": [4],
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [4]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1, 4]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": [3]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": [3]
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": ["cluster(id)"],
+            "tvar": [3],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "strata(g) ~ x",
+      "metadata": {
+        "term_labels": ["x"],
+        "variables": ["strata(g)", "x"],
+        "factors": [
+          [0],
+          [1]
+        ],
+        "order": [1],
+        "response": 1,
+        "specials": {
+          "strata": [1],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [0],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [0],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [0],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [0],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ strata(g):strata(h):x",
+      "metadata": {
+        "term_labels": ["strata(g):strata(h):x"],
+        "variables": ["y", "strata(g)", "strata(h)", "x"],
+        "factors": [
+          [0],
+          [2],
+          [2],
+          [2]
+        ],
+        "order": [3],
+        "response": 1,
+        "specials": {
+          "strata": [2, 3],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": [1, 2, 3, 4]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)", "strata(h)"],
+            "tvar": [1, 2],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    },
+    {
+      "formula": "y ~ strata(g) / (x + z)",
+      "metadata": {
+        "term_labels": ["strata(g)", "strata(g):x", "strata(g):z"],
+        "variables": ["y", "strata(g)", "x", "z"],
+        "factors": [
+          [0, 0, 0],
+          [1, 2, 2],
+          [0, 1, 0],
+          [0, 0, 1]
+        ],
+        "order": [1, 2, 2],
+        "response": 1,
+        "specials": {
+          "strata": [2],
+          "cluster": null,
+          "offset": null,
+          "foo": null,
+          "survival::strata": null
+        }
+      },
+      "queries": [
+        {
+          "special": "strata",
+          "order": [1],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [2],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [2, 3]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": [1, 2, 3]
+          },
+          "error": null
+        },
+        {
+          "special": "strata",
+          "order": [],
+          "expected": {
+            "vars": ["strata(g)"],
+            "tvar": [1],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "cluster",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "offset",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "foo",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "survival::strata",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [2],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [1, 2, 3],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        },
+        {
+          "special": "absent",
+          "order": [],
+          "expected": {
+            "vars": [],
+            "terms": []
+          },
+          "error": null
+        }
+      ]
+    }
+  ],
+  "assign_cases": [
+    {
+      "name": "~1 original",
+      "term_labels": [],
+      "assign": [0],
+      "expected": {
+        "(Intercept)": [1]
+      }
+    },
+    {
+      "name": "~1 reverse",
+      "term_labels": [],
+      "assign": [0],
+      "expected": {
+        "(Intercept)": [1]
+      }
+    },
+    {
+      "name": "~1 interleaved",
+      "term_labels": [],
+      "assign": [0],
+      "expected": {
+        "(Intercept)": [1]
+      }
+    },
+    {
+      "name": "~0 original",
+      "term_labels": [],
+      "assign": [],
+      "expected": {}
+    },
+    {
+      "name": "~0 reverse",
+      "term_labels": [],
+      "assign": [],
+      "expected": {}
+    },
+    {
+      "name": "~0 interleaved",
+      "term_labels": [],
+      "assign": [],
+      "expected": {}
+    },
+    {
+      "name": "~x + g original",
+      "term_labels": ["x", "g"],
+      "assign": [0, 1, 2, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "x": [2],
+        "g": [3, 4]
+      }
+    },
+    {
+      "name": "~x + g reverse",
+      "term_labels": ["x", "g"],
+      "assign": [2, 2, 1, 0],
+      "expected": {
+        "g": [1, 2],
+        "x": [3],
+        "(Intercept)": [4]
+      }
+    },
+    {
+      "name": "~x + g interleaved",
+      "term_labels": ["x", "g"],
+      "assign": [0, 2, 1, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "g": [2, 4],
+        "x": [3]
+      }
+    },
+    {
+      "name": "~0 + g original",
+      "term_labels": ["g"],
+      "assign": [1, 1, 1],
+      "expected": {
+        "g": [1, 2, 3]
+      }
+    },
+    {
+      "name": "~0 + g reverse",
+      "term_labels": ["g"],
+      "assign": [1, 1, 1],
+      "expected": {
+        "g": [1, 2, 3]
+      }
+    },
+    {
+      "name": "~0 + g interleaved",
+      "term_labels": ["g"],
+      "assign": [1, 1, 1],
+      "expected": {
+        "g": [1, 2, 3]
+      }
+    },
+    {
+      "name": "~x*g + z original",
+      "term_labels": ["x", "g", "z", "x:g"],
+      "assign": [0, 1, 2, 2, 3, 4, 4],
+      "expected": {
+        "(Intercept)": [1],
+        "x": [2],
+        "g": [3, 4],
+        "z": [5],
+        "x:g": [6, 7]
+      }
+    },
+    {
+      "name": "~x*g + z reverse",
+      "term_labels": ["x", "g", "z", "x:g"],
+      "assign": [4, 4, 3, 2, 2, 1, 0],
+      "expected": {
+        "x:g": [1, 2],
+        "z": [3],
+        "g": [4, 5],
+        "x": [6],
+        "(Intercept)": [7]
+      }
+    },
+    {
+      "name": "~x*g + z interleaved",
+      "term_labels": ["x", "g", "z", "x:g"],
+      "assign": [0, 2, 3, 4, 1, 2, 4],
+      "expected": {
+        "(Intercept)": [1],
+        "g": [2, 6],
+        "z": [3],
+        "x:g": [4, 7],
+        "x": [5]
+      }
+    },
+    {
+      "name": "~g:h original",
+      "term_labels": ["g:h"],
+      "assign": [0, 1, 1, 1, 1, 1, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "g:h": [2, 3, 4, 5, 6, 7]
+      }
+    },
+    {
+      "name": "~g:h reverse",
+      "term_labels": ["g:h"],
+      "assign": [1, 1, 1, 1, 1, 1, 0],
+      "expected": {
+        "g:h": [1, 2, 3, 4, 5, 6],
+        "(Intercept)": [7]
+      }
+    },
+    {
+      "name": "~g:h interleaved",
+      "term_labels": ["g:h"],
+      "assign": [0, 1, 1, 1, 1, 1, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "g:h": [2, 3, 4, 5, 6, 7]
+      }
+    },
+    {
+      "name": "~0 + g:h original",
+      "term_labels": ["g:h"],
+      "assign": [1, 1, 1, 1, 1, 1],
+      "expected": {
+        "g:h": [1, 2, 3, 4, 5, 6]
+      }
+    },
+    {
+      "name": "~0 + g:h reverse",
+      "term_labels": ["g:h"],
+      "assign": [1, 1, 1, 1, 1, 1],
+      "expected": {
+        "g:h": [1, 2, 3, 4, 5, 6]
+      }
+    },
+    {
+      "name": "~0 + g:h interleaved",
+      "term_labels": ["g:h"],
+      "assign": [1, 1, 1, 1, 1, 1],
+      "expected": {
+        "g:h": [1, 2, 3, 4, 5, 6]
+      }
+    },
+    {
+      "name": "~g/h original",
+      "term_labels": ["g", "g:h"],
+      "assign": [0, 1, 1, 2, 2, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "g": [2, 3],
+        "g:h": [4, 5, 6]
+      }
+    },
+    {
+      "name": "~g/h reverse",
+      "term_labels": ["g", "g:h"],
+      "assign": [2, 2, 2, 1, 1, 0],
+      "expected": {
+        "g:h": [1, 2, 3],
+        "g": [4, 5],
+        "(Intercept)": [6]
+      }
+    },
+    {
+      "name": "~g/h interleaved",
+      "term_labels": ["g", "g:h"],
+      "assign": [0, 1, 2, 1, 2, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "g": [2, 4],
+        "g:h": [3, 5, 6]
+      }
+    },
+    {
+      "name": "~strata(g) + x:strata(g) original",
+      "term_labels": ["strata(g)", "strata(g):x"],
+      "assign": [0, 1, 1, 2, 2, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "strata(g)": [2, 3],
+        "strata(g):x": [4, 5, 6]
+      }
+    },
+    {
+      "name": "~strata(g) + x:strata(g) reverse",
+      "term_labels": ["strata(g)", "strata(g):x"],
+      "assign": [2, 2, 2, 1, 1, 0],
+      "expected": {
+        "strata(g):x": [1, 2, 3],
+        "strata(g)": [4, 5],
+        "(Intercept)": [6]
+      }
+    },
+    {
+      "name": "~strata(g) + x:strata(g) interleaved",
+      "term_labels": ["strata(g)", "strata(g):x"],
+      "assign": [0, 1, 2, 1, 2, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "strata(g)": [2, 4],
+        "strata(g):x": [3, 5, 6]
+      }
+    },
+    {
+      "name": "~x + offset(z) original",
+      "term_labels": ["x"],
+      "assign": [0, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "x": [2]
+      }
+    },
+    {
+      "name": "~x + offset(z) reverse",
+      "term_labels": ["x"],
+      "assign": [1, 0],
+      "expected": {
+        "x": [1],
+        "(Intercept)": [2]
+      }
+    },
+    {
+      "name": "~x + offset(z) interleaved",
+      "term_labels": ["x"],
+      "assign": [0, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "x": [2]
+      }
+    },
+    {
+      "name": "~splines::ns(x, 3) original",
+      "term_labels": ["splines::ns(x, 3)"],
+      "assign": [0, 1, 1, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "splines::ns(x, 3)": [2, 3, 4]
+      }
+    },
+    {
+      "name": "~splines::ns(x, 3) reverse",
+      "term_labels": ["splines::ns(x, 3)"],
+      "assign": [1, 1, 1, 0],
+      "expected": {
+        "splines::ns(x, 3)": [1, 2, 3],
+        "(Intercept)": [4]
+      }
+    },
+    {
+      "name": "~splines::ns(x, 3) interleaved",
+      "term_labels": ["splines::ns(x, 3)"],
+      "assign": [0, 1, 1, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "splines::ns(x, 3)": [2, 3, 4]
+      }
+    },
+    {
+      "name": "~(x + z + g)^2 original",
+      "term_labels": ["x", "z", "g", "x:z", "x:g", "z:g"],
+      "assign": [0, 1, 2, 3, 3, 4, 5, 5, 6, 6],
+      "expected": {
+        "(Intercept)": [1],
+        "x": [2],
+        "z": [3],
+        "g": [4, 5],
+        "x:z": [6],
+        "x:g": [7, 8],
+        "z:g": [9, 10]
+      }
+    },
+    {
+      "name": "~(x + z + g)^2 reverse",
+      "term_labels": ["x", "z", "g", "x:z", "x:g", "z:g"],
+      "assign": [6, 6, 5, 5, 4, 3, 3, 2, 1, 0],
+      "expected": {
+        "z:g": [1, 2],
+        "x:g": [3, 4],
+        "x:z": [5],
+        "g": [6, 7],
+        "z": [8],
+        "x": [9],
+        "(Intercept)": [10]
+      }
+    },
+    {
+      "name": "~(x + z + g)^2 interleaved",
+      "term_labels": ["x", "z", "g", "x:z", "x:g", "z:g"],
+      "assign": [0, 2, 3, 5, 6, 1, 3, 4, 5, 6],
+      "expected": {
+        "(Intercept)": [1],
+        "z": [2],
+        "g": [3, 7],
+        "x:g": [4, 9],
+        "z:g": [5, 10],
+        "x": [6],
+        "x:z": [8]
+      }
+    }
+  ],
+  "fit_cases": [
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ age + strata(sex) + ph.ecog",
+      "labels": ["age", "strata(sex)", "ph.ecog"],
+      "assign": [1, 3],
+      "expected": {
+        "age": [1],
+        "ph.ecog": [2]
+      }
+    },
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ strata(sex) + age",
+      "labels": ["strata(sex)", "age"],
+      "assign": [2],
+      "expected": {
+        "age": [1]
+      }
+    },
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ age + strata(sex)",
+      "labels": ["age", "strata(sex)"],
+      "assign": [1],
+      "expected": {
+        "age": [1]
+      }
+    },
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ factor(ph.ecog) + strata(sex)",
+      "labels": ["factor(ph.ecog)", "strata(sex)"],
+      "assign": [1, 1, 1],
+      "expected": {
+        "factor(ph.ecog)": [1, 2, 3]
+      }
+    },
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ age + cluster(inst) + strata(sex)",
+      "labels": ["age", "strata(sex)"],
+      "assign": [1],
+      "expected": {
+        "age": [1]
+      }
+    },
+    {
+      "kind": "coxph",
+      "formula": "Surv(time, status) ~ age + strata(sex) + ph.ecog:age",
+      "labels": ["age", "strata(sex)", "age:ph.ecog"],
+      "assign": [1, 3],
+      "expected": {
+        "age": [1],
+        "age:ph.ecog": [2]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ age + strata(sex) + ph.ecog",
+      "labels": ["age", "strata(sex)", "ph.ecog"],
+      "assign": [0, 1, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "age": [2],
+        "strata(sex)": [3]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ strata(sex) + age",
+      "labels": ["strata(sex)", "age"],
+      "assign": [0, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "strata(sex)": [2]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ age + strata(sex)",
+      "labels": ["age", "strata(sex)"],
+      "assign": [0, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "age": [2]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ factor(ph.ecog) + strata(sex)",
+      "labels": ["factor(ph.ecog)", "strata(sex)"],
+      "assign": [0, 1, 1, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "factor(ph.ecog)": [2, 3, 4]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ age + cluster(inst) + strata(sex)",
+      "labels": ["age", "strata(sex)"],
+      "assign": [0, 1],
+      "expected": {
+        "(Intercept)": [1],
+        "age": [2]
+      }
+    },
+    {
+      "kind": "survreg",
+      "formula": "Surv(time, status) ~ age + strata(sex) + ph.ecog:age",
+      "labels": ["age", "strata(sex)", "age:ph.ecog"],
+      "assign": [0, 1, 2],
+      "expected": {
+        "(Intercept)": [1],
+        "age": [2],
+        "strata(sex)": [3]
+      }
+    }
+  ]
+}

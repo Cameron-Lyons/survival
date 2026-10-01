@@ -141,6 +141,9 @@ for the scope, memory bounds and reproducible measurements.
 Prepared matrices and risks can use `r.coxsurv_fit` or `r.survfitcoxph_fit`
 directly; see [direct Cox curves](docs/cox-direct-curves.md) for inputs,
 read-only results and individual trajectories.
+Prepared formula metadata is supported by `r.attrassign` and
+`r.untangle_specials`; see [term helpers](docs/term-helpers.md) for column
+grouping and special-term indices.
 
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
