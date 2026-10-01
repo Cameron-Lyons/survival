@@ -19,6 +19,20 @@
   expect_equal(actual, expected, tolerance = 1e-11)
 }
 
+test_that("Cox expected survival reconstructs an omitted training response", {
+  d <- .se_data()
+  d$time[1:3] <- c(2, 2 + 1e-12, 2 + 2e-12)
+  for (timefix in c(FALSE, TRUE)) {
+    fit <- survival::coxph(survival::Surv(time,status) ~ score + z, d,
+      x = FALSE, y = FALSE, model = FALSE,
+      control = survival::coxph.control(timefix = timefix))
+    for (method in c("ederer", "conditional", "individual.h")) {
+      .se_equal(survexp(Surv(time,status) ~ group, d, ratetable = fit, method = method),
+        survival::survexp(Surv(time,status) ~ group, d, ratetable = fit, method = method))
+    }
+  }
+})
+
 test_that("Cox cohorts and individual predictions share numerical kernels", {
   d <- .se_data()
   for (counting in c(FALSE, TRUE)) for (ties in c("efron", "breslow", "exact")) {

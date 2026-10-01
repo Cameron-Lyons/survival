@@ -45,36 +45,25 @@
     strata_terms <- untangle.specials(Terms, "strata")
     for (name in strata_terms$vars) factors <- factors[, factors[name, ] == 0, drop = FALSE]
     if (!individual && any(factors > 1L)) stop("not able to create a curve for models that contain an interaction without the lower order effect", call. = FALSE)
-    frame <- if (is.null(fit$model)) stats::model.frame(fit) else fit$model
-    train_y <- if (is.null(fit$y)) stats::model.response(frame) else fit$y
-    if (is.null(fit$y) && !identical(fit$timefix, FALSE)) train_y <- aeqSurv(train_y)
-    if (!attr(train_y, "type") %in% c("right", "counting")) stop("Invalid Cox survival response", call. = FALSE)
-    train_weights <- stats::model.weights(frame)
-    if (is.null(train_weights)) train_weights <- rep(1, nrow(frame))
-    train_offset <- stats::model.offset(frame)
-    offset_mean <- if (is.null(train_offset)) 0 else sum(train_offset * train_weights) / sum(train_weights)
-    beta <- ifelse(is.na(fit$coefficients), 0, fit$coefficients)
-    center <- sum(fit$means * beta) + offset_mean
+    input <- .cox_model_data(fit)
+    train_y <- input$y
+    beta <- input$beta
     new_terms <- if (individual) Terms else stats::delete.response(Terms)
     new_frame <- stats::model.frame(new_terms, data, xlev = fit$xlevels, na.action = stats::na.fail)
-    new_x <- stats::model.matrix(fit, new_frame)
-    if (!is.null(fit$frail)) new_x <- new_x[, !grepl("frailty(", colnames(new_x), fixed = TRUE), drop = FALSE]
+    new_x <- .cox_fixed_design(fit, new_frame)
     new_offset <- stats::model.offset(new_frame)
     if (is.null(new_offset)) new_offset <- rep(0, nrow(new_frame))
-    new_risk <- exp(drop(new_x %*% beta) + new_offset - center)
-    train_strata <- if (length(strata_terms$vars)) strata(frame[strata_terms$vars], shortlabel = TRUE) else factor(rep(0, nrow(frame)))
+    new_risk <- exp(drop(new_x %*% beta) + new_offset - input$center)
+    train_strata <- input$strata
     new_strata <- if (length(strata_terms$vars)) {
       match(as.character(strata(new_frame[strata_terms$vars], shortlabel = TRUE)), levels(train_strata))
     } else rep(1L, nrow(new_frame))
     if (anyNA(new_strata)) stop("New data set has strata levels not found in the original", call. = FALSE)
-    train_risk <- exp(fit$linear.predictors - offset_mean)
-    # Individual predictions retain fitted frailty in the training risk set;
-    # new observations have zero frailty, as in the shared prediction kernel.
-    baselines <- lapply(split(seq_len(nrow(frame)), train_strata), function(rows) {
+    baselines <- lapply(split(seq_len(nrow(train_y)), train_strata), function(rows) {
       if (!length(rows)) return(list(time = numeric(), cumhaz = numeric()))
       curve <- .survival_analysis_attr("cox_survfit_baseline")(
         unclass(train_y[rows, , drop = FALSE]), matrix(0, length(rows), 0L),
-        array(train_weights[rows]), array(train_risk[rows]),
+        array(input$weights[rows]), array(input$risk[rows]),
         if (fit$method == "efron") 3L else 2L, if (fit$method == "efron") 3L else 2L)
       keep <- as.numeric(curve$n_event) > 0
       list(time = as.numeric(curve$time)[keep], cumhaz = as.numeric(curve$cumhaz)[keep])

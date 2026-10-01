@@ -149,7 +149,7 @@ def test_r_bridge_defines_exported_functions():
 
 
 def test_r_bridge_registers_model_s3_methods():
-    bridge = (R_PACKAGE / "R" / "bridge.R").read_text()
+    bridge = "\n".join(path.read_text() for path in sorted((R_PACKAGE / "R").glob("*.R")))
     manual = (R_PACKAGE / "man" / "survivalr.Rd").read_text()
     methods = _namespace_s3_methods()
 
