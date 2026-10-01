@@ -55,12 +55,14 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
         error=function(e) list(r_error=conditionMessage(e)))
     fit_error <- fit$r_error
     if(!is.null(fit_error)) {
-        # survreg retains the unused NA stratum after g removes those rows,
-        # then assigns three names to two fitted scales. Fit the equivalent
-        # complete-case model and retain the original row-removal record.
+        # Retain the empty trailing scale instead of assigning three names to
+        # two scales. Only change the count; use the installed numerical fitter.
         stopifnot(kind=="survreg",name=="shared_source")
-        fit <- survreg(as.formula(formula),d[!is.na(d$g),],model=TRUE,x=TRUE,y=TRUE)
-        fit$na.action <- structure(which(is.na(d$g)),class="omit")
+        source <- deparse(survival::survreg)
+        stopifnot(sum(grepl("nstrata <- max(strata)",source,fixed=TRUE)) == 1L)
+        corrected <- eval(parse(text=sub("nstrata <- max(strata)",
+            "nstrata <- nlevels(strata.keep)",source,fixed=TRUE)),envir=asNamespace("survival"))
+        fit <- corrected(as.formula(formula),d,model=TRUE,x=TRUE,y=TRUE)
     }
     prediction <- predict(fit,new,type="lp",se.fit=TRUE,na.action=na.pass)
     vars <- names(fit$model)[vapply(fit$model,is.factor,logical(1))]

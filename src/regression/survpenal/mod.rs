@@ -202,7 +202,18 @@ impl SurvpenalFit {
         distribution: &SurvregDistribution,
         options: &SurvpenalOptions,
     ) -> SurvivalResult<Self> {
-        Self::fit_inputs(&data.survreg, &data.terms, distribution, options)
+        Self::fit_with_nstrata(data, distribution, options, None)
+    }
+
+    /// Fits with an explicit scale-stratum count, retaining unused strata.
+    /// `None` infers the count from the largest observed stratum code.
+    pub fn fit_with_nstrata(
+        data: &SurvpenalData,
+        distribution: &SurvregDistribution,
+        options: &SurvpenalOptions,
+        nstrata: Option<usize>,
+    ) -> SurvivalResult<Self> {
+        Self::fit_inputs(&data.survreg, &data.terms, distribution, options, nstrata)
     }
 
     fn fit_inputs(
@@ -210,8 +221,9 @@ impl SurvpenalFit {
         terms: &[ModelTerm],
         distribution: &SurvregDistribution,
         options: &SurvpenalOptions,
+        nstrata: Option<usize>,
     ) -> SurvivalResult<Self> {
-        let result = Self::fit_engine(data, terms, distribution, options, None)?;
+        let result = Self::fit_engine(data, terms, distribution, options, nstrata)?;
         let raw = result.fit;
         let nfrail = raw.frail.as_ref().map_or(0, Vec::len);
         let df_total: f64 = raw.df.iter().sum();
@@ -351,10 +363,32 @@ impl SurvpenalFit {
             eps,
             tol_chol,
         )?;
+        // Empty scale strata have zero covariance rows. They contain no
+        // information about the effective sample size or the typical scale.
+        let mut observed = vec![false; nstrata];
+        for &stratum in &strata {
+            observed[stratum] = true;
+        }
+        let scales: Vec<usize> = if nstrat2 == 0 {
+            vec![1]
+        } else {
+            (0..nstrata)
+                .filter(|&s| observed[s])
+                .map(|s| s + 1)
+                .collect()
+        };
         let mean_scale =
-            fit0.beta[1..].iter().map(|v| v.exp()).sum::<f64>() / (fit0.beta.len() - 1) as f64;
-        let n_eff =
-            neff_variance(distribution, mean_scale * mean_scale)? * lu_inverse(&fit0.var)?[(0, 0)];
+            scales.iter().map(|&s| fit0.beta[s].exp()).sum::<f64>() / scales.len() as f64;
+        let information = if nstrat2 > 0 && scales.len() < nstrata {
+            let keep: Vec<usize> = std::iter::once(0).chain(scales).collect();
+            let covariance = Array2::from_shape_fn((keep.len(), keep.len()), |(i, j)| {
+                fit0.var[(keep[i], keep[j])]
+            });
+            lu_inverse(&covariance)?[(0, 0)]
+        } else {
+            lu_inverse(&fit0.var)?[(0, 0)]
+        };
+        let n_eff = neff_variance(distribution, mean_scale * mean_scale)? * information;
         composer.neff = n_eff;
 
         // Starting values: frailties, dense coefficients, log(scale)s.
@@ -726,7 +760,7 @@ impl SurvpenalFit {
 /// term is a single column of group codes.  The response is untransformed,
 /// as for `survreg_fit`.
 #[pyfunction]
-#[pyo3(signature = (data, distribution, penalties, pcols, assign=None, init=None, scale=0.0, control=None, robust=None))]
+#[pyo3(signature = (data, distribution, penalties, pcols, assign=None, init=None, scale=0.0, control=None, robust=None, nstrat=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn survpenal_fit(
     py: Python<'_>,
@@ -739,6 +773,7 @@ pub fn survpenal_fit(
     scale: f64,
     control: Option<SurvregControl>,
     robust: Option<bool>,
+    nstrat: Option<usize>,
 ) -> PyResult<SurvpenalFit> {
     let options = SurvpenalOptions {
         init,
@@ -753,7 +788,7 @@ pub fn survpenal_fit(
             pcols,
             assign,
         )?;
-        SurvpenalFit::fit_inputs(data, &terms, distribution, &options)
+        SurvpenalFit::fit_inputs(data, &terms, distribution, &options, nstrat)
     })?)
 }
 

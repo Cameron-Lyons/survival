@@ -33,8 +33,9 @@ Scalar vectors, factor levels, multistate attributes, named arguments and
 `difftime` inputs are preserved. Constructor diagnostics are signalled as R
 warnings. Date-valued time inputs are rejected as in stock R.
 
-This work does not establish full package parity. The documented AFT unused-scale
-difference, R object persistence and the broader formula/completeness audit remain.
+This work does not establish full package parity. The subsequent
+[AFT scale correction](aft-unused-strata.md) addresses unused scale strata;
+R object persistence and the broader formula/completeness audit remain.
 Timeline responses keep their existing, separate conversion path.
 
 ## Verification

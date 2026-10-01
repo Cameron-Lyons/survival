@@ -45,8 +45,24 @@ def arguments(case):
 def test_survpenal_fit_against_r(case):
     expected = case["expected"]
     if "error" in expected:
-        with pytest.raises((ValueError, RuntimeError), match="singular|Singular"):
-            r.survpenal_fit(case["x"], case["y"], **arguments(case))
+        assert case["name"] == "unused_stratum"
+        assert "exactly singular" in expected["error"]
+        # R tries to invert the unused scale's zero covariance row. The port
+        # retains it and agrees with R's otherwise identical two-stratum fit.
+        compact = next(c for c in REFERENCE["cases"] if c["name"] == "gaussian_strata")
+        assert case["x"] == compact["x"]
+        assert case["specs"] == compact["specs"]
+        fit = r.survpenal_fit(case["x"], case["y"], **arguments(case))
+        for name in ("coefficients", "icoef", "score"):
+            values = getattr(fit, name)
+            np.testing.assert_allclose(values[:-1], compact["expected"][name], atol=3e-8)
+        for name in ("var", "var2"):
+            values = np.asarray(getattr(fit, name))
+            np.testing.assert_allclose(values[:-1, :-1], compact["expected"][name], atol=3e-8)
+            np.testing.assert_array_equal(values[-1], 0)
+        for name in ("df", "loglik", "linear_predictors"):
+            np.testing.assert_allclose(getattr(fit, name), compact["expected"][name], atol=3e-8)
+        assert fit.score[-1] == 0
         return
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

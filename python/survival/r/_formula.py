@@ -3084,11 +3084,12 @@ def _strata_argument_values(data: Any, term: _CovariateTerm, n: int) -> Any:
     return values
 
 
-def _strata_term(data: Any, spec: _StrataSpec) -> StrataFactor:
-    """Evaluate a parsed strata call, preserving factor levels and its label options."""
+def _strata_term(data: Any, spec: _StrataSpec, *, drop_unused: bool = True) -> StrataFactor:
+    """Evaluate strata, optionally retaining levels emptied by row selection."""
 
     if isinstance(data, _FormulaRows) and spec in data.strata_cache:
-        return data.strata_cache[spec]
+        factor = data.strata_cache[spec]
+        return _drop_empty_strata(factor) if drop_unused else factor
     n = len(_materialize_1d(_column_source(data, spec.columns[0]), spec.columns[0]))
     shortlabel = spec.shortlabel
     if shortlabel is None and any(
@@ -3124,37 +3125,55 @@ def _with_strata_cache(data: Any, specs: Sequence[_StrataSpec], n: int) -> Any:
 
 
 def _strata_rows(factor: StrataFactor, rows: Sequence[int]) -> StrataFactor:
-    """Subset evaluated strata and omit empty groups from the fitted stratum codes."""
+    """Subset evaluated strata, retaining the model frame's original factor levels."""
 
     codes = [None if row < 0 else factor.codes[row] for row in rows]
     counts = [0] * len(factor.levels)
     for code in codes:
         if code is not None:
             counts[code] += 1
+    return StrataFactor(
+        codes=codes,
+        levels=factor.levels,
+        labels=[None if row < 0 else factor.labels[row] for row in rows],
+        counts=counts,
+    )
+
+
+def _drop_empty_strata(factor: StrataFactor) -> StrataFactor:
+    """Contiguous observed codes for methods that omit unused model-frame strata."""
+
+    counts = factor.counts
+    if all(counts):
+        return factor
     kept = [code for code, count in enumerate(counts) if count]
     remap = {code: i for i, code in enumerate(kept)}
     return StrataFactor(
-        codes=[None if code is None else remap[code] for code in codes],
+        codes=[None if code is None else remap[code] for code in factor.codes],
         levels=[factor.levels[code] for code in kept],
-        labels=[None if row < 0 else factor.labels[row] for row in rows],
+        labels=factor.labels,
         counts=[counts[code] for code in kept],
     )
 
 
-def _strata_term_values(data: Any, spec: _StrataSpec) -> _RFactorVector:
+def _strata_term_values(
+    data: Any, spec: _StrataSpec, *, drop_unused: bool = True
+) -> _RFactorVector:
     """The model-frame column of a ``strata(a, b)`` term: the factor ``strata()`` returns."""
 
-    factor = _strata_term(data, spec)
+    factor = _strata_term(data, spec, drop_unused=drop_unused)
     return _r_factor(factor.labels, factor.levels)
 
 
-def _strata_keep(data: Any, terms: Sequence[_StrataSpec]) -> StrataFactor:
+def _strata_keep(
+    data: Any, terms: Sequence[_StrataSpec], *, drop_unused: bool = True
+) -> StrataFactor:
     """``strata.keep`` of coxph.R, survreg.R and survdiff.R for the ``strata()`` terms
     (each given by its columns): the one term's factor, else ``strata(m[, vars],
     shortlabel = TRUE)`` of the terms' factors."""
 
     if len(terms) == 1:
-        return _strata_term(data, terms[0])
+        return _strata_term(data, terms[0], drop_unused=drop_unused)
     return _strata(
         [(term.call, _strata_term_values(data, term)) for term in terms],
         shortlabel=True,

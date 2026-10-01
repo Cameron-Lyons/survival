@@ -24,7 +24,10 @@ initial values and stratum codes follow [bare AFT fitting](aft-low-level-fitting
 The response must already be transformed; for Weibull fitting, supply logged
 times with `dist="extreme"`. `scale=0` estimates log-scales; positive values
 fix the scale. Custom distributions also need their variance component to
-compute the effective sample size used by penalty searches.
+compute the effective sample size used by penalty searches. Empty scale strata
+retain their positions but are excluded from the initial mean scale and
+covariance inverse used for effective sample size. This avoids stock R's
+singular-matrix failure; see [AFT unused strata](aft-unused-strata.md).
 
 ## Penalty and term inputs
 

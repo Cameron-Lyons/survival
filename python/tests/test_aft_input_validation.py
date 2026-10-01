@@ -65,10 +65,9 @@ def test_unrepresentable_covariance_is_rejected_before_callbacks(name, size, cus
     data = core.SurvregData(**_arguments(), strata=[int(size) - 1] * 4)
     with pytest.raises(ValueError, match="too many AFT parameters"):
         _fit(name, data, distribution)
-    if name.endswith("_raw"):
-        data = core.SurvregData(**_arguments())
-        with pytest.raises(ValueError, match="too many AFT parameters"):
-            _fit(name, data, distribution, nstrat=int(size))
+    data = core.SurvregData(**_arguments())
+    with pytest.raises(ValueError, match="too many AFT parameters"):
+        _fit(name, data, distribution, nstrat=int(size))
 
 
 @pytest.mark.parametrize("order", ["C", "F", "strided"])
