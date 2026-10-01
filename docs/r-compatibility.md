@@ -95,6 +95,15 @@ the terms of a model with strata interactions. Yates factorial and SAS
 populations retain compound strata as evaluated factors; their labels are
 not parsed back into the original source columns.
 
+Penalized Cox/AFT matrices use formula/basis column labels separately from
+coefficient labels. Cox reconstruction includes sparse frailty terms, recodes
+new sparse groups before omission, and retains fitted full dense contrasts.
+Automatic sparse-to-dense changes follow R's reevaluated constructor. Stored
+sparse extraction inserts the original codes into one owned row snapshot.
+The 168-case reference retains raw R outputs alongside explicit corrections
+for its strata-branch contrast typo, lost unpenalized spline options and empty
+spline inputs; see [model matrices](cox-model-matrices.md).
+
 Formula expansion also handles `offset()` and `cluster()` inside products,
 nesting, and powers. Each distinct offset contributes once even if it appears
 in a removed term, matching R's `terms()` behavior. Cluster main terms supply

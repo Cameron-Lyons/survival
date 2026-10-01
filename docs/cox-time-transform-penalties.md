@@ -52,7 +52,8 @@ Stored model matrices include the original sparse group column, including
 custom numeric labels. The fitting matrix retains only the dense coefficient
 columns; keeping the sparse labels costs one vector, without copying the
 whole expanded design. This also corrects stored matrices for ordinary
-sparse frailty formulas. New-data sparse matrices are outside this change.
+sparse frailty formulas. The subsequent [model-matrix reconstruction change](cox-model-matrices.md)
+adds new-data sparse matrices and separates basis labels from coefficient labels.
 Sparse callbacks without a custom formatter receive a group Wald summary.
 
 ## Independent checks

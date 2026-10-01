@@ -849,7 +849,7 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{weights}{survival_py_model}(object, ...)
 
-\method{model.matrix}{survival_py_model}(object, ...)
+\method{model.matrix}{survival_py_model}(object, data = NULL, ...)
 
 \method{model.frame}{survival_py_model}(formula, ...)
 

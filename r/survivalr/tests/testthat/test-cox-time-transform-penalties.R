@@ -9,6 +9,7 @@
   expect_equal(unname(fitted(actual)), unname(fitted(expected)), tolerance = 4e-7)
   expect_equal(unname(model.matrix(actual)), unname(expected$x), ignore_attr = TRUE)
   expect_identical(attr(model.matrix(actual), "assign"), attr(expected$x, "assign"))
+  expect_identical(colnames(model.matrix(actual)), colnames(expected$x))
   expect_equal(summary(actual)$coefficients, summary(expected)$coefficients, tolerance = 4e-7)
   expect_equal(summary(actual)$print2, summary(expected)$print2)
   expanded <- data.frame(t = expected$y[,1], event = expected$y[,2],
@@ -27,6 +28,20 @@
     expect_equal(residuals(restored), residuals(actual))
   }
 }
+
+test_that("named penalty matrices retain basis labels separately from coefficient labels", {
+  d <- survival::ovarian
+  d$x <- (d$age - 60)/10
+  fun <- function(x,t,...) {
+    value <- survival::ridge(x*log(t), x*sqrt(t), theta = 2)
+    colnames(value) <- c("log", "root")
+    value
+  }
+  actual <- coxph(Surv(futime,fustat) ~ x + tt(x), d, tt = fun, x = TRUE)
+  expected <- survival::coxph(survival::Surv(futime,fustat) ~ x + tt(x), d, tt = fun, x = TRUE)
+  .tt_penalty_compare(actual, expected, saved = TRUE)
+  expect_identical(colnames(model.matrix(actual)), c("x", "tt(x)log", "tt(x)root"))
+})
 
 test_that("sparse numeric and dense factor penalties preserve all frailty families", {
   d <- survival::ovarian

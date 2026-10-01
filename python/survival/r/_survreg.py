@@ -45,6 +45,7 @@ from ._coerce import (
 )
 from ._fit import (
     _excluded_rows,
+    _model_matrix_names_and_assign,
     _NewData,
     _newdata_frame,
     _pad_rows,
@@ -1447,7 +1448,9 @@ def model_matrix_survreg(fit: SurvregModelResult, data: Any | None = None) -> di
         "data": [[float(value) for value in row] for row in fit.fit.covariates]
         if data is None
         else _newdata_inputs(fit, data, "na.omit").x,
-        "columns": list(fit.coefficient_names),
+        "columns": list(fit.coefficient_names)
+        if fit.design is None
+        else _model_matrix_names_and_assign(fit.design)[0],
         "assign": [code - sum(index < code for index in removed) for code in fit.assign],
     }
 

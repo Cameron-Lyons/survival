@@ -120,6 +120,7 @@ def test_native_penalty_results_match_r_fit_summary_and_residuals(case):
     matrix = r.model_matrix(fit)
     compare(matrix["data"], case["x"])
     assert matrix["assign"] == case["matrix_assign"]
+    assert matrix["columns"] == case["matrix_names"]
     compare(np.column_stack((fit.y.time, fit.y.event)), case["y"])
     residuals = r.residuals(fit)
     if case["kind"] == "missing":
@@ -209,6 +210,9 @@ def test_public_penalty_column_names_are_full_labels_and_validate_width():
 
     fit = r.coxph("Surv(futime,fustat) ~ x + tt(rx)", data, tt=callback)
     assert fit.coef_names == ("x", "log term", "root term")
+    assert r.model_matrix(fit)["columns"] == ["x", "tt(rx)1", "tt(rx)2"]
+    with pytest.raises(ValueError, match="an evaluated matrix is required"):
+        r.model_matrix(fit, {"x": [1.0], "rx": [2.0]})
     with pytest.raises(ValueError, match="tt penalty column names must match its width"):
         r.coxph(
             "Surv(futime,fustat) ~ tt(rx)",

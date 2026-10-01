@@ -28,6 +28,7 @@ from ._coerce import (
 )
 from ._formula import (
     _apply_formula_na_action,
+    _column,
     _column_or_values,
     _column_source,
     _covariate_term_name,
@@ -47,6 +48,7 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _penalty_arguments,
     _strata_covariate,
     _strata_keep,
     _strata_specs,
@@ -54,6 +56,7 @@ from ._formula import (
     _subset_formula_inputs,
     _with_strata_cache,
 )
+from ._penalties import fit_penalty
 from ._surv import Surv, _complete_codes, _strata
 from ._types import (
     NaAction,
@@ -250,6 +253,79 @@ def _design_names_and_assign(
         assign[_design_term_name(term)] = tuple(range(len(names), len(names) + len(columns)))
         names.extend(columns)
     return names, assign
+
+
+def _model_matrix_column_names(term: _SingleDesignTerm) -> list[str]:
+    """Formula/basis labels, before a penalty replaces the coefficient labels."""
+    if not isinstance(term, _PenaltyDesignTerm):
+        return _column_names(term)
+    if term.matrix_names:
+        return list(term.matrix_names)
+    prefix = _covariate_term_name(term.term)
+    width = len(term.names)
+    if width == 1:
+        return [prefix]
+    suffixes = (
+        term.columns
+        if term.kind == "ridge" and term.term.transform != "tt"
+        else tuple(str(j + 1) for j in range(width))
+    )
+    return [prefix + suffix for suffix in suffixes]
+
+
+def _model_matrix_names_and_assign(design: _FormulaDesign) -> tuple[list[str], list[int]]:
+    names: list[str] = ["(Intercept)"] if design.intercept else []
+    assign = [0] if design.intercept else []
+    for term, code in zip(design.covariates, design.term_assignments, strict=True):
+        if isinstance(term, _InteractionDesignTerm):
+            parts = [_model_matrix_column_names(factor) for factor in term.factors]
+            columns = [":".join(reversed(combo)) for combo in product(*reversed(parts))]
+        else:
+            columns = _model_matrix_column_names(term)
+        names.extend(columns)
+        assign.extend([code] * len(columns))
+    return names, assign
+
+
+def _model_matrix_newdata_design(design: _FormulaDesign, data: Any) -> _FormulaDesign:
+    """Reevaluate frailty constructors before NA omission, then restore fitted factors.
+
+    Sparse groups have no fitted factor levels. R therefore recodes them locally,
+    and the automatic sparse default can produce a dense basis on a small new set.
+    Dense terms retain their original full identity contrasts and factor levels.
+    """
+    covariates: list[_DesignTerm] = []
+    for term in design.covariates:
+        if isinstance(term, _PenaltyDesignTerm) and term.term.transform == "tt":
+            raise ValueError("an evaluated matrix is required for a matrix time transform")
+        if not isinstance(term, _PenaltyDesignTerm) or term.kind != "frailty":
+            covariates.append(term)
+            continue
+        if term.term.call is None:
+            raise ValueError("a frailty term must have a function call")
+        columns, options = _penalty_arguments(term.term.call)
+        source = _column_source(data, columns[0])
+        fresh = fit_penalty(
+            term.term,
+            columns,
+            {column: _column(data, column) for column in columns},
+            options,
+            _mstate_categories(source),
+        )
+        if not fresh.penalty.sparse and len(fresh.levels) < 2:
+            raise ValueError("not enough degrees of freedom to define contrasts")
+        if not term.penalty.sparse:
+            if fresh.penalty.sparse:
+                raise ValueError("contrasts apply only to factors")
+            unknown = [level for level in fresh.levels if level not in term.levels]
+            if unknown:
+                raise ValueError(
+                    f"factor {term.term.call} has new levels "
+                    + ", ".join(_strata_value_label(level) for level in unknown)
+                )
+            fresh = replace(fresh, levels=term.levels, names=term.names)
+        covariates.append(fresh)
+    return replace(design, covariates=tuple(covariates))
 
 
 def _model_frame(
