@@ -131,6 +131,8 @@ pub use uno_c_index_module::{
     CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
+#[cfg(feature = "python")]
+pub use yates::yates_response_py;
 pub use yates::{
     YatesContrast, YatesCurves, YatesEstimate, YatesInput, YatesPrediction, YatesPredictor,
     YatesResult, YatesSgttInput, YatesSgttResult, YatesSimulation, YatesTest, population_means,
