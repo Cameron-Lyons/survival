@@ -5,7 +5,7 @@ compiled extension, annotations from the Rust sources; ``python3 scripts/generat
 regenerates the file and ``--check`` verifies it in CI.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -11191,6 +11191,10 @@ class YatesResult:
     @property
     def mvar(self) -> list[list[float]]: ...
     @property
+    def prediction_mean(self) -> list[list[float]] | None: ...
+    @property
+    def prediction_variance(self) -> list[list[float]] | None: ...
+    @property
     def summary(self) -> YatesCurves | None: ...
     @property
     def test(self) -> list[YatesContrast]: ...
@@ -14198,17 +14202,31 @@ def yates_population_means(
     xmatlist: Sequence[ArrayLike],
     weights: ArrayLike | None = None,
 ) -> list[list[float]]: ...
-def yates_response(
+def yates_predict(
     xmatlist: Sequence[ArrayLike],
     beta: ArrayLike,
     vmat: ArrayLike,
-    inverse_link: Any,
+    predict: Callable[[NDArray[np.float64]], ArrayLike],
     means: ArrayLike | None = None,
     estimable: Sequence[bool] | None = None,
     nsim: int = 200,
     seed: int = 0,
     test: str = "global",
     term: str | None = None,
+    normal_draws: ArrayLike | Callable[[int, int], ArrayLike] | None = None,
+) -> YatesResult: ...
+def yates_response(
+    xmatlist: Sequence[ArrayLike],
+    beta: ArrayLike,
+    vmat: ArrayLike,
+    inverse_link: Callable[[NDArray[np.float64]], ArrayLike],
+    means: ArrayLike | None = None,
+    estimable: Sequence[bool] | None = None,
+    nsim: int = 200,
+    seed: int = 0,
+    test: str = "global",
+    term: str | None = None,
+    normal_draws: ArrayLike | Callable[[int, int], ArrayLike] | None = None,
 ) -> YatesResult: ...
 def yates_risk(
     xmatlist: Sequence[ArrayLike],
@@ -14220,6 +14238,7 @@ def yates_risk(
     seed: int = 0,
     test: str = "global",
     term: str | None = None,
+    normal_draws: ArrayLike | Callable[[int, int], ArrayLike] | None = None,
 ) -> YatesResult: ...
 def yates_sgtt(
     x: ArrayLike,
@@ -14246,6 +14265,7 @@ def yates_survival(
     seed: int = 0,
     test: str = "global",
     term: str | None = None,
+    normal_draws: ArrayLike | Callable[[int, int], ArrayLike] | None = None,
 ) -> YatesResult: ...
 def yates_survival_summary(
     mean: ArrayLike,

@@ -5184,15 +5184,6 @@ totimeline <- function(formula, data, id, istate) {
   converted
 }
 
-yates <- function(fit, term, population = c("data", "factorial", "sas"),
-                  levels, test = c("global", "trend", "pairwise"),
-                  predict = "linear", options, nsim = 200,
-                  method = c("direct", "sgtt")) {
-  call <- match.call()
-  call[[1L]] <- quote(survival::yates)
-  eval.parent(call)
-}
-
 yates_setup <- function(fit, ...) {
   UseMethod("yates_setup", fit)
 }
@@ -5231,7 +5222,7 @@ yates_setup.glm <- function(fit, predict = c("link", "response", "terms", "linea
     return(NULL)
   }
   if (type == "risk") {
-    return(function(eta, X) exp(eta))
+    return(structure(function(eta, X) exp(eta), survivalr_prediction = list(kind = "risk")))
   }
   if (type == "survival") {
     suppressWarnings(baseline <- if (inherits(fit, "survival_py_coxph")) {
@@ -5272,7 +5263,10 @@ yates_setup.glm <- function(fit, predict = c("link", "response", "terms", "linea
       baseline$std.chaz <- baseline$std.err
       baseline
     }
-    return(list(predict = predict_fun, summary = summary_fun))
+    return(structure(
+      list(predict = predict_fun, summary = summary_fun),
+      survivalr_prediction = list(kind = "survival", baseline = baseline, rmean = rmean)
+    ))
   }
   stop("type expected is not supported", call. = FALSE)
 }

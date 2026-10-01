@@ -7,7 +7,22 @@ regresses to ``Any`` or to the wrong class.
 
 from typing import Any, assert_type
 
-from survival import r
+import numpy as np
+from survival import _survival, r
+
+
+def _check_yates_prediction_types() -> None:
+    result = _survival.yates_predict(
+        [[[1.0]], [[2.0]]],
+        [0.1],
+        [[0.02]],
+        lambda eta: np.column_stack((np.exp(eta), eta)),
+        nsim=3,
+        normal_draws=lambda n, p: np.zeros((n, p)),
+    )
+    assert_type(result, _survival.YatesResult)
+    assert_type(result.prediction_mean, list[list[float]] | None)
+    assert_type(result.prediction_variance, list[list[float]] | None)
 
 
 def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitResult) -> None:

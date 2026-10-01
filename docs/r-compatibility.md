@@ -1230,6 +1230,16 @@ calculations used by `yates`; summaries correct R's extra time-zero row and
 stale cumulative hazard. See [Yates setup](yates-setup.md) for accepted inputs,
 dispatch rules, empty baselines and performance measurements.
 
+The R `survivalr::yates` formula interface uses the same Rust means,
+estimability, simulation and type III kernels. R retains formula evaluation,
+fitted contrasts and result attributes, and supplies normal draws from its
+global RNG. Custom S3 setup methods support vector or matrix predictions and
+optional summaries. Cox risk/survival use the native prediction loop directly.
+The wrapper also accepts Python-backed Cox and AFT fits and handles joint
+level matrices, reversed variable order, matrix-valued SAS adjusters and
+empty adjustment sets. These cases correct stock-R preparation failures;
+explicit population designs also retain the fit's custom contrasts.
+
 ## Not yet implemented
 
 These R entry points have no port. Calls that reach them raise an explicit

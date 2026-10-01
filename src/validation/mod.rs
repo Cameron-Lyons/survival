@@ -131,12 +131,12 @@ pub use uno_c_index_module::{
     CIndexDecompositionResult, ConcordanceComparisonResult, GonenHellerResult, UnoCIndexResult,
     c_index_decomposition, compare_uno_c_indices, gonen_heller_concordance, uno_c_index,
 };
-#[cfg(feature = "python")]
-pub use yates::yates_response_py;
 pub use yates::{
     YatesContrast, YatesCurves, YatesEstimate, YatesInput, YatesPrediction, YatesPredictor,
     YatesResult, YatesSgttInput, YatesSgttResult, YatesSimulation, YatesTest, population_means,
     population_means_py, yates, yates_estimable, yates_estimable_py, yates_py, yates_risk_py,
-    yates_sgtt, yates_sgtt_py, yates_simulate, yates_survival_py, yates_survival_summary,
-    yates_survival_summary_py,
+    yates_sgtt, yates_sgtt_py, yates_simulate, yates_simulate_with_draws, yates_survival_py,
+    yates_survival_summary, yates_survival_summary_py,
 };
+#[cfg(feature = "python")]
+pub use yates::{yates_predict_py, yates_response_py};
