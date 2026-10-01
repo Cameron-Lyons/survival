@@ -6029,9 +6029,13 @@ test_that("Fitted-model concordance supports joint Cox and survreg comparisons",
     crossprod(cbind(cox_x_single$dfbeta, cox_z_single$dfbeta)),
     tolerance = 1e-12
   )
-  expect_equal(dim(cox_joint$dfbeta), c(nrow(data), 2L))
-  expect_equal(dim(cox_joint$influence), c(nrow(data), 5L, 2L))
-  expect_equal(dimnames(cox_joint$influence)[[3L]], c("cox_x", "cox_z"))
+  # cord.work returns neither influence component for joint influence = 3.
+  expect_null(cox_joint$dfbeta)
+  expect_null(cox_joint$influence)
+  expect_equal(dim(concordance(cox_x, cox_z, influence = 1)$dfbeta), c(nrow(data), 2L))
+  joint_influence <- concordance(cox_x, cox_z, influence = 2)$influence
+  expect_equal(dim(joint_influence), c(nrow(data), 5L, 2L))
+  expect_null(dimnames(joint_influence))
   expect_equal(unique(cox_joint$ranks$fit), c("cox_x", "cox_z"))
   expect_equal(
     concordance(cox_x, cox_z, newdata = data)$concordance,
