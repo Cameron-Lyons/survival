@@ -1209,7 +1209,7 @@ survival when the fitted Cox model used Efron ties.}
 Python fit exposes extra parameters such as estimated survreg scale terms.}
 \item{offset, init, control, rownames, resid, nocenter}{Low-level
 \code{coxph.fit}, \code{agexact.fit}, \code{agreg.fit}, native
-\code{survreg.fit}, and delegated \code{survpenal.fit} optimizer inputs matching the R
+\code{survreg.fit}, and \code{survpenal.fit} optimizer inputs matching the R
 \pkg{survival} entry points. \code{offset} is also accepted by
 \code{statefig}.}
 \item{controlvals, dist, nstrat, pcols, pattr, assign}{Low-level
@@ -1309,6 +1309,15 @@ convergence warnings use R's condition system. Named built-in distributions
 run entirely in Rust and Student-t requires an explicit \code{parms} value.
 Response transforms and distribution-level fixed scales are ignored by this
 prepared-response interface.
+
+\code{survpenal.fit} also uses the compact Rust fitter. R penalty and tuning
+functions (\code{pfun} and \code{cfun}) run through the shared outer search,
+including sparse frailties, recentering, full penalty matrices, and requested
+degrees of freedom. Controller histories and \code{printfun} functions remain
+in the returned R list. Custom density variance functions receive the null
+fit's squared mean scale, as in R. Dense linear predictors include offsets
+and treat aliased coefficients as zero; dense penalties may follow a sparse
+column in the input design.
 
 The optimizer uses positive-definite
 observed-information steps with an outer-product fallback. Fixed and

@@ -72,13 +72,13 @@ pub use cox_zph::{CoxZph, CoxZphTest, ZphFit, ZphTransform, cox_zph};
 #[cfg(feature = "python")]
 pub use cox_zph_smooth::cox_zph_smooth_py;
 pub use cox_zph_smooth::{CoxZphSmooth, cox_zph_smooth};
-#[cfg(feature = "python")]
-pub use coxpenal::CallbackPenalty;
 pub use coxpenal::{
     COXPENAL_OUTER_MAX, CoxPenalty, CoxPenaltyTerms, CoxpenalData, CoxpenalFit, CoxpenalOptions,
     FrailtyFamily, FrailtyMethod, FrailtyPenalty, ModelTerm, PenaltyHistory, PenaltyTerm,
     PsplineMethod, PsplinePenalty, RidgePenalty, coxpenal_fit,
 };
+#[cfg(feature = "python")]
+pub use coxpenal::{CallbackPenalty, ControlledPenalty};
 pub use coxph::{
     Basehaz, CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxTermsPrediction, CoxphData,
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,

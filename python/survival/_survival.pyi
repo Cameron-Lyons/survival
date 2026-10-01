@@ -2344,6 +2344,14 @@ class CoxPenalty:
     @staticmethod
     def callback(fexpr: Any, diag: bool = True, sparse: bool = False) -> CoxPenalty: ...
     @staticmethod
+    def controlled(
+        pfun: Any,
+        cfun: Any,
+        diag: bool = True,
+        sparse: bool = False,
+        needs_df: bool = False,
+    ) -> CoxPenalty: ...
+    @staticmethod
     def frailty(
         distribution: str = "gamma",
         sparse: bool = True,
@@ -9865,6 +9873,7 @@ class SurvregDistribution:
         scale: float | None = None,
         parms: ArrayLike | None = None,
         parm_names: Sequence[str] | None = None,
+        fitting_variance: Any = None,
     ) -> SurvregDistribution: ...
     def pdf_values(self, x: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...
     def quantile_values(self, p: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...

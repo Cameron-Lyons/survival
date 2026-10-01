@@ -8,6 +8,8 @@
 //! (`coxpenal.df`), [`cholesky3`] the sparse Cholesky routines of the C
 //! kernels and [`terms`] the pieces of the outer loop.
 
+#[cfg(feature = "python")]
+pub(crate) mod callbacks;
 pub(crate) mod cholesky3;
 pub(crate) mod control;
 pub(crate) mod df;

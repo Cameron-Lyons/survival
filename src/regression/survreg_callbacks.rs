@@ -38,6 +38,19 @@ pub trait SurvregCallbacks: Any + Send + Sync {
         scale: &[f64],
         parms: &[f64],
     ) -> SurvivalResult<(Vec<f64>, Vec<f64>)>;
+    /// Effective-sample-size variance used during penalized initialization.
+    /// The default is the standardized variance. R adapters can reproduce
+    /// `sd$variance(scale_squared)` without changing the ordinary variance.
+    fn fitting_variance(&self, _scale_squared: f64, parms: &[f64]) -> SurvivalResult<f64> {
+        let value = self.variance(parms)?;
+        if !value.is_finite() || value <= 0.0 {
+            return Err(SurvivalError::invalid_input(
+                "variance callback must return a finite positive value",
+            ));
+        }
+        Ok(value)
+    }
+
     /// Variance of the standardized distribution, used by penalized fits.
     fn variance(&self, _parms: &[f64]) -> SurvivalResult<f64> {
         Err(SurvivalError::invalid_input(

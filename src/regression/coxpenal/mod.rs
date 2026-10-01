@@ -24,6 +24,8 @@ mod kernel;
 
 #[cfg(feature = "python")]
 pub use crate::regression::penalized::CallbackPenalty;
+#[cfg(feature = "python")]
+pub use crate::regression::penalized::callbacks::ControlledPenalty;
 pub use crate::regression::penalized::{
     CoxPenaltyTerms, FrailtyFamily, FrailtyMethod, FrailtyPenalty, ModelTerm, PenaltyHistory,
     PenaltyTerm, PsplineMethod, PsplinePenalty, RidgePenalty,
@@ -229,8 +231,9 @@ impl CoxpenalFit {
             &data.status,
             eps2,
         )?;
-        let need_df = terms.iter().any(|term| term.control.needs_df());
+        let need_df = terms.iter().any(|term| term.needs_df());
         let mut composer = Composer::new(terms, nfrail, nvar, shape.full_imat, false);
+        composer.neff = n_eff;
 
         let nocenter = nocenter_columns(&xx, options.nocenter.as_deref());
         let docenter: Vec<bool> = nocenter.iter().map(|&skip| !skip).collect();
@@ -528,6 +531,17 @@ impl CoxPenalty {
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
         match &self.term {
+            PenaltyTerm::Controlled(callback) => (
+                py.get_type::<Self>().getattr("controlled")?,
+                (
+                    callback.pfun.clone_ref(py),
+                    callback.cfun.clone_ref(py),
+                    callback.diag,
+                    callback.sparse,
+                    callback.needs_df,
+                ),
+            )
+                .into_pyobject(py),
             PenaltyTerm::Callback(callback) => (
                 py.get_type::<Self>().getattr("callback")?,
                 (callback.fexpr.clone_ref(py), callback.diag, callback.sparse),
@@ -620,6 +634,37 @@ impl CoxPenalty {
                 sparse,
             }),
         }
+    }
+
+    /// An R-style penalty and outer-loop controller. `pfun(coef, theta, neff)`
+    /// returns positive penalty derivatives and an optional recentering.
+    /// `cfun(old, info)` returns the next scalar theta, done flag and optional
+    /// numeric history; opaque state is passed back only within this fit.
+    #[cfg(feature = "python")]
+    #[staticmethod]
+    #[pyo3(signature = (pfun, cfun, diag=true, sparse=false, needs_df=false))]
+    fn controlled(
+        py: Python<'_>,
+        pfun: Py<PyAny>,
+        cfun: Py<PyAny>,
+        diag: bool,
+        sparse: bool,
+        needs_df: bool,
+    ) -> PyResult<Self> {
+        if !pfun.bind(py).is_callable() || !cfun.bind(py).is_callable() {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "pfun and cfun must be callable",
+            ));
+        }
+        Ok(Self {
+            term: PenaltyTerm::Controlled(ControlledPenalty {
+                pfun: std::sync::Arc::new(pfun),
+                cfun: std::sync::Arc::new(cfun),
+                diag,
+                sparse,
+                needs_df,
+            }),
+        })
     }
 
     /// `"ridge"`, `"pspline"`, `"frailty"` or `"callback"`.

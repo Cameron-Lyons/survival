@@ -1182,6 +1182,10 @@ including ridge, spline, dense/sparse frailty and callback penalties.
 `print_survreg_penal` accepts this result and prints the sparse frailty
 branch. See [bare penalized AFT fitting](penalized-aft-low-level-fitting.md)
 for zero-based column assignments, result shapes and R reference checks.
+The R `survpenal.fit` bridge uses this shared fitter with the original R
+penalty and controller functions, histories and printing functions. Python's
+`CoxPenalty.controlled` exposes the same outer-search machinery for custom
+Cox and AFT penalties, with state owned by each fit.
 
 `survfitKM` fits a prepared factor and `Surv` with the common Rust curve
 engine. It preserves unused factor levels and returns numerical components

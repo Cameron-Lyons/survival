@@ -246,6 +246,8 @@ pub(crate) struct TermState<'a> {
     pub state: ControlState,
     /// Events per group (frailty terms).
     pub events_by_group: Vec<f64>,
+    #[cfg(feature = "python")]
+    callback_state: Option<super::callbacks::CallbackState>,
 }
 
 /// The penalised terms of `terms` with their `pparm`, `cfun` and first
@@ -306,6 +308,13 @@ pub(crate) fn build_term_states<'a>(
             eps2,
         )?;
         let state = control.initial();
+        #[cfg(feature = "python")]
+        let (state, callback_state) = if let PenaltyTerm::Controlled(callback) = penalty {
+            let (state, callback_state) = callback.initial(eps2)?;
+            (state, Some(callback_state))
+        } else {
+            (state, None)
+        };
         states.push(TermState {
             index,
             term: penalty,
@@ -314,6 +323,8 @@ pub(crate) fn build_term_states<'a>(
             control,
             state,
             events_by_group: events,
+            #[cfg(feature = "python")]
+            callback_state,
         });
     }
     Ok(states)
@@ -323,6 +334,7 @@ pub(crate) fn build_term_states<'a>(
 /// `coxlist1`/`coxlist2`.
 pub(crate) struct Composer<'a> {
     pub terms: Vec<TermState<'a>>,
+    pub neff: f64,
     pub sparse: Option<usize>,
     pub full_imat: bool,
     /// survpenal.fit's `f.expr1` zeroes `first` and `second` of a flagged
@@ -346,6 +358,7 @@ impl<'a> Composer<'a> {
         Self {
             sparse: terms.iter().position(|term| term.term.is_sparse()),
             terms,
+            neff: 0.0,
             full_imat,
             zero_flagged_sparse,
             coxlist1: CoxPenaltyTerms::zeros(nfrail, nfrail, 1),
@@ -360,7 +373,7 @@ impl PenaltyCallback for Composer<'_> {
             let sparse = self.sparse.expect("a sparse term exists");
             let term = &self.terms[sparse];
             let nfrail = coef.len();
-            let value = term.term.evaluate(coef, term.state.theta, &term.pparm, 1)?;
+            let value = term.evaluate(coef, self.neff, 1)?;
             let list = &mut self.coxlist1;
             list.coef = value.coef;
             if !value.flag {
@@ -389,9 +402,7 @@ impl PenaltyCallback for Composer<'_> {
             let pen_col = &term.columns;
             let p = pen_col.len();
             let coef_term: Vec<f64> = pen_col.iter().map(|&c| list.coef[c]).collect();
-            let value = term
-                .term
-                .evaluate(&coef_term, term.state.theta, &term.pparm, 2)?;
+            let value = term.evaluate(&coef_term, self.neff, 2)?;
             if value.coef.len() != p {
                 return Err(SurvivalError::computation("Length error in coxlist2"));
             }
@@ -532,6 +543,8 @@ pub(crate) fn control_of(
         }
         #[cfg(feature = "python")]
         PenaltyTerm::Callback(_) => Control::Fixed { theta: f64::NAN },
+        #[cfg(feature = "python")]
+        PenaltyTerm::Controlled(_) => Control::Fixed { theta: 0.0 },
     };
     Ok(control)
 }
@@ -582,6 +595,19 @@ pub(crate) fn update_controls(
             events_by_group: &term.events_by_group,
             coef: &coef_term,
         };
+        #[cfg(feature = "python")]
+        if let PenaltyTerm::Controlled(callback) = term.term {
+            let (state, callback_state) = callback.update(
+                term.callback_state
+                    .as_ref()
+                    .expect("initialized controller"),
+                input,
+            )?;
+            term.state = state;
+            term.callback_state = Some(callback_state);
+            done &= term.state.done;
+            continue;
+        }
         term.state = term.control.update(&term.state, input)?;
         done &= term.state.done;
     }
@@ -613,14 +639,46 @@ pub(crate) fn histories(terms: &[TermState<'_>]) -> Vec<PenaltyHistory> {
             theta: term.state.theta,
             done: term.state.done,
             history: term.state.history.clone(),
-            columns: term
-                .control
-                .history_columns()
-                .iter()
-                .map(|name| (*name).to_string())
-                .collect(),
+            columns: term.history_columns(),
             c_loglik: term.state.c_loglik,
             half: term.state.half,
         })
         .collect()
+}
+
+impl TermState<'_> {
+    pub(crate) fn needs_df(&self) -> bool {
+        #[cfg(feature = "python")]
+        if let PenaltyTerm::Controlled(callback) = self.term {
+            return callback.needs_df;
+        }
+        self.control.needs_df()
+    }
+
+    #[cfg_attr(not(feature = "python"), expect(unused_variables))]
+    fn evaluate(
+        &self,
+        coef: &[f64],
+        neff: f64,
+        which: i32,
+    ) -> SurvivalResult<super::penalty::PenaltyValue> {
+        #[cfg(feature = "python")]
+        if let PenaltyTerm::Controlled(callback) = self.term {
+            return callback.evaluate(coef, self.state.theta, neff, which);
+        }
+        self.term
+            .evaluate(coef, self.state.theta, &self.pparm, which)
+    }
+
+    fn history_columns(&self) -> Vec<String> {
+        #[cfg(feature = "python")]
+        if let Some(state) = &self.callback_state {
+            return state.columns.clone();
+        }
+        self.control
+            .history_columns()
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect()
+    }
 }
