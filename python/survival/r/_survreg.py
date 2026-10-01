@@ -52,6 +52,7 @@ from ._fit import (
     _empty_prediction,
     _excluded_rows,
     _model_matrix_contrasts,
+    _model_matrix_evaluated,
     _model_matrix_names_and_assign,
     _NewData,
     _newdata_frame,
@@ -72,6 +73,7 @@ from ._formula import (
     _design_rows_from_spec,
     _design_term_name,
     _design_term_output_names,
+    _EvaluatedModelFrame,
     _fit_formula_design,
     _formula_cluster_values,
     _formula_model_frame,
@@ -1575,6 +1577,19 @@ def model_matrix_survreg(
 
     strata_names = {spec.call for spec in fit.strata_terms}
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
+    if isinstance(data, _EvaluatedModelFrame) and fit.design is not None:
+        result = _model_matrix_evaluated(
+            fit.design,
+            data,
+            covered_strata=tuple(spec for spec in fit.strata_terms if spec.call in fit.term_labels),
+        )
+        result["assign"] = [
+            code - sum(index < code for index in removed) for code in result["assign"]
+        ]
+        if not _with_metadata:
+            for key in ("row_names", "contrasts"):
+                result.pop(key, None)
+        return result
     new = None
     if data is not None:
         action = _normalize_na_action(na_action)

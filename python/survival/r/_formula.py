@@ -819,6 +819,22 @@ class _FormulaRows(dict[str, Any]):
         self.row_names = row_names
 
 
+class _EvaluatedModelFrame(_FormulaRows):
+    """Columns from an R model frame, whose expressions have already run."""
+
+    __slots__ = ("column_metadata",)
+
+    def __init__(
+        self,
+        columns: dict[str, Any],
+        nrow: int,
+        row_names: tuple[str, ...] | None = None,
+        column_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(columns, nrow, row_names)
+        self.column_metadata = dict(column_metadata or {})
+
+
 def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
     """Explicit R row names or a valid data-frame index; None means automatic names."""
     labels = getattr(data, "row_names", None)
@@ -2494,6 +2510,9 @@ def _fit_formula_design(
         variables=tuple(
             replace(term, special=None) if term.special == "offset" else term
             for term in terms.variables
+        ),
+        variable_labels=tuple(
+            _covariate_term_name(term) for term in terms.variables if term.special != "cluster"
         ),
     )
 
