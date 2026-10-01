@@ -188,7 +188,8 @@ def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
     """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
 
     categories = _mstate_categories(values)
-    present = {value for value in values if not _is_missing_value(value)}
+    # Repeated group labels need their missingness checked only once.
+    present = {value for value in set(values) if not _is_missing_value(value)}
     if categories is not None:
         return [level for level in _materialize_1d(categories, "levels") if level in present]
     try:
@@ -671,14 +672,17 @@ def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
     return codes, levels
 
 
-def _factor(values: Any, name: str = "values") -> tuple[list[int | None], list[str]]:
+def _factor(
+    values: Any, name: str = "values", *, levels: Sequence[Any] | None = None
+) -> tuple[list[int | None], list[str]]:
     """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
 
     array = _numeric_ndarray(values)
-    if array is not None:
+    if array is not None and levels is None:
         numeric_codes, numeric_levels = _numeric_factor(array)
         return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]
-    levels = _factor_levels(values, name)
+    if levels is None:
+        levels = _factor_levels(values, name)
     index = {level: code for code, level in enumerate(levels)}
     materialized = _materialize_labels(values, name)
     codes: list[int | None] = list(map(index.get, materialized))

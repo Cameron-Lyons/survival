@@ -145,6 +145,7 @@ class CoxphModel:
     # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
     # dropped, since model.frame() does not use them
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
+    cluster_levels: tuple[Any, ...] | None = None
 
     def __getattr__(self, name: str) -> Any:
         if self.penalized is not None and name in {
@@ -741,6 +742,7 @@ def _coxph_fit_frame(
         tt=bool(tt_terms),
         id=None if frame.id is None else tuple(frame.id),
         cluster=None if frame.cluster is None else tuple(frame.cluster),
+        cluster_levels=frame.cluster_levels,
         model=frame.model_frame() if keep_model else None,
         weights_column=frame.weights_column,
         id_column=frame.id_column,

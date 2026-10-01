@@ -2092,12 +2092,16 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
     return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
 
 
-def _formula_cluster_values(data: Any, terms: _FormulaTerms, n: int) -> list[Any] | None:
+def _formula_cluster_values(data: Any, terms: _FormulaTerms, n: int) -> Sequence[Any] | None:
     """Evaluate the cluster argument after the model frame's row selection."""
 
     for item in terms.model_terms:
         if isinstance(item, _ModelClusterTerm):
-            return _term_values(data, replace(item.term, special=None), n)
+            term = replace(item.term, special=None)
+            values = _term_values(data, term, n)
+            if term.transform is None and term.arithmetic is None and term.strata is None:
+                return _rows_of(_column_source(data, term.column), values)
+            return values
     return None
 
 
@@ -2655,7 +2659,8 @@ def _column_or_values(data: Any, values: Any, name: str) -> Any:
     if isinstance(values, str):
         if data is None:
             raise ValueError(f"{name} column lookup requires data")
-        return _column(data, values)
+        # Cluster factor levels determine the order of grouped influence rows.
+        return _column_source(data, values) if name == "cluster" else _column(data, values)
     return values
 
 

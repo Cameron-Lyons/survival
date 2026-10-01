@@ -29,10 +29,12 @@ For joint models, `influence=1` returns `dfbeta`, `influence=2` returns the
 three-dimensional influence array, and `influence=3` returns neither, following
 R's fitted-model method. A single model with `influence=3` returns both.
 
-The bridge retains R model names, count labels and explicit cluster ordering.
-Stored cluster values use R's sorted label order; a fitted categorical cluster's
-original declared level order is not retained by the existing model object.
-An explicit factor cluster preserves that order. Rank tables contain event
+The bridge retains R model names, count labels and cluster ordering. Fitted
+categorical clusters now retain their declared level order through row selection
+and omission, as explicit factor clusters do. Joint influence rows align by
+cluster membership, independent of names or level order; incompatible partitions
+are refused. See [cluster alignment](concordance-clusters.md) for the covariance
+correction and its validation. Rank tables contain event
 rows without R's original model-frame row labels. New-data stratum counts keep
 the fitted labels instead of R's integer codes.
 
@@ -53,7 +55,7 @@ Known reference bugs use those explicit calculations rather than the broken
 reference dispatcher. A test disables R's numerical routine while scoring
 models to verify that computation stays in the shared implementation.
 
-The 398 focused checks pass. The package archive passes 7,023 R checks with
+At commit `7d5c8aeb`, the 398 focused checks passed. The package archive passed 7,023 R checks with
 zero errors, warnings or notes; the full Python suite passes 14,413 tests,
 with 48 skips and 37 documented expected differences. Pinned lint/format,
 generated-interface checks and Mypy across 47 files also pass. The Rust
