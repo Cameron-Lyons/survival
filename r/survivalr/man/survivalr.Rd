@@ -105,6 +105,7 @@
 \alias{brier}
 \alias{concordance}
 \alias{concordance.default}
+\alias{concordance.lm}
 \alias{concordance.survival_py_model}
 \alias{concordancefit}
 \alias{survConcordance}
@@ -756,6 +757,9 @@ concordance(object, ..., formula)
 
 \method{concordance}{default}(object, data = NULL, ..., scores = NULL, risk.scores = NULL,
   weights = NULL, cluster = NULL, subset = NULL, na.action = NULL)
+
+\method{concordance}{lm}(object, ..., newdata, cluster, ymin, ymax,
+  influence = 0, ranks = FALSE, timefix = TRUE, keepstrata = 10)
 
 \method{concordance}{survival_py_model}(object, ..., newdata, cluster, ymin,
   ymax, timewt = c("n", "S", "S/G", "n/G2", "I"), influence = 0,

@@ -472,7 +472,7 @@ def _response_arg_columns(part: str) -> list[str]:
         return bound_columns
     if _response_rep_call(part) is not None:
         return []
-    if _is_formula_arithmetic_expression(part):
+    if _is_formula_arithmetic_expression(part) or _numeric_call(part) is not None:
         return _arithmetic_expression_columns(part)
     comparison = _top_level_comparison(part)
     if comparison is None:
@@ -593,7 +593,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
         repeated_value, count_expression = rep_call
         return [repeated_value] * _response_rep_count(count_expression, inferred_length)
 
-    if _is_formula_arithmetic_expression(part):
+    if _is_formula_arithmetic_expression(part) or _numeric_call(part) is not None:
         columns = _arithmetic_expression_columns(part)
         n = len(_column(data, columns[0])) if columns else inferred_length
         if n is None:

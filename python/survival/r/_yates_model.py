@@ -14,7 +14,7 @@ from ._types import _FormulaDesign
 
 @dataclass(frozen=True)
 class YatesModel:
-    """Supply an external linear model or GLM to :func:`yates`.
+    """Supply an external linear model or GLM to :func:`yates` or :func:`concordance`.
 
     Coefficients and covariance follow the R formula's design-column order,
     including its intercept, with ``lm``'s factor levels: those that occur in
@@ -22,6 +22,11 @@ class YatesModel:
     for sum-of-squares tests. ``family`` supplies a GLM's vectorized inverse
     link, using ``linkinv`` or ``link.inverse``. Optional ``weights`` are the
     fitted model's case weights, used for linear data-population means.
+    Concordance uses the numeric response, linear predictors (including formula
+    offsets) and case weights; a new-data call evaluates complete rows and uses
+    no training weights. Supply the training rows retained by the external fit.
+    Optional ``linear_predictors`` preserve the original training predictions,
+    including their exact ties; otherwise they are reconstructed from the design.
     No model is refitted by this adapter.
     """
 
@@ -32,6 +37,7 @@ class YatesModel:
     sigma2: float | None = None
     family: Any = field(default=None, kw_only=True, repr=False)
     weights: Any = field(default=None, kw_only=True, repr=False)
+    linear_predictors: Any = field(default=None, kw_only=True, repr=False)
     design: _FormulaDesign = field(init=False, repr=False)
     model: dict[str, Any] = field(init=False, repr=False)
 
@@ -66,3 +72,8 @@ class YatesModel:
                 raise ValueError("weights must have a positive total")
             self.model["(weights)"] = weights
             object.__setattr__(self, "weights", weights)
+        if self.linear_predictors is not None:
+            values = _float_vector(self.linear_predictors, "linear_predictors")
+            if len(values) != frame.n or any(not math.isfinite(value) for value in values):
+                raise ValueError("linear_predictors must be finite and match the model rows")
+            object.__setattr__(self, "linear_predictors", values)

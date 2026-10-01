@@ -1,5 +1,4 @@
-"""Hooks between Python and Rust: R's ``coxpenal.fit`` penalty callback and the pickle
-reconstructors of the native result classes."""
+"""Internal hooks for R interoperability and native-result reconstruction."""
 
 import warnings
 from collections.abc import Callable, Mapping
@@ -47,6 +46,28 @@ def _yates_model_metadata(fit: Any) -> dict[str, Any]:
             part.term.column: list(part.levels) for part in factors if not part.term.strata
         },
     }
+
+
+def _concordance_lm_data(
+    data: list[dict[str, Any]], names: list[str], options: dict[str, Any], newdata: bool = False
+) -> Any:
+    """R evaluates external model frames and predictions; Rust scores them."""
+    from .r._concordance import _concordance_from_data, _FitData
+    from .r._surv import Surv
+
+    prepared = [
+        _FitData(
+            y=Surv(value["y"]),
+            x=list(value["x"]),
+            strata=None,
+            strata_levels=(),
+            weights=None if value.get("weights") is None else list(value["weights"]),
+            cluster=value.get("cluster"),
+            timefix=None if newdata else False,
+        )
+        for value in data
+    ]
+    return _concordance_from_data(prepared, options=options, names=names)
 
 
 def _survexp_cox_fit(
