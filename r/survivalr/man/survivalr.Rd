@@ -1208,14 +1208,15 @@ survival when the fitted Cox model used Efron ties.}
 \item{complete}{Logical flag requesting the full variance matrix where the
 Python fit exposes extra parameters such as estimated survreg scale terms.}
 \item{offset, init, control, rownames, resid, nocenter}{Low-level
-\code{coxph.fit}, \code{agexact.fit}, \code{agreg.fit}, native built-in
+\code{coxph.fit}, \code{agexact.fit}, \code{agreg.fit}, native
 \code{survreg.fit}, and delegated \code{survpenal.fit} optimizer inputs matching the R
 \pkg{survival} entry points. \code{offset} is also accepted by
 \code{statefig}.}
 \item{controlvals, dist, nstrat, pcols, pattr, assign}{Low-level
 \code{survreg.fit} and \code{survpenal.fit} inputs. Built-in extreme-value,
-logistic, Gaussian, and Student-t \code{survreg.fit} distributions use the
-Rust optimizer; custom density callbacks retain the upstream fallback.}
+logistic, Gaussian, Student-t and custom \code{survreg.fit} distributions use
+the compact Rust optimizer. Explicit distribution lists retain their R
+density and initialization callbacks, regardless of their display name.}
 \item{varmat, wt, risk, newrisk, position, oldid, x2, risk2, strata2,
 survtype, vartype, unlist}{Low-level Cox survival-curve inputs.}
 \item{var}{Variance matrix for \code{coxph.wtest}, or a constructed spline
@@ -1300,7 +1301,16 @@ single-row/column matrices. The GLM method calls the supplied family's inverse
 link. A native R Cox fit supplies its baseline through R's \code{survfit};
 Python-backed fits use the Rust baseline implementation.
 
-Built-in \code{survreg.fit} matrix calls use positive-definite
+\code{survreg.fit} matrix calls use the same compact fitter as the Python
+interface, with direct matrix conversion and no retained training inputs.
+Custom density callbacks execute on vector batches and receive the supplied
+R parameters with their names. Errors retain the failing callback's message;
+convergence warnings use R's condition system. Named built-in distributions
+run entirely in Rust and Student-t requires an explicit \code{parms} value.
+Response transforms and distribution-level fixed scales are ignored by this
+prepared-response interface.
+
+The optimizer uses positive-definite
 observed-information steps with an outer-product fallback. Fixed and
 stratified scales, left and interval censoring, null likelihoods, covariance,
 scores, and linear predictors are returned in the usual low-level R shape.

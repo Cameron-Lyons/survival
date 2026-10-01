@@ -106,3 +106,62 @@ limits and warnings, intercept-only and singular designs, interval
 censoring, names, validation and minimal custom callbacks. Additional
 tests cover matrix layouts, ownership, pickling, response conventions,
 native/full-model agreement and GIL release.
+
+## R matrix bridge
+
+`survivalr::survreg.fit` calls this same compact Python/Rust interface for
+every density. It passes the design as a matrix, avoiding the previous
+per-row R lists, and assembles the ordinary R result from the native fit's
+names and numerical fields. It retains no training data or callbacks.
+Convergence warnings are forwarded through R's condition system on each call.
+
+Named built-ins execute entirely in Rust. An explicit distribution list uses
+its R density and initialization functions, including when its display name
+is `"Gaussian"`, `"Logistic"` or `"Extreme value"`. This follows the Python
+interface's callback policy; R's original C fitter selects its built-in
+density based on that display name. The density receives vector batches,
+with the original R `parms` supplied when nonempty; the initializer receives
+`y`, `weights` and `parms`, including `NULL`. Parameter names are preserved.
+Distribution transforms, quantiles, deviance functions and stored fixed
+scales are unused. Complete intercept-only starting values need no initializer.
+
+There is no call to R's reference fitter for custom distributions. Callback
+errors retain their messages. Interval-censored callback fits use the Rust
+solver's existing indexing correction; tests compare a custom Gaussian with
+R's equivalent built-in Gaussian path to avoid R's unsafe callback C path.
+An explicit Student-t parameter is required for `dist="t"`, consistently with
+the Python bare interface. Fractional stratum codes are rejected rather than
+silently truncated, and unused scale strata retain their positions.
+
+R tests compare 64 built-in fitting cases with stock survival, including
+all four base families, weights/offsets, scale choices, full/partial starts,
+iteration limits, aliases, interval censoring and matrix names. Further
+checks cover callbacks, parameter names, errors, serialization, unused strata
+and singleton vectors. A test disables `survival::survreg.fit` and records
+the call to `survival.r.survreg_fit`, so numerical equality alone cannot mask
+a reference fallback.
+
+`scripts/benchmark_aft_r_bridge.R` measures complete R calls, including
+conversion and result assembly, after checking all returned components.
+Fitting inputs, warmup and garbage collection are outside the timing.
+The optional third argument is a previous `bridge.R` for a direct comparison:
+
+```sh
+git show 0d61027e:r/survivalr/R/bridge.R > /tmp/aft-bridge-before.R
+RETICULATE_PYTHON=$PWD/.venv/bin/python PYTHONPATH=$PWD/python \
+  Rscript scripts/benchmark_aft_r_bridge.R 20000 7 /tmp/aft-bridge-before.R
+```
+
+On an Intel Core Ultra 5 325 with R 4.5.3, survival 3.8-12 and Python 3.14.7,
+seven samples with 20,000 rows and six design columns gave these medians:
+
+| Density | Stock R | Previous bridge | Compact bridge |
+| --- | ---: | ---: | ---: |
+| Gaussian | 27 ms | 68 ms | 18 ms |
+| Logistic | 17 ms | 66 ms | 16 ms |
+| Custom Gaussian callback | 44 ms | 44 ms | 45 ms |
+
+Built-in calls improved by 3.78–4.13× against the previous bridge. Custom
+callbacks now use Rust fitting with similar runtime; the previous bridge
+delegated them to R. These local measurements have millisecond resolution,
+depend on workload and machine load, and do not measure peak memory.
