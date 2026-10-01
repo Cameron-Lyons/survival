@@ -175,7 +175,7 @@ def test_joint_validation_does_not_hide_invalid_cluster_values(cluster):
     data = _data()
     first = r.coxph("Surv(time,status)~x", data)
     second = r.coxph("Surv(time,status)~z", data)
-    with pytest.raises((ValueError, TypeError), match="cluster|categor"):
+    with pytest.raises((ValueError, TypeError), match="cluster|category|categories|categorical"):
         r.concordance(first, second, cluster=cluster)
 
 
