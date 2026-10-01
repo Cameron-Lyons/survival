@@ -131,6 +131,7 @@ pub use longitudinal_survival::{
 pub use parametric_survival::{
     SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_py,
 };
+pub use penalized::{PenaltyControl, PenaltyControlInput, PenaltyControlState, PenaltyController};
 pub use recurrent_events::{
     AndersonGillResult, NegativeBinomialFrailtyConfig, NegativeBinomialFrailtyResult, PWPConfig,
     PWPResult, PWPTimescale, WLWConfig, WLWResult, anderson_gill_model, negative_binomial_frailty,

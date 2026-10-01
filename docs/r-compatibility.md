@@ -1595,7 +1595,9 @@ including ridge, spline, dense/sparse frailty and callback penalties.
 branch. See [bare penalized AFT fitting](penalized-aft-low-level-fitting.md)
 for zero-based column assignments, result shapes and R reference checks.
 The R `survpenal.fit` bridge uses this shared fitter with the original R
-penalty and controller functions, histories and printing functions. Python's
+penalty callback contract, histories and printing functions. Built-in R
+constructors now use the [shared Rust controllers](penalty-controllers.md)
+for their smoothing searches and gamma likelihood corrections. Python's
 `CoxPenalty.controlled` exposes the same outer-search machinery for custom
 Cox and AFT penalties, with state owned by each fit.
 

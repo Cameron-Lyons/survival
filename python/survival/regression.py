@@ -20,6 +20,8 @@ __all__ = bind_names(
         "CoxPenalty",
         "CoxpenalFit",
         "PenaltyHistory",
+        "PenaltyController",
+        "PenaltyControlState",
         "coxpenal_fit",
         "TieMethod",
         "CoxPrediction",

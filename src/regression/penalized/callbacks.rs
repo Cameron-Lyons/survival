@@ -91,6 +91,7 @@ fn controller_state(
             .map(|v| number(&v))
             .transpose()?,
         half: optional(&value, "half")?.map(|v| v.extract()).transpose()?,
+        theta_history_index: None,
     };
     Ok((
         state,

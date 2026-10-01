@@ -90,6 +90,13 @@ def test_survobrien_releases_the_gil():
     _assert_detaches(lambda: survival.validation.survobrien(times, events, columns))
 
 
+def test_penalty_controller_releases_the_gil():
+    events = np.arange(2_000_000, dtype=float) % 19
+    controller = regression.PenaltyController("gamma", theta=0.4)
+    old = controller.initial()
+    _assert_detaches(lambda: controller.step(old, 1, loglik=-100, events_by_group=events))
+
+
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
 def test_cox_fits_on_four_threads_overlap():
     time_, status, x = _cox_data(100_000)

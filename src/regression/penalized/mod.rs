@@ -12,6 +12,10 @@
 pub(crate) mod callbacks;
 pub(crate) mod cholesky3;
 pub(crate) mod control;
+mod controller;
+
+pub use control::{PenaltyControl, PenaltyControlInput, PenaltyControlState};
+pub use controller::PenaltyController;
 pub(crate) mod df;
 pub(crate) mod penalty;
 pub(crate) mod terms;
