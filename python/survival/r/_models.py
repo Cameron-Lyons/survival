@@ -853,10 +853,10 @@ def _subset_coxms_curves(
 
     Strata select their time rows and their ``n``, ``n_id`` and ``p0`` rows; ``data``
     the newdata rows.  A state subset keeps those columns of ``pstate``, ``n_risk``,
-    ``n_event`` and ``p0`` (``n_censor`` keeps its columns, as R's), drops ``cumhaz``
-    and ``n_transition`` and records ``oldstate``.  ``transitions`` is always dropped,
-    and the engine (the counts ``summary`` and ``survfit0`` need) unless every state is
-    kept.  Unlike R, ``n_id`` and every column of ``n_transition`` are kept.
+    ``n_event``, ``n_censor`` and ``p0``, drops ``cumhaz`` and ``n_transition`` and
+    records ``oldstate``. The engine retains the same selected counts for summary
+    and initial-row operations. ``transitions`` is always dropped. Unlike R,
+    ``n_id`` follows the selected strata and censor counts follow the states.
     """
 
     names = result.strata_names
@@ -882,13 +882,15 @@ def _subset_coxms_curves(
 
     def pick(values: list[list[float]], columns: list[int] | None = None) -> list[list[float]]:
         if columns is None:
-            return [values[row] for row in rows]
+            return [list(values[row]) for row in rows]
         return [[values[row][c] for c in columns] for row in rows]
 
     state_columns = None if every_state else kept_states
     engine = result.engine
     if engine is not None and not every_stratum:
         engine = engine.select_curves(kept_strata)
+    if engine is not None and not every_state:
+        engine = engine.select_states(kept_states)
     cumhaz = None
     if every_state and result.cumhaz is not None:
         cumhaz = result.cumhaz[np.ix_(rows, kept_data, range(result.cumhaz.shape[2]))]
@@ -899,7 +901,7 @@ def _subset_coxms_curves(
         time=[result.time[row] for row in rows],
         n_risk=pick(result.n_risk, state_columns),
         n_event=pick(result.n_event, state_columns),
-        n_censor=pick(result.n_censor),
+        n_censor=pick(result.n_censor, state_columns),
         n_transition=None
         if not every_state or result.n_transition is None
         else pick(result.n_transition),
@@ -909,11 +911,19 @@ def _subset_coxms_curves(
         states=[result.states[c] for c in kept_states],
         oldstate=result.oldstate if every_state else tuple(result.oldstate or result.states),
         transitions=None,
-        strata=None if not names else {names[s]: sizes[s] for s in kept_strata},
+        strata=None
+        if not names
+        else dict(
+            zip(
+                _make_unique([names[s] for s in kept_strata]),
+                [sizes[s] for s in kept_strata],
+                strict=True,
+            )
+        ),
         newdata=None
         if result.newdata is None
         else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
-        engine=engine if every_state else None,
+        engine=engine,
     )
 
 

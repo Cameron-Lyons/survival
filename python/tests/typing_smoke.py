@@ -43,6 +43,7 @@ def _check_survival_summary_types(
     assert_type(r.summary_survfit(aj), r.SummarySurvfitResult)
     assert_type(r.summary_survfit(cox), r.SummarySurvfitResult)
     assert_type(r.summary_survfit(cox_multistate), r.SummarySurvfitCoxmsResult)
+    assert_type(cox_multistate.subset(states=[0]), r.CoxSurvfitMultiStateResult)
     assert_type(r.summary_survfit(mixed), r.SummarySurvfitResult | r.SummarySurvfitCoxmsResult)
 
 

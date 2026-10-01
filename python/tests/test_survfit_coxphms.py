@@ -978,14 +978,12 @@ def test_subsetting(sf, sfs):
     assert death.states == ["death"]
     assert death.oldstate == ("(s0)", "pcm", "death")
     assert np.shape(death.n_risk) == (268, 1)
-    assert np.shape(death.n_censor) == (268, 3)
+    assert np.shape(death.n_censor) == (268, 1)
     assert death.p0 == [[0.0]]
     # deviation: n_id stays (R drops it)
     assert death.n_id == [1384]
-    with pytest.raises(ValueError, match="summary of a state subset"):
-        r.summary_survfit(death)
-    with pytest.raises(ValueError, match="survfit0 of a state subset"):
-        r.survfit0(death)
+    assert r.summary_survfit(death).states == ["death"]
+    assert r.survfit0(death).pstate.shape == (269, 2, 1)
     part = _subset_coxms_curves(sf, data=[0], states=["pcm", "death"])
     assert part.pstate[49, 0].tolist() == approx([0.0272954726877502, 0.107959427282836])
     men = _subset_coxms_curves(sfs, strata=["M"])

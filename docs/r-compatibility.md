@@ -363,6 +363,46 @@ Curves (`survfit.coxphms`, `coxsurv1-4.c`):
   keeps only the first column); an unknown state name or an out-of-range index
   is an error (R returns curves filled with NA).
 
+Multistate Cox curves expose `curves.subset(strata=..., data=..., states=...)`
+in Python; the R wrapper uses its existing bracket syntax. Select by zero-based
+indices, stratum labels or state names. Omitted dimensions retain all values.
+Selected curves keep the corresponding Rust count engine, so `summary_survfit`,
+`survfit0`, `as_data_frame`, reports and aggregation remain available. Reordering,
+repeated states and successive selections preserve the original state names in
+`oldstate`; probabilities are not renormalized. Arrays and mutable count rows
+are independent of the source. A state selection drops transition hazards and
+transition counts unless every state remains in its original order.
+
+`n_censor` follows the selected state columns, correcting R 3.8-12's retention
+of the original columns. Repeated stratum labels gain unique suffixes such as
+`b`, `b.1`, so the Python dictionary retains every selected time block.
+The 24-case generator
+[`generate_coxms_subset_reference.R`](../scripts/generate_coxms_subset_reference.R)
+covers weighted counting-process data, conditional starts, initial rows,
+reordered strata/prediction rows and repeated states. It records raw R censor
+counts and summary tables alongside aligned references. As well as aligning
+`n_id` and censor columns after selection, it independently accumulates censor
+counts for event-only summaries (R drops the matrix to one column when joining
+strata) and corrects the documented `survmean2` event-column ordering.
+Probabilities, risk/event counts and restricted means come from stock R.
+
+[`bench_coxms_subset_summary.py`](../benches/python/bench_coxms_subset_summary.py)
+compares summarizing one prepared state with summarizing all three states then
+projecting the same output. On Python 3.14.7 with a release build, 2,000 MGUS
+prediction rows and 268 times took 3.782 ms (3.668–3.863), versus 13.509 ms
+(12.905–13.791). Preparing the subset took 1.669 ms (1.619–1.715).
+For one prediction row the times were 0.293 ms (0.292–0.299), 0.424 ms
+(0.418–0.442) and 0.133 ms (0.125–0.138), respectively. These are seven
+alternating samples after three warmups, including summary calculation and
+numeric output materialization, excluding fitting and prediction. This compares
+two current workflows; subset preparation is a separate cost. Whole output
+arrays are checked before timing.
+
+```python
+death = curves.subset(states=["death"])
+summary = survival.r.summary_survfit(death, times=[100, 200])
+```
+
 ### Parametric regression (`survreg`)
 
 - **Loglogistic with a zero lower bound**: `survreg.R:130` lists
@@ -1739,6 +1779,9 @@ Features R itself does not implement stay refused with R's message: anova on
 multi-state fits; `predict.coxphms` types expected, survival and terms and
 `reference = "strata"`; `basehaz`, `royston` and `yates` on multi-state fits;
 `survexp`/`pyears` with a multi-state rate table ("Invalid rate table").
+Multistate Cox covariate paths also raise R's unsupported-path error. Offsets
+in formula lists raise an explicit error directing callers to the `offset`
+argument; stock R 3.8-12 fails with "termmatch failure 1" for those formulas.
 
 `pyears(ratetable=cox_fit)` also remains explicitly unsupported. R 3.8-12
 recognizes the fit initially but then tries to coerce it to a numeric rate
