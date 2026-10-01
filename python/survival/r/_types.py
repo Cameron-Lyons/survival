@@ -336,7 +336,7 @@ class ModelFrame:
 
     ``data`` is the caller's data or, when ``subset`` or the ``na.action`` removed rows,
     a mapping of the formula's variables at the kept rows; ``response`` is the ``Surv``
-    (or ``Surv2``) response (``y`` a plain numeric response such as ``time ~ 1``, or both
+    (or ``Surv2``) response (``y`` a numeric vector or NumPy matrix response, or both
     ``None`` for ``~ x``); the R-style extra arguments (``weights``, ``offset``, ``id``,
     ``cluster``, ``istate``) are row aligned with it.  ``na_action`` records the rows the
     ``na.action`` removed (``None`` when it removed none).
@@ -347,7 +347,7 @@ class ModelFrame:
     n: int
     spec: _SurvResponseSpec | None
     response: Surv | Surv2 | None
-    y: list[float] | None
+    y: list[float] | NDArray[np.float64] | None
     terms: _FormulaTerms
     weights: list[Any] | None = None
     offset: list[float] | None = None
@@ -538,7 +538,7 @@ class PyearsResult:
     ``model=True`` retains the evaluated model frame in ``model``. Otherwise,
     ``x=True`` retains the one-based grouping codes and raw ``tcut`` times as a
     row-major matrix (a vector of ones without groups), and ``y=True`` retains
-    the ``Surv`` response or a one-column numeric matrix. ``formula`` and
+    the ``Surv`` response or a numeric matrix. ``formula`` and
     ``term_labels`` identify the formula regardless of the retention flags.
     """
 

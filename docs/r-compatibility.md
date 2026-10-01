@@ -962,12 +962,48 @@ formula can return a data frame with person-years and counts; R's no-term
 
 R's two-column numeric-response convention depends on the kernel: without a
 rate table the columns are time and event; with a rate table they are start
-and stop, without events. These conventions are supported by the R bridge;
-Python's high-level formula parser still accepts scalar numeric or `Surv`
-responses. Numeric matrices with more than two columns are rejected. Zero-time
+and stop, without events. Both the R bridge and Python formulas support these
+conventions. Python accepts a row-major matrix column (`Y ~ group`) or a
+`cbind(...)` response, including named columns, arithmetic, nested bindings
+and scalar constants. A one-column matrix supplies follow-up without events.
+Numeric event counts remain numeric, including fractional counts and values
+greater than one; they are not recoded as `Surv` statuses. Numeric matrices with
+more than two columns are rejected. Zero-time
 right-censored events produce R's warning, and missing responses or invalid
 rate tables fail explicitly. Cox rate tables remain unsupported for `pyears`,
 as described below; there is no numerical fallback for them.
+
+Matrix rows pass through the shared subset and missing-data path. Missing cells
+in either column remove the whole row, and repeated subset rows retain aligned
+weights, rate-table positions and grouping values. NumPy inputs use array row
+selection and row-wise missingness checks; matrix columns reach Rust without
+per-row Python list conversion. List, strided, Fortran-order, read-only and
+object/nullable inputs are supported. Retained responses and matrix columns
+returned by `model_frame` are independent row-major lists.
+
+`scripts/generate_pyears_matrix_reference.R` records 36 R survival 3.8-12 cases
+covering scalar/grouped tables, time cuts, weights, event and expected-person-year
+rate-table calculations, repeated subsets and missing cells. Each runs through
+both Python matrix columns and `cbind` formulas. Independent checks cover numeric
+event totals, zero exposure, input ownership, arithmetic-created missing values
+and invalid shapes.
+
+`scripts/benchmark_pyears_matrix.py` compares equivalent complete calls with
+binary events, 100,000 input rows, weights and ten groups. Data and matrix
+construction are outside timing. Outputs are checked before three warmups and
+seven alternating samples; formula preparation, native tabulation and result
+conversion are included. Garbage collection is outside timing; peak memory is
+not measured.
+On an Intel Core Ultra 5 325 with Python 3.14.7 and NumPy 2.4.6:
+
+| Rows selected | `Surv` median (range) | `cbind` median (range) | Matrix median (range) |
+| --- | ---: | ---: | ---: |
+| All | 34.2 ms (31.3–37.1) | 19.3 ms (18.3–22.1) | 20.1 ms (18.1–22.0) |
+| Every second row, missing time every eleventh row | 24.6 ms (23.5–24.8) | 19.2 ms (18.5–19.8) | 19.6 ms (19.0–20.1) |
+
+These compare input representations in the current implementation, not a
+previous-release speedup. Numeric matrices avoid `Surv` status preparation;
+timings vary with machine load and allocation.
 
 Tests compare whole R results, including retained data, transformed terms,
 formula environments, subsets, scalar cells, rate tables and numeric responses.
@@ -1281,7 +1317,7 @@ With `model=False`, `pyears(x=True)` keeps a row-major matrix of one-based
 category codes and raw scaled `tcut` times; `survexp(x=True)` keeps a
 `StrataFactor` with zero-based codes, labels, and counts. Without grouping
 terms, either function retains a vector of ones. `pyears(y=True)` keeps the
-`Surv` response or a one-column numeric matrix. `survexp(y=True)` keeps
+`Surv` response or a one- or two-column numeric matrix. `survexp(y=True)` keeps
 numeric follow-up times; without a response, a rate-table call uses the
 maximum requested time before output scaling, and a Cox-reference call
 keeps `None`.

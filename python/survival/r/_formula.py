@@ -443,8 +443,33 @@ def _response_operand(expression: str, *, allow_literal: bool) -> _ResponseOpera
     return _ResponseOperand(column=column)
 
 
+def _response_bind_arguments(part: str) -> list[str] | None:
+    """Numeric matrix response columns, with optional cbind column labels."""
+    part = _unwrap_response_identity(part)
+    if not part.startswith("cbind(") or not part.endswith(")"):
+        return None
+    arguments = []
+    for item in _formula_response_parts(part[6:-1]):
+        named = _formula_named_option(item)
+        if named is not None and named[0] == "deparse.level":
+            continue
+        arguments.append(item if named is None else named[1])
+    if not arguments:
+        raise ValueError("formula response cbind() requires at least one column")
+    return arguments
+
+
 def _response_arg_columns(part: str) -> list[str]:
     part = _unwrap_response_identity(part)
+    bound = _response_bind_arguments(part)
+    if bound is not None:
+        bound_columns: list[str] = []
+        for argument in bound:
+            try:
+                _parse_formula_literal(argument)
+            except ValueError:
+                _append_unique(bound_columns, _response_arg_columns(argument))
+        return bound_columns
     if _response_rep_call(part) is not None:
         return []
     if _is_formula_arithmetic_expression(part):
@@ -533,9 +558,36 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
             return _response_arg_values(data, part[len(prefix) : -1], inferred_length)
     if part.startswith(("factor(", "as.factor(")) and part.endswith(")"):
         term = _parse_covariate_atom(part)
-        n = inferred_length if inferred_length is not None else len(_column(data, term.column))
-        return _strata_argument_values(data, term, n)
+        factor_n = (
+            inferred_length if inferred_length is not None else len(_column(data, term.column))
+        )
+        return _strata_argument_values(data, term, factor_n)
     part = _unwrap_response_identity(part)
+    bound = _response_bind_arguments(part)
+    if bound is not None:
+        columns = []
+        literal = []
+        for argument in bound:
+            try:
+                value = _parse_formula_literal(argument)
+            except ValueError:
+                value = _response_arg_values(data, argument, inferred_length)
+                literal.append(False)
+            else:
+                literal.append(True)
+            columns.append(value)
+        nrows = max(
+            (len(value) for value, scalar in zip(columns, literal, strict=True) if not scalar),
+            default=1,
+        )
+        columns = [
+            [value] * nrows if scalar else value
+            for value, scalar in zip(columns, literal, strict=True)
+        ]
+        try:
+            return np.column_stack(columns)
+        except ValueError as exc:
+            raise ValueError("formula response columns must have the same length") from exc
     rep_call = _response_rep_call(part)
     if rep_call is not None:
         repeated_value, count_expression = rep_call
@@ -763,11 +815,13 @@ def _data_row_count(data: Any, formula: str | None = None) -> int:
     if isinstance(data, _FormulaRows):
         return data.nrow
     spec = None if formula is None else _response_spec(formula)
-    if spec is not None and spec.columns:
-        return len(_column(data, spec.columns[0]))
-    names = _data_column_names(data)
+    names = spec.columns if spec is not None and spec.columns else _data_column_names(data)
     if names:
-        return len(_column(data, str(names[0])))
+        name = str(names[0])
+        source = _column_source(data, name)
+        if isinstance(source, np.ndarray) and source.ndim >= 1:
+            return len(source)
+        return len(_coerce_array_like(source, name))
     try:
         return len(data)
     except TypeError as exc:
@@ -1346,6 +1400,8 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
     """``source[rows]`` of the data column *name* (*index* is *rows* as an array)."""
 
     array = _numeric_ndarray(source)
+    if array is None:
+        array = _numeric_ndarray(source, ndim=2)
     if array is not None:
         if len(array) != n:
             raise ValueError(f"variable lengths differ (found for '{name}')")
@@ -1428,7 +1484,15 @@ def _response_variables(spec: _SurvResponseSpec | None) -> list[_CovariateTerm]:
 
     if spec is None or spec.type in {"interval", "interval2"}:
         return []
-    arguments = [_unwrap_response_identity(argument) for argument in spec.arguments]
+    arguments = []
+    pending = list(spec.arguments)
+    while pending:
+        argument = _unwrap_response_identity(pending.pop())
+        bound = _response_bind_arguments(argument)
+        if bound is None:
+            arguments.append(argument)
+        else:
+            pending.extend(bound)
     return [
         _CovariateTerm(argument, arithmetic=argument)
         for argument in arguments
@@ -2771,9 +2835,21 @@ def _istate_agrees(given: Any, codes: Sequence[int], current: Sequence[str]) -> 
     return all(_as_character(value) == state for value, state in zip(values, current, strict=True))
 
 
-def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]:
+def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float] | np.ndarray:
     values = _response_arg_values(data, spec.arguments[0], n)
     try:
+        vector = _numeric_ndarray(values)
+        if vector is not None:
+            return vector.astype(np.float64, copy=False).tolist()
+        matrix = _numeric_ndarray(values, ndim=2)
+        if matrix is not None:
+            return matrix.astype(np.float64, copy=True)
+        values = _coerce_array_like(values, spec.name)
+        if values and isinstance(values[0], list | tuple):
+            matrix = np.asarray([_floats_or_nan(row) for row in values], dtype=float)
+            if matrix.ndim != 2:
+                raise ValueError("response must be a vector or matrix")
+            return matrix
         return _floats_or_nan(values)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"formula response {spec.arguments[0]!r} must be numeric") from exc
@@ -2834,7 +2910,7 @@ def model_frame(
     spec = _response_spec(formula)
     n = _data_row_count(data, formula)
     response: Surv | Surv2 | None = None
-    y: list[float] | None = None
+    y: list[float] | np.ndarray | None = None
     if spec is not None and spec.timeline and timeline:
         response = _surv2_from_spec(data, spec)
         n = len(response)

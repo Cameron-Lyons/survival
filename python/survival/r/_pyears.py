@@ -708,13 +708,29 @@ def _pyears_terms(mf: ModelFrame, data: Any, calls: Mapping[str, _CallTerm]) -> 
     ]
 
 
-def _pyears_followup(mf: ModelFrame) -> tuple[list[float], list[float] | None, list[float] | None]:
+def _pyears_followup(
+    mf: ModelFrame, has_ratetable: bool
+) -> tuple[
+    list[float] | np.ndarray, list[float] | np.ndarray | None, list[float] | np.ndarray | None
+]:
     """R's ``Y`` checks: (stop, start, event) of the follow-up."""
 
     response = mf.response
     if response is None:
         if mf.y is None:
             raise ValueError("Follow-up time must appear in the formula")
+        if isinstance(mf.y, np.ndarray):
+            if np.any(mf.y < 0):
+                raise ValueError("Negative follow up time")
+            if mf.y.shape[1] > 2:
+                raise ValueError("Y has too many columns")
+            if mf.y.shape[1] == 0:
+                raise ValueError("Y must have at least one column")
+            if mf.y.shape[1] == 2:
+                if has_ratetable:
+                    return mf.y[:, 1], mf.y[:, 0], None
+                return mf.y[:, 0], None, mf.y[:, 1]
+            return mf.y[:, 0], None, None
         if any(value < 0.0 for value in mf.y):
             raise ValueError("Negative follow up time")
         return list(mf.y), None, None
@@ -902,7 +918,9 @@ def _population_model_frame(
     if mf.response is not None:
         frame[mf.response_name or "response"] = mf.response
     elif mf.y is not None:
-        frame[mf.response_name or "response"] = list(mf.y)
+        frame[mf.response_name or "response"] = (
+            mf.y.tolist() if isinstance(mf.y, np.ndarray) else list(mf.y)
+        )
     frame.update(_model_variables(mf, overrides))
     rows = [int(row) for row in mf.extra[row_key]]
     for name in _rmap_source_names(rmap, rate_names, data):
@@ -1075,7 +1093,12 @@ def pyears(
     keywords tabulates plain vectors (the reticulate bridge's call).
     ``model=True`` retains the evaluated model frame. Otherwise, ``x=True``
     retains the grouping codes and raw ``tcut`` times (ones without groups),
-    and ``y=True`` retains the ``Surv`` response or a one-column numeric matrix.
+    and ``y=True`` retains the ``Surv`` response or a numeric matrix.
+
+    A numeric matrix column (``Y ~ group``) or ``cbind(time, event)`` supplies
+    one or two response columns. Without a rate table, two columns are time and
+    numeric event count; with a rate table, they are start and stop without
+    events. Matrix responses are not recoded as binary ``Surv`` statuses.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, None)
@@ -1117,7 +1140,7 @@ def pyears(
     )
     if mf.n == 0:
         raise ValueError("Data set has 0 observations")
-    stop_values, start_values, event_values = _pyears_followup(mf)
+    stop_values, start_values, event_values = _pyears_followup(mf, table is not None)
     terms = _pyears_terms(mf, data, calls)
     categories = np.column_stack([term.values for term in terms]) if terms else np.empty((mf.n, 0))
     positions = None if table is None else _rate_positions(mf, table)
@@ -1136,6 +1159,14 @@ def pyears(
         scale_value,
     )
     output = _pyears_result(result, terms, data_frame_value, mf.na_action)
+    retained_y: Surv | list[list[float]] | None = None
+    if retention[2]:
+        if isinstance(mf.response, Surv):
+            retained_y = mf.response
+        elif isinstance(mf.y, np.ndarray):
+            retained_y = mf.y.tolist()
+        elif mf.y is not None:
+            retained_y = [[value] for value in mf.y]
     return replace(
         output,
         formula=formula,
@@ -1149,9 +1180,7 @@ def pyears(
             mf, data, row_key, rmap, [] if table is None else table.dimid, calls
         ),
         x=((categories.tolist() if terms else [1.0] * mf.n) if retention[1] else None),
-        y=(mf.response if mf.response is not None else [[value] for value in mf.y])
-        if retention[2]
-        else None,
+        y=retained_y,
     )
 
 
@@ -1358,6 +1387,8 @@ def _survexp_response(mf: ModelFrame) -> list[float] | None:
             raise ValueError("Illegal response value")
         values = list(mf.response.time)
     elif mf.y is not None:
+        if isinstance(mf.y, np.ndarray):
+            raise ValueError("Illegal response value")
         values = list(mf.y)
     else:
         return None
