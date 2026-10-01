@@ -691,8 +691,9 @@ def _newdata_frame(
         for term in design.covariates
         for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     ]
-    if not pass_missing:
-        variables.extend(term for term in design.variables if term.strata is None)
+    # model.frame evaluates unused transforms even with na.pass: their domain
+    # warnings still belong to the call, although their NaNs do not enter x.
+    variables.extend(term for term in design.variables if term.strata is None)
     variables.extend(_strata_covariate(spec) for spec in strata_terms if strata_columns)
     missing = _formula_missing_rows(
         newdata, columns, [*variables, *design.offsets], n, required=response_columns

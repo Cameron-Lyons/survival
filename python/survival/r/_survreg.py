@@ -1565,7 +1565,11 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
 
 
 def model_matrix_survreg(
-    fit: SurvregModelResult, data: Any | None = None, *, _with_metadata: bool = False
+    fit: SurvregModelResult,
+    data: Any | None = None,
+    *,
+    na_action: str | None = _DEFAULT_NA_ACTION,
+    _with_metadata: bool = False,
 ) -> dict[str, Any]:
     """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
 
@@ -1573,8 +1577,9 @@ def model_matrix_survreg(
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
     new = None
     if data is not None:
+        action = _normalize_na_action(na_action)
         if fit.design is None:
-            new = _newdata_inputs(fit, data, "na.omit")
+            new = _newdata_inputs(fit, data, action, allow_missing_predictors=action == "pass")
         else:
             if not (isinstance(data, Mapping) or hasattr(data, "columns")):
                 raise TypeError("data must be a data frame with the model's columns")
@@ -1588,7 +1593,8 @@ def model_matrix_survreg(
                 data,
                 need_strata=False,
                 need_response=False,
-                na_action="na.omit",
+                na_action=action,
+                allow_missing_predictors=action == "pass",
             )
     result = {
         "data": [[float(value) for value in row] for row in fit.fit.covariates]

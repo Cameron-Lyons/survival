@@ -104,8 +104,8 @@ validation and performance evidence. Its 64,738 characters have SHA-256
 `a79f8d8de139bdaa5ab6f194352f854e8dcf85240d825ea835d8dfd40d13cfe4`.
 The live index links this immutable snapshot to remain within GitHub's body limit.
 
-The broader compatibility and performance audit remains open. The next audit
-has reproduced that global R `na.pass` and `na.fail` options are ignored by
-model-matrix calls, which currently always omit incomplete covariate rows.
-Inputs that are already evaluated R model frames also remain outside these
-checks. These results do not establish full package parity.
+The broader compatibility and performance audit remains open. The subsequent
+[missing-data correction](model-matrix-na-action.md) honors global R `na.pass`
+and `na.fail` options and retains incomplete matrix rows under `na.pass`.
+Inputs that are already evaluated R model frames remain outside these checks.
+These results do not establish full package parity.

@@ -1900,6 +1900,14 @@ strata requirements. Another 216 stock fits provide 4,080 matrices and 456
 validation failures. See [AFT model-matrix inputs](aft-model-matrix-inputs.md)
 for validation, persistence, warning conventions and complete-call measurements.
 
+Fresh Cox and AFT matrices honor all four global R omission options. Python
+callers can select `na_action`; stored matrices retain their fitted row masks.
+Missing strata remain aligned under `na.pass`, ridge columns retain independent
+NA/NaN values, and nullable logical values support incomplete factor coding.
+Seventy-two stock fits provide 3,952 whole matrices and 368 validation failures.
+See [model-matrix missing-data rules](model-matrix-na-action.md) for validation,
+persistence, warning limits and complete-call measurements.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on
