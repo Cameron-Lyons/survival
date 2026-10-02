@@ -90,9 +90,9 @@ Two corrections are explicit in the records:
 These behaviors are visible in the upstream
 [AFT prediction method](https://github.com/therneau/survival/blob/master/R/predict.survreg.R)
 and [Cox prediction method](https://github.com/therneau/survival/blob/master/R/predict.coxph.R).
-The reference regenerates byte-for-byte. Checks of values and column names do
-not establish complete row-name parity; ungrouped prediction row labels remain
-a separate bridge audit item.
+The reference regenerates byte-for-byte. Its value and column checks do not
+establish row-name parity; a subsequent [prediction row-label reference](prediction-row-labels.md)
+checks that metadata separately.
 
 ## Complete-call measurements
 

@@ -138,6 +138,16 @@ def _r_subset(rows: list[int]) -> Any:
     return _RSubset(rows)
 
 
+def _r_data_frame(columns: dict[str, Any], n: int, row_names: Any = None) -> Any:
+    """Carry R row names separately from formula variables and retain empty frame sizes."""
+    from .r._formula import _FormulaRows
+
+    labels = None if row_names is None else tuple(row_names)
+    if labels is not None and len(labels) != n:
+        raise ValueError("row names must have one label per data row")
+    return _FormulaRows(columns, n, labels)
+
+
 def _yates_model_metadata(fit: Any) -> dict[str, Any]:
     """Factor levels needed to rebuild a fitted Python model's R model frame."""
     from .r._fit import _formula_design_for_fit

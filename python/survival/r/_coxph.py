@@ -65,6 +65,8 @@ from ._fit import (
     _newdata_columns,
     _newdata_frame,
     _pad_rows,
+    _prediction_row_labels,
+    _prediction_row_result,
     _rowsum_excluded,
     _tt_terms,
 )
@@ -74,6 +76,7 @@ from ._formula import (
     _column_source,
     _covariate_term_name,
     _data_row_count,
+    _data_row_labels,
     _data_rows,
     _design_contrasts,
     _design_rows_from_spec,
@@ -165,6 +168,7 @@ class CoxphModel:
     cluster_levels: tuple[Any, ...] | None = None
     id_levels: tuple[Any, ...] | None = None
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
+    _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     def __getattr__(self, name: str) -> Any:
         if name == "history" and self.penalized is not None:
@@ -975,6 +979,7 @@ def _coxph_fit_frame(
         na_action=frame.na_action,
         _frame=replace(frame, x=[]),
         _sparse_values=sparse_values,
+        _prediction_rows=frame.row_names,
     )
 
 
@@ -1895,6 +1900,7 @@ def predict_coxph(
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
     with_group_names = kwargs.pop("_with_group_names", False)
+    with_row_names = kwargs.pop("_with_row_names", False)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
@@ -2039,6 +2045,39 @@ def predict_coxph(
         pred = _pad_rows(pred, gaps, width)
         se = None if se is None else _pad_rows(se, gaps, width)
     output = PredictResult(pred, se) if include_se else pred
+    if with_row_names and group_names is None:
+        uses_x = (
+            include_se
+            or (_has_strata(fit) and reference_name == "strata")
+            or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
+        )
+        if sparse_only:
+            fit_named = se_named = False
+        elif predict_type in {"expected", "survival"}:
+            fit_named = new is None
+            se_named = fit_named and predict_type == "survival"
+        else:
+            fit_named = new is not None or predict_type == "terms" or uses_x
+            se_named = fit_named
+        se_named = include_se and se_named
+        if not (fit_named or se_named):
+            return _prediction_row_result(output, None, None)
+        if new is None:
+            omitted_rows = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
+            labels = _prediction_row_labels(
+                fit._prediction_rows,
+                fit.n + len(omitted_rows),
+                omitted_rows,
+                bool(_excluded_rows(fit.na_action)),
+            )
+        else:
+            count = new.n + len(new.missing)
+            labels = _prediction_row_labels(
+                _data_row_labels(newdata, count), count, new.missing, action != "omit"
+            )
+        return _prediction_row_result(
+            output, labels if fit_named else None, labels if se_named else None
+        )
     return {"values": output, "group_names": group_names} if with_group_names else output
 
 
@@ -2402,13 +2441,9 @@ def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
     ``as.character``), else the 1-based row numbers (R's automatic row names, which is
     also what ``rbind`` gives two data frames that have them)."""
 
-    index = None if isinstance(data, Mapping) else getattr(data, "index", None)
-    if index is not None and not (
-        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
-    ):
-        labels = [_as_character(label) for label in index]
-        if len(set(labels)) == len(labels) and not any(map(_is_missing_value, index)):
-            return [labels[row] for row in rows]
+    labels = _data_row_labels(data, _data_row_count(data))
+    if labels is not None:
+        return [labels[row] for row in rows]
     return [str(row + 1) for row in rows]
 
 
