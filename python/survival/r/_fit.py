@@ -413,13 +413,16 @@ def _model_matrix_evaluated(
             if len(values) != n:
                 raise ValueError("model-frame columns must have the same number of rows")
             levels = _mstate_categories(source)
+            array = _numeric_ndarray(source)
+            numeric = levels is None and array is not None and array.dtype.kind in "iuf"
             logical = metadata.get("kind") == "logical" or (
-                levels is None
+                not numeric
+                and levels is None
                 and any(_is_bool_like(value) for value in values)
                 and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
             )
-            character = metadata.get("kind") == "character" or any(
-                isinstance(value, str) for value in values
+            character = metadata.get("kind") == "character" or (
+                not numeric and any(isinstance(value, str) for value in values)
             )
             if levels is not None or logical or character:
                 levels = (
