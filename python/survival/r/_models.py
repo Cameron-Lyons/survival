@@ -1250,21 +1250,23 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
         states = next(iter(result.values())).states
         if any(curve.states != states for curve in result.values()):
             raise ValueError("grouped multi-state results must share state columns")
+        if any(list(curve_frame) != columns for curve_frame in curve_frames.values()):
+            raise ValueError("grouped multi-state results must share tabular columns")
         frame: dict[str, list[Any]] = {
             name: [] for name in [*[name for name in columns if name != "state"], "strata", "state"]
         }
-        for state in states:
+        for state_index, state in enumerate(states):
             for label, curve_frame in curve_frames.items():
-                if list(curve_frame) != columns:
-                    raise ValueError("grouped multi-state results must share tabular columns")
-                indices = [
-                    index for index, value in enumerate(curve_frame["state"]) if value == state
-                ]
-                frame["strata"].extend([str(label)] * len(indices))
-                frame["state"].extend([state] * len(indices))
+                # Each source table has one contiguous time block per state
+                # column. Select the position: state labels may be repeated by
+                # fit[, states], and rescanning labels costs O(time * states²).
+                count = len(result[label].time)
+                start, stop = state_index * count, (state_index + 1) * count
+                frame["strata"].extend([str(label)] * count)
+                frame["state"].extend([state] * count)
                 for name in columns:
                     if name != "state":
-                        frame[name].extend(curve_frame[name][index] for index in indices)
+                        frame[name].extend(curve_frame[name][start:stop])
         return frame
 
     frame = {}

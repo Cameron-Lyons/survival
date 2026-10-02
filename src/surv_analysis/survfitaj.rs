@@ -26,6 +26,8 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod independent;
+
 /// The data of a `survfit(Surv(...) ~ strata, id, istate, weights, cluster)`
 /// call with a multi-state outcome.
 ///
@@ -707,6 +709,7 @@ pub(crate) fn survcheck2(
 
 /// Everything `survfitaj.c` reads.
 struct AJKernelData<'a> {
+    right: bool,
     time1: &'a [f64],
     time2: &'a [f64],
     /// 1-based state entered, 0 = censored.
@@ -810,6 +813,22 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
                 nrisk[[i, j]] = ntemp[j];
             }
         }
+    }
+
+    if let Some(estimates) = independent::estimates(d, &nrisk, &ntrans) {
+        return AJCurveFit {
+            n_risk: nrisk,
+            n_event: nevent,
+            n_censor: ncensor,
+            n_enter: nenter,
+            n_transition: ntrans,
+            pstate: estimates.pstate,
+            cumhaz: estimates.cumhaz,
+            std_err: Some(estimates.std_err),
+            std_chaz: Some(estimates.std_chaz),
+            std_auc: Some(estimates.std_auc),
+            influence: None,
+        };
     }
 
     let mut pstate = Array2::<f64>::zeros((ntime, nstate));
@@ -1286,6 +1305,10 @@ pub fn survfitaj(
     let mut is_atrisk = vec![false; n];
     let mut row_offset = 0;
     let single = n_curves == 1;
+    // Initial-state estimation uses the full data's earliest entry time.
+    // Right-censored curves do not need this scan, and counting curves share it.
+    let min_start = (counting && p0_common.is_none())
+        .then(|| time1.iter().copied().fold(f64::INFINITY, f64::min));
     for (&code, keep) in strata_levels.iter().zip(rows_by_curve(&x, n_curves)) {
         let curve_offset = row_offset;
         row_offset += keep.len();
@@ -1339,14 +1362,13 @@ pub fn survfitaj(
             Some(p0) => p0.clone(),
             None => {
                 let start = &time1;
-                let min_start = start.iter().copied().fold(f64::INFINITY, f64::min);
                 let atrisk: Vec<usize> = keep
                     .iter()
                     .copied()
                     .filter(|&i| {
                         if !counting {
                             true
-                        } else if t0 == min_start {
+                        } else if Some(t0) == min_start {
                             start[i] <= t0 && time[i] >= t0
                         } else {
                             start[i] < t0 && time[i] >= t0
@@ -1400,6 +1422,7 @@ pub fn survfitaj(
             }
         };
         let kernel_data = AJKernelData {
+            right: !counting,
             time1: &time1,
             time2: &time,
             state: &stat2,
@@ -1781,6 +1804,350 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn assert_independent_ij_matches_general(data: &SurvfitAJData, options: &SurvfitAJOptions) {
+        let fast = survfitaj(data, options).unwrap();
+        let reference = survfitaj(
+            data,
+            &SurvfitAJOptions {
+                influence: true,
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(fast.time, reference.time);
+        assert_eq!(fast.pstate, reference.pstate);
+        assert_eq!(fast.cumhaz, reference.cumhaz);
+        assert_eq!(fast.n_risk, reference.n_risk);
+        assert_eq!(fast.n_transition, reference.n_transition);
+        for (name, actual, expected) in [
+            ("probability", &fast.std_err, &reference.std_err),
+            ("hazard", &fast.std_chaz, &reference.std_chaz),
+            ("area", &fast.std_auc, &reference.std_auc),
+            ("lower", &fast.lower, &reference.lower),
+            ("upper", &fast.upper, &reference.upper),
+        ] {
+            for (time, (actual, expected)) in actual
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(expected.as_ref().unwrap())
+                .enumerate()
+            {
+                for (state, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+                    assert!(
+                        actual == expected
+                            || (actual.is_nan() && expected.is_nan())
+                            || (actual.is_finite()
+                                && expected.is_finite()
+                                && close(actual, expected, 2e-11)),
+                        "{name} at time {time}, column {state}: {actual} != {expected}; \
+                         p={}, fast se={}, reference se={}; weights={:?}",
+                        fast.pstate[time][state.min(fast.states.len() - 1)],
+                        fast.std_err.as_ref().unwrap()[time][state.min(fast.states.len() - 1)],
+                        reference.std_err.as_ref().unwrap()[time][state.min(fast.states.len() - 1)],
+                        data.weights
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn independent_moments_match_general_weighted_tied_and_stratified_ij() {
+        for seed in 0..48_u64 {
+            let mut rng = seed + 1;
+            let mut next = || {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                rng >> 32
+            };
+            let rows = 48 + seed as usize;
+            let time = (0..rows)
+                .map(|row| {
+                    if seed % 2 == 0 {
+                        (next() % 13 + 1) as f64
+                    } else {
+                        row as f64 / 4.0 + 1.0
+                    }
+                })
+                .collect();
+            let state = (0..rows).map(|_| (next() % 4) as i32).collect();
+            let weights = (0..rows).map(|_| (next() % 17) as f64 / 4.0).collect();
+            let grouped = seed % 3 == 0;
+            let data = SurvfitAJData::try_new(
+                None,
+                time,
+                state,
+                names(&["a", "b", "c"]),
+                Some(weights),
+                grouped.then(|| (0..rows).map(|row| (row % 3) as i32).collect()),
+                None,
+                Some(
+                    (0..rows)
+                        .map(|row| {
+                            ["a", "b", "c"][(seed as usize + if grouped { row % 3 } else { 0 }) % 3]
+                                .to_string()
+                        })
+                        .collect(),
+                ),
+                Some(names(&["a", "b", "c"])),
+                None,
+            )
+            .unwrap();
+            let options = SurvfitAJOptions {
+                p0: (seed % 4 != 0).then(|| vec![0.15, 0.5, 0.35]),
+                start_time: (seed % 5 == 0).then_some(2.0),
+                time0: seed % 2 == 0,
+                timefix: false,
+                ..Default::default()
+            };
+            assert_independent_ij_matches_general(&data, &options);
+        }
+    }
+
+    #[test]
+    fn independent_moments_preserve_single_destination_absorption() {
+        let data = SurvfitAJData::try_new(
+            None,
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![1, 1, 1, 1],
+            names(&["dead"]),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for p0 in [None, Some(vec![0.6, 0.4])] {
+            let options = SurvfitAJOptions {
+                p0,
+                ..Default::default()
+            };
+            assert_independent_ij_matches_general(&data, &options);
+            let fit = survfitaj(&data, &options).unwrap();
+            assert_eq!(fit.std_err.as_ref().unwrap().last().unwrap(), &[0.0, 0.0]);
+            for matrix in [fit.std_err.unwrap(), fit.std_auc.unwrap()] {
+                assert!(matrix.iter().all(|row| row[0] == row[1]));
+            }
+        }
+    }
+
+    #[test]
+    fn independent_moments_preserve_extreme_weights_and_zero_risk_events() {
+        for weights in [
+            vec![1e150, 2e150, 3e150, 4e150],
+            vec![1e-150, 2e-150, 3e-150, 4e-150],
+            vec![1.0, 0.0, 0.0, 0.0],
+            vec![0.0; 4],
+            vec![1e300, 1e-300, 1.0, 0.0],
+            vec![1e-320, 2e-320, 3e-320, 4e-320],
+        ] {
+            let data = SurvfitAJData::try_new(
+                None,
+                vec![1.0, 2.0, 2.0, 3.0],
+                vec![1, 2, 0, 1],
+                names(&["a", "b"]),
+                Some(weights),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_independent_ij_matches_general(&data, &SurvfitAJOptions::default());
+        }
+    }
+
+    #[test]
+    fn independent_single_destination_is_local_to_each_stratum() {
+        let data = SurvfitAJData::try_new(
+            None,
+            vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
+            vec![1, 1, 1, 1, 2, 2, 2, 2],
+            names(&["a", "b"]),
+            Some(vec![0.375, 3.0, 0.25, 1.875, 0.375, 3.0, 0.25, 1.875]),
+            Some(vec![0, 0, 0, 0, 1, 1, 1, 1]),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for conf_type in [
+            ConfType::Plain,
+            ConfType::Log,
+            ConfType::LogLog,
+            ConfType::Logit,
+            ConfType::Arcsin,
+        ] {
+            assert_independent_ij_matches_general(
+                &data,
+                &SurvfitAJOptions {
+                    conf_type,
+                    timefix: false,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn independent_single_destination_ignores_zero_weight_and_hidden_events() {
+        for competitor in [(1.0, 0.0), (-1.0, 2.0)] {
+            let data = SurvfitAJData::try_new(
+                None,
+                vec![1.0, 2.0, 3.0, 4.0, competitor.0],
+                vec![1, 1, 1, 1, 2],
+                names(&["a", "b"]),
+                Some(vec![0.375, 3.0, 0.25, 1.875, competitor.1]),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            assert_independent_ij_matches_general(
+                &data,
+                &SurvfitAJOptions {
+                    conf_type: ConfType::LogLog,
+                    timefix: false,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn independent_moments_retain_general_variance_square_range() {
+        for p0 in [vec![-1e200, 1e200, 1.0], vec![1e-200, 1.0, 0.0]] {
+            let options = SurvfitAJOptions {
+                p0: Some(p0),
+                conf_type: ConfType::LogLog,
+                ..Default::default()
+            };
+            assert_independent_ij_matches_general(&ties_data(), &options);
+        }
+        let mut data = ties_data();
+        data.time.iter_mut().for_each(|time| *time *= 1e200);
+        assert_independent_ij_matches_general(
+            &data,
+            &SurvfitAJOptions {
+                timefix: false,
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn independent_moments_preserve_absorption_below_zero_from_rounding() {
+        let data = SurvfitAJData::try_new(
+            None,
+            vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0],
+            vec![1, 2, 1, 2, 1, 2],
+            names(&["a", "b"]),
+            Some(vec![0.5, 1.0, 2.0, 1.5, 1.25, 2.75]),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_independent_ij_matches_general(&data, &SurvfitAJOptions::default());
+    }
+
+    #[test]
+    fn estimated_initial_states_match_separately_fitted_curves() {
+        let make_data = |rows: &[usize], counting: bool, grouped: bool| {
+            let time = [1.0, 3.0, 2.0, 4.0];
+            let weights = [0.5, 1.5, 2.0, 1.0];
+            let istate = ["a", "b", "a", "b"];
+            let strata = [9, 9, -2, -2];
+            SurvfitAJData::try_new(
+                counting.then(|| vec![0.0; rows.len()]),
+                rows.iter().map(|&i| time[i]).collect(),
+                vec![1; rows.len()],
+                names(&["dead"]),
+                Some(rows.iter().map(|&i| weights[i]).collect()),
+                grouped.then(|| rows.iter().map(|&i| strata[i]).collect()),
+                Some(rows.iter().map(|&i| i as i64).collect()),
+                Some(rows.iter().map(|&i| istate[i].to_string()).collect()),
+                Some(names(&["a", "b"])),
+                None,
+            )
+            .unwrap()
+        };
+        for counting in [false, true] {
+            for start_time in [0.0, 1.0] {
+                // At the earliest entry time, subjects starting there are at
+                // risk; later estimates use intervals starting strictly before it.
+                let options = SurvfitAJOptions {
+                    se_fit: false,
+                    start_time: Some(start_time),
+                    time0: true,
+                    timefix: false,
+                    ..Default::default()
+                };
+                let grouped =
+                    survfitaj(&make_data(&[0, 1, 2, 3], counting, true), &options).unwrap();
+                for (curve, rows) in [[2, 3], [0, 1]].iter().enumerate() {
+                    let alone = survfitaj(&make_data(rows, counting, false), &options).unwrap();
+                    let range = grouped.curve_ranges()[curve].clone();
+                    assert_eq!(grouped.states, alone.states);
+                    assert_eq!(grouped.p0[curve], alone.p0[0]);
+                    assert_eq!(grouped.time[range.clone()], alone.time);
+                    for (combined, separate) in [
+                        (&grouped.n_risk, &alone.n_risk),
+                        (&grouped.n_event, &alone.n_event),
+                        (&grouped.n_censor, &alone.n_censor),
+                        (&grouped.n_transition, &alone.n_transition),
+                        (&grouped.pstate, &alone.pstate),
+                        (&grouped.cumhaz, &alone.cumhaz),
+                    ] {
+                        assert_eq!(combined[range.clone()], *separate);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn initial_state_estimation_uses_entry_minimum_across_curves() {
+        let mut data = SurvfitAJData::try_new(
+            Some(vec![0.0, 0.0, 1.0, 1.0]),
+            vec![2.0, 3.0, 2.0, 4.0],
+            vec![1; 4],
+            names(&["dead"]),
+            None,
+            Some(vec![9, 9, -2, -2]),
+            Some(vec![0, 1, 2, 3]),
+            Some(names(&["a", "b", "a", "b"])),
+            None,
+            None,
+        )
+        .unwrap();
+        let options = SurvfitAJOptions {
+            se_fit: false,
+            start_time: Some(1.0),
+            timefix: false,
+            ..Default::default()
+        };
+        // Entry at a later curve's own minimum is excluded when other
+        // curves enter earlier. Taking the minimum per curve would admit it.
+        assert!(
+            survfitaj(&data, &options)
+                .unwrap_err()
+                .to_string()
+                .contains("no one at risk for one of the curves")
+        );
+        data.start = Some(vec![1.0; 4]);
+        let fit = survfitaj(&data, &options).unwrap();
+        assert_eq!(fit.p0, vec![vec![0.5, 0.5, 0.0]; 2]);
     }
 
     #[test]

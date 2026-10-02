@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Compute independent competing-risk Aalen–Johansen uncertainty from small
+  influence moment factors, avoiding subject scans at every reporting time.
+  Reuse the earliest entry time across grouped initial-state estimates.
+  Grouped multistate tables assemble state columns by position, preserving
+  repeated state selections and avoiding repeated label scans.
+
 - Reuse stratum data, event-time weights and time ordering across concordance
   predictors, retaining independent rank trees and joint covariance. Prevent
   zero-weight events with an empty weighted risk set from producing a `NaN`

@@ -1949,4 +1949,10 @@ The normal fixture run includes the documented expected differences. Add
 the reference data; see [the fixture workflow](../test/r/README.md).
 
 For curve complexity, benchmark inputs and measured timings, see
-[Kaplan–Meier performance](kaplan-meier-performance.md).
+[survival curve performance](kaplan-meier-performance.md), including independent
+Aalen–Johansen uncertainty and grouped multistate table assembly. Fourteen
+stock-R uncertainty cases compare probabilities, hazards, counts, all three
+standard-error matrices and confidence limits through both Python APIs.
+Another sixteen cases retain repeated/reordered state selections by column
+position; their raw-matrix references work around stock `[.survfitms` leaving
+the censor-count matrix unsliced.
