@@ -98,7 +98,7 @@ Rscript scripts/benchmark_cox_model_matrix.R 10000 9 current
 Rscript scripts/benchmark_cox_model_matrix.R 10000 9 stock
 ```
 
-The broader compatibility and performance audit remains open. In particular,
-AFT `model.matrix` still requires otherwise unused standalone strata variables;
-the next input-handling audit has reproduced this discrepancy. These checks
-do not establish full package parity.
+The broader compatibility and performance audit remains open. The subsequent
+[AFT input correction](aft-model-matrix-inputs.md) removes the previously
+reproduced requirement for otherwise unused standalone strata variables.
+These checks do not establish full package parity.

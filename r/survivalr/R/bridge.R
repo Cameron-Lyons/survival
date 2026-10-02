@@ -1606,10 +1606,10 @@ attrassign <- function(object, tt) {
     }
   }
   arguments <- lapply(.compact_null(arguments), .unwrap_grouped_survfit)
-  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted") ||
+  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted", "model_matrix") ||
       (name == "residuals" && isTRUE(arguments[["_with_group_names"]]))) {
     captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments,
-      user_warnings = name %in% c("predict", "fitted"))
+      user_warnings = name %in% c("predict", "fitted", "model_matrix"))
     result <- captured$result
     for (message in captured$warnings) {
       warning(message, call. = FALSE)
@@ -8956,7 +8956,7 @@ weights.survival_py_model <- function(object, ...) {
 }
 
 model.matrix.survival_py_model <- function(object, data = NULL, ...) {
-  result <- .call_r_api("model_matrix", object, data = .as_python_data(data), `_with_metadata` = TRUE, ...)
+  result <- .call_r_api("model_matrix", fit = object, data = .as_python_data(data), `_with_metadata` = TRUE, ...)
   values <- .as_model_matrix(result)
   if (!is.null(data) && !is.null(result[["strata"]])) {
     attr(values, "strata") <- factor(unlist(result[["strata"]], use.names = FALSE),
