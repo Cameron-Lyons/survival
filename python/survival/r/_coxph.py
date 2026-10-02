@@ -1803,6 +1803,7 @@ def _prediction_newdata(
         na_action=na_action,
         allow_missing_predictors=allow_missing_predictors,
         extra_missing=extra_missing,
+        as_array=True,
     )
 
 

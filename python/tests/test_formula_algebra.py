@@ -23,12 +23,20 @@ for name, levels in REFERENCE["factor_levels"].items():
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["formula"])
-def test_formula_design_matches_r(case):
+@pytest.mark.parametrize("as_array", [False, True], ids=["rows", "array"])
+@pytest.mark.parametrize("columns", ["lists", "numpy", "pandas"])
+def test_formula_design_matches_r(case, as_array, columns):
+    data = dict(DATA)
+    if columns != "lists":
+        pd = pytest.importorskip("pandas") if columns == "pandas" else None
+        for name, values in DATA.items():
+            if name not in REFERENCE["factor_levels"]:
+                data[name] = np.asarray(values) if pd is None else pd.Series(values)
     if "error" in case:
         with pytest.raises(ValueError, match=re.escape(case["error"])):
-            formula.model_frame(case["formula"], DATA)
+            formula.model_frame(case["formula"], data)
         return
-    frame = formula.model_frame(case["formula"], DATA)
+    frame = formula.model_frame(case["formula"], data)
     design = fit_module._r_factor_design(
         frame.data,
         formula._fit_formula_design(
@@ -48,8 +56,17 @@ def test_formula_design_matches_r(case):
     ]
     assert columns == case["columns"]
     assert assign == case["assign"]
+    make_design = formula._design_array_from_spec if as_array else formula._design_rows_from_spec
+    actual = make_design(data, design, frame.n)
+    if as_array:
+        assert actual.dtype == np.dtype("float64")
+        assert actual.flags.c_contiguous
+        assert actual.flags.owndata
+        assert actual.shape == (frame.n, len(columns))
+    else:
+        assert isinstance(actual, list)
     np.testing.assert_allclose(
-        formula._design_rows_from_spec(frame.data, design, frame.n),
+        actual,
         case["x"],
         rtol=1e-14,
         atol=1e-14,

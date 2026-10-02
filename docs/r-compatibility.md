@@ -1863,6 +1863,16 @@ cover entirely omitted AFT outputs. See
 [prediction array snapshots](prediction-array-snapshots.md) for interface details,
 validation and complete-call timings.
 
+Cox new-data predictions/curves and formula-based AFT predictions also build
+owned float64 designs directly from numeric arrays. Factors, transforms and
+penalties retain their evaluators; interactions retain fitted column order and
+scalar multiplication order. Public Python matrices and results retain lists.
+The 123 R formula references run against both designs with list, NumPy and
+pandas columns. Complete 20,000-row calls take 7–10 ms versus 19–22 ms in the
+predecessor, and 7–11 ms versus 36–39 ms with interactions. See
+[numeric prediction designs](numeric-prediction-designs.md) for validation,
+stock R comparisons and measured scope.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

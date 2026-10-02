@@ -37,6 +37,7 @@ from ._formula import (
     _data_row_count,
     _data_row_labels,
     _data_rows,
+    _design_array_from_spec,
     _design_rows_from_spec,
     _design_term_name,
     _fit_formula_design,
@@ -524,7 +525,7 @@ class _NewData:
     available. ``data`` holds the model's variables at the kept rows."""
 
     data: Any
-    x: list[list[float]]
+    x: Any  # Row lists by default; an owned float64 ndarray for prediction kernels.
     strata: list[int] | None
     offset: list[float] | None
     y: Surv | None
@@ -565,6 +566,7 @@ def _newdata_frame(
     allow_missing_predictors: bool = False,
     allow_missing_strata: bool = False,
     extra_missing: Sequence[int] = (),
+    as_array: bool = False,
 ) -> _NewData:
     """Evaluate the model terms on ``newdata`` (R's ``model.frame(Terms2, newdata,
     na.action)``).
@@ -672,9 +674,8 @@ def _newdata_frame(
         newdata = _data_rows(newdata, columns, kept, n)
         if response is not None:
             response = response.subset(kept)
-    rows = _design_rows_from_spec(
-        newdata, design, m, evaluated=evaluated, allow_missing=keep_missing
-    )
+    make_design = _design_array_from_spec if as_array else _design_rows_from_spec
+    rows = make_design(newdata, design, m, evaluated=evaluated, allow_missing=keep_missing)
     offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
     strata_codes: list[int] | None = None
     if strata_columns:
