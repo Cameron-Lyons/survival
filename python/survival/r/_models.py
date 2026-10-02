@@ -25,6 +25,7 @@ from .. import _survival as _core
 from ._aareg import summary_aareg
 from ._cch import summary_cch
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
     _coefficient_selection,
     _coerce_array_like,
     _integer_scalar,
@@ -33,6 +34,7 @@ from ._coerce import (
     _matrix_term_selection,
     _normalize_bool_option_with_default,
     _normalize_conf_level,
+    _normalize_na_action,
 )
 from ._coxph import (
     CoxphModel,
@@ -63,6 +65,7 @@ from ._formula import (
     _data_row_labels,
     _formula_columns,
     _formula_model_term_degree,
+    _strata_keep,
     _strata_specs,
 )
 from ._formula import model_frame as _formula_model_frame
@@ -461,7 +464,11 @@ def _model_weights_fit(
 
 @singledispatch
 def model_matrix(
-    fit: Any, data: Any | None = None, *, _with_metadata: bool = False
+    fit: Any,
+    data: Any | None = None,
+    *,
+    na_action: str | None = _DEFAULT_NA_ACTION,
+    _with_metadata: bool = False,
 ) -> dict[str, Any]:
     """``model.matrix(fit)``: the design matrix, its column names and ``assign``."""
 
@@ -470,13 +477,19 @@ def model_matrix(
 
 @model_matrix.register(CoxphModel)
 def _model_matrix_cox(
-    fit: CoxphModel, data: Any | None = None, *, _with_metadata: bool = False
+    fit: CoxphModel,
+    data: Any | None = None,
+    *,
+    na_action: str | None = _DEFAULT_NA_ACTION,
+    _with_metadata: bool = False,
 ) -> dict[str, Any]:
     """R's ``model.matrix.coxph``: the fit's design, or with ``data`` the design of
-    those rows (``model.frame(Terms, data)``, whose default ``na.omit`` leaves out
-    the incomplete ones).  ``assign`` numbers each column's term by its position in
-    the model's term labels, which count ``strata()`` terms (the columns keep R's
-    numbering "wrt the original model matrix") but not ``cluster()``; ``strata`` is
+    those rows (``model.frame(Terms, data)``). ``na_action`` defaults to omitting
+    incomplete rows; ``pass`` retains them and ``fail`` refuses them. Stored
+    matrices keep their fitted omission mask. ``assign`` numbers each column's
+    term by its position in the model's term labels, which count ``strata()``
+    terms (the columns keep R's numbering "wrt the original model matrix") but
+    not ``cluster()``; ``strata`` is
     ``attr(X, "strata")``, each row's stratum, ``None`` for an unstratified fit.
 
     A multi-state fit's design is the unstacked one, a column per covariate (NaN
@@ -498,6 +511,7 @@ def _model_matrix_cox(
             for row, value in zip(rows, values, strict=True):
                 row.insert(columns[0], value)
     else:
+        action = _normalize_na_action(na_action)
         design = _model_matrix_newdata_design(design, data)
         new = _newdata_frame(
             design,
@@ -506,13 +520,20 @@ def _model_matrix_cox(
             data,
             need_strata=_has_strata(fit),
             need_response=False,
-            na_action="na.omit",
+            na_action=action,
+            allow_missing_predictors=action == "pass",
+            allow_missing_strata=action == "pass",
         )
         rows, strata = new.x, None
         if _has_strata(fit):
             if new.strata is None:
                 raise ValueError("data must contain the strata variable(s) of the model")
+            # Prediction uses a valid placeholder for missing strata. Matrix
+            # metadata keeps those rows missing, aligned with na.pass predictors.
             strata = [fit.strata_levels[code] for code in new.strata] if new.strata else None
+            if strata and action == "pass":
+                factor = _strata_keep(new.data, _strata_specs(fit.terms))
+                strata = list(factor.labels)
     names, assign = _model_matrix_names_and_assign(design)
     result = {"data": rows, "columns": names, "assign": assign, "strata": strata}
     if _with_metadata:

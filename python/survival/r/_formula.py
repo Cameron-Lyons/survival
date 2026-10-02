@@ -2506,6 +2506,10 @@ def _single_design_columns(
         penalty_values = {column: _column(data, column) for column in spec.columns}
         if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
+        if allow_missing and spec.kind == "ridge":
+            # Ridge's basis is its input matrix. Keep missing kinds and complete
+            # columns independently instead of marking an entire row as NA.
+            return [_floats_or_nan(values) for values in penalty_values.values()]
         if allow_missing:
             missing_penalty_rows = _missing_row_indices(list(penalty_values.items()), n)
             if missing_penalty_rows:
@@ -2557,12 +2561,17 @@ def _single_design_columns(
     # model.matrix of an na.pass frame: a missing value is NA in every column
     missing: list[int] = []
     for row, value in enumerate(values):
-        if all(value != level for level in levels):
-            if not _is_missing_value(value):
-                raise ValueError(
-                    f"newdata column {spec.term.column!r} contains unknown level {value!r}"
-                )
+        if _is_missing_value(value):
             missing.append(row)
+        elif all(value != level for level in levels):
+            raise ValueError(
+                f"newdata column {spec.term.column!r} contains unknown level {value!r}"
+            )
+    if missing:
+        # Nullable pandas scalars cannot participate in boolean comparisons.
+        values = list(values)
+        for row in missing:
+            values[row] = None
     encoded_levels = levels if spec.full else levels[1:]
     if spec.contrasts and not spec.full:
         lookup = dict(zip(levels, spec.contrasts, strict=True))

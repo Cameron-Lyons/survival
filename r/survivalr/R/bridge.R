@@ -8956,10 +8956,25 @@ weights.survival_py_model <- function(object, ...) {
 }
 
 model.matrix.survival_py_model <- function(object, data = NULL, ...) {
-  result <- .call_r_api("model_matrix", fit = object, data = .as_python_data(data), `_with_metadata` = TRUE, ...)
+  dots <- list(...)
+  # The stock new-data methods build model.frame without forwarding na.action.
+  # It therefore comes from options(), while stored matrices retain their rows.
+  if (!is.null(data)) dots$na.action <- NULL
+  action <- if (is.null(data)) "omit" else .as_na_action(NULL)
+  result <- do.call(.call_r_api, c(list("model_matrix", fit = object,
+    data = .as_python_data(data), na_action = action, `_with_metadata` = TRUE), dots))
   values <- .as_model_matrix(result)
   if (!is.null(data) && !is.null(result[["strata"]])) {
-    attr(values, "strata") <- factor(unlist(result[["strata"]], use.names = FALSE),
+    groups <- result[["strata"]]
+    labels <- unlist(groups, use.names = FALSE)
+    if (length(labels) != nrow(values)) {
+      # unlist drops Python None/NULL entries. Fill those positions in bulk.
+      retained <- lengths(groups) != 0L
+      padded <- rep(NA_character_, length(groups))
+      padded[retained] <- labels
+      labels <- padded
+    }
+    attr(values, "strata") <- factor(labels,
       levels = unlist(.result_field(object, "strata_levels"), use.names = FALSE))
   }
   values
