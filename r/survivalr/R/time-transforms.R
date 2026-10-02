@@ -11,8 +11,13 @@
         stop("contrasts can be applied only to factors with 2 or more levels", call. = FALSE)
       }
       contrast <- stats::contrasts(value)
+      declared <- attr(value, "contrasts")
+      contrast_label <- if (is.null(declared)) getOption("contrasts")[[if(is.ordered(value)) 2L else 1L]] else
+        if (is.character(declared)) declared[[1L]] else NULL
       return(list(`_survival_tt_kind` = "factor", values = as.character(value),
-                  levels = as.list(levels(value)), contrasts = unname(contrast),
+                  levels = as.list(levels(value)), contrasts = unname(contrast), contrast_label = contrast_label,
+                  contrast_metadata = if (is.null(contrast_label)) list(data = unname(contrast),
+                    rows = rownames(contrast), columns = colnames(contrast)) else NULL,
                   contrast_names = as.list(if (is.null(colnames(contrast)))
                     as.character(seq_len(ncol(contrast))) else colnames(contrast))))
     }
@@ -41,6 +46,11 @@
     penalty = controller$penalty,
     penalty_names = if (is.null(attribute$varname)) NULL else as.list(attribute$varname),
     history = controller$history)
+  if (is.factor(value) && !sparse) {
+    contrast <- stats::contrasts(value)
+    result$contrast_metadata <- list(data = unname(contrast),
+      rows = rownames(contrast), columns = colnames(contrast))
+  }
   if (is.function(controller$printfun)) {
     result$report <- function(coef, var, var2, df, digits) {
       previous <- options(digits = as.integer(digits))

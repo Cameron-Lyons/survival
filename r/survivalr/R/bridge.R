@@ -1063,6 +1063,17 @@ attrassign <- function(object, tt) {
   values <- .as_numeric_matrix(result[["data"]])
   if (nrow(values) == 0L) values <- matrix(numeric(), 0L, length(result[["columns"]]))
   colnames(values) <- as.character(result[["columns"]])
+  if (!is.null(result[["row_names"]])) rownames(values) <- as.character(result[["row_names"]])
+  contrasts <- result[["contrasts"]]
+  if (!is.null(contrasts)) {
+    attr(values, "contrasts") <- lapply(contrasts, function(x) {
+      if (!is.list(x)) return(x)
+      value <- .as_numeric_matrix(x[["data"]])
+      dimnames(value) <- list(if(is.null(x[["rows"]])) NULL else as.character(x[["rows"]]),
+                             if(is.null(x[["columns"]])) NULL else as.character(x[["columns"]]))
+      value
+    })
+  }
   assign <- result[["assign"]]
   if (!is.null(assign)) {
     assign <- as.integer(unlist(assign, recursive = TRUE, use.names = FALSE))
@@ -8837,6 +8848,7 @@ coef.survival_py_model <- function(object, ...) {
     attr(values, "states") <- as.character(.result_field(object, "states"))
     return(values)
   }
+  if (inherits(object, "survival_py_coxph") && length(values) == 0L) return(NULL)
   values <- if (inherits(object, "survival_py_survreg")) {
     .as_nullable_numeric_vector(values)
   } else {
@@ -8944,7 +8956,7 @@ weights.survival_py_model <- function(object, ...) {
 }
 
 model.matrix.survival_py_model <- function(object, data = NULL, ...) {
-  result <- .call_r_api("model_matrix", object, data = data, ...)
+  result <- .call_r_api("model_matrix", object, data = .as_python_data(data), `_with_metadata` = TRUE, ...)
   values <- .as_model_matrix(result)
   if (!is.null(data) && !is.null(result[["strata"]])) {
     attr(values, "strata") <- factor(unlist(result[["strata"]], use.names = FALSE),

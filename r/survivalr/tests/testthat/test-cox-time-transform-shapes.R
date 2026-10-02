@@ -17,6 +17,8 @@
   expect_equal(vcov(actual), vcov(expected), tolerance = 3e-7)
   expect_equal(as.numeric(actual$loglik), expected$loglik, tolerance = 3e-7)
   expect_equal(unname(model.matrix(actual)), unname(expected$x), ignore_attr = TRUE)
+  expect_identical(rownames(model.matrix(actual)), rownames(expected$x))
+  expect_identical(attr(model.matrix(actual), "contrasts"), attr(expected$x, "contrasts"))
   expect_equal(unname(residuals(actual)), unname(residuals(residual_reference)), tolerance = 3e-7)
   expect_equal(summary(actual)$n, expected$n)
 }

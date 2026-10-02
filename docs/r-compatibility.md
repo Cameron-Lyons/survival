@@ -1884,6 +1884,14 @@ See [missing values and omitted prediction rows](prediction-missing-values.md)
 for recorded stock failures, stored-model compatibility and complete-call
 measurements with missing data.
 
+Logical covariates retain FALSE/TRUE factor coding, including constant levels
+and interaction widths. R model matrices preserve source row names and contrast
+declarations, and missing logical new-data rows survive input conversion as
+missing values. Expanded time-transform labels follow risk-set order. The 440
+stock fits provide 2,592 matrix references, checked with list, NumPy, nullable
+pandas and live R inputs. See [logical covariates and matrix metadata](logical-model-matrices.md)
+for validation, stored-fit limits and complete-call measurements.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

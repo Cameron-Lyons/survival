@@ -23,11 +23,19 @@ measure <- function(fun) {
   list(median_ms = median(samples), range_ms = range(samples), samples_ms = I(samples))
 }
 stopifnot(isTRUE(all.equal(unname(model.matrix(fit)), unname(reference$x), check.attributes = FALSE)))
+if (mode %in% c("current", "stock")) {
+  stopifnot(identical(dimnames(model.matrix(fit)), dimnames(reference$x)),
+            identical(attr(model.matrix(fit), "contrasts"), attr(reference$x, "contrasts")))
+}
 results <- list(stored_sparse = measure(function() model.matrix(fit)))
 if (mode != "baseline") {
   nd <- d[seq_len(n %/% 2L), ]; nd$group <- 1000 + nd$group
   stopifnot(isTRUE(all.equal(unname(model.matrix(fit, data = nd)),
     unname(model.matrix(reference, nd)), check.attributes = FALSE)))
+  if (mode %in% c("current", "stock")) {
+    stopifnot(identical(dimnames(model.matrix(fit, data = nd)), dimnames(model.matrix(reference, nd))),
+              identical(attr(model.matrix(fit, data = nd), "contrasts"), attr(model.matrix(reference, nd), "contrasts")))
+  }
   results$new_sparse <- measure(function() model.matrix(fit, data = nd))
 }
 cat(jsonlite::toJSON(list(rows = n, dense_columns = 16L, repeats = repeats, warmups = 3L,

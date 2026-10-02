@@ -51,6 +51,7 @@ from ._coerce import (
 from ._fit import (
     _empty_prediction,
     _excluded_rows,
+    _model_matrix_contrasts,
     _model_matrix_names_and_assign,
     _NewData,
     _newdata_frame,
@@ -1563,20 +1564,38 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
     return names if selection is None else [names[idx] for idx in selection]
 
 
-def model_matrix_survreg(fit: SurvregModelResult, data: Any | None = None) -> dict[str, Any]:
+def model_matrix_survreg(
+    fit: SurvregModelResult, data: Any | None = None, *, _with_metadata: bool = False
+) -> dict[str, Any]:
     """``model.matrix.survreg``: the design matrix, its column names and ``assign``."""
 
     strata_names = {spec.call for spec in fit.strata_terms}
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
-    return {
+    new = None if data is None else _newdata_inputs(fit, data, "na.omit")
+    result = {
         "data": [[float(value) for value in row] for row in fit.fit.covariates]
-        if data is None
-        else _newdata_inputs(fit, data, "na.omit").x,
+        if new is None
+        else new.x,
         "columns": list(fit.coefficient_names)
         if fit.design is None
         else _model_matrix_names_and_assign(fit.design)[0],
         "assign": [code - sum(index < code for index in removed) for code in fit.assign],
     }
+    if _with_metadata:
+        if new is None:
+            missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
+            labels = _prediction_row_labels(
+                fit._prediction_rows, len(result["data"]) + len(missing), missing, False
+            )
+        else:
+            labels = _prediction_row_labels(_data_row_labels(new.data, new.n), new.n, (), False)
+        result.update(
+            row_names=labels,
+            contrasts=_model_matrix_contrasts(
+                fit.design, fitted_design=fit.design if data is not None else None
+            ),
+        )
+    return result
 
 
 def model_summary_survreg(fit: SurvregModelResult, correlation: Any = False) -> dict[str, Any]:

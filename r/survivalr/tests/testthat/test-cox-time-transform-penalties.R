@@ -8,6 +8,8 @@
   expect_equal(as.numeric(actual$fvar), as.numeric(expected$fvar), tolerance = 4e-7)
   expect_equal(unname(fitted(actual)), unname(fitted(expected)), tolerance = 4e-7)
   expect_equal(unname(model.matrix(actual)), unname(expected$x), ignore_attr = TRUE)
+  expect_identical(rownames(model.matrix(actual)), rownames(expected$x))
+  expect_identical(attr(model.matrix(actual), "contrasts"), attr(expected$x, "contrasts"))
   expect_identical(attr(model.matrix(actual), "assign"), attr(expected$x, "assign"))
   expect_identical(colnames(model.matrix(actual)), colnames(expected$x))
   expect_equal(summary(actual)$coefficients, summary(expected)$coefficients, tolerance = 4e-7)

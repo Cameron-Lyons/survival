@@ -1,6 +1,8 @@
 .matrix_compare <- function(actual, expected) {
   expect_identical(dim(actual), dim(expected))
   expect_identical(colnames(actual), colnames(expected))
+  expect_identical(rownames(actual), rownames(expected))
+  expect_identical(attr(actual, "contrasts"), attr(expected, "contrasts"))
   expect_identical(attr(actual, "assign"), as.integer(attr(expected, "assign")))
   expect_equal(unname(actual), unname(expected), ignore_attr = TRUE, tolerance = 1e-12)
   expect_equal(attr(actual, "strata"), attr(expected, "strata"))
@@ -62,6 +64,9 @@ test_that("dense frailty matrices retain full fitted contrasts and factor order"
     fixed <- full[, !assign %in% c(0L, 2L), drop = FALSE]
     attr(fixed, "assign") <- assign[!assign %in% c(0L, 2L)]
     attr(fixed, "strata") <- frame[["strata(sex)"]]
+    contrasts <- attr(full, "contrasts")
+    contrasts[["strata(sex)"]] <- NULL
+    attr(fixed, "contrasts") <- contrasts
     .matrix_compare(model.matrix(actual, data = nd), fixed)
     one <- nd; one$g <- factor(rep(2, nrow(one)), levels = levels(d$g))
     expect_error(model.matrix(actual, data = one), "not enough degrees of freedom")

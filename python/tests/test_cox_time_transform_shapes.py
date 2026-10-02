@@ -1,8 +1,10 @@
 """Cox time-transform types and expanded fitted data against independent R fits."""
 
+import importlib
 import json
 import math
 import pickle
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -126,6 +128,20 @@ def fit_case(case, **kwargs):
         iter_max=50,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda c: c["name"])
+def test_legacy_expanded_matrix_labels_restore_without_transform_callbacks(case, monkeypatch):
+    fit = fit_case(case)
+    expected = r.model_matrix(fit, _with_metadata=True)
+    legacy = pickle.loads(pickle.dumps(replace(fit, _matrix_rows=None)))  # noqa: S301
+
+    def forbid_callbacks(*args, **kwargs):
+        pytest.fail("model_matrix must not rerun time-transform callbacks")
+
+    module = importlib.import_module("survival.r._coxph")
+    monkeypatch.setattr(module, "_tt_functions", forbid_callbacks)
+    assert r.model_matrix(legacy, _with_metadata=True) == expected
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda c: c["name"])

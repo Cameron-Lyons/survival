@@ -146,6 +146,8 @@ class _CategoricalDesignTerm:
     full: bool = False
     contrasts: tuple[tuple[float, ...], ...] = ()
     contrast_names: tuple[str, ...] = ()
+    contrast_label: str | None = None
+    contrast_metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +187,7 @@ class _PenaltyDesignTerm:
     controller_history: Callable[[], Any] | None = None
     # Basis labels can differ from the fitted coefficient labels (e.g. ps(x)3).
     matrix_names: tuple[str, ...] = ()
+    contrast_metadata: dict[str, Any] | None = None
 
     @property
     def penalized(self) -> bool:

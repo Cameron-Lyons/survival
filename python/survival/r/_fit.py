@@ -336,6 +336,64 @@ def _model_matrix_newdata_design(design: _FormulaDesign, data: Any) -> _FormulaD
     return replace(design, covariates=tuple(covariates))
 
 
+def _model_matrix_contrasts(
+    design: _FormulaDesign | None, *, fitted_design: _FormulaDesign | None = None
+) -> dict[str, Any] | None:
+    """R's contrast attribute, including full dummy coding and dense frailty."""
+    if design is None:
+        return None
+    releveled = {
+        term.term
+        for term in (() if fitted_design is None else fitted_design.covariates)
+        if isinstance(term, _PenaltyDesignTerm)
+        and term.kind == "frailty"
+        and not term.penalty.sparse
+    }
+    contrasts: dict[str, Any] = {}
+    for term in design.covariates:
+        factors = term.factors if isinstance(term, _InteractionDesignTerm) else (term,)
+        for factor in factors:
+            if isinstance(factor, _CategoricalDesignTerm):
+                name = _covariate_term_name(factor.term)
+                contrasts[name] = (
+                    factor.contrast_metadata
+                    or factor.contrast_label
+                    or (
+                        {
+                            "data": [list(row) for row in factor.contrasts],
+                            "rows": [_strata_value_label(level) for level in factor.levels],
+                            "columns": list(factor.contrast_names),
+                        }
+                        if factor.contrasts
+                        else "contr.treatment"
+                    )
+                )
+            elif isinstance(factor, _PenaltyDesignTerm) and factor.contrast_metadata is not None:
+                contrasts[_covariate_term_name(factor.term)] = factor.contrast_metadata
+            elif (
+                isinstance(factor, _PenaltyDesignTerm)
+                and factor.kind == "frailty"
+                and not factor.penalty.sparse
+            ):
+                labels = [str(i + 1) for i in range(len(factor.levels))]
+                contrasts[_covariate_term_name(factor.term)] = {
+                    "data": np.eye(len(labels)).tolist(),
+                    "rows": [_strata_value_label(level) for level in factor.levels]
+                    if factor.term in releveled
+                    else labels,
+                    "columns": labels,
+                }
+    # R orders contrasts by formula variable order, including interaction-only
+    # factors, rather than by the order in which output terms are expanded.
+    ordered: dict[str, Any] = {}
+    for variable in design.variables:
+        name = _covariate_term_name(variable)
+        if name in contrasts:
+            ordered[name] = contrasts.pop(name)
+    ordered.update(contrasts)
+    return ordered or None
+
+
 def _model_frame(
     formula: str,
     data: Any,
