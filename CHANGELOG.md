@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Reuse stratum data, event-time weights and time ordering across concordance
+  predictors, retaining independent rank trees and joint covariance. Prevent
+  zero-weight events with an empty weighted risk set from producing a `NaN`
+  Cox variance numerator.
+- Classify plain numeric formula arrays from their dtype, avoiding repeated
+  Python scalar scans while preserving logical and categorical contrasts.
+- Size interval-splitting outputs with binary searches over sorted cutpoints,
+  removing a scan of every cutpoint for every input interval.
+- Add a runnable Rust Kaplan-Meier and Cox example alongside the Python examples.
+
 - Preserve sparse and dense frailty penalties returned by Cox time transforms,
   including controller histories, summaries and saved models. Python callbacks
   accept `CoxPenaltyBasis` and direct `pspline()` results; stored model matrices

@@ -516,7 +516,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   extent").
 - Zero-weight deaths with `timewt` other than "n": R's `fastkm.c` fills
   `etime` for every death time but counts only positive-weight ones, and
-  overruns its arrays.
+  overruns its arrays. Here, event times with no weighted observations at risk
+  contribute zero to the Cox variance numerator, so they do not turn otherwise
+  valid `cvar` results into `NaN`.
 - `timefix = FALSE` is honoured. R's `concordance.formula` and `cord.work` call
   `concordancefit` with its default `timefix = TRUE`, so near-tied times are
   merged either way.

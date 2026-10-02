@@ -89,6 +89,27 @@ For development against ML bindings:
 maturin develop --release --features extension-module,ml
 ```
 
+## Rust usage
+
+The Rust crate runs independently of Python with its default features. Use
+validated input types and domain modules:
+
+```rust
+use survival::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
+
+let data = SurvfitKMData::right_censored(
+    vec![1.0, 2.0, 3.0, 4.0],
+    vec![1, 1, 0, 1],
+)?;
+let fit = survfitkm(&data, &SurvfitKMOptions::default())?;
+println!("{:?}", fit.surv);
+```
+
+For a complete Kaplan-Meier and Cox example, run
+`cargo run --example rust_package_layout --no-default-features`.
+See [the example](examples/rust_package_layout.rs) and
+[repository layout](docs/repo-layout.md) for the shared Rust/Python boundaries.
+
 ## Python Package Layout
 
 Prefer domain modules in new code:
@@ -510,7 +531,7 @@ print(spline.n_cols, spline.knots, spline.boundary_knots)
 ### Concordance
 
 ```python
-from survival import Surv, concordance
+from survival import core
 
 time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
 status = [1, 1, 0, 1, 1, 1, 0, 1]
@@ -534,6 +555,11 @@ dfbeta applies case weights and uses pooled counts across strata. Variance is
 available with every result, while
 `influence` controls which diagnostic rows are returned. For multiple scores,
 `result.covariance` and `vcov(result)` include the covariance between scores.
+Joint calculations prepare each stratum's data and time weights once; each
+predictor keeps its own rank tree and tied-event ordering. Run
+`cargo bench --bench concordance_benchmarks` to measure the native paths.
+See [concordance performance](docs/concordance-performance.md) for the algorithm,
+variance correction and complete-call benchmark.
 
 By default, `timefix=True` groups near-tied times using R's `aeqSurv` tolerance;
 `timefix=False` preserves exact observed times. `ymin` clips exit times and
@@ -1067,6 +1093,30 @@ The Rust benchmarks use divan; a single group runs with, for example:
 ```sh
 RAYON_NUM_THREADS=1 cargo bench --bench survival_benchmarks -- survreg_bench
 ```
+
+Focused Python benchmarks check numerical outputs before reporting timings:
+
+```sh
+PYTHONPATH=python python scripts/bench_formula_model_frame.py
+PYTHONPATH=python python scripts/benchmark_multi_concordance.py
+PYTHONPATH=python python scripts/benchmark_survsplit.py
+```
+
+Local release-build measurements for the preparation improvements:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| Formula frame, 100,000 rows and 2 numeric array terms | 40.35 ms | 20.90 ms |
+| Formula frame, 100,000 rows and 16 numeric array terms | 242.94 ms | 90.86 ms |
+| Concordance counts, 20,000 rows and 8 predictors | 10.47 ms | 5.34 ms |
+| Interval splitting, 100,000 rows and 4,096 cuts after follow-up | 79.55 ms | 5.69 ms |
+
+These are medians of seven samples (nine for concordance) on Python 3.14.7.
+Formula comparisons alternate classifiers in one process; native comparisons
+use separate release builds. Fitting is excluded from formula preparation;
+the interval case uses `timefix=False` and creates no additional rows. See
+[concordance notes](docs/concordance-performance.md) for variance timings and
+single-predictor controls. These results describe the listed workloads.
 
 `benches/python/bench_vs_r.py` times the same synthetic data against R's
 `survival` at two separate layers: the `survival.r` formula calls against R's

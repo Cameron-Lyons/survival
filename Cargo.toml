@@ -50,6 +50,10 @@ harness = false
 name = "survfitaj_benchmarks"
 harness = false
 
+[[bench]]
+name = "concordance_benchmarks"
+harness = false
+
 # `panic = "abort"` is deliberately NOT set: the release profile builds every
 # maturin wheel, and a PyO3 extension module must be able to unwind so that a
 # Rust panic surfaces in Python as `pyo3_runtime.PanicException` instead of
