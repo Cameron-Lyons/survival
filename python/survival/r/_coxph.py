@@ -23,6 +23,7 @@ import numpy as np
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _NA_REAL,
     _as_character,
     _as_matrix_rows,
     _as_rows,
@@ -1873,9 +1874,9 @@ def _restore_prediction_groups(
         return values
     missing = {codes[row] for row in gaps}
     output: Any = (
-        np.full((n_groups, *values.shape[1:]), math.nan)
+        np.full((n_groups, *values.shape[1:]), _NA_REAL)
         if isinstance(values, np.ndarray)
-        else [math.nan if width is None else [math.nan] * width for _ in range(n_groups)]
+        else [_NA_REAL if width is None else [_NA_REAL] * width for _ in range(n_groups)]
     )
     for code, value in zip(sorted(set(fitted_codes)), values, strict=True):
         if code not in missing:
@@ -1952,13 +1953,20 @@ def predict_coxph(
         reference_name = "sample"
 
     action = _normalize_na_action(na_action)
+    sparse_only = (
+        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
+    )
     new: _NewData | None = None
     group_names = None
     if newdata is not None:
         collapse_missing: list[int] = []
         if collapse is not None and collapse is not False:
             collapse_values = _materialize_labels(collapse, "collapse")
-            n = _formula_design_row_count(newdata, fit.design)
+            n = (
+                _data_row_count(newdata)
+                if sparse_only
+                else _formula_design_row_count(newdata, fit.design)
+            )
             if len(collapse_values) != n:
                 raise ValueError("Collapse vector is the wrong length")
             if action != "pass":
@@ -1973,15 +1981,20 @@ def predict_coxph(
             or reference_name == "strata"
             or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
         )
-        new = _prediction_newdata(
-            fit,
-            newdata,
-            need_strata=need_strata,
-            need_response=need_response,
-            na_action=action,
-            allow_missing_predictors=True,
-            extra_missing=collapse_missing,
-        )
+        if sparse_only:
+            # predict.coxph.penal returns zero for a new frailty-only population;
+            # it uses newdata's row count without evaluating its model variables.
+            new = _NewData(newdata, np.empty((_data_row_count(newdata), 0)), None, None, None)
+        else:
+            new = _prediction_newdata(
+                fit,
+                newdata,
+                need_strata=need_strata,
+                need_response=need_response,
+                na_action=action,
+                allow_missing_predictors=True,
+                extra_missing=collapse_missing,
+            )
         if (
             _has_strata(fit)
             and new.strata is None
@@ -1995,9 +2008,6 @@ def predict_coxph(
 
     pred: Any
     se: Any
-    sparse_only = (
-        predict_type in {"lp", "risk", "terms"} and _sparse_term(fit) is not None and not fit.assign
-    )
     width = len(selected) if predict_type == "terms" and not sparse_only else None
     # Prepare groups against the padded output rows, then send only retained
     # codes to the native predictor. Groups containing gaps are restored below.
@@ -2062,6 +2072,8 @@ def predict_coxph(
         se = None if se is None else _pad_rows(se, gaps, width)
     output = PredictResult(pred, se) if include_se else pred
     if with_row_names and group_names is None:
+        if new is not None and new.n == 0:
+            return _prediction_row_result(output, None, None)
         uses_x = (
             include_se
             or (_has_strata(fit) and reference_name == "strata")

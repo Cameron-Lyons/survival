@@ -10,9 +10,7 @@
   expect_identical(dim(actual), dim(expected))
   expect_identical(colnames(actual), colnames(expected))
   expect_identical(is.na(actual), is.na(expected), ignore_attr = TRUE)
-  # Python uses NaN for R's missing numeric values.
-  actual[is.na(actual)] <- NA_real_
-  expected[is.na(expected)] <- NA_real_
+  expect_identical(is.nan(actual), is.nan(expected), ignore_attr = TRUE)
   expect_equal(unname(actual), unname(expected), ignore_attr = TRUE, tolerance = 3e-7)
 }
 

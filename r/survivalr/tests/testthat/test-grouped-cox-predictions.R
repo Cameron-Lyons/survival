@@ -2,6 +2,7 @@
   if (is.null(dim(actual))) actual <- matrix(actual, ncol = 1L, dimnames = list(names(actual), NULL))
   expect_identical(dim(actual), dim(expected))
   expect_identical(rownames(actual), rownames(expected))
+  expect_identical(is.nan(actual), is.nan(expected), ignore_attr = TRUE)
   expect_equal(unname(actual), unname(expected), ignore_attr = TRUE, tolerance = 2e-7)
 }
 

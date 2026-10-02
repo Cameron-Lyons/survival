@@ -253,10 +253,11 @@ if (getRversion() >= "2.15.1") {
   if (is.data.frame(data)) {
     columns <- lapply(data, function(column) {
       if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
-          is.null(dim(column)) && length(column) <= .Machine$integer.max && !anyNA(column)) {
+          is.null(dim(column)) && length(column) <= .Machine$integer.max &&
+          (typeof(column) == "double" || !anyNA(column))) {
         # A one-dimensional R array crosses in bulk as a NumPy array, including
-        # empty and single-row columns. Keep NA and classed columns on the
-        # existing path so their missing-value and categorical semantics remain.
+        # empty and single-row columns. Double arrays retain R's NA payload;
+        # missing integers keep their source type and scalar missing markers.
         value <- as.vector(column)
         dim(value) <- length(value)
         return(value)
@@ -9176,7 +9177,11 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   labels <- unname(vapply(group_names, function(label) if (is.null(label)) NA_character_ else
     as.character(label)[[1L]], character(1)))
   label <- function(x) {
-    if (is.matrix(x)) rownames(x) <- labels else if (is.numeric(x)) names(x) <- labels
+    if (is.matrix(x)) {
+      # R's dimname setters normalize character(0) to NULL. The empty rowsum
+      # primitive preserves the explicitly empty group-label vector instead.
+      if (length(labels)) rownames(x) <- labels else x <- rowsum(x, labels)
+    } else if (is.numeric(x)) names(x) <- labels
     x
   }
   if (is.list(value)) lapply(value, label) else label(value)

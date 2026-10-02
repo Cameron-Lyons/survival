@@ -24,6 +24,7 @@ test_that("entirely omitted AFT predictions preserve stock dimensions and absent
           expect_identical(names(actual[[name]]), names(expected[[name]]), info = info)
           expect_identical(dimnames(actual[[name]]), dimnames(expected[[name]]), info = info)
           expect_identical(is.na(actual[[name]]), is.na(expected[[name]]), info = info)
+          expect_identical(is.nan(actual[[name]]), is.nan(expected[[name]]), info = info)
         }
       }
     }
