@@ -134,7 +134,7 @@ def test_r_bridge_defines_exported_functions():
     assert '.call_r_api("model_weights", object)' in bridge
     assert '.call_r_api("model_matrix", object' in bridge
     assert '.call_r_api("model_frame", formula' in bridge
-    assert '"fitted",\n    object' in bridge
+    assert '"fitted",\n    fit = object' in bridge
     assert '.call_r_api("as_data_frame", x)' in bridge
     assert '.call_r_api("model_summary", object' in bridge
     assert 'UseMethod("survfit")' in bridge

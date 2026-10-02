@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import numbers
 import os
 import sys
 import warnings
@@ -372,6 +373,115 @@ def _is_bool_like(value: Any) -> bool:
     return isinstance(value, bool) or (
         value_type.__module__ == "numpy" and value_type.__name__ in {"bool", "bool_"}
     )
+
+
+class _RTermSubscript(list[Any]):
+    """An R terms vector retaining its type when NA values cross Python."""
+
+    def __init__(self, values: Any, kind: str, levels: Any = None):
+        super().__init__(values)
+        self.kind = kind
+        self.categories = levels
+
+
+def _r_term_subscript(values: Any, kind: str, levels: Any = None) -> _RTermSubscript:
+    return _RTermSubscript(values, kind, levels)
+
+
+def _term_subscript(terms: Any) -> tuple[list[Any], str]:
+    if isinstance(terms, _RTermSubscript):
+        return list(terms), terms.kind
+    if _categories(terms) is not None:
+        return _materialize_1d(terms, "terms"), "factor"
+    if getattr(terms, "ndim", None) == 0 and hasattr(terms, "item"):
+        terms = terms.item()
+    values = (
+        [terms]
+        if isinstance(terms, str | numbers.Number) or _is_bool_like(terms)
+        else _materialize_1d(terms, "terms")
+    )
+    if any(isinstance(value, str) for value in values):
+        kind = "character"
+    elif all(_is_bool_like(value) or value is None for value in values):
+        kind = "logical"
+    elif all(isinstance(value, numbers.Real) or _is_missing_value(value) for value in values):
+        kind = "double"
+    else:
+        raise TypeError("terms must contain names, numeric indices or logical values")
+    return values, kind
+
+
+def _term_subscript_name(value: Any) -> str | None:
+    if _is_missing_value(value):
+        return None
+    if _is_bool_like(value):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, numbers.Real):
+        return _r_format_number(float(value))
+    return str(value)
+
+
+def _matrix_term_selection(
+    terms: Any, names: Sequence[str], *, warn_overflow: bool = True, warning_repeats: int = 1
+) -> list[int | None] | None:
+    """R's matrix column subscript used by predict.survreg, retaining NA columns."""
+    if terms is None:
+        return None
+    values, kind = _term_subscript(terms)
+    if kind == "NULL":
+        return None
+    if kind == "factor":
+        levels = _categories(terms) or []
+        values = [None if _is_missing_value(value) else levels.index(value) + 1 for value in values]
+        kind = "integer"
+    if kind == "character":
+        lookup = {name: i for i, name in reversed(list(enumerate(names)))}
+        requested = [_term_subscript_name(value) for value in values]
+        if any(value not in lookup for value in requested):
+            raise ValueError("subscript out of bounds")
+        return [lookup[value] for value in requested if value is not None]
+    if kind == "logical":
+        if len(values) > len(names):
+            raise ValueError("(subscript) logical subscript too long")
+        if not values:
+            return []
+        selected: list[int | None] = []
+        for i in range(len(names)):
+            value = values[i % len(values)]
+            if _is_missing_value(value):
+                selected.append(None)
+            elif value:
+                selected.append(i)
+        return selected
+    if kind not in {"integer", "double"}:
+        raise TypeError(f"invalid subscript type '{kind}'")
+    indices: list[int | None] = []
+    overflow = False
+    for value in values:
+        if _is_missing_value(value):
+            indices.append(None)
+        else:
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric >= 2147483648 or numeric <= -2147483648:
+                overflow = True
+                indices.append(None)
+            else:
+                indices.append(math.trunc(numeric))
+    if overflow and warn_overflow:
+        _warn_outside_package("NAs introduced by coercion to integer range", UserWarning)
+    if any(value is not None and value < 0 for value in indices):
+        if any(value is None or value > 0 for value in indices):
+            raise ValueError("only 0's may be mixed with negative subscripts")
+        excluded = {-value - 1 for value in indices if value is not None and value < 0}
+        return [i for i in range(len(names)) if i not in excluded]
+    if any(value is not None and value > len(names) for value in indices):
+        raise ValueError("subscript out of bounds")
+    if overflow and warn_overflow:
+        for _ in range(warning_repeats - 1):
+            _warn_outside_package("NAs introduced by coercion to integer range", UserWarning)
+    return [
+        None if value is None else value - 1 for value in indices if value is None or value != 0
+    ]
 
 
 class _RSubset(list[int]):

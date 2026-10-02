@@ -80,13 +80,15 @@ def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
 
 
 def _call_fit_with_warnings(
-    function: Callable[..., Any], arguments: Mapping[str, Any]
+    function: Callable[..., Any], arguments: Mapping[str, Any], *, user_warnings: bool = False
 ) -> dict[str, Any]:
     """Return a model call and its warnings for R's condition system."""
     with warnings.catch_warnings(record=True) as recorded:
         # Each R model call should signal its diagnostics, including when Python
         # has already emitted the same warning from this source line.
         warnings.simplefilter("always", RuntimeWarning)
+        if user_warnings:
+            warnings.simplefilter("always", UserWarning)
         if "fit" in arguments:
             # singledispatch model methods require their model positionally.
             keywords = dict(arguments)

@@ -351,7 +351,7 @@ def test_predict_survreg_types_and_shapes(lung_weibull):
 
     with pytest.raises(ValueError, match="'type' should be one of"):
         r.predict(fit, type="risk")
-    with pytest.raises(ValueError, match="unknown model term"):
+    with pytest.raises(ValueError, match="subscript out of bounds"):
         r.predict(fit, NEWDATA, type="terms", terms="ph.ecog")
     with pytest.raises(TypeError, match="unexpected keyword argument 'reference'"):
         r.predict(fit, NEWDATA, reference="strata")
