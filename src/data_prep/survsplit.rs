@@ -71,10 +71,12 @@ pub fn survsplit_intervals(
     let mut extra = 0;
     for i in 0..n {
         if !tstart[i].is_nan() && !tstop[i].is_nan() {
-            extra += cut
-                .iter()
-                .filter(|&&c| c > tstart[i] && c < tstop[i])
-                .count();
+            // The sorted cutpoints strictly inside this interval lie between
+            // these bounds. Searching them avoids scanning every cut for every
+            // row when most cuts fall outside the observed follow-up.
+            let first = cut.partition_point(|&c| c <= tstart[i]);
+            let last = cut.partition_point(|&c| c < tstop[i]);
+            extra += last.saturating_sub(first);
         }
     }
     let n2 = n + extra;
@@ -314,6 +316,44 @@ mod tests {
     }
 
     #[test]
+    fn kernel_preserves_missing_intervals_alongside_endpoint_cuts() {
+        let out = survsplit_intervals(
+            &[f64::NAN, 0.0, f64::NAN, 0.0],
+            &[10.0, f64::NAN, f64::NAN, 10.0],
+            &[0.0, 5.0, 10.0],
+        )
+        .unwrap();
+        assert_eq!(out.row, vec![0, 1, 2, 3, 3]);
+        assert_eq!(out.interval, vec![1, 1, 1, 1, 2]);
+        assert_eq!(out.censor, vec![false, false, false, true, false]);
+        assert!(out.start[0].is_nan());
+        assert!(out.end[1].is_nan());
+        assert!(out.start[2].is_nan() && out.end[2].is_nan());
+        assert_eq!(&out.start[3..], &[0.0, 5.0]);
+        assert_eq!(&out.end[3..], &[5.0, 10.0]);
+    }
+
+    #[test]
+    fn kernel_handles_cutpoints_entirely_before_or_after_followup() {
+        for (cut, episode) in [(&[-3.0, -2.0][..], 2), (&[2.0, 3.0][..], 0)] {
+            let out = survsplit_intervals(&[0.0, 0.5], &[1.0, 1.5], cut).unwrap();
+            assert_eq!(out.row, vec![0, 1]);
+            assert_eq!(out.interval, vec![episode, episode]);
+            assert_eq!(out.start, vec![0.0, 0.5]);
+            assert_eq!(out.end, vec![1.0, 1.5]);
+            assert_eq!(out.censor, vec![false, false]);
+        }
+        // The kernel also accepts an unsplit empty interval for a final
+        // timeline visit. A reversed interval retains that same pass-through
+        // behavior when callers use the kernel directly.
+        let out = survsplit_intervals(&[1.0, 2.0], &[1.0, 0.0], &[0.5, 1.0, 1.5]).unwrap();
+        assert_eq!(out.row, vec![0, 1]);
+        assert_eq!(out.start, vec![1.0, 2.0]);
+        assert_eq!(out.end, vec![1.0, 0.0]);
+        assert_eq!(out.censor, vec![false, false]);
+    }
+
+    #[test]
     fn right_censored_rows_start_at_zero_and_cuts_censor() {
         let out = survsplit(
             right(&[8.0, 25.0], &[1.0, 1.0]),
@@ -334,6 +374,22 @@ mod tests {
         assert!(err.to_string().contains("'zero' parameter"));
         let err = survsplit(right(&[1.0], &[1.0]), &[f64::NAN], 0.0, true).unwrap_err();
         assert!(err.to_string().contains("finite"));
+    }
+
+    #[test]
+    fn counting_process_sorts_and_deduplicates_cuts_at_both_endpoints() {
+        let response: SurvSplitResponse<'_, i64> = SurvSplitResponse::Counting {
+            start: &[0.0],
+            stop: &[10.0],
+            status: &[1.0],
+        };
+        let out = survsplit(response, &[10.0, 5.0, 0.0, 5.0, 10.0], 0.0, false).unwrap();
+        assert_eq!(out.cut, vec![0.0, 5.0, 10.0]);
+        assert_eq!(out.row, vec![0, 0]);
+        assert_eq!(out.interval, vec![1, 2]);
+        assert_eq!(out.start, vec![0.0, 5.0]);
+        assert_eq!(out.end, vec![5.0, 10.0]);
+        assert_eq!(out.status, vec![0.0, 1.0]);
     }
 
     #[test]

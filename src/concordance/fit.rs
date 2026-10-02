@@ -35,6 +35,8 @@ use crate::internal::validation::{
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::ops::Range;
 
 /// R's `timewt` argument: the weight given to each event time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,21 +294,19 @@ pub fn concordancefit(
     let mut per_stratum: Vec<Vec<SweepOutput>> = Vec::with_capacity(nstrat);
     let mut rank_tables: Vec<ConcordanceRanks> = (0..nvar).map(|_| empty_ranks()).collect();
     for (_, rows) in &groups {
+        let mut risk: Vec<f64> = rows.iter().map(|&i| x[[i, 0]]).collect();
+        let prepared =
+            prepare_stratum(&times, rows, &risk, weights, options, merged_events, ranks)?;
         let mut per_x = Vec::with_capacity(nvar);
         for column in 0..nvar {
-            let risk: Vec<f64> = rows.iter().map(|&i| x[[i, column]]).collect();
-            let sweep = docount(
-                &times,
-                rows,
-                &risk,
-                weights,
-                options,
-                merged_events,
-                std_err,
-                ranks,
-            )?;
+            if column > 0 {
+                for (value, &row) in risk.iter_mut().zip(rows) {
+                    *value = x[[row, column]];
+                }
+            }
+            let sweep = docount(&prepared, &risk, column == 0, std_err, ranks);
             if ranks {
-                append_ranks(&mut rank_tables[column], &times, rows, &sweep);
+                append_ranks(&mut rank_tables[column], &prepared.death_times, &sweep);
             }
             per_x.push(sweep);
         }
@@ -444,19 +444,32 @@ fn timefix(times: &mut SurvTimes) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// R's `docount`: one predictor within one stratum.  `merged_events` is the
-/// total event count when R would have merged the strata into one sweep.
-#[allow(clippy::too_many_arguments)]
-fn docount(
+/// Outcome ordering and time weights are shared by all predictor columns.
+struct PreparedStratum {
+    start: Option<Vec<f64>>,
+    stop: Vec<f64>,
+    status: Vec<i32>,
+    weight: Vec<f64>,
+    timewt: Vec<f64>,
+    sort_start: Option<Vec<usize>>,
+    sort_stop: Vec<usize>,
+    predictor_ties: Vec<Range<usize>>,
+    death_times: Vec<f64>,
+}
+
+/// The predictor-independent portion of R's `docount`. `merged_events` is
+/// the total event count when R would have merged the strata into one sweep.
+/// Use the first predictor's order for risk sums to preserve the one-column
+/// accumulation order, and reuse those weights for the other predictors.
+fn prepare_stratum(
     times: &SurvTimes,
     rows: &[usize],
     risk: &[f64],
     weights: &[f64],
     options: &ConcordanceOptions,
     merged_events: Option<usize>,
-    std_err: bool,
     ranks: bool,
-) -> SurvivalResult<SweepOutput> {
+) -> SurvivalResult<PreparedStratum> {
     let n = rows.len();
     let stop: Vec<f64> = rows.iter().map(|&i| times.stop[i]).collect();
     let status: Vec<i32> = rows.iter().map(|&i| times.status[i]).collect();
@@ -467,11 +480,16 @@ fn docount(
     let wts: Vec<f64> = rows.iter().map(|&i| weights[i]).collect();
     let nevent = status.iter().filter(|&&s| s == 1).count();
     if nevent == 0 {
-        // A stratum without events contributes nothing.
-        return Ok(SweepOutput {
-            count: [0.0; 6],
-            influence: vec![[0.0; 5]; if std_err { n } else { 0 }],
-            resid: Vec::new(),
+        return Ok(PreparedStratum {
+            start,
+            stop,
+            status,
+            weight: wts,
+            timewt: Vec::new(),
+            sort_start: None,
+            sort_stop: Vec::new(),
+            predictor_ties: Vec::new(),
+            death_times: Vec::new(),
         });
     }
     // With a single event every time weighting is the same; R counts the
@@ -490,11 +508,39 @@ fn docount(
             .then_with(|| status[a].cmp(&status[b]))
             .then_with(|| risk[a].total_cmp(&risk[b]))
     });
+    // Only these groups depend on the predictor. Other columns can retain
+    // the outcome ordering and sort within each group instead of all rows.
+    let mut predictor_ties = Vec::new();
+    let mut first = 0;
+    while first < n {
+        let row = sort_stop[first];
+        let mut end = first + 1;
+        while end < n
+            && stop[row].total_cmp(&stop[sort_stop[end]]).is_eq()
+            && status[row] == status[sort_stop[end]]
+        {
+            end += 1;
+        }
+        if end - first > 1 {
+            predictor_ties.push(first..end);
+        }
+        first = end;
+    }
     let sort_start: Option<Vec<usize>> = start.as_ref().map(|start| {
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
         order
     });
+    let death_times = if ranks {
+        sort_stop
+            .iter()
+            .rev()
+            .filter(|&&row| status[row] == 1)
+            .map(|&row| stop[row])
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let (etime, timewt): (Vec<f64>, Vec<f64>) = if timeopt == TimeWeight::N {
         let mut etime: Vec<f64> = (0..n)
@@ -550,6 +596,49 @@ fn docount(
     }
     timewt.reverse();
 
+    Ok(PreparedStratum {
+        start,
+        stop,
+        status,
+        weight: wts,
+        timewt,
+        sort_start,
+        sort_stop,
+        predictor_ties,
+        death_times,
+    })
+}
+
+/// R's `docount`: one predictor within an already prepared stratum.
+fn docount(
+    prepared: &PreparedStratum,
+    risk: &[f64],
+    first_predictor: bool,
+    std_err: bool,
+    ranks: bool,
+) -> SweepOutput {
+    if prepared.timewt.is_empty() {
+        // A stratum without events contributes nothing.
+        return SweepOutput {
+            count: [0.0; 6],
+            influence: vec![[0.0; 5]; if std_err { risk.len() } else { 0 }],
+            resid: Vec::new(),
+        };
+    }
+    let sort_stop: Cow<'_, [usize]> = if first_predictor || prepared.predictor_ties.is_empty() {
+        Cow::Borrowed(&prepared.sort_stop)
+    } else {
+        let mut order = prepared.sort_stop.clone();
+        for group in &prepared.predictor_ties {
+            order[group.clone()].sort_unstable_by(|&a, &b| {
+                // Restore input order for equal predictor values, matching
+                // the stable full sort even when the first column differed.
+                risk[a].total_cmp(&risk[b]).then_with(|| a.cmp(&b))
+            });
+        }
+        Cow::Owned(order)
+    };
+
     // Tree node of each predictor value among the sorted unique values.
     let mut levels = risk.to_vec();
     levels.sort_by(f64::total_cmp);
@@ -560,20 +649,20 @@ fn docount(
         .map(|value| tree[levels.partition_point(|level| level < value)])
         .collect();
 
-    Ok(concordance_sweep(
+    concordance_sweep(
         &SweepInput {
-            start: start.as_deref(),
-            stop: &stop,
-            status: &status,
+            start: prepared.start.as_deref(),
+            stop: &prepared.stop,
+            status: &prepared.status,
             node: &node,
-            weight: &wts,
-            timewt: &timewt,
-            sort_start: sort_start.as_deref(),
+            weight: &prepared.weight,
+            timewt: &prepared.timewt,
+            sort_start: prepared.sort_start.as_deref(),
             sort_stop: &sort_stop,
         },
         std_err,
         ranks,
-    ))
+    )
 }
 
 fn empty_ranks() -> ConcordanceRanks {
@@ -587,18 +676,7 @@ fn empty_ranks() -> ConcordanceRanks {
 
 /// Appends a stratum's rank rows (ascending event time, rows with zero
 /// time weight dropped, as R does).
-fn append_ranks(
-    table: &mut ConcordanceRanks,
-    times: &SurvTimes,
-    rows: &[usize],
-    sweep: &SweepOutput,
-) {
-    let mut death_times: Vec<f64> = rows
-        .iter()
-        .filter(|&&i| times.status[i] == 1)
-        .map(|&i| times.stop[i])
-        .collect();
-    death_times.sort_by(f64::total_cmp);
+fn append_ranks(table: &mut ConcordanceRanks, death_times: &[f64], sweep: &SweepOutput) {
     for (time, resid) in death_times.iter().zip(&sweep.resid) {
         if resid[1] > 0.0 {
             table.time.push(*time);
@@ -1090,12 +1168,10 @@ mod tests {
                 for (&i, row) in keep.iter().zip(without.dfbeta.as_ref().unwrap()) {
                     assert_close(dfbeta[i][0], row[0]);
                 }
-                if dropped == 3 {
-                    assert_close(
-                        with_zero.cvar.as_ref().unwrap()[0],
-                        without.cvar.as_ref().unwrap()[0],
-                    );
-                }
+                assert_close(
+                    with_zero.cvar.as_ref().unwrap()[0],
+                    without.cvar.as_ref().unwrap()[0],
+                );
             }
             // (start, stop] data takes the same path through fastkm2.
             let start = vec![0.0; 8];
@@ -1132,6 +1208,10 @@ mod tests {
                     with_zero.var.as_ref().unwrap()[0][0],
                     without.var.as_ref().unwrap()[0][0],
                 );
+                assert_close(
+                    with_zero.cvar.as_ref().unwrap()[0],
+                    without.cvar.as_ref().unwrap()[0],
+                );
             }
         }
     }
@@ -1167,6 +1247,177 @@ mod tests {
         assert_close(var[0][1], -var[0][0]);
         assert_eq!(out.dfbeta.as_ref().unwrap()[0].len(), 2);
         assert_eq!(out.cvar.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn shared_preparation_matches_individual_predictor_fits() {
+        // Predictor orders differ within tied deaths and censorings. Include
+        // delayed entry, near ties, signed-zero predictors, fractional and
+        // zero case weights, and a stratum with no events.
+        let n = 48;
+        let stop: Vec<f64> = (0..n)
+            .map(|i| 1.0 + ((i * 17) % 12) as f64 + if i % 7 == 0 { 1e-10 } else { 0.0 })
+            .collect();
+        let status: Vec<i32> = (0..n)
+            .map(|i| i32::from(i % 5 != 0 && i % 3 != 2))
+            .collect();
+        let start: Vec<f64> = stop
+            .iter()
+            .enumerate()
+            .map(|(i, &time)| (time - 1.0 - (i % 4) as f64).max(-1.0))
+            .collect();
+        let right = right(&stop, &status);
+        let counting = CountingProcessData::try_new(start, stop, status).unwrap();
+        let x = Array2::from_shape_fn((n, 4), |(i, column)| {
+            let value = ((i * (7 + 2 * column) + column) % 5) as f64;
+            if value == 0.0 && i % 2 == 0 {
+                -0.0
+            } else {
+                value
+            }
+        });
+        let weights: Vec<f64> = (0..n)
+            .map(|i| {
+                if i % 13 == 0 {
+                    0.0
+                } else {
+                    0.2 + (i % 7) as f64 * 0.1
+                }
+            })
+            .collect();
+        let strata: Vec<i32> = (0..n).map(|i| (i % 3) as i32).collect();
+        let cluster: Vec<i32> = (0..n).map(|i| (i / 4) as i32).collect();
+        for counting_process in [false, true] {
+            for timewt in [
+                TimeWeight::N,
+                TimeWeight::S,
+                TimeWeight::SOverG,
+                TimeWeight::NOverG2,
+                TimeWeight::I,
+            ] {
+                if counting_process && matches!(timewt, TimeWeight::SOverG | TimeWeight::NOverG2) {
+                    continue;
+                }
+                for std_err in [false, true] {
+                    for reverse in [false, true] {
+                        for timefix in [false, true] {
+                            let options = ConcordanceOptions {
+                                timewt,
+                                ymin: Some(3.0),
+                                ymax: Some(9.0),
+                                influence: 3,
+                                ranks: true,
+                                reverse,
+                                timefix,
+                                keepstrata: 0,
+                                std_err,
+                            };
+                            let score = |predictor: ArrayView2<'_, f64>| {
+                                let response = if counting_process {
+                                    SurvResponse::Counting(&counting)
+                                } else {
+                                    SurvResponse::Right(&right)
+                                };
+                                concordancefit(
+                                    response,
+                                    predictor,
+                                    Some(&weights),
+                                    Some(&strata),
+                                    Some(&cluster),
+                                    &options,
+                                )
+                                .unwrap()
+                            };
+                            let joint = score(x.view());
+                            let singles: Vec<ConcordanceFit> = x
+                                .axis_iter(ndarray::Axis(1))
+                                .map(|values| score(column(&values.to_vec()).view()))
+                                .collect();
+                            for (index, single) in singles.iter().enumerate() {
+                                assert_close(joint.concordance[index], single.concordance[0]);
+                                let count = single.count[0];
+                                assert_counts(
+                                    &joint.count[index],
+                                    [
+                                        count.concordant,
+                                        count.discordant,
+                                        count.tied_x,
+                                        count.tied_y,
+                                        count.tied_xy,
+                                    ],
+                                );
+                                if std_err {
+                                    assert_close(
+                                        joint.cvar.as_ref().unwrap()[index],
+                                        single.cvar.as_ref().unwrap()[0],
+                                    );
+                                    assert_close(
+                                        joint.var.as_ref().unwrap()[index][index],
+                                        single.var.as_ref().unwrap()[0][0],
+                                    );
+                                    for (joint_row, single_row) in joint
+                                        .dfbeta
+                                        .as_ref()
+                                        .unwrap()
+                                        .iter()
+                                        .zip(single.dfbeta.as_ref().unwrap())
+                                    {
+                                        assert_close(joint_row[index], single_row[0]);
+                                    }
+                                    for (joint_row, single_row) in joint.influence.as_ref().unwrap()
+                                        [index]
+                                        .iter()
+                                        .zip(&single.influence.as_ref().unwrap()[0])
+                                    {
+                                        for (&actual, &expected) in joint_row.iter().zip(single_row)
+                                        {
+                                            assert_close(actual, expected);
+                                        }
+                                    }
+                                    let actual = &joint.ranks.as_ref().unwrap()[index];
+                                    let expected = &single.ranks.as_ref().unwrap()[0];
+                                    assert_eq!(actual.time, expected.time);
+                                    assert_eq!(actual.casewt, expected.casewt);
+                                    for (&actual, &expected) in actual
+                                        .rank
+                                        .iter()
+                                        .chain(&actual.timewt)
+                                        .zip(expected.rank.iter().chain(&expected.timewt))
+                                    {
+                                        assert_close(actual, expected);
+                                    }
+                                }
+                            }
+                            if std_err {
+                                for first in 0..x.ncols() {
+                                    for second in 0..x.ncols() {
+                                        let expected = singles[first]
+                                            .dfbeta
+                                            .as_ref()
+                                            .unwrap()
+                                            .iter()
+                                            .zip(singles[second].dfbeta.as_ref().unwrap())
+                                            .map(|(a, b)| a[0] * b[0])
+                                            .sum();
+                                        assert_close(
+                                            joint.var.as_ref().unwrap()[first][second],
+                                            expected,
+                                        );
+                                    }
+                                }
+                            } else {
+                                assert!(joint.var.is_none() && joint.cvar.is_none());
+                                assert!(
+                                    joint.dfbeta.is_none()
+                                        && joint.influence.is_none()
+                                        && joint.ranks.is_none()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

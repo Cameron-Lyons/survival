@@ -38,6 +38,30 @@ def _complete(data, *columns):
     return {name: [values[i] for i in keep] for name, values in data.items()}
 
 
+@pytest.mark.parametrize(
+    ("counting", "timewt"),
+    [(False, name) for name in ("n", "S", "S/G", "n/G2", "I")]
+    + [(True, name) for name in ("n", "S", "I")],
+)
+def test_zero_weight_last_event_preserves_concordance_variance(timewt, counting):
+    # An event with no weighted observations at risk contributes no variance.
+    # Its 0/0 Cox-variance increment used to poison otherwise valid results.
+    stop = [1.0, 2.0, 3.0, 4.0]
+    start = [0.0, 0.0, 1.5, 1.0]
+    status = [1, 1, 1, 1]
+    response = r.Surv(start, stop, status) if counting else r.Surv(stop, status)
+    retained = (
+        r.Surv(start[:-1], stop[:-1], status[:-1]) if counting else r.Surv(stop[:-1], status[:-1])
+    )
+    actual = concordancefit(
+        response, [3.0, 2.0, 4.0, 1.0], weights=[0.5, 1.5, 1.0, 0.0], timewt=timewt
+    )
+    expected = concordancefit(retained, [3.0, 2.0, 4.0], weights=[0.5, 1.5, 1.0], timewt=timewt)
+    assert actual.concordance == approx(expected.concordance)
+    assert actual.var == approx(expected.var)
+    assert actual.cvar == approx(expected.cvar)
+
+
 @pytest.fixture(scope="module")
 def lung():
     return datasets.load_lung()

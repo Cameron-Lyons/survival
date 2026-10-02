@@ -262,7 +262,12 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             tree.addin(x[jj], wt[jj]);
         }
         if std_err {
-            count[5] += dwt * adjtimewt * z2 / tree.total();
+            let risk_weight = tree.total();
+            // A time containing only zero-weight observations contributes
+            // nothing. Avoid 0/0 poisoning the variance of later pairs.
+            if risk_weight > 0.0 {
+                count[5] += dwt * adjtimewt * z2 / risk_weight;
+            }
             if ranks {
                 // Ranks use the Cox model risk set, i.e. after the deaths
                 // have been added; filled from the back so the result is
@@ -271,8 +276,12 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
                     let wsum = tree.walkup(x[jj]);
                     nevent_left -= 1;
                     resid[nevent_left] = [
-                        (wsum[0] - wsum[1]) / tree.total(),
-                        tree.total() * adjtimewt,
+                        if risk_weight > 0.0 {
+                            (wsum[0] - wsum[1]) / risk_weight
+                        } else {
+                            0.0
+                        },
+                        risk_weight * adjtimewt,
                         wt[jj],
                     ];
                 }

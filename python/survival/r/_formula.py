@@ -2349,6 +2349,22 @@ def _fit_single_design_term(
         penalty_values = {column: _column(full_data, column) for column in columns}
         levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, penalty_values, options, levels)
+    if not (
+        term.categorical
+        or term.transform
+        or term.arithmetic
+        or term.call
+        or term.strata
+        or term.categorical_wrapper
+    ):
+        source = _column_source(data, term.column)
+        array = _numeric_ndarray(source)
+        if array is not None and array.dtype.kind in "iuf" and _mstate_categories(source) is None:
+            if len(array) != n:
+                raise ValueError("formula columns must have the same length as the Surv response")
+            # Numeric dtypes already declare this term's type. Avoid materializing
+            # and scanning its scalars before constructing the list-valued design.
+            return _NumericDesignTerm(term)
     cache = getattr(data, "variable_cache", {})
     values = cache[term] if term in cache else _term_raw_values(data, term, n)
     if (
