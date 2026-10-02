@@ -18,7 +18,9 @@
 use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::SurvResponse;
-use crate::core::strata_order::{order_within_strata, validate_intervals};
+use crate::core::strata_order::{
+    grouped_sum, order_within_strata, stratum_groups, validate_intervals,
+};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
@@ -460,6 +462,22 @@ pub struct CoxPrediction {
     pub fit: Vec<f64>,
     #[pyo3(get)]
     pub se_fit: Option<Vec<f64>>,
+}
+
+impl CoxPrediction {
+    /// Sum predictions by ascending group, combining standard errors in
+    /// quadrature before results cross a language boundary.
+    pub fn collapse(self, group: &[i32]) -> SurvivalResult<Self> {
+        let sum = |values: &[f64], squares| {
+            let column = ArrayView2::from_shape((values.len(), 1), values)
+                .expect("a column vector has a valid shape");
+            grouped_sum(column, group, squares).map(|result| result.column(0).to_vec())
+        };
+        Ok(Self {
+            fit: sum(&self.fit, false)?,
+            se_fit: self.se_fit.as_deref().map(|se| sum(se, true)).transpose()?,
+        })
+    }
 }
 
 /// `predict(type = "terms")` output: one column per term.
@@ -1512,23 +1530,80 @@ impl CoxPHFit {
         reference: PredictReference,
         assign: &[Vec<usize>],
     ) -> SurvivalResult<CoxTermsPrediction> {
+        self.predict_terms_inner(newdata, se_fit, reference, assign, None)
+    }
+
+    /// Term predictions summed by ascending integer group. Only grouped
+    /// output rows are allocated; standard errors combine in quadrature.
+    pub fn predict_terms_grouped(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+        reference: PredictReference,
+        assign: &[Vec<usize>],
+        group: &[i32],
+    ) -> SurvivalResult<CoxTermsPrediction> {
+        self.predict_terms_inner(newdata, se_fit, reference, assign, Some(group))
+    }
+
+    fn predict_terms_inner(
+        &self,
+        newdata: Option<&CoxNewData>,
+        se_fit: bool,
+        reference: PredictReference,
+        assign: &[Vec<usize>],
+        group: Option<&[i32]>,
+    ) -> SurvivalResult<CoxTermsPrediction> {
         validate_assign(assign, self.nvar())?;
+        let nrows = newdata.map_or(self.n, CoxNewData::nrows);
+        if group.is_some_and(|group| group.len() != nrows) {
+            return Err(SurvivalError::invalid_input(
+                "group must have one value per prediction row",
+            ));
+        }
+        let groups = group.map(stratum_groups);
         let (newx, _) = self.prediction_rows(newdata, reference, true)?;
         let coef = self.coefficients_or_zero();
         let nterms = assign.len();
-        let mut fit = vec![vec![0.0; nterms]; newx.nrows()];
-        let mut se = se_fit.then(|| vec![vec![0.0; nterms]; newx.nrows()]);
+        let output_rows = groups.as_ref().map_or(newx.nrows(), Vec::len);
+        let mut fit = vec![vec![0.0; nterms]; output_rows];
+        let mut se = se_fit.then(|| vec![vec![0.0; nterms]; output_rows]);
         for (t, columns) in assign.iter().enumerate() {
-            for (i, row) in newx.outer_iter().enumerate() {
-                fit[i][t] = columns.iter().map(|&c| row[c] * coef[c]).sum();
-                if let Some(se) = se.as_mut() {
+            let evaluate = |row: ArrayView1<'_, f64>| {
+                let value = columns.iter().map(|&c| row[c] * coef[c]).sum();
+                let error = if se_fit {
                     let mut total = 0.0;
                     for &c1 in columns {
                         for &c2 in columns {
                             total += row[c1] * self.var[(c1, c2)] * row[c2];
                         }
                     }
-                    se[i][t] = total.sqrt();
+                    total.sqrt()
+                } else {
+                    0.0
+                };
+                (value, error)
+            };
+            if let Some(groups) = &groups {
+                for (i, (_, rows)) in groups.iter().enumerate() {
+                    for &row in rows {
+                        let (value, error) = evaluate(newx.row(row));
+                        fit[i][t] += value;
+                        if let Some(se) = se.as_mut() {
+                            se[i][t] += error * error;
+                        }
+                    }
+                    if let Some(se) = se.as_mut() {
+                        se[i][t] = se[i][t].sqrt();
+                    }
+                }
+            } else {
+                for (i, row) in newx.outer_iter().enumerate() {
+                    let (value, error) = evaluate(row);
+                    fit[i][t] = value;
+                    if let Some(se) = se.as_mut() {
+                        se[i][t] = error;
+                    }
                 }
             }
         }
@@ -1878,7 +1953,7 @@ impl CoxPHFit {
 
     /// `predict(fit, newdata, type, se.fit, reference)` for the vector-valued
     /// types `lp`, `risk`, `expected` and `survival`.
-    #[pyo3(signature = (r#type = "lp", newdata = None, new_strata = None, new_offset = None, new_time = None, new_entry = None, se_fit = false, reference = "strata"))]
+    #[pyo3(signature = (r#type = "lp", newdata = None, new_strata = None, new_offset = None, new_time = None, new_entry = None, se_fit = false, reference = "strata", *, collapse = None))]
     #[allow(clippy::too_many_arguments)]
     fn predict(
         &self,
@@ -1891,27 +1966,33 @@ impl CoxPHFit {
         new_entry: Option<FloatVec>,
         se_fit: bool,
         reference: &str,
+        collapse: Option<IntVec>,
     ) -> PyResult<CoxPrediction> {
         let newdata = newdata_from_python(newdata, new_strata, new_offset, new_time, new_entry)?;
         let reference = PredictReference::parse(reference)?;
         let newdata = newdata.as_ref();
-        Ok(match r#type {
-            "lp" => py.detach(|| self.predict_lp(newdata, se_fit, reference))?,
-            "risk" => py.detach(|| self.predict_risk(newdata, se_fit, reference))?,
-            "expected" => py.detach(|| self.predict_expected(newdata, se_fit))?,
-            "survival" => py.detach(|| self.predict_survival(newdata, se_fit))?,
-            other => {
-                return Err(SurvivalError::invalid_input(format!(
-                    "type must be 'lp', 'risk', 'expected' or 'survival', got '{other}'; use predict_terms for 'terms'"
-                ))
-                .into());
+        Ok(py.detach(|| {
+            let prediction = match r#type {
+                "lp" => self.predict_lp(newdata, se_fit, reference),
+                "risk" => self.predict_risk(newdata, se_fit, reference),
+                "expected" => self.predict_expected(newdata, se_fit),
+                "survival" => self.predict_survival(newdata, se_fit),
+                other => {
+                    return Err(SurvivalError::invalid_input(format!(
+                        "type must be 'lp', 'risk', 'expected' or 'survival', got '{other}'; use predict_terms for 'terms'"
+                    )));
+                }
+            }?;
+            match collapse.as_deref() {
+                Some(group) => prediction.collapse(group),
+                None => Ok(prediction),
             }
-        })
+        })?)
     }
 
     /// `predict(fit, type = "terms")`; `assign` lists the columns of each
     /// term (default: one term per column).
-    #[pyo3(name = "predict_terms", signature = (newdata = None, new_strata = None, new_offset = None, se_fit = false, reference = "sample", assign = None))]
+    #[pyo3(name = "predict_terms", signature = (newdata = None, new_strata = None, new_offset = None, se_fit = false, reference = "sample", assign = None, *, collapse = None))]
     #[allow(clippy::too_many_arguments)]
     fn predict_terms_py(
         &self,
@@ -1922,11 +2003,17 @@ impl CoxPHFit {
         se_fit: bool,
         reference: &str,
         assign: Option<Vec<Vec<usize>>>,
+        collapse: Option<IntVec>,
     ) -> PyResult<CoxTermsPrediction> {
         let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
         let reference = PredictReference::parse(reference)?;
         let assign = assign.unwrap_or_else(|| default_assign(self.nvar()));
-        Ok(py.detach(|| self.predict_terms(newdata.as_ref(), se_fit, reference, &assign))?)
+        Ok(py.detach(|| match collapse.as_deref() {
+            Some(group) => {
+                self.predict_terms_grouped(newdata.as_ref(), se_fit, reference, &assign, group)
+            }
+            None => self.predict_terms(newdata.as_ref(), se_fit, reference, &assign),
+        })?)
     }
 
     /// `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`.
@@ -2212,6 +2299,122 @@ mod tests {
         )
         .unwrap();
         CoxphData::try_new(time, None, status, x, None, None, None).unwrap()
+    }
+
+    #[test]
+    fn grouped_vector_predictions_preserve_addition_order_and_error_quadrature() {
+        let prediction = CoxPrediction {
+            fit: vec![1e16, -1e16, 1.0, 2.0],
+            se_fit: Some(vec![3.0, 4.0, 0.0, 2.0]),
+        };
+        assert_eq!(
+            prediction.clone().collapse(&[-3, -3, -3, 9]).unwrap(),
+            CoxPrediction {
+                fit: vec![1.0, 2.0],
+                se_fit: Some(vec![5.0, 2.0]),
+            }
+        );
+        assert!(prediction.collapse(&[1, 2]).is_err());
+        assert_eq!(
+            CoxPrediction {
+                fit: vec![],
+                se_fit: Some(vec![])
+            }
+            .collapse(&[])
+            .unwrap(),
+            CoxPrediction {
+                fit: vec![],
+                se_fit: Some(vec![])
+            }
+        );
+    }
+
+    #[test]
+    fn grouped_terms_retain_selected_empty_and_repeated_columns_and_reference() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let group = [
+            i32::MAX,
+            i32::MIN,
+            -11,
+            i32::MAX,
+            i32::MIN,
+            -11,
+            i32::MAX,
+            -11,
+        ];
+        let assign = vec![vec![0], vec![1], vec![0, 1], vec![], vec![1]];
+        for reference in [
+            PredictReference::Sample,
+            PredictReference::Strata,
+            PredictReference::Zero,
+        ] {
+            for errors in [false, true] {
+                let ungrouped = fit.predict_terms(None, errors, reference, &assign).unwrap();
+                let grouped = fit
+                    .predict_terms_grouped(None, errors, reference, &assign, &group)
+                    .unwrap();
+                assert_eq!(grouped.constant, ungrouped.constant);
+                assert_eq!(grouped.fit.len(), 3);
+                for (i, label) in [i32::MIN, -11, i32::MAX].iter().enumerate() {
+                    for t in 0..assign.len() {
+                        let rows: Vec<usize> =
+                            (0..group.len()).filter(|&r| group[r] == *label).collect();
+                        let expected: f64 = rows.iter().map(|&r| ungrouped.fit[r][t]).sum();
+                        assert_eq!(grouped.fit[i][t], expected);
+                        if let Some(se) = ungrouped.se_fit.as_ref() {
+                            let expected: f64 = rows.iter().map(|&r| se[r][t] * se[r][t]).sum();
+                            assert_eq!(grouped.se_fit.as_ref().unwrap()[i][t], expected.sqrt());
+                        } else {
+                            assert!(grouped.se_fit.is_none());
+                        }
+                    }
+                }
+            }
+        }
+        let empty = fit
+            .predict_terms_grouped(None, true, PredictReference::Sample, &[], &group)
+            .unwrap();
+        assert_eq!(empty.fit, vec![Vec::<f64>::new(); 3]);
+        assert_eq!(empty.se_fit, Some(empty.fit));
+        assert!(
+            fit.predict_terms_grouped(None, false, PredictReference::Sample, &assign, &[1, 2])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn grouped_terms_propagate_missingness_per_term_and_preserve_independent_columns() {
+        let fit = CoxPHFit::fit(lung_like_data(), CoxphOptions::default()).unwrap();
+        let newdata = CoxNewData::try_new_prediction(
+            ndarray::array![[f64::NAN, 2.0], [1.0, 3.0], [2.0, 4.0]],
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let ungrouped = fit
+            .predict_terms(
+                Some(&newdata),
+                true,
+                PredictReference::Zero,
+                &default_assign(2),
+            )
+            .unwrap();
+        let grouped = fit
+            .predict_terms_grouped(
+                Some(&newdata),
+                true,
+                PredictReference::Zero,
+                &default_assign(2),
+                &[9, 2, 9],
+            )
+            .unwrap();
+        assert_eq!(grouped.fit[0], ungrouped.fit[1]);
+        assert!(grouped.fit[1][0].is_nan());
+        assert!(grouped.se_fit.as_ref().unwrap()[1][0].is_nan());
+        assert_eq!(grouped.fit[1][1], ungrouped.fit[0][1] + ungrouped.fit[2][1]);
+        assert!(grouped.se_fit.unwrap()[1][1].is_finite());
     }
 
     #[test]

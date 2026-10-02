@@ -385,6 +385,9 @@ Grouped Cox predictions and Cox/AFT residuals preserve factor order and missing
 groups. Prediction errors combine in quadrature through a shared Rust kernel;
 the R interface retains group names. See [grouped model outputs](docs/model-collapse.md)
 for omission rules, reference differences and complete-call timings.
+Grouped predictions sum before leaving Rust, and term output storage follows
+the group count. See [native grouping performance](docs/cox-grouped-prediction-performance.md)
+for time and memory measurements.
 `predict(pspline(x), newx)` evaluates a spline basis using the original
 boundaries, degree, intercept and column combinations, with linear
 extrapolation outside the boundaries.

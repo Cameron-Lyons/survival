@@ -1,0 +1,5718 @@
+{
+  "metadata": {
+    "r": "4.5.3",
+    "survival": "3.8.12",
+    "reference": "uncollapsed stock R predictions padded before base rowsum; sparse terms add fitted frailties; survival uses expected and delta-method errors"
+  },
+  "data": {
+    "futime": [59, 115, 156, 421, 431, 448, 464, 475, 477, 563, 638, 744, 769, 770, 803, 855, 1040, 1106, 1129, 1206, 1227, 268, 329, 353, 365, 377],
+    "fustat": [1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0],
+    "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997, 64.175299999999993, 55.178100000000001, 56.7562, 50.1096, 59.630099999999999, 57.052100000000003, 39.2712, 43.1233, 38.8932, 44.600000000000001, 53.906799999999997, 44.205500000000001, 59.588999999999999, 74.504099999999994, 43.137, 63.219200000000001, 64.424700000000001, 58.309600000000003],
+    "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1],
+    "rx": [1, 1, 1, 2, 1, 1, 2, 2, 1, 2, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2],
+    "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2, 1, 2, 2, 1, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 2, 1, 1],
+    "x": [1.2331500000000006, 1.4493200000000002, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, -0.30630000000000024, -0.014520000000000265, 0.41752999999999929, -0.48218999999999995, -0.32438, -0.98903999999999992, -0.03699000000000012, -0.29478999999999972, -2.0728800000000001, -1.68767, -2.1106799999999999, -1.5399999999999998, -0.60932000000000031, -1.57945, -0.041100000000000136, 1.4504099999999993, -1.6862999999999999, 0.32192000000000009, 0.44247000000000014, -0.16903999999999969],
+    "cl": ["a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b"]
+  },
+  "levels": ["c", "b", "a"],
+  "specs": {
+    "plain": "x + rx",
+    "ridge": "x + ridge(rx, theta = 2)",
+    "multi": "ridge(x, rx, theta = 2)",
+    "sparse": "x + frailty(cl, sparse = TRUE, theta = .4)",
+    "sparse_only": "frailty(cl, sparse = TRUE, theta = .4)"
+  },
+  "cases": [
+    {
+      "name": "plain/lp/FALSE/numeric/all",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [2.2016977120051715],
+            [null],
+            [-2.2016977120051808]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/lp/TRUE/numeric/all",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [2.2016977120051768],
+              [null],
+              [-2.2016977120051746]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [2.2121521600018261],
+              [null],
+              [1.9862317067335318]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/risk/FALSE/numeric/all",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [69.521188372692478],
+            [null],
+            [73.306417592966497]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/risk/TRUE/numeric/all",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [69.521188372692507],
+              [null],
+              [73.306417592966554]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [7.8796656646806786],
+              [null],
+              [9.584028270746316]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/numeric/all",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.15201519268995223, 2.0496825193152235],
+            [null, null],
+            [-0.15201519268995456, -2.0496825193152199]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/numeric/repeated",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [2, 1, 2],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [2.0496825193152235, 0.15201519268995223, 2.0496825193152235],
+            [null, null, null],
+            [-2.0496825193152199, -0.15201519268995456, -2.0496825193152199]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 3
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/numeric/empty",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/numeric/all",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.15201519268995223, 2.0496825193152235],
+              [null, null],
+              [-0.15201519268995456, -2.0496825193152199]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.9291099615068281, 1.19738760825519],
+              [null, null],
+              [1.6260086517852548, 1.1481586675750297]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/numeric/repeated",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [2, 1, 2],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [2.0496825193152235, 0.15201519268995223, 2.0496825193152235],
+              [null, null, null],
+              [-2.0496825193152199, -0.15201519268995456, -2.0496825193152199]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 3
+          },
+          "se_fit": {
+            "values": [
+              [1.19738760825519, 1.9291099615068281, 1.19738760825519],
+              [null, null, null],
+              [1.1481586675750297, 1.6260086517852548, 1.1481586675750297]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 3
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/numeric/empty",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/expected/FALSE/numeric/all",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.8448087565212106],
+            [null],
+            [5.1551912434787903]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/expected/TRUE/numeric/all",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.8448087565212106],
+              [null],
+              [5.1551912434787903]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.3357178128249787],
+              [null],
+              [1.368980560069635]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/survival/FALSE/numeric/all",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.177827000474668],
+            [null],
+            [8.459159902684716]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/survival/TRUE/numeric/all",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.177827000474668],
+              [null],
+              [8.459159902684716]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.49785299947155076],
+              [null],
+              [0.4656833471162703]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/lp/FALSE/factor/all",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-2.2016977120051808],
+            [null],
+            [2.2016977120051715]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/lp/TRUE/factor/all",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-2.2016977120051746],
+              [null],
+              [2.2016977120051768]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.9862317067335318],
+              [null],
+              [2.2121521600018261]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/risk/FALSE/factor/all",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [73.306417592966497],
+            [null],
+            [69.521188372692478]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/risk/TRUE/factor/all",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [73.306417592966554],
+              [null],
+              [69.521188372692507]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [9.584028270746316],
+              [null],
+              [7.8796656646806786]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/factor/all",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.15201519268995456, -2.0496825193152199],
+            [null, null],
+            [0.15201519268995223, 2.0496825193152235]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/factor/repeated",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [2, 1, 2],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-2.0496825193152199, -0.15201519268995456, -2.0496825193152199],
+            [null, null, null],
+            [2.0496825193152235, 0.15201519268995223, 2.0496825193152235]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 3
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/FALSE/factor/empty",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/factor/all",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.15201519268995456, -2.0496825193152199],
+              [null, null],
+              [0.15201519268995223, 2.0496825193152235]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.6260086517852548, 1.1481586675750297],
+              [null, null],
+              [1.9291099615068281, 1.19738760825519]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/factor/repeated",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [2, 1, 2],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-2.0496825193152199, -0.15201519268995456, -2.0496825193152199],
+              [null, null, null],
+              [2.0496825193152235, 0.15201519268995223, 2.0496825193152235]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 3
+          },
+          "se_fit": {
+            "values": [
+              [1.1481586675750297, 1.6260086517852548, 1.1481586675750297],
+              [null, null, null],
+              [1.19738760825519, 1.9291099615068281, 1.19738760825519]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 3
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/terms/TRUE/factor/empty",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/expected/FALSE/factor/all",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.1551912434787903],
+            [null],
+            [5.8448087565212106]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/expected/TRUE/factor/all",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.1551912434787903],
+              [null],
+              [5.8448087565212106]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.368980560069635],
+              [null],
+              [1.3357178128249787]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/survival/FALSE/factor/all",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.459159902684716],
+            [null],
+            [8.177827000474668]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "plain/survival/TRUE/factor/all",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.459159902684716],
+              [null],
+              [8.177827000474668]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.4656833471162703],
+              [null],
+              [0.49785299947155076]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/lp/FALSE/na.pass",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [0.053889899292609567, null, 3.8957210711342971, 2.7415867536397176],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": ["missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.053889899292609567],
+            [null],
+            [3.8957210711342971],
+            [2.7415867536397176]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/lp/FALSE/na.omit",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [0.053889899292609567, 3.8957210711342971],
+          "names": ["kept-c", "kept-a"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.053889899292609567],
+            [3.8957210711342971]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/lp/FALSE/na.exclude",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.053889899292609567],
+            [null],
+            [3.8957210711342971],
+            [null]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/lp/TRUE/na.pass",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.053889899292609567, null, 3.8957210711342971, 2.7415867536397176],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.51776820092684783, null, 1.2093264437941844, 0.78215306071284552],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.053889899292609567],
+              [null],
+              [3.8957210711342971],
+              [2.7415867536397176]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.51776820092684783],
+              [null],
+              [1.2093264437941844],
+              [0.78215306071284552]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/lp/TRUE/na.omit",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.053889899292609567, 3.8957210711342971],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.51776820092684783, 1.2093264437941844],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.053889899292609567],
+              [3.8957210711342971]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.51776820092684783],
+              [1.2093264437941844]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/lp/TRUE/na.exclude",
+      "model": "plain",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.053889899292609567],
+              [null],
+              [3.8957210711342971],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.51776820092684783],
+              [null],
+              [1.2093264437941844],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/risk/FALSE/na.pass",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [3.0590464058132714, null, 45.60193372634437, 15.511578633091673],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": ["missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [3.0590464058132714],
+            [null],
+            [45.60193372634437],
+            [15.511578633091673]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/risk/FALSE/na.omit",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [3.0590464058132714, 45.60193372634437],
+          "names": ["kept-c", "kept-a"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [3.0590464058132714],
+            [45.60193372634437]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/risk/FALSE/na.exclude",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [3.0590464058132714],
+            [null],
+            [45.60193372634437],
+            [null]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/risk/TRUE/na.pass",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [3.0590464058132714, null, 45.60193372634437, 15.511578633091673],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.67038201369211292, null, 7.1239568256300583, 3.0804896112462461],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [3.0590464058132714],
+              [null],
+              [45.60193372634437],
+              [15.511578633091673]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.67038201369211292],
+              [null],
+              [7.1239568256300583],
+              [3.0804896112462461]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/risk/TRUE/na.omit",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [3.0590464058132714, 45.60193372634437],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.67038201369211292, 7.1239568256300583],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [3.0590464058132714],
+              [45.60193372634437]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.67038201369211292],
+              [7.1239568256300583]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/risk/TRUE/na.exclude",
+      "model": "plain",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [3.0590464058132714],
+              [null],
+              [45.60193372634437],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.67038201369211292],
+              [null],
+              [7.1239568256300583],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/terms/FALSE/na.pass",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [
+            [-0.059981351780458492, 0.11387125107306817],
+            [null, 0.11387125107306817],
+            [3.0416866880862874, 0.85403438304800949],
+            [2.0014236216647765, 0.74016313197494132]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": ["missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.059981351780458492, 0.11387125107306817],
+            [null, 0.11387125107306817],
+            [3.0416866880862874, 0.85403438304800949],
+            [2.0014236216647765, 0.74016313197494132]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/terms/FALSE/na.omit",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [
+            [-0.059981351780458492, 0.11387125107306817],
+            [3.0416866880862874, 0.85403438304800949]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.059981351780458492, 0.11387125107306817],
+            [3.0416866880862874, 0.85403438304800949]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/terms/FALSE/na.exclude",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.059981351780458492, 0.11387125107306817],
+            [null, null],
+            [3.0416866880862874, 0.85403438304800949],
+            [null, null]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/terms/TRUE/na.pass",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.059981351780458492, 0.11387125107306817],
+              [null, 0.11387125107306817],
+              [3.0416866880862874, 0.85403438304800949],
+              [2.0014236216647765, 0.74016313197494132]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [0.11947794671222486, 0.48222531010662983],
+              [null, 0.48222531010662983],
+              [1.0149135661595079, 0.60667674064561683],
+              [0.62432874513876868, 0.36812418819326953]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.059981351780458492, 0.11387125107306817],
+              [null, 0.11387125107306817],
+              [3.0416866880862874, 0.85403438304800949],
+              [2.0014236216647765, 0.74016313197494132]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [0.11947794671222486, 0.48222531010662983],
+              [null, 0.48222531010662983],
+              [1.0149135661595079, 0.60667674064561683],
+              [0.62432874513876868, 0.36812418819326953]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/terms/TRUE/na.omit",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.059981351780458492, 0.11387125107306817],
+              [3.0416866880862874, 0.85403438304800949]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [0.11947794671222486, 0.48222531010662983],
+              [1.0149135661595079, 0.60667674064561683]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.059981351780458492, 0.11387125107306817],
+              [3.0416866880862874, 0.85403438304800949]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [0.11947794671222486, 0.48222531010662983],
+              [1.0149135661595079, 0.60667674064561683]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/terms/TRUE/na.exclude",
+      "model": "plain",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.059981351780458492, 0.11387125107306817],
+              [null, null],
+              [3.0416866880862874, 0.85403438304800949],
+              [null, null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [0.11947794671222486, 0.48222531010662983],
+              [null, null],
+              [1.0149135661595079, 0.60667674064561683],
+              [null, null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/expected/FALSE/na.pass",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [0.76064927456728204, null, 1.1160784992964263, 0.26468948069603104],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": ["missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.76064927456728204],
+            [null],
+            [1.1160784992964263],
+            [0.26468948069603104]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/expected/FALSE/na.omit",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [0.76064927456728204, 1.1160784992964263],
+          "names": ["kept-c", "kept-a"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.76064927456728204],
+            [1.1160784992964263]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/expected/FALSE/na.exclude",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.76064927456728204],
+            [null],
+            [1.1160784992964263],
+            [null]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/expected/TRUE/na.pass",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.76064927456728204, null, 1.1160784992964263, 0.26468948069603104],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.39846323060022282, null, 0.45176667544013094, 0.19750514919368836],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.76064927456728204],
+              [null],
+              [1.1160784992964263],
+              [0.26468948069603104]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.39846323060022282],
+              [null],
+              [0.45176667544013094],
+              [0.19750514919368836]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/expected/TRUE/na.omit",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.76064927456728204, 1.1160784992964263],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.39846323060022282, 0.45176667544013094],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.76064927456728204],
+              [1.1160784992964263]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.39846323060022282],
+              [0.45176667544013094]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/expected/TRUE/na.exclude",
+      "model": "plain",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.76064927456728204],
+              [null],
+              [1.1160784992964263],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.39846323060022282],
+              [null],
+              [0.45176667544013094],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/survival/FALSE/na.pass",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [1.4322482218025958, null, 2.0897242627558033, 0.76744421922512918],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": ["missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.4322482218025958],
+            [null],
+            [2.0897242627558033],
+            [0.76744421922512918]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/survival/FALSE/na.omit",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [1.4322482218025958, 2.0897242627558033],
+          "names": ["kept-c", "kept-a"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.4322482218025958],
+            [2.0897242627558033]
+          ],
+          "names": ["kept-c", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/survival/FALSE/na.exclude",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.4322482218025958],
+            [null],
+            [2.0897242627558033],
+            [null]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a", null],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": ["missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/survival/TRUE/na.pass",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.pass",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [1.4322482218025958, null, 2.0897242627558033, 0.76744421922512918],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.20443441579553659, null, 0.30668696138020068, 0.15157418501589282],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.4322482218025958],
+              [null],
+              [2.0897242627558033],
+              [0.76744421922512918]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.20443441579553659],
+              [null],
+              [0.30668696138020068],
+              [0.15157418501589282]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "newdata/survival/TRUE/na.omit",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.omit",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [1.4322482218025958, 2.0897242627558033],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [0.20443441579553659, 0.30668696138020068],
+            "names": ["kept-c", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.4322482218025958],
+              [2.0897242627558033]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.20443441579553659],
+              [0.30668696138020068]
+            ],
+            "names": ["kept-c", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "newdata/survival/TRUE/na.exclude",
+      "model": "plain",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", null, "kept-c", "kept-a", "kept-c", "only-omitted", "kept-a"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "newdata": {
+        "futime": [59, 115, 156, 421, 431, 448, 464, 475],
+        "fustat": [1, 1, 1, 0, 1, 0, 1, 1],
+        "age": [72.331500000000005, 74.493200000000002, 66.465800000000002, 53.364400000000003, 50.339700000000001, 56.430100000000003, 56.936999999999998, 59.854799999999997],
+        "resid.ds": [2, 2, 2, 2, 2, 1, 2, 2],
+        "rx": [1, 1, 1, 2, 1, 1, 2, 2],
+        "ecog.ps": [1, 1, 2, 1, 1, 2, 2, 2],
+        "x": [1.2331500000000006, null, 0.64658000000000015, -0.66355999999999971, -0.96602999999999994, -0.3569899999999997, null, -0.014520000000000265],
+        "cl": ["a", "b", "c", "a", "b", "c", "a", "b"]
+      },
+      "na_action": "na.exclude",
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "incorrect length for 'group'"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.4322482218025958],
+              [null],
+              [2.0897242627558033],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.20443441579553659],
+              [null],
+              [0.30668696138020068],
+              [null]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a", null],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": ["missing values for 'group'", "missing values for 'group'"]
+      }
+    },
+    {
+      "name": "ridge/lp/FALSE/numeric/all",
+      "model": "ridge",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.8033026357676261],
+            [null],
+            [-1.8033026357676261]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/lp/TRUE/numeric/all",
+      "model": "ridge",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.803302635767623],
+              [null],
+              [-1.8033026357676292]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [2.1401356689897226],
+              [null],
+              [1.8963340904473041]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/risk/FALSE/numeric/all",
+      "model": "ridge",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [59.053009359508145],
+            [null],
+            [61.498772985806802]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/risk/TRUE/numeric/all",
+      "model": "ridge",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [59.053009359508131],
+              [null],
+              [61.498772985806795]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [6.7953554696098957],
+              [null],
+              [8.2512124765480408]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/numeric/all",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.148973980687503, 1.6543286550801211],
+            [null, null],
+            [-0.14897398068751044, -1.6543286550801186]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/numeric/repeated",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [2, 1, 2],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.6543286550801211, 0.148973980687503, 1.6543286550801211],
+            [null, null, null],
+            [-1.6543286550801186, -0.14897398068751044, -1.6543286550801186]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 3
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/numeric/empty",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/numeric/all",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.148973980687503, 1.6543286550801211],
+              [null, null],
+              [-0.14897398068751044, -1.6543286550801186]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.8941356168737598, 1.0724176561340772],
+              [null, null],
+              [1.5965294680691187, 1.0283266827398301]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/numeric/repeated",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [2, 1, 2],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.6543286550801211, 0.148973980687503, 1.6543286550801211],
+              [null, null, null],
+              [-1.6543286550801186, -0.14897398068751044, -1.6543286550801186]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 3
+          },
+          "se_fit": {
+            "values": [
+              [1.0724176561340772, 1.8941356168737598, 1.0724176561340772],
+              [null, null, null],
+              [1.0283266827398301, 1.5965294680691187, 1.0283266827398301]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 3
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/numeric/empty",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/expected/FALSE/numeric/all",
+      "model": "ridge",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.8085108668522043],
+            [null],
+            [5.1914891331477957]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/expected/TRUE/numeric/all",
+      "model": "ridge",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.8085108668522043],
+              [null],
+              [5.1914891331477957]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.2178821490179601],
+              [null],
+              [1.318911541621145]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/survival/FALSE/numeric/all",
+      "model": "ridge",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.1102194165720203],
+            [null],
+            [8.3767919388007286]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/survival/TRUE/numeric/all",
+      "model": "ridge",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.1102194165720203],
+              [null],
+              [8.3767919388007286]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.48770640970181628],
+              [null],
+              [0.46043567322757845]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/lp/FALSE/factor/all",
+      "model": "ridge",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-1.8033026357676261],
+            [null],
+            [1.8033026357676261]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/lp/TRUE/factor/all",
+      "model": "ridge",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-1.8033026357676292],
+              [null],
+              [1.803302635767623]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.8963340904473041],
+              [null],
+              [2.1401356689897226]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/risk/FALSE/factor/all",
+      "model": "ridge",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [61.498772985806802],
+            [null],
+            [59.053009359508145]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/risk/TRUE/factor/all",
+      "model": "ridge",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [61.498772985806795],
+              [null],
+              [59.053009359508131]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [8.2512124765480408],
+              [null],
+              [6.7953554696098957]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/factor/all",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.14897398068751044, -1.6543286550801186],
+            [null, null],
+            [0.148973980687503, 1.6543286550801211]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/factor/repeated",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [2, 1, 2],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-1.6543286550801186, -0.14897398068751044, -1.6543286550801186],
+            [null, null, null],
+            [1.6543286550801211, 0.148973980687503, 1.6543286550801211]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 3
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/FALSE/factor/empty",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/factor/all",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.14897398068751044, -1.6543286550801186],
+              [null, null],
+              [0.148973980687503, 1.6543286550801211]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.5965294680691187, 1.0283266827398301],
+              [null, null],
+              [1.8941356168737598, 1.0724176561340772]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/factor/repeated",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [2, 1, 2],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-1.6543286550801186, -0.14897398068751044, -1.6543286550801186],
+              [null, null, null],
+              [1.6543286550801211, 0.148973980687503, 1.6543286550801211]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 3
+          },
+          "se_fit": {
+            "values": [
+              [1.0283266827398301, 1.5965294680691187, 1.0283266827398301],
+              [null, null, null],
+              [1.0724176561340772, 1.8941356168737598, 1.0724176561340772]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 3
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/terms/TRUE/factor/empty",
+      "model": "ridge",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/expected/FALSE/factor/all",
+      "model": "ridge",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.1914891331477957],
+            [null],
+            [5.8085108668522043]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/expected/TRUE/factor/all",
+      "model": "ridge",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.1914891331477957],
+              [null],
+              [5.8085108668522043]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.318911541621145],
+              [null],
+              [1.2178821490179601]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/survival/FALSE/factor/all",
+      "model": "ridge",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.3767919388007286],
+            [null],
+            [8.1102194165720203]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "ridge/survival/TRUE/factor/all",
+      "model": "ridge",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.3767919388007286],
+              [null],
+              [8.1102194165720203]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.46043567322757845],
+              [null],
+              [0.48770640970181628]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/lp/FALSE/numeric/all",
+      "model": "multi",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.6294273036186642],
+            [null],
+            [-1.6294273036186662]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/lp/TRUE/numeric/all",
+      "model": "multi",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.6294273036186633],
+              [null],
+              [-1.6294273036186657]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.6382802217776353],
+              [null],
+              [1.4824367946943804]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/risk/FALSE/numeric/all",
+      "model": "multi",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [30.318043180156387],
+            [null],
+            [27.298514115174523]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/risk/TRUE/numeric/all",
+      "model": "multi",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [30.318043180156387],
+              [null],
+              [27.29851411517453]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [3.3860714988450451],
+              [null],
+              [3.693304754467468]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/numeric/all",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.6294273036186633],
+            [null],
+            [-1.6294273036186657]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/numeric/repeated",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [1, 1],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [1.6294273036186633, 1.6294273036186633],
+            [null, null],
+            [-1.6294273036186657, -1.6294273036186657]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/numeric/empty",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/numeric/all",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.6294273036186633],
+              [null],
+              [-1.6294273036186657]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.6382802217776353],
+              [null],
+              [1.4824367946943804]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/numeric/repeated",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [1, 1],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [1.6294273036186633, 1.6294273036186633],
+              [null, null],
+              [-1.6294273036186657, -1.6294273036186657]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.6382802217776353, 1.6382802217776353],
+              [null, null],
+              [1.4824367946943804, 1.4824367946943804]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/numeric/empty",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/expected/FALSE/numeric/all",
+      "model": "multi",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.7980769617180261],
+            [null],
+            [5.2019230382819739]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/expected/TRUE/numeric/all",
+      "model": "multi",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.7980769617180261],
+              [null],
+              [5.2019230382819739]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.0908048674070729],
+              [null],
+              [1.0852556802211888]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/survival/FALSE/numeric/all",
+      "model": "multi",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [7.9425444847540723],
+            [null],
+            [8.0735698368352171]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/survival/TRUE/numeric/all",
+      "model": "multi",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [7.9425444847540723],
+              [null],
+              [8.0735698368352171]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.4854421920783149],
+              [null],
+              [0.49111064644509356]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/lp/FALSE/factor/all",
+      "model": "multi",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-1.6294273036186662],
+            [null],
+            [1.6294273036186642]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/lp/TRUE/factor/all",
+      "model": "multi",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-1.6294273036186657],
+              [null],
+              [1.6294273036186633]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.4824367946943804],
+              [null],
+              [1.6382802217776353]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/risk/FALSE/factor/all",
+      "model": "multi",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [27.298514115174523],
+            [null],
+            [30.318043180156387]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/risk/TRUE/factor/all",
+      "model": "multi",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [27.29851411517453],
+              [null],
+              [30.318043180156387]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [3.693304754467468],
+              [null],
+              [3.3860714988450451]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/factor/all",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-1.6294273036186657],
+            [null],
+            [1.6294273036186633]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/factor/repeated",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [1, 1],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-1.6294273036186657, -1.6294273036186657],
+            [null, null],
+            [1.6294273036186633, 1.6294273036186633]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/FALSE/factor/empty",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": false,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [],
+            [],
+            []
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 0
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/factor/all",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-1.6294273036186657],
+              [null],
+              [1.6294273036186633]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.4824367946943804],
+              [null],
+              [1.6382802217776353]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/factor/repeated",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [1, 1],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-1.6294273036186657, -1.6294273036186657],
+              [null, null],
+              [1.6294273036186633, 1.6294273036186633]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.4824367946943804, 1.4824367946943804],
+              [null, null],
+              [1.6382802217776353, 1.6382802217776353]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/terms/TRUE/factor/empty",
+      "model": "multi",
+      "type": "terms",
+      "se_fit": true,
+      "terms": [],
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          },
+          "se_fit": {
+            "values": [
+              [],
+              [],
+              []
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 0
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/expected/FALSE/factor/all",
+      "model": "multi",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.2019230382819739],
+            [null],
+            [5.7980769617180261]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/expected/TRUE/factor/all",
+      "model": "multi",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.2019230382819739],
+              [null],
+              [5.7980769617180261]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.0852556802211888],
+              [null],
+              [1.0908048674070729]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/survival/FALSE/factor/all",
+      "model": "multi",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.0735698368352171],
+            [null],
+            [7.9425444847540723]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "multi/survival/TRUE/factor/all",
+      "model": "multi",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.0735698368352171],
+              [null],
+              [7.9425444847540723]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.49111064644509356],
+              [null],
+              [0.4854421920783149]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/lp/FALSE/numeric/all",
+      "model": "sparse",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.14841150478184839],
+            [null],
+            [-0.24717774400711257]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/lp/TRUE/numeric/all",
+      "model": "sparse",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.14979489777733535],
+              [null],
+              [-0.14979489777734512]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [2.0344512224138107],
+              [null],
+              [1.7147987182109812]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/risk/FALSE/numeric/all",
+      "model": "sparse",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [38.497419334097273],
+            [null],
+            [41.167688198809557]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/risk/TRUE/numeric/all",
+      "model": "sparse",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [40.685176984948335],
+              [null],
+              [42.323398209376116]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [4.9846041923203481],
+              [null],
+              [6.1480059055153369]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/terms/FALSE/numeric/all",
+      "model": "sparse",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.14979489777733535, -0.0013833929954887303],
+            [null, null],
+            [-0.14979489777734512, -0.097382846229768338]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/terms/TRUE/numeric/all",
+      "model": "sparse",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.14979489777733535, -0.0013833929954887303],
+              [null, null],
+              [-0.14979489777734512, -0.097382846229768338]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [2.0344512224138107, 1.6179693445095631],
+              [null, null],
+              [1.7147987182109812, 1.6297558059223214]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/expected/FALSE/numeric/all",
+      "model": "sparse",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.5918786329269672],
+            [null],
+            [5.4081213670730319]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/expected/TRUE/numeric/all",
+      "model": "sparse",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.5918786329269672],
+              [null],
+              [5.4081213670730319]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.88784520859237337],
+              [null],
+              [1.1532562469313417]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/survival/FALSE/numeric/all",
+      "model": "sparse",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.17962404109789],
+            [null],
+            [8.208145714441379]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/survival/TRUE/numeric/all",
+      "model": "sparse",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.17962404109789],
+              [null],
+              [8.208145714441379]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.41077091147361289],
+              [null],
+              [0.43361968561355591]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/lp/FALSE/factor/all",
+      "model": "sparse",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.24717774400711257],
+            [null],
+            [0.14841150478184839]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/lp/TRUE/factor/all",
+      "model": "sparse",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.14979489777734512],
+              [null],
+              [0.14979489777733535]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.7147987182109812],
+              [null],
+              [2.0344512224138107]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/risk/FALSE/factor/all",
+      "model": "sparse",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [41.167688198809557],
+            [null],
+            [38.497419334097273]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/risk/TRUE/factor/all",
+      "model": "sparse",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [42.323398209376116],
+              [null],
+              [40.685176984948335]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [6.1480059055153369],
+              [null],
+              [4.9846041923203481]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/terms/FALSE/factor/all",
+      "model": "sparse",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.14979489777734512, -0.097382846229768338],
+            [null, null],
+            [0.14979489777733535, -0.0013833929954887303]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 2
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/terms/TRUE/factor/all",
+      "model": "sparse",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.14979489777734512, -0.097382846229768338],
+              [null, null],
+              [0.14979489777733535, -0.0013833929954887303]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          },
+          "se_fit": {
+            "values": [
+              [1.7147987182109812, 1.6297558059223214],
+              [null, null],
+              [2.0344512224138107, 1.6179693445095631]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 2
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/expected/FALSE/factor/all",
+      "model": "sparse",
+      "type": "expected",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [5.4081213670730319],
+            [null],
+            [5.5918786329269672]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/expected/TRUE/factor/all",
+      "model": "sparse",
+      "type": "expected",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [5.4081213670730319],
+              [null],
+              [5.5918786329269672]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.1532562469313417],
+              [null],
+              [0.88784520859237337]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/survival/FALSE/factor/all",
+      "model": "sparse",
+      "type": "survival",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [8.208145714441379],
+            [null],
+            [8.17962404109789]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse/survival/TRUE/factor/all",
+      "model": "sparse",
+      "type": "survival",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "'arg' should be one of “lp”, “risk”, “expected”, “terms”"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [8.208145714441379],
+              [null],
+              [8.17962404109789]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [0.43361968561355591],
+              [null],
+              [0.41077091147361289]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/lp/FALSE/numeric/all",
+      "model": "sparse_only",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.24825471327083359],
+            [null],
+            [-0.19728674099813337]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/lp/TRUE/numeric/all",
+      "model": "sparse_only",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.24825471327083359, null, -0.19728674099813337],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5623443565554835, null, 1.5878156195097239],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.24825471327083359],
+              [null],
+              [-0.19728674099813337]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5623443565554835],
+              [null],
+              [1.5878156195097239]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/risk/FALSE/numeric/all",
+      "model": "sparse_only",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [12.435779087806026],
+            [null],
+            [12]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/risk/TRUE/numeric/all",
+      "model": "sparse_only",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [12.435779087806026, null, 12],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5623443565554835, null, 1.5878156195097239],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [12.435779087806026],
+              [null],
+              [12]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5623443565554835],
+              [null],
+              [1.5878156195097239]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/terms/FALSE/numeric/all",
+      "model": "sparse_only",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "values": [0.24825471327083359, null, -0.19728674099813337],
+          "names": ["-11", "5", "99"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [0.24825471327083359],
+            [null],
+            [-0.19728674099813337]
+          ],
+          "names": ["-11", "5", "99"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/terms/TRUE/numeric/all",
+      "model": "sparse_only",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["-11", "5", "-11", "99", "-11", "99", "-11", "99", "5", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99", "-11", "99"],
+      "levels": null,
+      "numeric_groups": true,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [0.24825471327083359, null, -0.19728674099813337],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5623443565554835, null, 1.5878156195097239],
+            "names": ["-11", "5", "99"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [0.24825471327083359],
+              [null],
+              [-0.19728674099813337]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5623443565554835],
+              [null],
+              [1.5878156195097239]
+            ],
+            "names": ["-11", "5", "99"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/lp/FALSE/factor/all",
+      "model": "sparse_only",
+      "type": "lp",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.19728674099813337],
+            [null],
+            [0.24825471327083359]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/lp/TRUE/factor/all",
+      "model": "sparse_only",
+      "type": "lp",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [-0.19728674099813337, null, 0.24825471327083359],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5878156195097239, null, 1.5623443565554835],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.19728674099813337],
+              [null],
+              [0.24825471327083359]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5878156195097239],
+              [null],
+              [1.5623443565554835]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/risk/FALSE/factor/all",
+      "model": "sparse_only",
+      "type": "risk",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "error": "Collapse vector is the wrong length"
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [12],
+            [null],
+            [12.435779087806026]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/risk/TRUE/factor/all",
+      "model": "sparse_only",
+      "type": "risk",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [12, null, 12.435779087806026],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5878156195097239, null, 1.5623443565554835],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [12],
+              [null],
+              [12.435779087806026]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5878156195097239],
+              [null],
+              [1.5623443565554835]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/terms/FALSE/factor/all",
+      "model": "sparse_only",
+      "type": "terms",
+      "se_fit": false,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "values": [-0.19728674099813337, null, 0.24825471327083359],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": false,
+          "width": null
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "values": [
+            [-0.19728674099813337],
+            [null],
+            [0.24825471327083359]
+          ],
+          "names": ["kept-c", "only-omitted", "kept-a"],
+          "matrix": true,
+          "width": 1
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "sparse_only/terms/TRUE/factor/all",
+      "model": "sparse_only",
+      "type": "terms",
+      "se_fit": true,
+      "terms": null,
+      "collapse": ["kept-a", "only-omitted", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "only-omitted", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c", "kept-a", "kept-c"],
+      "levels": ["kept-c", "only-omitted", "kept-a", "unused"],
+      "numeric_groups": false,
+      "raw": {
+        "result": {
+          "fit": {
+            "values": [-0.19728674099813337, null, 0.24825471327083359],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          },
+          "se_fit": {
+            "values": [1.5878156195097239, null, 1.5623443565554835],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": false,
+            "width": null
+          }
+        },
+        "warnings": []
+      },
+      "expected": {
+        "result": {
+          "fit": {
+            "values": [
+              [-0.19728674099813337],
+              [null],
+              [0.24825471327083359]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          },
+          "se_fit": {
+            "values": [
+              [1.5878156195097239],
+              [null],
+              [1.5623443565554835]
+            ],
+            "names": ["kept-c", "only-omitted", "kept-a"],
+            "matrix": true,
+            "width": 1
+          }
+        },
+        "warnings": []
+      }
+    }
+  ]
+}

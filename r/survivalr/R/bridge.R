@@ -1308,9 +1308,15 @@ attrassign <- function(object, tt) {
 }
 
 .as_prediction_value <- function(value, matrix_result = FALSE, col.names = NULL) {
-  curve <- .as_prediction_curve(value)
-  if (!is.null(curve)) {
-    return(curve)
+  if (!isTRUE(matrix_result)) {
+    curve <- .as_prediction_curve(value)
+    if (!is.null(curve)) {
+      return(curve)
+    }
+  }
+  if (isTRUE(matrix_result) && !is.null(col.names) && !is.matrix(value) && length(value) == 0L) {
+    return(matrix(numeric(), nrow = 0L, ncol = length(col.names),
+                  dimnames = list(NULL, col.names)))
   }
   .as_numeric_result(value, matrix_result = matrix_result, col.names = col.names)
 }
