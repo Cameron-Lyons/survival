@@ -1846,6 +1846,14 @@ and scalar/multiple quantile scale labels. Another 1,680 independent R calls
 check complete values and metadata; see [prediction row labels](prediction-row-labels.md).
 Grouped labels are covered separately above.
 
+Complete, unclassed numeric R data-frame columns cross the bridge in bulk as
+one-dimensional NumPy arrays, retaining single-row and empty shapes. Missing,
+categorical and classed columns retain their existing conversion. Lifetime and
+mixed-model checks pass, and complete public predictions on 20,000 numeric rows
+take 21–58 ms versus 47–87 ms in the predecessor; see
+[numeric data-frame conversion](r-numeric-data-columns.md) for stock R timings
+and the measured scope.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

@@ -3,6 +3,7 @@ args <- commandArgs(trailingOnly = TRUE)
 n <- if (length(args)) as.integer(args[[1L]]) else 20000L
 repeats <- if (length(args) > 1L) as.integer(args[[2L]]) else 9L
 mode <- if (length(args) > 2L) args[[3L]] else "current"
+include_transport <- length(args) > 3L && args[[4L]] == "transport"
 suppressPackageStartupMessages(library(survival))
 if (mode != "stock") suppressPackageStartupMessages(library(survivalr))
 set.seed(719)
@@ -24,6 +25,10 @@ measure <- function(fun) {
   }, numeric(1))
   list(median_ms = median(samples), range_ms = range(samples), samples_ms = I(samples))
 }
+transport <- if (include_transport && mode != "stock") {
+  convert <- getFromNamespace(".as_python_data", "survivalr")
+  list(columns = ncol(newdata), results = measure(function() convert(newdata)))
+} else NULL
 workloads <- list(cox_lp = list(kind = "coxph", type = "lp"),
                   cox_terms = list(kind = "coxph", type = "terms", terms = c("x9", "x1", "x9")),
                   aft_quantile = list(kind = "survreg", type = "quantile", p = .5),
@@ -51,5 +56,7 @@ results <- lapply(workloads, function(workload) {
 cat(jsonlite::toJSON(list(rows = n, columns = 16L, training_rows = 2000L,
   repeats = repeats, warmups = 3L, mode = mode,
   r = as.character(getRversion()), survival = as.character(packageVersion("survival")),
+  reticulate = if (mode != "stock") as.character(packageVersion("reticulate")) else NULL,
+  transport = transport,
   scope = "Complete public new-data predictions with errors, including bridge conversion, formula design, calculation, output materialization and row/column metadata; fitting, input setup and explicit GC excluded. Baseline numerical outputs/shapes checked; current complete names also checked against stock R.",
   results = results), auto_unbox = TRUE, pretty = TRUE, digits = NA), "\n")
