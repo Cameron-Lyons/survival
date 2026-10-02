@@ -16,7 +16,8 @@ use super::survfitaj::{
     AJPrepared, SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, aj_prepare, survfitaj,
 };
 use super::survfitkm::{
-    SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm,
+    SurvType, SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, rows_by_curve, strata_index,
+    survfitkm,
 };
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -395,8 +396,10 @@ fn residuals_from_fit(
         (data.start.clone(), data.time.clone())
     };
     let mut resid = vec![vec![0.0; times.len()]; n];
-    for (curve, range) in ranges.iter().enumerate() {
-        let rows: Vec<usize> = (0..n).filter(|&i| curve_of[i] == curve).collect();
+    for (range, rows) in ranges
+        .iter()
+        .zip(rows_by_curve(&curve_of, strata_levels.len()))
+    {
         if rows.is_empty() {
             continue;
         }
@@ -911,7 +914,7 @@ fn residuals_aj_from_fit(
         check,
     } = aj_prepare(data, options.timefix)?;
     let nstate = fit.states.len();
-    let (_, curve_of) = strata_index(data.strata.as_deref(), n);
+    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), n);
     let cluster: Vec<i64> = match (&data.cluster, &data.id) {
         (Some(cluster), _) => cluster.clone(),
         (None, Some(id)) => id.clone(),
@@ -934,8 +937,11 @@ fn residuals_aj_from_fit(
     };
     let mut resid = vec![vec![vec![0.0; times.len()]; ncol]; n];
     let ranges = fit.curve_ranges();
-    for (curve, range) in ranges.iter().enumerate() {
-        let rows: Vec<usize> = (0..n).filter(|&i| curve_of[i] == curve).collect();
+    for (curve, (range, rows)) in ranges
+        .iter()
+        .zip(rows_by_curve(&curve_of, strata_levels.len()))
+        .enumerate()
+    {
         if rows.is_empty() {
             continue;
         }
@@ -1610,6 +1616,218 @@ mod tests {
         for (row, expected) in both.values[11..].iter().zip(&alone.values) {
             for (a, b) in row.iter().zip(expected) {
                 assert!(close(*a, *b));
+            }
+        }
+    }
+
+    fn interleaved_counting_groups() -> SurvfitKMData {
+        // Rows of a subject and rows of a curve are both interleaved. The
+        // first curve in data order is the second sorted stratum level.
+        SurvfitKMData::try_new(
+            Some(vec![0.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 5.0]),
+            vec![2.0, 3.0, 6.0, 4.0, 7.0, 5.0, 8.0, 9.0],
+            vec![0, 0, 1, 0, 1, 0, 0, 0],
+            Some(vec![0.5, 1.5, 0.5, 2.0, 1.5, 0.75, 2.0, 0.75]),
+            Some(vec![17, -4, 17, 17, -4, -4, 17, -4]),
+            Some(vec![91, 42, 91, 15, 42, 77, 15, 77]),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn select_rows<T: Clone>(values: &[T], rows: &[usize]) -> Vec<T> {
+        rows.iter().map(|&row| values[row].clone()).collect()
+    }
+
+    #[test]
+    fn grouped_counting_residuals_and_pseudo_preserve_row_and_subject_order() {
+        let data = interleaved_counting_groups();
+        let groups = [(0, vec![1, 4, 5, 7]), (1, vec![0, 2, 3, 6])];
+        let times = [10.0, 7.0, 7.0];
+        for start_time in [None, Some(4.5)] {
+            let options = SurvfitKMOptions {
+                start_time,
+                timefix: false,
+                ..Default::default()
+            };
+            for kind in [
+                PseudoResidualType::Pstate,
+                PseudoResidualType::Cumhaz,
+                PseudoResidualType::Auc,
+            ] {
+                for (collapse, weighted) in [(false, false), (false, true), (true, true)] {
+                    let both = survfitresid(
+                        &data,
+                        &options,
+                        &times,
+                        kind,
+                        options.stype,
+                        collapse,
+                        weighted,
+                    )
+                    .unwrap();
+                    let expected_ids = if collapse {
+                        vec![91, 42, 15, 77]
+                    } else {
+                        data.id.clone().unwrap()
+                    };
+                    let expected_curves = if collapse {
+                        vec![1, 0, 1, 0]
+                    } else {
+                        vec![1, 0, 1, 1, 0, 0, 1, 0]
+                    };
+                    assert_eq!(both.id, expected_ids);
+                    assert_eq!(both.curve, expected_curves);
+                    assert_eq!(both.times, vec![7.0, 10.0]);
+                    let ps =
+                        pseudo(&data, &options, &times, kind, options.stype, collapse).unwrap();
+                    assert_eq!(ps.id, both.id);
+                    assert_eq!(ps.curve, both.curve);
+                    for (curve, rows) in &groups {
+                        let alone_data = SurvfitKMData::try_new(
+                            Some(select_rows(data.start.as_ref().unwrap(), rows)),
+                            select_rows(&data.time, rows),
+                            select_rows(&data.status, rows),
+                            Some(select_rows(data.weights.as_ref().unwrap(), rows)),
+                            None,
+                            Some(select_rows(data.id.as_ref().unwrap(), rows)),
+                            None,
+                        )
+                        .unwrap();
+                        let alone = survfitresid(
+                            &alone_data,
+                            &options,
+                            &times,
+                            kind,
+                            options.stype,
+                            collapse,
+                            weighted,
+                        )
+                        .unwrap();
+                        let alone_ps =
+                            pseudo(&alone_data, &options, &times, kind, options.stype, collapse)
+                                .unwrap();
+                        for (k, &id) in alone.id.iter().enumerate() {
+                            let row = if collapse {
+                                both.id.iter().position(|&value| value == id).unwrap()
+                            } else {
+                                rows[k]
+                            };
+                            assert_eq!(both.curve[row], *curve);
+                            for j in 0..both.times.len() {
+                                assert!(close(both.values[row][j], alone.values[k][j]));
+                                assert!(close(ps.values[row][j], alone_ps.values[k][j]));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_multistate_residuals_preserve_histories_and_cluster_order() {
+        let km = interleaved_counting_groups();
+        let data = SurvfitAJData::try_new(
+            km.start,
+            km.time,
+            vec![0, 1, 1, 0, 2, 0, 2, 0],
+            vec!["a".to_string(), "b".to_string()],
+            km.weights,
+            km.strata,
+            km.id,
+            None,
+            None,
+            Some(vec![501, 23, 501, 501, 23, 23, 501, 23]),
+        )
+        .unwrap();
+        let groups = [(0, vec![1, 4, 5, 7]), (1, vec![0, 2, 3, 6])];
+        let times = [10.0, 7.0, 7.0];
+        // The conditional fit omits row 0, but residuals still use the
+        // complete original histories. Subject 42 changes from a to b.
+        for start_time in [None, Some(2.5)] {
+            let options = SurvfitAJOptions {
+                start_time,
+                timefix: false,
+                ..Default::default()
+            };
+            for kind in [
+                PseudoResidualType::Pstate,
+                PseudoResidualType::Cumhaz,
+                PseudoResidualType::Auc,
+            ] {
+                for (collapse, weighted) in [(false, false), (false, true), (true, true)] {
+                    let both =
+                        survfitresid_aj(&data, &options, &times, kind, collapse, weighted).unwrap();
+                    assert_eq!(
+                        both.id,
+                        if collapse {
+                            vec![501, 23]
+                        } else {
+                            data.id.clone().unwrap()
+                        }
+                    );
+                    assert_eq!(
+                        both.curve,
+                        if collapse {
+                            vec![1, 0]
+                        } else {
+                            vec![1, 0, 1, 1, 0, 0, 1, 0]
+                        }
+                    );
+                    assert_eq!(both.times, vec![7.0, 10.0]);
+                    let ps = pseudo_aj(&data, &options, &times, kind, collapse).unwrap();
+                    assert_eq!(ps.id, both.id);
+                    assert_eq!(ps.curve, both.curve);
+                    for (curve, rows) in &groups {
+                        let alone_data = SurvfitAJData::try_new(
+                            Some(select_rows(data.start.as_ref().unwrap(), rows)),
+                            select_rows(&data.time, rows),
+                            select_rows(&data.state, rows),
+                            data.states.clone(),
+                            Some(select_rows(data.weights.as_ref().unwrap(), rows)),
+                            None,
+                            Some(select_rows(data.id.as_ref().unwrap(), rows)),
+                            None,
+                            None,
+                            Some(select_rows(data.cluster.as_ref().unwrap(), rows)),
+                        )
+                        .unwrap();
+                        let alone = survfitresid_aj(
+                            &alone_data,
+                            &options,
+                            &times,
+                            kind,
+                            collapse,
+                            weighted,
+                        )
+                        .unwrap();
+                        let alone_ps =
+                            pseudo_aj(&alone_data, &options, &times, kind, collapse).unwrap();
+                        for (k, &id) in alone.id.iter().enumerate() {
+                            let row = if collapse {
+                                both.id.iter().position(|&value| value == id).unwrap()
+                            } else {
+                                rows[k]
+                            };
+                            assert_eq!(both.curve[row], *curve);
+                            // The combined fit includes transitions absent
+                            // in an isolated curve; those hazard columns are 0.
+                            for (col, name) in both.columns.iter().enumerate() {
+                                let separate_col =
+                                    alone.columns.iter().position(|value| value == name);
+                                for j in 0..both.times.len() {
+                                    let expected =
+                                        separate_col.map_or(0.0, |c| alone.values[k][c][j]);
+                                    let expected_ps =
+                                        separate_col.map_or(0.0, |c| alone_ps.values[k][c][j]);
+                                    assert!(close(both.values[row][col][j], expected));
+                                    assert!(close(ps.values[row][col][j], expected_ps));
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

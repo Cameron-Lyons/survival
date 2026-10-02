@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Prepare grouped survival residuals and pseudo-values with one pass over input
+  rows, and check curve endpoints with cumulative offsets. Preserve weighted,
+  clustered and counting-process results while removing repeated scans per stratum.
 - Reuse stratum data, event-time weights and time ordering across concordance
   predictors, retaining independent rank trees and joint covariance. Prevent
   zero-weight events with an empty weighted risk set from producing a `NaN`

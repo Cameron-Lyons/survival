@@ -240,8 +240,11 @@ counting-process results.
 Ordinary fitted curves support R-style influence residuals and pseudo-values for
 survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
 grouping, estimator settings, and conditional start times. A native query kernel
-uses the fitted risk tables and event prefixes without refitting or building a
-full observation-by-event influence matrix. The fitted RMST path follows R's
+uses risk tables and event prefixes without building a full
+observation-by-event influence matrix. Grouped ordinary and multistate residuals
+prepare each curve's input rows in one pass, preserving original subject and
+cluster order. See [survival curve performance](docs/kaplan-meier-performance.md)
+for the complete-call benchmark. The fitted RMST path follows R's
 infinitesimal jackknife; the direct time/status pseudo-value API retains its
 existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
 approximation and report the same limitation.
