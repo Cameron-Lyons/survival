@@ -2784,14 +2784,15 @@ def _formula_model_frame(
 
 
 def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
-    columns = _formula_design_columns(design)
+    columns = _formula_design_columns(design, include_unused=True)
     if columns:
         return len(_column(data, columns[0]))
     if isinstance(data, _FormulaRows) or hasattr(data, "columns"):
         return _data_row_count(data)
-    if isinstance(data, Mapping) and data:
-        name, values = next(iter(data.items()))
-        return len(_materialize_1d(values, str(name)))
+    if isinstance(data, Mapping):
+        # A variable-free R model.frame cannot infer rows from unused list
+        # columns. Data frames above carry an explicit row count instead.
+        return 0
     raise ValueError("newdata must include at least one column")
 
 

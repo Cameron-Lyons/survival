@@ -1908,6 +1908,14 @@ Seventy-two stock fits provide 3,952 whole matrices and 368 validation failures.
 See [model-matrix missing-data rules](model-matrix-na-action.md) for validation,
 persistence, warning limits and complete-call measurements.
 
+Named R list vectors use the shared data-column adapter, preserving logical
+missing values, declared factor levels and numeric NA/NaN payloads. Numeric
+vectors transfer in bulk. Variable-free list/mapping frames produce zero rows;
+explicit data frames retain their row counts. Live list fit, matrix, prediction,
+curve, log-rank and concordance checks and 32 further stock list/frame cases
+are described in [R list data columns](r-list-data-columns.md), including
+known stock AFT term-label and null Cox prediction discrepancies.
+
 ## Reference limitations
 
 Features R itself does not implement stay refused with R's message: anova on

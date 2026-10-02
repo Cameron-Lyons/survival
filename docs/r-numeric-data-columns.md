@@ -19,6 +19,10 @@ ordinary NumPy integers. Complete numeric columns may contain infinities;
 existing downstream validation determines whether a particular formula accepts
 them.
 
+The subsequent [R list data-column change](r-list-data-columns.md) applies
+this adapter to named list vectors too, preserving their logical missing
+values, declared factor levels and bulk numeric transport.
+
 ## Validation
 
 The R source archive passes 27,579 checks with zero errors, warnings or notes,
