@@ -55,6 +55,7 @@ from ._data_prep import aeqSurv, summary_tmerge
 from ._finegray import _finegray_frame
 from ._fit import (
     _model_matrix_contrasts,
+    _model_matrix_evaluated,
     _model_matrix_names_and_assign,
     _model_matrix_newdata_design,
     _newdata_frame,
@@ -63,6 +64,7 @@ from ._fit import (
 from ._formula import _column as _formula_column
 from ._formula import (
     _data_row_labels,
+    _EvaluatedModelFrame,
     _formula_columns,
     _formula_model_term_degree,
     _strata_keep,
@@ -498,6 +500,20 @@ def _model_matrix_cox(
     position = _sparse_term(fit)
     design = _fit_frame(fit).design if position is not None else fit.design
     fitted_design = design
+    if isinstance(data, _EvaluatedModelFrame):
+        result = _model_matrix_evaluated(
+            design,
+            data,
+            cox=True,
+            strata_terms=_strata_specs(fit.terms),
+            covered_strata=tuple(
+                item.spec for item in fit.terms.model_terms if isinstance(item, _ModelStrataTerm)
+            ),
+        )
+        if not _with_metadata:
+            for key in ("row_names", "contrasts", "strata_levels", "strata_column"):
+                result.pop(key, None)
+        return result
     if data is None:
         strata = fit.strata
         rows = fit.x

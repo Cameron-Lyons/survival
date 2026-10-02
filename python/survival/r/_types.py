@@ -222,6 +222,7 @@ class _FormulaDesign:
     strata: tuple[str, ...] = ()
     intercept: bool = False
     variables: tuple[_CovariateTerm, ...] = ()
+    variable_labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -278,6 +278,32 @@ if (getRversion() >= "2.15.1") {
   data
 }
 
+.as_python_matrix_data <- function(data) {
+  if (is.null(data) || is.null(attr(data, "terms")) || !is.data.frame(data)) {
+    return(.as_python_data(data))
+  }
+  columns <- lapply(data, function(column) {
+    if (is.matrix(column)) unclass(column) else .as_python_data_column(column)
+  })
+  metadata <- lapply(data, function(column) {
+    result <- list(kind = typeof(column), matrix_names = as.list(colnames(column)))
+    if (is.factor(column) || is.logical(column)) {
+      factor <- if (is.logical(column)) factor(column, levels = c(FALSE, TRUE)) else column
+      result$kind <- if (is.logical(column)) "logical" else "factor"
+      if (nlevels(factor) > 1L) {
+        basis <- stats::contrasts(factor)
+        label <- attr(factor, "contrasts")
+        if (is.null(label)) label <- getOption("contrasts")[[if (is.ordered(factor)) 2L else 1L]]
+        result$contrast <- list(data = unname(basis), rows = as.list(rownames(basis)),
+          columns = as.list(colnames(basis)), label = if (is.character(label)) label else NULL)
+      }
+    }
+    result
+  })
+  labels <- if (.row_names_info(data, 1L) < 0L) NULL else as.list(row.names(data))
+  .pybridge_attr("_r_model_frame")(columns, nrow(data), labels, metadata)
+}
+
 .eval_formula_dots <- function(dots, data, env, vector_args = character()) {
   if (is.null(dots) || length(dots) == 0L) {
     return(list())
@@ -8971,9 +8997,14 @@ model.matrix.survival_py_model <- function(object, data = NULL, ...) {
   if (!is.null(data)) dots$na.action <- NULL
   action <- if (is.null(data)) "omit" else .as_na_action(NULL)
   result <- do.call(.call_r_api, c(list("model_matrix", fit = object,
-    data = .as_python_data(data), na_action = action, `_with_metadata` = TRUE), dots))
+    data = .as_python_matrix_data(data), na_action = action, `_with_metadata` = TRUE), dots))
   values <- .as_model_matrix(result)
   if (!is.null(data) && !is.null(result[["strata"]])) {
+    column <- result[["strata_column"]]
+    if (!is.null(column) && is.data.frame(data) && !is.null(attr(data, "terms"))) {
+      attr(values, "strata") <- data[[column]]
+      return(values)
+    }
     groups <- result[["strata"]]
     labels <- unlist(groups, use.names = FALSE)
     if (length(labels) != nrow(values)) {
@@ -8983,8 +9014,9 @@ model.matrix.survival_py_model <- function(object, data = NULL, ...) {
       padded[retained] <- labels
       labels <- padded
     }
-    attr(values, "strata") <- factor(labels,
-      levels = unlist(.result_field(object, "strata_levels"), use.names = FALSE))
+    levels <- result[["strata_levels"]]
+    if (is.null(levels)) levels <- .result_field(object, "strata_levels")
+    attr(values, "strata") <- factor(labels, levels = unlist(levels, use.names = FALSE))
   }
   values
 }

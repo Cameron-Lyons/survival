@@ -167,6 +167,21 @@ def _r_data_frame(columns: dict[str, Any], n: int, row_names: Any = None) -> Any
     return _FormulaRows(columns, n, labels)
 
 
+def _r_model_frame(
+    columns: dict[str, Any],
+    n: int,
+    row_names: Any = None,
+    column_metadata: Mapping[str, Any] | None = None,
+) -> Any:
+    """Carry evaluated R columns, including matrix widths and factor contrasts."""
+    from .r._formula import _EvaluatedModelFrame
+
+    labels = None if row_names is None else tuple(row_names)
+    if labels is not None and len(labels) != n:
+        raise ValueError("row names must have one label per data row")
+    return _EvaluatedModelFrame(columns, n, labels, column_metadata)
+
+
 def _yates_model_metadata(fit: Any) -> dict[str, Any]:
     """Factor levels needed to rebuild a fitted Python model's R model frame."""
     from .r._fit import _formula_design_for_fit
