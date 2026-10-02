@@ -8981,6 +8981,7 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     type = type,
     `se.fit` = se.fit,
     `_with_row_names` = TRUE,
+    `_as_arrays` = TRUE,
     ...
   )
   row_metadata <- result
@@ -9109,6 +9110,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
   with_row_names <- !.is_coxphms_fit(object)
+  if (with_row_names) dots[["_as_arrays"]] <- TRUE
   grouped <- inherits(object, "survival_py_coxph") && with_row_names &&
     !is.null(dots[["collapse"]]) && !identical(dots[["collapse"]], FALSE)
   if (grouped) {
@@ -9145,7 +9147,10 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   fit_names <- convert(metadata[["fit_names"]])
   se_names <- if (isTRUE(metadata[["shared_names"]])) fit_names else convert(metadata[["se_names"]])
   label <- function(x, labels) {
-    if (is.null(labels)) return(x)
+    if (is.null(labels)) {
+      if (is.matrix(x) && isTRUE(metadata[["null_dimnames"]])) dimnames(x) <- list(NULL, NULL)
+      return(x)
+    }
     if (is.matrix(x)) rownames(x) <- labels else names(x) <- labels
     x
   }

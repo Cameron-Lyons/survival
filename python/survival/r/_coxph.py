@@ -18,6 +18,8 @@ from itertools import chain
 from statistics import NormalDist
 from typing import Any, Protocol
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
@@ -57,6 +59,7 @@ from ._coerce import (
 from ._data_prep import aeqSurv
 from ._fit import (
     _design_names_and_assign,
+    _empty_prediction,
     _excluded_rows,
     _model_frame,
     _model_frame_levels,
@@ -67,6 +70,7 @@ from ._fit import (
     _pad_rows,
     _prediction_row_labels,
     _prediction_row_result,
+    _prediction_values,
     _rowsum_excluded,
     _tt_terms,
 )
@@ -1856,18 +1860,22 @@ def _rowsum(values: list[Any], codes: Sequence[int], *, squares: bool = False) -
 
 
 def _restore_prediction_groups(
-    values: list[Any],
+    values: Any,
     codes: Sequence[int],
     fitted_codes: Sequence[int],
     gaps: Sequence[int],
     n_groups: int,
     width: int | None,
-) -> list[Any]:
+) -> Any:
     """Restore groups containing omitted rows after summing retained rows natively."""
     if not gaps:
         return values
     missing = {codes[row] for row in gaps}
-    output: list[Any] = [math.nan if width is None else [math.nan] * width for _ in range(n_groups)]
+    output: Any = (
+        np.full((n_groups, *values.shape[1:]), math.nan)
+        if isinstance(values, np.ndarray)
+        else [math.nan if width is None else [math.nan] * width for _ in range(n_groups)]
+    )
     for code, value in zip(sorted(set(fitted_codes)), values, strict=True):
         if code not in missing:
             output[code] = value
@@ -1901,6 +1909,7 @@ def predict_coxph(
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, False)
     with_group_names = kwargs.pop("_with_group_names", False)
     with_row_names = kwargs.pop("_with_row_names", False)
+    as_arrays = kwargs.pop("_as_arrays", False)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
@@ -2009,7 +2018,8 @@ def predict_coxph(
         missing = set(gaps)
         fitted_codes = [code for row, code in enumerate(codes) if row not in missing]
     if new is not None and new.n == 0:  # no complete newdata row
-        pred, se = [], ([] if include_se else None)
+        pred = _empty_prediction(width, as_arrays)
+        se = _empty_prediction(width, as_arrays) if include_se else None
     elif sparse_only:
         pred, se = _frailty_prediction(fit, new, include_se)
         if predict_type == "risk":
@@ -2017,8 +2027,13 @@ def predict_coxph(
         if fitted_codes is not None:
             pred = _rowsum(pred, fitted_codes)
             se = None if se is None else _rowsum(se, fitted_codes, squares=True)
+        if as_arrays:
+            pred = np.asarray(pred, dtype=float)
+            se = None if se is None else np.asarray(se, dtype=float)
     elif predict_type == "terms":
-        pred, se = _predict_terms(fit, new, include_se, reference_name, selected, fitted_codes)
+        pred, se = _predict_terms(
+            fit, new, include_se, reference_name, selected, fitted_codes, as_arrays
+        )
     else:
         result = fit.fit.predict(
             predict_type,
@@ -2033,7 +2048,7 @@ def predict_coxph(
             reference=reference_name,
             collapse=fitted_codes,
         )
-        pred, se = result.fit, result.se_fit
+        pred, se = _prediction_values(result, as_arrays)
 
     if codes is not None and fitted_codes is not None and group_names is not None:
         pred = _restore_prediction_groups(pred, codes, fitted_codes, gaps, len(group_names), width)
@@ -2104,7 +2119,8 @@ def _predict_terms(
     reference: str,
     selected: list[int],
     collapse: list[int] | None = None,
-) -> tuple[list[list[float]], list[list[float]] | None]:
+    as_arrays: bool = False,
+) -> tuple[Any, Any]:
     """The ``terms`` predictions of the ``selected`` model terms (positions among
     :func:`_model_terms`).  As in predict.coxph.penal, a sparse frailty's column holds
     the subjects' frailties (with standard errors ``sqrt(fvar)``), and 0 for new
@@ -2127,7 +2143,7 @@ def _predict_terms(
         assign=[active[idx] for idx in engine_terms],
         collapse=collapse,
     )
-    rows, se_rows = result.fit, result.se_fit
+    rows, se_rows = _prediction_values(result, as_arrays)
     # the frailty column goes in at each place the selection names it, left to right
     columns = [column for column, idx in enumerate(selected) if idx == position]
     if columns:
@@ -2144,6 +2160,18 @@ def _predict_terms(
         if collapse is not None:
             values = _rowsum(values, collapse)
             errors = None if errors is None else _rowsum(errors, collapse, squares=True)
+        if as_arrays:
+            dense = [column for column in range(len(selected)) if column not in columns]
+
+            def insert_frailty(matrix: np.ndarray, values: Any) -> np.ndarray:
+                output = np.empty((len(matrix), len(selected)))
+                output[:, dense] = matrix
+                output[:, columns] = np.asarray(values)[:, None]
+                return output
+
+            return insert_frailty(rows, values), (
+                None if se_rows is None else insert_frailty(se_rows, errors)
+            )
         for i, row in enumerate(rows):
             for column in columns:
                 row.insert(column, values[i])

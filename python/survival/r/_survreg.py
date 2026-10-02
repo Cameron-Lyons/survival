@@ -20,6 +20,8 @@ from operator import index
 from statistics import NormalDist
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
@@ -46,6 +48,7 @@ from ._coerce import (
     _rowsum_groups,
 )
 from ._fit import (
+    _empty_prediction,
     _excluded_rows,
     _model_matrix_names_and_assign,
     _NewData,
@@ -53,6 +56,7 @@ from ._fit import (
     _pad_rows,
     _prediction_row_labels,
     _prediction_row_result,
+    _prediction_values,
     _r_factor_design,
     _rowsum_excluded,
 )
@@ -1002,10 +1006,16 @@ def _prediction_term_labels(fit: SurvregModelResult) -> list[str]:
     return [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
 
 
-def _drop(values: list[list[float]], keep_matrix: bool) -> Any:
+def _drop(values: Any, keep_matrix: bool) -> Any:
     """R's ``drop``: one column (or one quantile row) becomes a vector."""
 
     if keep_matrix:
+        return values
+    if isinstance(values, np.ndarray):
+        if values.shape[1] == 1:
+            return values[:, 0]
+        if len(values) == 1:
+            return values[0]
         return values
     if values and len(values[0]) == 1:
         return [row[0] for row in values]
@@ -1024,6 +1034,7 @@ def predict_survreg(
     na_action: str | None = "na.pass",
     *,
     _with_row_names: bool = False,
+    _as_arrays: bool = False,
 ) -> Any:
     """R's ``predict.survreg``: response, lp, terms, quantile and uquantile predictions.
 
@@ -1060,8 +1071,15 @@ def predict_survreg(
     native_selection = (
         None if selection is None else [value for value in selection if value is not None]
     )
-    predictions: list[list[float]] = []
-    se_values: list[list[float]] = []
+    if predict_type in {"quantile", "uquantile"}:
+        width = len(quantiles)
+    elif predict_type == "terms":
+        width = len(term_names if selection is None else selection)
+    else:
+        width = 1
+    native_width = width if selection is None else len(native_selection or [])
+    predictions = _empty_prediction(native_width, _as_arrays)
+    se_values = _empty_prediction(native_width, _as_arrays)
     if new is None or new.n:
         result = fit.fit.predict(
             newdata=None if new is None else new.x,
@@ -1073,15 +1091,19 @@ def predict_survreg(
             assign=list(fit.assign),
             terms=native_selection,
         )
-        predictions = result.fit
+        predictions, standard_errors = _prediction_values(result, _as_arrays)
         if include_se:
-            standard_errors = result.se_fit
             if standard_errors is None:
                 raise RuntimeError("native predictor did not return requested standard errors")
             se_values = standard_errors
     if selection is not None and any(value is None for value in selection):
 
-        def missing_columns(rows: list[list[float]]) -> list[list[float]]:
+        def missing_columns(rows: Any) -> Any:
+            if isinstance(rows, np.ndarray):
+                output = np.full((len(rows), len(selection)), math.nan)
+                retained = [column for column, value in enumerate(selection) if value is not None]
+                output[:, retained] = rows
+                return output
             result = []
             for row in rows:
                 values = iter(row)
@@ -1096,12 +1118,6 @@ def predict_survreg(
         gaps = _excluded_rows(fit.na_action)
     else:
         gaps = [] if action == "omit" else list(new.missing)
-    if predict_type in {"quantile", "uquantile"}:
-        width = len(quantiles)
-    elif predict_type == "terms":
-        width = len(term_names if selection is None else selection)
-    else:
-        width = 1
     keep_matrix = predict_type == "terms"
     fitted = _drop(_pad_rows(predictions, gaps, width), keep_matrix)
     output = (
@@ -1111,6 +1127,15 @@ def predict_survreg(
     )
     if not _with_row_names:
         return output
+    if new is not None and new.n == 0 and predict_type != "terms":
+        return _prediction_row_result(
+            output,
+            None,
+            None,
+            null_dimnames=width > 1
+            and predict_type in {"quantile", "uquantile"}
+            and _estimated_scale_count(fit.fit) > 1,
+        )
     if new is None and not include_se and predict_type in {"response", "link", "lp", "linear"}:
         return _prediction_row_result(output, None, None)
     if new is None:

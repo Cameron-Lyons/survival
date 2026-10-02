@@ -93,6 +93,15 @@ pub(crate) fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
 /// rows.  No rows give a `0 x 0` matrix.
 pub(crate) fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
     let ncols = rows.first().map_or(0, Vec::len);
+    matrix_from_rows_with_columns(rows, ncols, name)
+}
+
+/// Preserve a known column count, including when there are no rows.
+pub(crate) fn matrix_from_rows_with_columns(
+    rows: &[Vec<f64>],
+    ncols: usize,
+    name: &str,
+) -> SurvivalResult<Array2<f64>> {
     if rows.iter().any(|row| row.len() != ncols) {
         return Err(SurvivalError::invalid_input(format!(
             "{name} must be rectangular"
@@ -537,6 +546,30 @@ pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Ve
 mod tests {
     use super::*;
     use ndarray::arr2;
+
+    #[test]
+    fn known_matrix_columns_survive_empty_rows_and_columns() {
+        assert_eq!(
+            matrix_from_rows_with_columns(&[], 3, "x").unwrap().dim(),
+            (0, 3)
+        );
+        assert_eq!(
+            matrix_from_rows_with_columns(&[vec![], vec![]], 0, "x")
+                .unwrap()
+                .dim(),
+            (2, 0)
+        );
+    }
+
+    #[test]
+    fn known_matrix_columns_validate_every_row() {
+        assert!(matrix_from_rows_with_columns(&[vec![1.0, 2.0]], 1, "x").is_err());
+        assert!(matrix_from_rows_with_columns(&[vec![1.0], vec![]], 1, "x").is_err());
+        assert_eq!(
+            matrix_from_rows_with_columns(&[vec![1.0, 2.0], vec![3.0, 4.0]], 2, "x").unwrap(),
+            arr2(&[[1.0, 2.0], [3.0, 4.0]])
+        );
+    }
 
     fn assert_close(actual: f64, expected: f64, tol: f64) {
         assert!(

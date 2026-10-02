@@ -562,6 +562,35 @@ mod python {
 #[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
+/// Owned prediction matrices, without constructing Python scalar/row lists.
+#[cfg(feature = "python")]
+pub(crate) fn prediction_matrix_arrays<'py>(
+    py: pyo3::Python<'py>,
+    fit: &[Vec<f64>],
+    se: Option<&[Vec<f64>]>,
+    columns: usize,
+) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    use crate::internal::matrix::matrix_from_rows_with_columns;
+    use crate::internal::validation::validate_length;
+    use numpy::IntoPyArray;
+    use pyo3::types::PyDictMethods;
+
+    let (fit, se) = py.detach(|| -> crate::error::SurvivalResult<_> {
+        if let Some(se) = se {
+            validate_length(fit.len(), se.len(), "prediction errors")?;
+        }
+        Ok((
+            matrix_from_rows_with_columns(fit, columns, "prediction")?,
+            se.map(|se| matrix_from_rows_with_columns(se, columns, "prediction errors"))
+                .transpose()?,
+        ))
+    })?;
+    let result = pyo3::types::PyDict::new(py);
+    result.set_item("fit", fit.into_pyarray(py))?;
+    result.set_item("se_fit", se.map(|se| se.into_pyarray(py)))?;
+    Ok(result)
+}
+
 /// Extracts `float64` values from any array-like; prefer a [`FloatVec`]
 /// parameter, which does the same conversion in the signature.
 #[cfg(feature = "python")]

@@ -480,10 +480,33 @@ impl CoxPrediction {
     }
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl CoxPrediction {
+    /// Independent writable float64 snapshots; absent errors remain None.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        use pyo3::types::PyDict;
+        let (fit, se) = py.detach(|| -> SurvivalResult<_> {
+            if let Some(se) = &self.se_fit {
+                validate_length(self.fit.len(), se.len(), "prediction errors")?;
+            }
+            Ok((self.fit.clone(), self.se_fit.clone()))
+        })?;
+        let result = PyDict::new(py);
+        result.set_item("fit", fit.into_pyarray(py))?;
+        result.set_item("se_fit", se.map(|se| se.into_pyarray(py)))?;
+        Ok(result)
+    }
+}
+
 /// `predict(type = "terms")` output: one column per term.
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxTermsPrediction {
+    /// Column count retained independently of the row count.
+    #[pyo3(get)]
+    pub n_columns: usize,
     #[pyo3(get)]
     pub fit: Vec<Vec<f64>>,
     #[pyo3(get)]
@@ -491,6 +514,22 @@ pub struct CoxTermsPrediction {
     /// `sum(coefficients * means)`, R's `attr(pred, "constant")`.
     #[pyo3(get)]
     pub constant: f64,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl CoxTermsPrediction {
+    /// Independent writable float64 matrices, including empty dimensions.
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let result = crate::internal::numpy_utils::prediction_matrix_arrays(
+            py,
+            &self.fit,
+            self.se_fit.as_deref(),
+            self.n_columns,
+        )?;
+        result.set_item("constant", self.constant)?;
+        Ok(result)
+    }
 }
 
 /// `basehaz(fit)`: the cumulative hazard at each event or censoring time
@@ -1608,6 +1647,7 @@ impl CoxPHFit {
             }
         }
         Ok(CoxTermsPrediction {
+            n_columns: nterms,
             fit,
             se_fit: se,
             constant: coef.iter().zip(&self.means).map(|(b, m)| b * m).sum(),
