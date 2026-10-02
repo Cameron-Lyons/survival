@@ -806,7 +806,7 @@ class _FormulaRows(dict[str, Any]):
     Like R's data frame it keeps its row count without any column, as for ``~ 1``.
     """
 
-    __slots__ = ("nrow", "strata_cache", "response_cache", "row_names")
+    __slots__ = ("nrow", "strata_cache", "response_cache", "variable_cache", "row_names")
 
     def __init__(
         self, columns: dict[str, Any], nrow: int, row_names: tuple[str, ...] | None = None
@@ -815,6 +815,7 @@ class _FormulaRows(dict[str, Any]):
         self.nrow = nrow
         self.strata_cache: dict[_StrataSpec, StrataFactor] = {}
         self.response_cache: tuple[_SurvResponseSpec, Surv] | None = None
+        self.variable_cache: dict[_CovariateTerm, list[Any]] = {}
         self.row_names = row_names
 
 
@@ -1425,6 +1426,16 @@ def _data_rows(
         response = getattr(data, "response_cache", None)
         if response is not None and set(response[0].columns) <= frame.keys():
             selected.response_cache = (response[0], _subset_surv(response[1], list(rows)))
+        missing_rows = bool(np.any(index < 0))
+        selected.variable_cache = {
+            term: (
+                [_NA_REAL if row < 0 else values[row] for row in rows]
+                if missing_rows
+                else list(map(values.__getitem__, rows))
+            )
+            for term, values in getattr(data, "variable_cache", {}).items()
+            if set(_covariate_term_columns(term)) <= frame.keys()
+        }
     return selected
 
 
@@ -1483,8 +1494,10 @@ def _subset_formula_inputs(
     **row_aligned: Any,
 ) -> tuple[_FormulaRows, dict[str, Any]]:
     n = _data_row_count(data, formula)
-    data = _with_strata_cache(data, _strata_specs(_formula_rhs_terms(formula, data)), n)
+    terms = _formula_rhs_terms(formula, data)
     data = _with_response_cache(data, _response_spec(formula), n)
+    data = _with_strata_cache(data, _strata_specs(terms), n)
+    data = _with_evaluated_variables(data, _frame_variables(terms), n)
     indices = _subset_indices(subset, n)
     filtered = {
         name: _subset_optional_sequence(values, indices, name)
@@ -1535,39 +1548,46 @@ def _response_variables(spec: _SurvResponseSpec | None) -> list[_CovariateTerm]:
     ]
 
 
-def _made_nan_rows(
-    data: Any,
-    variables: Iterable[_CovariateTerm],
-    missing: set[int],
-    n: int,
-) -> tuple[set[int], dict[_CovariateTerm, list[float]]]:
-    """The rows outside ``missing`` at which one of the formula ``variables`` is NaN, and
-    the values at the rows outside ``missing`` of the variables it evaluated.
-
-    R's ``model.frame`` evaluates every variable before ``na.action`` scans it, so a NaN
-    made from values that are present (``log``/``sqrt`` of a negative value, ``0/0``,
-    ``Inf - Inf``) is missing as well.  Only arithmetic and ``log``/``sqrt`` make one, so
-    no other variable is evaluated; an interaction's product is not a variable.
-    """
-
-    variables = [
-        term
-        for term in dict.fromkeys(
-            replace(term, special=None) if term.special == "offset" else term for term in variables
-        )
-        if term.call is None and (term.arithmetic is not None or term.transform in {"log", "sqrt"})
+def _frame_variables(terms: _FormulaTerms) -> list[_CovariateTerm]:
+    return [
+        *terms.variables,
+        *(item.term for item in terms.model_terms if isinstance(item, _ModelClusterTerm)),
+        *(factor for term in terms.covariates for factor in _covariate_factors(term)),
+        *terms.offsets,
     ]
+
+
+def _evaluated_variables(variables: Iterable[_CovariateTerm]) -> list[_CovariateTerm]:
+    return list(
+        dict.fromkeys(
+            replace(term, special=None) if term.special in {"offset", "cluster"} else term
+            for term in variables
+            if term.call is None
+            and term.strata is None
+            and (term.arithmetic is not None or term.transform not in {None, "tt"})
+        )
+    )
+
+
+def _with_evaluated_variables(data: Any, variables: Iterable[_CovariateTerm], n: int) -> Any:
+    """Evaluate transforms once before subset/NA removal, then carry their rows."""
+    variables = _evaluated_variables(variables)
     if not variables:
-        return set(), {}
-    rows: Sequence[int] = range(n)
-    if missing:
-        rows = [row for row in rows if row not in missing]
-        data = _data_rows(data, _covariate_columns(variables), rows, n)
-    values = {term: _numeric_variable(data, term, len(rows)) for term in variables}
-    made: set[int] = set()
-    for column in values.values():
-        made.update(compress(rows, map(math.isnan, column)))
-    return made, values
+        return data
+    if not isinstance(data, _FormulaRows):
+        data = _FormulaRows(
+            {name: _column_source(data, name) for name in _data_column_names(data) or ()},
+            n,
+            _data_row_labels(data, n),
+        )
+    cache = getattr(data, "variable_cache", None)
+    if cache is None:
+        # Older saved frames have no variable-cache slot value.
+        cache = data.variable_cache = {}
+    for term in variables:
+        if term not in cache:
+            cache[term] = _term_values(data, term, n)
+    return data
 
 
 def _apply_formula_na_action(
@@ -1586,28 +1606,28 @@ def _apply_formula_na_action(
     action = _normalize_na_action(na_action)
     terms = _formula_rhs_terms(formula, data)
     n = _data_row_count(data, formula)
-    data = _with_strata_cache(data, _strata_specs(terms), n)
     response_spec = _response_spec(formula)
     data = _with_response_cache(data, response_spec, n)
+    data = _with_strata_cache(data, _strata_specs(terms), n)
+    data = _with_evaluated_variables(data, _frame_variables(terms), n)
     if action == "pass":
         return data, row_aligned, []
 
     normalized = response_spec is not None and response_spec.surv and not response_spec.timeline
     variables = [
         *([] if normalized else _response_variables(response_spec)),
-        *terms.variables,
-        *(item.term for item in terms.model_terms if isinstance(item, _ModelClusterTerm)),
-        *(factor for term in terms.covariates for factor in _covariate_factors(term)),
-        *terms.offsets,
+        *_frame_variables(terms),
     ]
     columns = (
         list(dict.fromkeys(_covariate_columns(variables) + terms.clusters))
         if normalized
         else _formula_columns(formula, data)
     )
-    required = set(terms.clusters)
+    required: set[str] = set()
     if response_spec is not None and not normalized:
-        required.update(response_spec.columns)
+        required.update(
+            set(response_spec.columns) - set(_covariate_columns(_response_variables(response_spec)))
+        )
     missing = _formula_missing_rows(data, columns, variables, n, required=required)
     if normalized and response_spec is not None:
         missing.update(compress(range(n), is_na_surv(_surv_from_spec(data, response_spec))))
@@ -1617,8 +1637,6 @@ def _apply_formula_na_action(
             n,
         )
     )
-    made, _values = _made_nan_rows(data, variables, missing, n)
-    missing.update(made)
     keep = _keep_rows_after_na_action(missing, n, action, "formula data")
     if keep is None:
         return data, row_aligned, []
@@ -1636,11 +1654,13 @@ def _formula_missing_rows(
     *,
     required: Iterable[str] = (),
 ) -> set[int]:
-    """Scan evaluated strata rather than their sources for model-frame missingness.
+    """Scan evaluated formula variables for model-frame missingness.
 
     ``strata(x, na.group=TRUE)`` keeps a missing x as a level, unless another
     formula variable or response also reads x. Transformations and cutpoints can
     instead make a stratum missing even when all source columns are present.
+    Arithmetic can recover an observed value from a missing source (NA^0), so
+    transformed variables replace their raw sources unless another term reads them.
     """
 
     variables = tuple(variables)
@@ -1664,7 +1684,20 @@ def _formula_missing_rows(
             & set(columns)
         )
         raw.update(required)
+    computed = _evaluated_variables(variables)
+    if computed:
+        raw.difference_update(_covariate_columns(computed))
+        keys = set(computed)
+        ordinary = [
+            term
+            for term in variables
+            if (replace(term, special=None) if term.special in {"offset", "cluster"} else term)
+            not in keys
+        ]
+        raw.update(set(_covariate_columns(ordinary)) & set(columns))
+        raw.update(required)
     sources = [(name, _column_source(data, name)) for name in columns if name in raw]
+    sources.extend((_covariate_term_name(term), _term_values(data, term, n)) for term in computed)
     sources.extend((spec.call, _strata_term_values(data, spec)) for spec in strata)
     return _missing_row_indices(sources, n)
 
@@ -2165,6 +2198,13 @@ def _r_sqrt(value: float) -> float:
     return math.sqrt(value) if math.isnan(value) or value >= 0.0 else math.nan
 
 
+def _r_exp(value: float) -> float:
+    try:
+        return math.exp(value)
+    except OverflowError:
+        return math.inf
+
+
 def _apply_numeric_transform(values: list[float], transform: str | None, term: str) -> list[float]:
     if transform is None:
         return values
@@ -2176,7 +2216,10 @@ def _apply_numeric_transform(values: list[float], transform: str | None, term: s
                 _warn_outside_package(f"NaNs produced in {transform}({term})")
             return list(map(_r_log if transform == "log" else _r_sqrt, values))
     if transform == "exp":
-        return [math.exp(value) for value in values]
+        try:
+            return list(map(math.exp, values))
+        except OverflowError:
+            return list(map(_r_exp, values))
     if transform in {"I", "identity", "as.numeric", "tt"}:
         return values
     raise ValueError(f"unsupported formula transform {transform!r}")
@@ -2205,6 +2248,14 @@ def _numeric_variable(
 
     if evaluated and term in evaluated:
         return evaluated[term]
+    cache = getattr(data, "variable_cache", {})
+    key = replace(term, special=None) if term.special in {"offset", "cluster"} else term
+    if key in cache:
+        values = cache[key]
+        if not term.categorical and term.transform not in {None, "I", "identity"}:
+            # Numeric transforms already produced floats; reuse them directly.
+            return values
+        return _floats_or_nan(values)
     return _numeric_term_values(_term_raw_values(data, term, n), term)
 
 
@@ -2238,8 +2289,12 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
             return [tuple(values[idx] for values in factor_values) for idx in range(n)]
         return [math.prod(values[idx] for values in numeric_values) for idx in range(n)]
 
+    cache = getattr(data, "variable_cache", {})
+    key = replace(term, special=None) if term.special in {"offset", "cluster"} else term
+    if key in cache:
+        return cache[key]
     values = _term_raw_values(data, term, n)
-    if term.transform is None or term.categorical:
+    if term.transform in {None, "I", "identity"} or term.categorical:
         return values
     return _numeric_term_values(values, term)
 
@@ -2278,7 +2333,8 @@ def _fit_single_design_term(
         penalty_values = {column: _column(full_data, column) for column in columns}
         levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, penalty_values, options, levels)
-    values = _term_raw_values(data, term, n)
+    cache = getattr(data, "variable_cache", {})
+    values = cache[term] if term in cache else _term_raw_values(data, term, n)
     if (
         term.transform in {None, "I", "identity"}
         and term.categorical_wrapper is None
@@ -2299,10 +2355,10 @@ def _fit_single_design_term(
         or _mstate_categories(_column_source(data, term.column)) is None
     ):
         if term.transform is not None and term.transform != "tt":
-            _numeric_term_values(values, term)
+            _numeric_variable(data, term, n)
             return _NumericDesignTerm(term)
         try:
-            _numeric_term_values(values, term)
+            _numeric_variable(data, term, n)
         except (TypeError, ValueError):
             pass
         else:
@@ -3426,7 +3482,7 @@ def _model_variables(
             add(model_term.spec.call, _strata_term_values(mf.data, model_term.spec))
         elif isinstance(model_term, _ModelOffsetTerm):
             term = model_term.term
-            values = _numeric_term_values(_term_raw_values(mf.data, term, mf.n), term)
+            values = _numeric_variable(mf.data, term, mf.n)
             add(f"offset({_covariate_term_name(term)})", values)
     return columns
 

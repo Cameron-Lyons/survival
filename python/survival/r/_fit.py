@@ -8,7 +8,7 @@ import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from itertools import compress, product
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -50,7 +50,6 @@ from ._formula import (
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
-    _made_nan_rows,
     _na_action_record,
     _offset_vector,
     _parse_formula,
@@ -60,6 +59,7 @@ from ._formula import (
     _strata_specs,
     _strata_term_values,
     _subset_formula_inputs,
+    _with_evaluated_variables,
     _with_strata_cache,
 )
 from ._penalties import fit_penalty
@@ -696,6 +696,7 @@ def _newdata_frame(
     # warnings still belong to the call, although their NaNs do not enter x.
     variables.extend(term for term in design.variables if term.strata is None)
     variables.extend(_strata_covariate(spec) for spec in strata_terms if strata_columns)
+    newdata = _with_evaluated_variables(newdata, [*variables, *design.offsets], n)
     missing = _formula_missing_rows(
         newdata, columns, [*variables, *design.offsets], n, required=response_columns
     )
@@ -721,12 +722,6 @@ def _newdata_frame(
             if response.start is not None:
                 missing.update(i for i, value in enumerate(response.start) if math.isnan(value))
     missing.update(extra_missing)
-    made, evaluated = _made_nan_rows(newdata, [*variables, *design.offsets], missing, n)
-    if made and not keep_missing:
-        # the design reads the evaluated variables at the rows that stay
-        stays = [row not in made for row in range(n) if row not in missing]
-        evaluated = {term: list(compress(values, stays)) for term, values in evaluated.items()}
-        missing.update(made)
     if missing and _normalize_na_action(na_action) == "fail":
         raise ValueError("missing values in newdata")
     m = n - len(missing)
@@ -736,8 +731,8 @@ def _newdata_frame(
         if response is not None:
             response = response.subset(kept)
     make_design = _design_array_from_spec if as_array else _design_rows_from_spec
-    rows = make_design(newdata, design, m, evaluated=evaluated, allow_missing=keep_missing)
-    offset = _offset_vector(newdata, list(design.offsets), m, evaluated)
+    rows = make_design(newdata, design, m, allow_missing=keep_missing)
+    offset = _offset_vector(newdata, list(design.offsets), m)
     strata_codes: list[int] | None = None
     if strata_columns:
         factor = _strata_keep(newdata, strata_terms)

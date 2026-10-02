@@ -7,6 +7,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 _call_fit_with_warnings = importlib.import_module("survival.pybridge")._call_fit_with_warnings
+_raise_captured_error = importlib.import_module("survival.pybridge")._raise_captured_error
 
 
 def test_fit_warning_capture_preserves_result_and_records_each_call(capsys):
@@ -54,3 +55,32 @@ def test_fit_warning_capture_preserves_python_exceptions_and_restores_filters():
         _call_fit_with_warnings(fit, {})
     assert caught.value is expected
     assert warnings.filters == previous_filters
+
+
+def test_failed_calls_can_return_warnings_before_resignalling_the_same_exception():
+    expected = ValueError("invalid fit input")
+
+    def fit():
+        warnings.warn("NaNs produced", UserWarning, stacklevel=1)
+        raise expected
+
+    previous_filters = list(warnings.filters)
+    captured = _call_fit_with_warnings(fit, {}, user_warnings=True, capture_error=True)
+    assert captured["warnings"] == ["NaNs produced"]
+    assert captured["result"] is None
+    assert captured["error"] is expected
+    assert warnings.filters == previous_filters
+    with pytest.raises(ValueError, match="invalid fit input") as caught:
+        _raise_captured_error(captured["error"])
+    assert caught.value is expected
+
+
+def test_warning_capture_preserves_positional_formula_calls():
+    def formula_call(formula, /, *, data):
+        warnings.warn("NaNs produced", UserWarning, stacklevel=1)
+        return formula, data
+
+    result = _call_fit_with_warnings(
+        formula_call, {"data": [1, 2]}, positional=["y ~ log(x)"], user_warnings=True
+    )
+    assert result == {"result": ("y ~ log(x)", [1, 2]), "warnings": ["NaNs produced"]}

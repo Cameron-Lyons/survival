@@ -1598,6 +1598,20 @@ attrassign <- function(object, tt) {
   evaluated_dots
 }
 
+.call_python_with_warnings <- function(name, arguments, user_warnings = FALSE) {
+  argument_names <- names(arguments)
+  if (is.null(argument_names)) argument_names <- rep("", length(arguments))
+  positional <- unname(arguments[argument_names == ""])
+  keywords <- arguments[argument_names != ""]
+  if (length(keywords) == 0L) keywords <- reticulate::dict()
+  captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), keywords,
+    positional = positional,
+    user_warnings = user_warnings, capture_error = TRUE)
+  for (message in captured$warnings) warning(message, call. = FALSE)
+  if (!is.null(captured$error)) .pybridge_attr("_raise_captured_error")(captured$error)
+  captured$result
+}
+
 .call_r_api <- function(name, ..., .wrap = character()) {
   arguments <- list(...)
   if (name %in% c("predict", "fitted", "_prediction_term_names") && "terms" %in% names(arguments)) {
@@ -1609,14 +1623,11 @@ attrassign <- function(object, tt) {
     }
   }
   arguments <- lapply(.compact_null(arguments), .unwrap_grouped_survfit)
-  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted", "model_matrix") ||
+  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted", "model_matrix",
+      "survfit", "survdiff", "aareg", "cch", "pyears", "concordance", "rttright",
+      "survobrien", "survexp", "finegray", "survSplit") ||
       (name == "residuals" && isTRUE(arguments[["_with_group_names"]]))) {
-    captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr(name), arguments,
-      user_warnings = name %in% c("predict", "fitted", "model_matrix"))
-    result <- captured$result
-    for (message in captured$warnings) {
-      warning(message, call. = FALSE)
-    }
+    result <- .call_python_with_warnings(name, arguments, user_warnings = TRUE)
   } else {
     result <- do.call(.python_attr(name), arguments)
   }
@@ -2509,9 +2520,8 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
     }
   })
   args <- c(args, .compact_null(list(type = type, origin = origin)))
-  captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr("Surv"), args)
-  for (message in captured$warnings) warning(message, call. = FALSE)
-  .wrap_python(captured$result, c("survival_py_surv", "survival_py_object"))
+  result <- .call_python_with_warnings("Surv", args)
+  .wrap_python(result, c("survival_py_surv", "survival_py_object"))
 }
 
 .surv_factor_response <- function(args, type = NULL, origin = 0) {
@@ -2636,12 +2646,10 @@ Surv2 <- function(time, event, repeated = FALSE) {
   if (!is.factor(event) && !is.list(event_values)) {
     event_values <- as.list(event_values)
   }
-  captured <- .pybridge_attr("_call_fit_with_warnings")(
-    .python_attr("Surv2"),
+  result <- .call_python_with_warnings(
+    "Surv2",
     list(time = time_values, event = event_values, repeated = repeated)
   )
-  result <- captured$result
-  for (message in captured$warnings) warning(message, call. = FALSE)
   status <- as.integer(.as_nullable_numeric_vector(.result_field(result, "status")))
   out <- cbind(time = as.numeric(time), status = status)
   if (length(input_attributes) > 0L) {
@@ -7325,9 +7333,7 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
   if (!missing(robust)) args$robust <- robust
   if (!missing(type)) args$type <- type
   # time0 is intentionally unused by survival::survfitKM.
-  captured <- .pybridge_attr("_call_fit_with_warnings")(.python_attr("survfitKM"), .compact_null(args))
-  result <- captured$result
-  for (message in captured$warnings) warning(message, call. = FALSE)
+  result <- .call_python_with_warnings("survfitKM", .compact_null(args))
 
   numeric_field <- function(name) .as_numeric_vector(.result_field(result, name))
   out <- list(n = as.integer(numeric_field("n")))
