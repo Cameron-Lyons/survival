@@ -63,6 +63,15 @@ fn standard_errors(bencher: divan::Bencher, n: usize) {
         .bench_local_values(|(data, options)| run_benchmark(data, options));
 }
 
+#[divan::bench(args = [1000, 10000, 100000])]
+fn standard_errors_long_grid(bencher: divan::Bencher, n: usize) {
+    let data = benchmark_inputs(n, n);
+    let options = SurvfitAJOptions::default();
+    bencher
+        .with_inputs(|| (data.clone(), options.clone()))
+        .bench_local_values(|(data, options)| run_benchmark(data, options));
+}
+
 #[divan::bench(args = [100, 1000])]
 fn influence_output(bencher: divan::Bencher, n: usize) {
     let data = benchmark_inputs(n, 250);

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Compute independent competing-risk Aalen–Johansen uncertainty from small
+  influence moment factors, avoiding subject scans at every reporting time.
+  Reuse the earliest entry time across grouped initial-state estimates.
+  Grouped multistate tables assemble state columns by position, preserving
+  repeated state selections and avoiding repeated label scans.
+
 - Select requested population-survival times with one forward scan, preserving
   duplicates, groups and follow-up breakpoints without quadratic searches.
   Expected cumulative hazards preserve undefined survival probabilities as NaN.
