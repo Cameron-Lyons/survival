@@ -535,10 +535,12 @@ class SurvExpResult:
 
     @property
     def cumhaz(self) -> list[float] | list[list[float]]:
-        """``-log(surv)``, the expected cumulative hazard."""
+        """``-log(surv)``, preserving missing survival and infinite zero-survival hazards."""
 
         def negative_log(value: float) -> float:
-            return -math.log(value) if value > 0.0 else math.inf
+            if value > 0.0:
+                return -math.log(value)
+            return math.inf if value == 0.0 else math.nan
 
         if self.surv and isinstance(self.surv[0], list):
             return [[negative_log(value) for value in row] for row in self.surv]

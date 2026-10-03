@@ -245,12 +245,18 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
             // keep <- match(times, newtime); surv <- rbind(1, surv)[keep + 1, ]
             let mut surv = Vec::with_capacity(times.len());
             let mut n_risk = Vec::with_capacity(times.len());
+            // Both grids are increasing. Retain the cursor for duplicate
+            // requests so selection takes one pass through the fitted grid.
+            let mut keep = 0;
             for &t in times {
-                let keep = fit
-                    .times
-                    .iter()
-                    .position(|&value| value == t)
-                    .ok_or_else(|| SurvivalError::computation("requested time missing from fit"))?;
+                while keep < fit.times.len() && fit.times[keep] < t {
+                    keep += 1;
+                }
+                if fit.times.get(keep) != Some(&t) {
+                    return Err(SurvivalError::computation(
+                        "requested time missing from fit",
+                    ));
+                }
                 surv.push(fit.surv.row(keep).to_vec());
                 n_risk.push(fit.n.row(keep).iter().map(|&v| v as f64).collect());
             }
@@ -354,6 +360,71 @@ mod tests {
         let expected = ((-0.1f64).exp() + (-(0.05f64 + 0.15)).exp()) / 2.0;
         assert!((out.surv[1][0] - expected).abs() < 1e-12);
         assert_eq!(out.n_risk, vec![vec![2.0], vec![2.0]]);
+    }
+
+    #[test]
+    fn requested_times_retain_duplicates_when_follow_up_adds_fit_rows() {
+        let table = table();
+        let positions = ndarray::arr2(&[[0.0], [5.0], [3.0], [8.0]]);
+        let y = [1.25, 4.5, 10.0, 14.0];
+        let group = [0, 1, 0, 1];
+        let times = [-0.0, 0.0, 2.0, 2.0, 7.0, 10.0, 15.0, 15.0];
+        let grid = [0.0, 1.25, 2.0, 4.5, 7.0, 10.0, 14.0, 15.0];
+
+        for method in [
+            SurvexpMethod::Ederer,
+            SurvexpMethod::Hakulinen,
+            SurvexpMethod::Conditional,
+        ] {
+            let expected = survexp_fit(
+                &group,
+                &positions,
+                Some(&y),
+                &grid,
+                method == SurvexpMethod::Conditional,
+                &table,
+            )
+            .unwrap();
+            let mut args = input(&positions, Some(&y), Some(&times), Some(method));
+            args.group = Some(&group);
+            args.scale = 2.0;
+            let actual = survexp(&table, args).unwrap();
+            assert_eq!(actual.time, times.map(|t| t / 2.0));
+            assert!(actual.time[0].is_sign_negative());
+            assert!(actual.time[1].is_sign_positive());
+            for (row, &time) in times.iter().enumerate() {
+                let source = grid.iter().position(|&value| value == time).unwrap();
+                assert_eq!(actual.surv[row], expected.surv.row(source).to_vec());
+                assert_eq!(
+                    actual.n_risk[row],
+                    expected.n.row(source).map(|&value| value as f64).to_vec()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dense_requested_grid_matches_constant_population_hazard() {
+        let table = RateTable::try_new(
+            vec![1],
+            vec!["age".into()],
+            vec![vec!["0".into()]],
+            vec![Some(vec![0.0])],
+            vec![DimType::Continuous],
+            vec![1e-5],
+        )
+        .unwrap();
+        let positions = ndarray::arr2(&[[0.0]]);
+        let times: Vec<f64> = (0..8192).flat_map(|step| [step as f64 / 8.0; 2]).collect();
+        let actual = survexp(&table, input(&positions, None, Some(&times), None)).unwrap();
+        assert_eq!(actual.time, times);
+        for (row, &time) in times.iter().enumerate() {
+            assert!((actual.surv[row][0] - (-1e-5 * time).exp()).abs() < 1e-12);
+            assert_eq!(actual.n_risk[row], [1.0]);
+            if row % 2 == 1 {
+                assert_eq!(actual.surv[row], actual.surv[row - 1]);
+            }
+        }
     }
 
     #[test]
