@@ -680,6 +680,12 @@ this does not show.
 - `pyears(expect = "pyears")` with a zero rate uses the limit of
   `(1 - exp(-lambda t)) / lambda` at `lambda = 0`, which is `t`; R's C code
   divides by zero.
+- Rate-table `survexp` without a response retains duplicate requested times.
+  R 3.8.11 deduplicates the integration grid but selects from it using indices
+  in the original requested grid. Repeated earlier requests can select
+  incorrect rows or produce "subscript out of bounds" for grouped fits.
+  Selection here always uses the fitted grid, including after a forward scan
+  replaces repeated full-grid searches; see [expected-survival grids](expected-survival-grids.md).
 - `summary_pyears` of a result without terms returns scalar tables (R's
   `summary.pyears` fails while printing); with `totals=True` it raises where
   R's `pytot` fails with "dim(X) must have a positive length".

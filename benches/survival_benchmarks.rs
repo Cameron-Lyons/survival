@@ -1486,6 +1486,60 @@ mod rate_matching_bench {
     }
 }
 
+mod expected_survival_grid {
+    use super::*;
+    use survival::population::{DimType, RateTable, SurvexpInput, survexp};
+
+    fn run(bencher: divan::Bencher, points: usize, copies: usize) {
+        let table = RateTable::try_new(
+            vec![1],
+            vec!["age".into()],
+            vec![vec!["0".into()]],
+            vec![Some(vec![0.0])],
+            vec![DimType::Continuous],
+            vec![1e-5],
+        )
+        .unwrap();
+        let positions = Array2::zeros((1, 1));
+        let times: Vec<f64> = (0..points)
+            .flat_map(|i| std::iter::repeat_n(1000.0 * i as f64 / (points - 1) as f64, copies))
+            .collect();
+        let call = || {
+            survexp(
+                &table,
+                SurvexpInput {
+                    positions: &positions,
+                    y: None,
+                    group: None,
+                    times: Some(&times),
+                    method: None,
+                    cohort: true,
+                    conditional: false,
+                    scale: 1.0,
+                },
+            )
+            .unwrap()
+        };
+        let result = call();
+        assert_eq!(result.time, times);
+        assert_eq!(result.n_risk, vec![vec![1.0]; times.len()]);
+        for (&time, row) in times.iter().zip(&result.surv) {
+            assert!((row[0] - (-1e-5 * time).exp()).abs() < 1e-12);
+        }
+        bencher.bench_local(|| black_box(call()));
+    }
+
+    #[divan::bench(args = [100, 1000, 4000, 16000, 32000])]
+    fn unique_requests(bencher: divan::Bencher, points: usize) {
+        run(bencher, points, 1);
+    }
+
+    #[divan::bench(args = [100, 1000, 4000, 16000, 32000])]
+    fn repeated_requests(bencher: divan::Bencher, points: usize) {
+        run(bencher, points, 2);
+    }
+}
+
 fn main() {
     divan::main();
 }

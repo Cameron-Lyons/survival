@@ -906,6 +906,11 @@ The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
 
+Rate-table expected survival selects dense requested-time grids with a forward
+scan, retaining duplicate requests and follow-up breakpoints. Expected cumulative
+hazards preserve missing survival probabilities. See
+[expected-survival grids](docs/expected-survival-grids.md) for checks and benchmarks.
+
 ## Cox model reports
 
 `r.print_coxph(fit)` returns coefficient tables and formatted text for ordinary,

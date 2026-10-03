@@ -8,6 +8,10 @@
   Grouped multistate tables assemble state columns by position, preserving
   repeated state selections and avoiding repeated label scans.
 
+- Select requested population-survival times with one forward scan, preserving
+  duplicates, groups and follow-up breakpoints without quadratic searches.
+  Expected cumulative hazards preserve undefined survival probabilities as NaN.
+
 - Reuse stratum data, event-time weights and time ordering across concordance
   predictors, retaining independent rank trees and joint covariance. Prevent
   zero-weight events with an empty weighted risk set from producing a `NaN`
