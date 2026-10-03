@@ -57,8 +57,11 @@ jobs:
       - name: Run doctests
         run: cargo test --doc
 
+      - name: Run public Rust API integration tests
+        run: cargo test --test '*' --no-default-features
+
   build-smoke:
-    name: Build Smoke (${{ matrix.os }})
+    name: Wheel Numerical Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -89,15 +92,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-smoke-
 
-      - name: Install maturin
-        run: pip install maturin
+      - name: Install maturin and numerical test dependencies
+        run: python -m pip install maturin numpy pandas polars pytest
 
       - name: Clean old wheels
         run: rm -rf target/wheels || true
         shell: bash
 
       - name: Build wheel with maturin
-        run: maturin build --release --interpreter python --features extension-module,ml
+        run: maturin build --locked --release --interpreter python --features extension-module,ml
 
       - name: Install wheel (Unix)
         if: matrix.os != 'windows-latest'
@@ -109,11 +112,39 @@ jobs:
           $wheel = Get-ChildItem -Path target/wheels -Filter "survival-*.whl" | Select-Object -First 1
           pip install $wheel.FullName
 
-      # Only verify the extension loads on this platform; the test suites run on
-      # ubuntu in the rust-tests and python-matrix jobs.
-      - name: Import installed extension
+      - name: Verify the installed wheel is used
         working-directory: ${{ runner.temp }}
-        run: python -c "import survival._survival as m; print(m.__file__)"
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import survival
+          import survival._survival as native
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          for module in (survival, native):
+              location = Path(module.__file__).resolve()
+              if location.is_relative_to(workspace):
+                  raise SystemExit(f"Expected installed wheel, imported {location}")
+              print(location)
+          PY
+
+      # Frozen stock-R references require no R installation. Exercise the wheel's
+      # numerical results, ndarray conversions, formula types and callback/pickle
+      # paths on both supported platforms, beyond loading the shared library.
+      - name: Run installed-wheel numerical tests
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          python -m pytest --import-mode=importlib -q \
+            "$GITHUB_WORKSPACE/python/tests/test_r_fixtures.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_array_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_survreg_callbacks.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_formula_numeric_classification.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_typed_formula_expressions.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_model_frame_transport.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_survfit_missing_residuals.py"
 
   python-matrix:
     name: Python ${{ matrix.python-version }}
@@ -322,7 +353,7 @@ jobs:
       - name: Install R
         uses: r-lib/actions/setup-r@v2
         with:
-          r-version: '4.5.2'
+          r-version: '4.5.3'
 
       - name: Create Python environment
         run: |
@@ -339,7 +370,7 @@ jobs:
         run: |
           rspm <- Sys.getenv("RSPM", unset = "")
           repos <- if (nzchar(rspm)) c(CRAN = rspm) else c(CRAN = "https://cloud.r-project.org")
-          install.packages(c("reticulate", "testthat", "remotes"), repos = repos)
+          install.packages(c("reticulate", "testthat", "remotes", "jsonlite"), repos = repos)
           wanted <- Sys.getenv("R_SURVIVAL_VERSION")
           remotes::install_version(
             "survival", version = wanted, repos = c(CRAN = "https://cloud.r-project.org"),
@@ -353,10 +384,50 @@ jobs:
         env:
           R_SURVIVAL_VERSION: '3.8-12'
 
+      - name: Regenerate current-stock formula, survival-row and exact-risk references
+        run: |
+          fixture_dir="$RUNNER_TEMP/current-stock-fixtures"
+          mkdir -p "$fixture_dir/committed" "$fixture_dir/regenerated"
+          cp python/tests/fixtures/typed_formula_expression_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survfit_missing_residual_reference.json "$fixture_dir/committed/"
+          cp test/r/kernel_references/exact_counting_sweep.json "$fixture_dir/committed/"
+          Rscript scripts/generate_typed_formula_expression_reference.R \
+            "$fixture_dir/regenerated/typed_formula_expression_reference.json"
+          Rscript scripts/generate_survfit_missing_residual_reference.R \
+            "$fixture_dir/regenerated/survfit_missing_residual_reference.json"
+          Rscript scripts/generate_exact_counting_reference.R \
+            "$fixture_dir/regenerated/exact_counting_sweep.json"
+          python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \
+            --rtol 1e-9 --atol 1e-12
+
+      - name: Upload regenerated current-stock references
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: current-stock-r-fixtures
+          path: ${{ runner.temp }}/current-stock-fixtures
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Check R bridge package
-        run: R CMD check --no-manual --no-build-vignettes r/survivalr
+        run: |
+          check_dir="$RUNNER_TEMP/r-bridge-check"
+          mkdir -p "$check_dir"
+          cd "$check_dir"
+          R CMD build --no-manual --no-build-vignettes "$GITHUB_WORKSPACE/r/survivalr"
+          R CMD check --no-manual --no-build-vignettes survivalr_*.tar.gz
+          grep -q '^Status: OK$' survivalr.Rcheck/00check.log
         env:
           RETICULATE_PYTHON: ${{ github.workspace }}/.venv/bin/python
+
+      - name: Upload R bridge check logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r-bridge-check
+          path: ${{ runner.temp }}/r-bridge-check/survivalr.Rcheck
+          if-no-files-found: ignore
+          retention-days: 7
 
   docs:
     name: Documentation

@@ -118,7 +118,7 @@ jobs:
         # The smoke assertions protect public return types from regressing to Any.
         run: >-
           uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi
-          python/survival/r python/tests/typing_smoke.py
+          python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py
           --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 
       # `python3 scripts/generate_stubs.py --check` needs the built extension (with the ml
@@ -136,10 +136,36 @@ jobs:
         with:
           config: .typos.toml
 
+  ci-helpers:
+    name: CI Helper Tests & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Install Ruff
+        run: python -m pip install ruff==0.16.9
+
+      - name: Check helper formatting
+        run: >-
+          ruff format --check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
+
+      - name: Lint CI helpers
+        run: >-
+          ruff check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
+
+      - name: Test coverage and benchmark gates without the extension
+        run: python -m unittest discover -s scripts/tests -v
+
   veto:
     name: Veto
     runs-on: ubuntu-latest
-    needs: [rust-lint, rust-lint-aux, python-lint, typos]
+    needs: [rust-lint, rust-lint-aux, python-lint, typos, ci-helpers]
     if: always()
     steps:
       - name: Check all lint jobs passed
@@ -147,7 +173,8 @@ jobs:
           if [[ "${{ needs.rust-lint.result }}" != "success" ]] || \
              [[ "${{ needs.rust-lint-aux.result }}" != "success" ]] || \
              [[ "${{ needs.python-lint.result }}" != "success" ]] || \
-             [[ "${{ needs.typos.result }}" != "success" ]]; then
+             [[ "${{ needs.typos.result }}" != "success" ]] || \
+             [[ "${{ needs.ci-helpers.result }}" != "success" ]]; then
             echo "One or more lint jobs failed"
             exit 1
           fi

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Evaluate restricted formula expressions with R precedence and three-valued
+  logical operators. Preserve nested logical and factor identities, logical
+  offsets, fitted contrasts, and empty or missing prediction types. Check
+  expressions and full Cox/AFT fits against independent stock-R references;
+  preserve recovered nullable logical sources through the R bridge.
+  Preserve integer arithmetic and overflow missingness, and decode supported
+  R string escapes with canonical term labels.
+- Compute exact Cox tie moments from the smaller of the death subset and its
+  complement, reducing work and memory for nearly complete risk-set ties.
+  Preserve tiny covariance contributions when log risks differ sharply, with
+  exhaustive subset checks and an independent R fitting reference. Revalidate
+  mutable Rust inputs at the counting-process exact fitter boundary.
+  Sweep untied counting-process risk sets with growing accumulators or stable
+  blocked moment trees, removing repeated full-stratum scans. Preserve moderate
+  means across extreme covariate contrasts and dominant risk removal.
+- Retain survival-curve missing-row metadata and restore excluded observation
+  rows in residual and pseudo-value arrays. Preserve original observation labels
+  after omission, with 96 stock-R differential cases across KM and multistate fits.
+- Make benchmark execution and malformed coverage reports fail CI, compare
+  measured Divan cases between PR and base revisions, and test CI helpers without
+  building the extension. Run external Rust API integration tests in CI and
+  remove a stale Cox-dispatch test skip. Test numerical results from installed
+  wheels on macOS and Windows and regenerate current-stock references in CI.
+  Reject logical-to-numeric reference changes and check the built R source
+  archive with no package warnings or notes.
+
 - Prepare grouped survival residuals and pseudo-values with one pass over input
   rows, and check curve endpoints with cumulative offsets. Preserve weighted,
   clustered and counting-process results while removing repeated scans per stratum.

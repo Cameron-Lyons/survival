@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import combinations, compress, product
-from operator import add, mul, sub, truediv
+from operator import add, mul, sub
 from typing import Any
 
 import numpy as np
@@ -40,6 +40,13 @@ from ._coerce import (
     _subset_optional_sequence,
     _subset_sequence,
     _warn_outside_package,
+)
+from ._expression import (
+    _evaluate_expression,
+    _expression_label,
+    _expression_source,
+    _ExpressionVector,
+    _parse_expression,
 )
 from ._names import _make_unique
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
@@ -76,7 +83,6 @@ from ._types import (
     _ModelStrataTerm,
     _NumericDesignTerm,
     _PenaltyDesignTerm,
-    _ResponseOperand,
     _SingleDesignTerm,
     _StrataSpec,
     _SurvResponseSpec,
@@ -101,38 +107,30 @@ def _column(data: Any, name: str) -> list[Any]:
     return _materialize_1d(_column_source(data, name), name)
 
 
-def _comparison_column(data: Any, name: str) -> list[Any]:
-    """A data column as R's relational operators read it: a factor is its labels as
-    strings (``Ops.factor``), any other column its own values."""
-
-    source = _column_source(data, name)
-    values = _materialize_1d(source, name)
-    if _mstate_categories(source) is None:
-        return values
-    return [None if _is_missing_value(value) else _as_character(value) for value in values]
-
-
-def _as_numeric_column(data: Any, name: str) -> list[Any]:
-    """R's ``as.numeric`` of a data column: a factor's 1-based level codes (NaN where
-    missing), any other column's own values."""
-
-    source = _column_source(data, name)
-    values = _materialize_1d(source, name)
-    categories = _mstate_categories(source)
-    if categories is None:
-        return values
-    codes = {value: i + 1 for i, value in enumerate(categories)}
-    return [_NA_REAL if _is_missing_value(value) else codes[value] for value in values]
-
-
 def _formula_name(name: str) -> tuple[str, bool]:
     name = name.strip()
     if name.startswith("`") and name.endswith("`") and len(name) >= 2:
-        inner = name[1:-1]
+        inner = _parse_expression(name).value
         if not inner:
             raise ValueError("backtick formula names must not be empty")
         return inner, True
     return name, False
+
+
+def _column_expression(name: str) -> str:
+    """Spell a data-column symbol for the restricted expression parser."""
+    if name.replace(".", "_").isidentifier() and name not in {
+        "TRUE",
+        "FALSE",
+        "NA",
+        "NA_real_",
+        "NA_integer_",
+        "NA_character_",
+        "NaN",
+        "Inf",
+    }:
+        return name
+    return "`" + name.replace("\\", "\\\\").replace("`", "\\`") + "`"
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +151,14 @@ def _scan(text: str, *, quotes: bool = True) -> list[tuple[int, str, int]]:
     depth = 0
     in_backtick = False
     quote: str | None = None
+    escaped = False
     for idx, char in enumerate(text):
+        if (quote is not None or in_backtick) and escaped:
+            escaped = False
+            continue
+        if (quote is not None or in_backtick) and char == "\\":
+            escaped = True
+            continue
         if quote is not None:
             if char == quote:
                 quote = None
@@ -203,9 +208,7 @@ def _split_at(text: str, positions: Sequence[tuple[int, int]], *, keep_empty: bo
 def _split_top_level(segment: str, separator: str) -> list[str]:
     """Split at every top-level *separator* character (empty pieces kept, as R's terms)."""
 
-    positions = [
-        (idx, idx + 1) for idx, char in _top_level(segment, quotes=False) if char == separator
-    ]
+    positions = [(idx, idx + 1) for idx, char in _top_level(segment) if char == separator]
     return _split_at(segment, positions, keep_empty=True)
 
 
@@ -213,7 +216,7 @@ def _split_top_level_token(segment: str, token: str) -> list[str]:
     """Split at every top-level occurrence of the multi-character *token* (``%in%``)."""
 
     positions: list[tuple[int, int]] = []
-    for idx, char in _top_level(segment, quotes=False):
+    for idx, char in _top_level(segment):
         if char == token[0] and segment.startswith(token, idx):
             if positions and idx < positions[-1][1]:
                 continue
@@ -224,7 +227,7 @@ def _split_top_level_token(segment: str, token: str) -> list[str]:
 def _formula_name_items(segment: str) -> list[tuple[str, bool]]:
     """The comma-separated names of a ``strata(a, b)``-style argument list."""
 
-    positions = [(idx, idx + 1) for idx, char in _top_level(segment, quotes=False) if char == ","]
+    positions = [(idx, idx + 1) for idx, char in _top_level(segment) if char == ","]
     return [_formula_name(name) for name in _split_at(segment, positions, keep_empty=False)]
 
 
@@ -266,7 +269,7 @@ def _top_level_comparison(part: str) -> tuple[str, str, str] | None:
 def _formula_tokens(rhs: str) -> list[tuple[str, str]]:
     """The ``+``/``-`` separated terms of a right-hand side with their sign."""
 
-    positions = [(idx, idx + 1) for idx, char in _top_level(rhs, quotes=False) if char in "+-"]
+    positions = [(idx, idx + 1) for idx, char in _top_level(rhs) if char in "+-"]
     parts = _split_at(rhs, positions, keep_empty=True)
     operators = ["+", *(rhs[idx] for idx, _end in positions)]
     return [(op, term) for op, term in zip(operators, parts, strict=True) if term]
@@ -276,7 +279,7 @@ def _find_top_level_arithmetic_operator(
     expression: str,
     operators: set[str],
     *,
-    quotes: bool = False,
+    quotes: bool = True,
 ) -> tuple[str, str, str] | None:
     """The right-most top-level binary operator of *operators* (unary signs and the
     sign of a number's exponent skipped)."""
@@ -296,7 +299,7 @@ def _find_top_level_arithmetic_operator(
 
 
 def _find_top_level_power_operator(
-    expression: str, *, quotes: bool = False
+    expression: str, *, quotes: bool = True
 ) -> tuple[str, str, str] | None:
     """The left-most top-level ``^``."""
 
@@ -340,7 +343,7 @@ def _strip_outer_formula_parentheses(term: str) -> str:
 
     value = term.strip()
     while value.startswith("(") and value.endswith(")"):
-        items = _scan(value, quotes=False)
+        items = _scan(value)
         if any(depth == 0 for idx, _char, depth in items if 0 < idx < len(value) - 1):
             break
         value = value[1:-1].strip()
@@ -430,24 +433,6 @@ def _response_rep_call(expression: str) -> tuple[Any, str] | None:
     return repeated_value, count_expression
 
 
-def _response_operand(expression: str, *, allow_literal: bool) -> _ResponseOperand:
-    expression = _unwrap_response_identity(expression)
-    if not expression:
-        raise ValueError("formula response comparison operands must not be empty")
-    if allow_literal:
-        try:
-            return _ResponseOperand(value=_parse_formula_literal(expression))
-        except ValueError:
-            pass
-
-    column, quoted = _formula_name(expression)
-    if not column:
-        raise ValueError("Surv(...) formula response arguments must not be empty")
-    if not quoted and any(token in column for token in "():*/"):
-        raise ValueError(f"unsupported formula response expression: {expression}")
-    return _ResponseOperand(column=column)
-
-
 def _response_bind_arguments(part: str) -> list[str] | None:
     """Numeric matrix response columns, with optional cbind column labels."""
     part = _unwrap_response_identity(part)
@@ -477,30 +462,7 @@ def _response_arg_columns(part: str) -> list[str]:
         return bound_columns
     if _response_rep_call(part) is not None:
         return []
-    if _is_formula_arithmetic_expression(part) or _numeric_call(part) is not None:
-        return _arithmetic_expression_columns(part)
-    comparison = _top_level_comparison(part)
-    if comparison is None:
-        operand = _response_operand(part, allow_literal=False)
-        return [operand.column] if operand.column is not None else []
-
-    columns: list[str] = []
-    for expression in (comparison[0], comparison[2]):
-        operand = _response_operand(expression, allow_literal=True)
-        if operand.column is not None:
-            _append_unique(columns, [operand.column])
-    if not columns:
-        raise ValueError("formula response comparisons require at least one data column")
-    return columns
-
-
-def _response_operand_values(
-    data: Any,
-    operand: _ResponseOperand,
-) -> tuple[list[Any] | None, Any]:
-    if operand.column is None:
-        return None, operand.value
-    return _comparison_column(data, operand.column), None
+    return list(_parse_expression(part).columns)
 
 
 def _compare_response_values(left: Any, operator: str, right: Any) -> bool | None:
@@ -598,39 +560,13 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
         repeated_value, count_expression = rep_call
         return [repeated_value] * _response_rep_count(count_expression, inferred_length)
 
-    if _is_formula_arithmetic_expression(part) or _numeric_call(part) is not None:
-        columns = _arithmetic_expression_columns(part)
-        n = len(_column(data, columns[0])) if columns else inferred_length
-        if n is None:
-            raise ValueError("formula response arithmetic requires a data column")
-        return _arithmetic_expression_values(data, part, n)
-    comparison = _top_level_comparison(part)
-    if comparison is None:
-        operand = _response_operand(part, allow_literal=False)
-        if operand.column is None:
-            raise ValueError("Surv(...) formula response arguments must be data columns")
-        return _column_source(data, operand.column)
-
-    left_operand = _response_operand(comparison[0], allow_literal=True)
-    right_operand = _response_operand(comparison[2], allow_literal=True)
-    left_values, left_literal = _response_operand_values(data, left_operand)
-    right_values, right_literal = _response_operand_values(data, right_operand)
-    operator = comparison[1]
-
-    if left_values is None and right_values is None:
-        raise ValueError("formula response comparisons require at least one data column")
-    if left_values is not None and right_values is not None:
-        if len(left_values) != len(right_values):
-            raise ValueError("formula response comparison columns must have the same length")
-        return [
-            _compare_response_values(left, operator, right)
-            for left, right in zip(left_values, right_values, strict=True)
-        ]
-    if left_values is not None:
-        return [_compare_response_values(left, operator, right_literal) for left in left_values]
-    if right_values is not None:
-        return [_compare_response_values(left_literal, operator, right) for right in right_values]
-    raise ValueError("formula response comparisons require at least one data column")
+    tree = _parse_expression(part)
+    if tree.kind == "column":
+        return _column_source(data, tree.value)
+    n = len(_column(data, tree.columns[0])) if tree.columns else inferred_length
+    if n is None:
+        raise ValueError("formula response expressions require a data column")
+    return _expression_values(data, part, n)
 
 
 def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[Any]:
@@ -891,16 +827,6 @@ def _offset_columns(terms: Sequence[_CovariateTerm]) -> list[str]:
     return columns
 
 
-def _arithmetic_literal(value: str) -> float | None:
-    """The number R's constant *value* is in arithmetic (``TRUE`` counts one), or
-    ``None`` when *value* is not a constant."""
-
-    literal = _r_literal(value)
-    if isinstance(literal, str):
-        raise ValueError(f"non-numeric argument to binary operator: {value.strip()}")
-    return None if literal is None else float(literal)
-
-
 def _is_formula_arithmetic_expression(expression: str) -> bool:
     stripped_expression = _strip_outer_formula_parentheses(expression)
     return (
@@ -912,69 +838,17 @@ def _is_formula_arithmetic_expression(expression: str) -> bool:
 
 
 def _arithmetic_expression_columns(expression: str) -> list[str]:
-    expression = _strip_outer_formula_parentheses(expression)
-    split = _find_top_level_arithmetic_operator(expression, {"+", "-"})
-    if split is None:
-        split = _find_top_level_arithmetic_operator(expression, {"*", "/"})
-    if split is not None:
-        left, _operator, right = split
-        columns = _arithmetic_expression_columns(left)
-        _append_unique(columns, _arithmetic_expression_columns(right))
-        return columns
-
-    if expression.startswith(("+", "-")):
-        return _arithmetic_expression_columns(expression[1:].strip())
-
-    split = _find_top_level_power_operator(expression)
-    if split is not None:
-        left, _operator, right = split
-        columns = _arithmetic_expression_columns(left)
-        _append_unique(columns, _arithmetic_expression_columns(right))
-        return columns
-
-    if _arithmetic_literal(expression) is not None:
-        return []
-    if _top_level_comparison(expression) is not None:
-        return _expression_columns(expression)
-
-    call = _numeric_call(expression)
-    if call is not None:
-        return _expression_columns(call[1])
-
-    column, quoted = _formula_name(expression)
-    if _unsupported_formula_name(column, quoted):
-        raise ValueError(f"unsupported formula arithmetic term: {expression}")
-    return [column]
+    return list(_parse_expression(expression).columns)
 
 
 def _expression_columns(expression: str) -> list[str]:
-    """The data columns an arithmetic expression or a comparison reads."""
-
-    comparison = _top_level_comparison(_strip_outer_formula_parentheses(expression))
-    if comparison is None:
-        return _arithmetic_expression_columns(expression)
-    columns: list[str] = []
-    for operand in (comparison[0], comparison[2]):
-        if _r_literal(operand) is None:
-            _append_unique(columns, _arithmetic_expression_columns(operand))
-    return columns
+    """The data dependencies of the same cached tree used during evaluation."""
+    return list(_parse_expression(expression).columns)
 
 
 # The calls formula arithmetic evaluates: R's functions of one numeric argument and
 # the wrappers that return theirs unchanged.
 _NUMERIC_CALLS = ("log", "sqrt", "exp", "I", "identity", "as.numeric")
-
-
-def _numeric_call(expression: str) -> tuple[str, str] | None:
-    """``(function, argument)`` of a call such as ``log(x + 1)`` in formula arithmetic."""
-
-    for function in _NUMERIC_CALLS:
-        if expression.startswith(f"{function}(") and expression.endswith(")"):
-            arguments = _formula_response_parts(expression[len(function) + 1 : -1])
-            if len(arguments) != 1:
-                raise ValueError(f"unsupported formula arithmetic term: {expression}")
-            return function, arguments[0]
-    return None
 
 
 def _r_literal(text: str) -> Any:
@@ -1024,108 +898,31 @@ def _r_pow(base: float, exponent: float) -> float:
 
 
 def _arithmetic_expression_values(data: Any, expression: str, n: int) -> list[float]:
-    expression = _strip_outer_formula_parentheses(expression)
-    additive = _find_top_level_arithmetic_operator(expression, {"+", "-"})
-    if additive is not None:
-        left, operator, right = additive
-        left_values = _arithmetic_expression_values(data, left, n)
-        right_values = _arithmetic_expression_values(data, right, n)
-        if operator == "+":
-            return [left + right for left, right in zip(left_values, right_values, strict=True)]
-        return [left - right for left, right in zip(left_values, right_values, strict=True)]
-
-    multiplicative = _find_top_level_arithmetic_operator(expression, {"*", "/"})
-    if multiplicative is not None:
-        left, operator, right = multiplicative
-        left_values = _arithmetic_expression_values(data, left, n)
-        right_values = _arithmetic_expression_values(data, right, n)
-        if operator == "*":
-            return [left * right for left, right in zip(left_values, right_values, strict=True)]
-        try:
-            return list(map(truediv, left_values, right_values))
-        except ZeroDivisionError:
-            return list(map(_r_divide, left_values, right_values))
-
-    if expression.startswith(("+", "-")):
-        values = _arithmetic_expression_values(data, expression[1:].strip(), n)
-        if expression[0] == "-":
-            return [-value for value in values]
-        return values
-
-    power = _find_top_level_power_operator(expression)
-    if power is not None:
-        left, _operator, right = power
-        left_values = _arithmetic_expression_values(data, left, n)
-        right_values = _arithmetic_expression_values(data, right, n)
-        try:
-            return list(map(math.pow, left_values, right_values))
-        except (OverflowError, ValueError):
-            return list(map(_r_pow, left_values, right_values))
-
-    literal = _arithmetic_literal(expression)
-    if literal is not None:
-        return [literal] * n
-    if _top_level_comparison(expression) is not None:
-        # a parenthesised comparison, TRUE counting 1: I((age > 60) + 0)
-        return _floats_or_nan(_expression_values(data, expression, n))
-
-    call = _numeric_call(expression)
-    if call is not None:
-        function, argument = call
-        column, quoted = _formula_name(argument)
-        if function == "as.numeric" and not _unsupported_formula_name(column, quoted):
-            return _numeric_column(expression, _as_numeric_column(data, column), n)
-        # a logical argument counts TRUE as 1 (R's as.numeric)
-        values = _floats_or_nan(_expression_values(data, argument, n))
-        return _apply_numeric_transform(values, function, argument)
-
-    column, quoted = _formula_name(expression)
-    if _unsupported_formula_name(column, quoted):
-        raise ValueError(f"unsupported formula arithmetic term: {expression}")
-    return _numeric_column(expression, _column(data, column), n)
+    values = _expression_values(data, expression, n)
+    return _numeric_column(expression, values, n)
 
 
 def _numeric_column(expression: str, values: list[Any], n: int) -> list[float]:
     """The column *values* an arithmetic *expression* reads, as numbers."""
-
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     try:
-        return _floats_or_nan(values)  # R's arithmetic keeps an NA missing
+        return _floats_or_nan(values)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"I() formula term {expression!r} requires numeric values") from exc
 
 
-def _expression_values(data: Any, expression: str, n: int) -> list[Any]:
-    """A formula variable written as R arithmetic (floats) or as a comparison (R's
-    logical: ``True``/``False``, ``None`` where an operand is missing)."""
-
-    comparison = _top_level_comparison(_strip_outer_formula_parentheses(expression))
-    if comparison is None:
-        return _arithmetic_expression_values(data, expression, n)
-    left, operator, right = comparison
-    return [
-        _compare_response_values(a, operator, b)
-        for a, b in zip(
-            _comparison_operand(data, left, n), _comparison_operand(data, right, n), strict=True
-        )
-    ]
-
-
-def _comparison_operand(data: Any, text: str, n: int) -> list[Any]:
-    """One side of a formula comparison: a literal, a column (a factor as its labels)
-    or arithmetic."""
-
-    literal = _r_literal(text)
-    if literal is not None:
-        return [literal] * n
-    column, quoted = _formula_name(text)
-    if _unsupported_formula_name(column, quoted):
-        return _arithmetic_expression_values(data, text, n)
-    values = _comparison_column(data, column)
-    if len(values) != n:
-        raise ValueError("formula columns must have the same length as the Surv response")
-    return values
+def _expression_values(data: Any, expression: str, n: int) -> _ExpressionVector:
+    """R vector values and their declared type, evaluated without arbitrary code."""
+    return _evaluate_expression(
+        _parse_expression(expression),
+        n,
+        lambda name: _column_source(data, name),
+        _apply_numeric_transform,
+        _compare_response_values,
+        _r_divide,
+        _r_pow,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1444,7 +1241,9 @@ def _data_rows(
             selected.response_cache = (response[0], _subset_surv(response[1], list(rows)))
         missing_rows = bool(np.any(index < 0))
         selected.variable_cache = {
-            term: (
+            term: values.take(rows)
+            if isinstance(values, _ExpressionVector)
+            else (
                 [_NA_REAL if row < 0 else values[row] for row in rows]
                 if missing_rows
                 else list(map(values.__getitem__, rows))
@@ -1476,6 +1275,8 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
             raise ValueError(f"variable lengths differ (found for '{name}')")
         missing = index < 0
         if missing.any():
+            if array.dtype.kind == "b":
+                return _expression_source(source, name).take(rows)
             selected = np.full((len(index), *array.shape[1:]), np.nan)
             selected[~missing] = array[index[~missing]]
             return selected
@@ -1483,6 +1284,11 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
     values = _coerce_array_like(source, name)
     if len(values) != n:
         raise ValueError(f"variable lengths differ (found for '{name}')")
+    if isinstance(source, _core.TcutResult) or (values and isinstance(values[0], list | tuple)):
+        return _rows_of(source, [None if row < 0 else values[row] for row in rows])
+    vector = _expression_source(source, name)
+    if vector.kind in {"logical", "factor"} or isinstance(source, _ExpressionVector):
+        return vector.take(rows)
     return _rows_of(source, [None if row < 0 else values[row] for row in rows])
 
 
@@ -1580,7 +1386,11 @@ def _evaluated_variables(variables: Iterable[_CovariateTerm]) -> list[_Covariate
             for term in variables
             if term.call is None
             and term.strata is None
-            and (term.arithmetic is not None or term.transform not in {None, "tt"})
+            and (
+                term.arithmetic is not None
+                or term.transform not in {None, "tt"}
+                or term.categorical_wrapper is not None
+            )
         )
     )
 
@@ -1770,7 +1580,10 @@ def _remove_values(target: list[Any], values: list[Any]) -> None:
 
 
 def _unsupported_formula_name(name: str, quoted: bool) -> bool:
-    return not quoted and any(token in name for token in "():*/+-^%=<>!&|")
+    return not quoted and (
+        any(token in name for token in "():*/+-^%=<>!&|[]${};")
+        or any(char.isspace() for char in name)
+    )
 
 
 def _factor_column_items(term: str) -> tuple[str, list[tuple[str, bool]]] | None:
@@ -1851,7 +1664,8 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
         if len(columns) != 1:
             raise ValueError(f"{wrapper}() requires exactly one column")
         if any(_unsupported_formula_name(column, quoted) for column, quoted in column_items):
-            raise ValueError(f"unsupported formula term(s): {columns[0]}")
+            _expression_columns(term)
+            return _CovariateTerm(term, arithmetic=term)
         return _CovariateTerm(
             columns[0],
             categorical=True,
@@ -1861,21 +1675,12 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     transform_argument = _transform_argument(term)
     if transform_argument is not None:
         transform, argument = transform_argument
-        column, quoted = _formula_name(argument)
-        if not _unsupported_formula_name(column, quoted):
-            return _CovariateTerm(column, transform=transform)
+        tree = _parse_expression(argument)
+        if tree.kind == "column":
+            return _CovariateTerm(tree.value, transform=transform)
         if transform == "tt":
-            raise ValueError(f"unsupported formula term(s): {column}")
-        _expression_columns(argument)
-        # I() and identity() keep a comparison logical, which the design codes as a
-        # factor (I(sex == 2)TRUE); the other transforms count TRUE as 1
-        logical = (
-            transform in {"I", "identity"}
-            and _top_level_comparison(_strip_outer_formula_parentheses(argument)) is not None
-        )
-        return _CovariateTerm(
-            argument, categorical=logical, transform=transform, arithmetic=argument
-        )
+            raise ValueError(f"unsupported formula term(s): {argument}")
+        return _CovariateTerm(argument, transform=transform, arithmetic=argument)
 
     call_term = _parse_call_term(term)
     if call_term is not None:
@@ -1883,10 +1688,16 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
 
     term_name, quoted = _formula_name(term)
     if _unsupported_formula_name(term_name, quoted):
-        # a bare comparison (age > 60) is a logical term in R, coded like I(age > 60)
-        if _top_level_comparison(term) is not None:
-            _expression_columns(term)
-            return _CovariateTerm(term, categorical=True, arithmetic=term)
+        # Logical formula expressions use vector operators, including R's !
+        # precedence below comparison. Arithmetic outside calls is terms algebra.
+        try:
+            tree = _parse_expression(term)
+        except ValueError as exc:
+            raise ValueError(f"unsupported formula term(s): {term_name}") from exc
+        if (
+            tree.kind == "binary" and tree.value in {"&", "|", "==", "!=", "<", "<=", ">", ">="}
+        ) or (tree.kind == "unary" and tree.value == "!"):
+            return _CovariateTerm(term, arithmetic=term)
         raise ValueError(f"unsupported formula term(s): {term_name}")
     return _CovariateTerm(term_name)
 
@@ -1968,10 +1779,7 @@ def _parse_offset_term(expression: str) -> _CovariateTerm:
     if _is_formula_arithmetic_expression(expression):
         _arithmetic_expression_columns(expression)
         return _CovariateTerm(expression, arithmetic=expression)
-    offset_term = _parse_covariate_atom(expression)
-    if offset_term.categorical:
-        raise ValueError("offset() requires a numeric column or transform")
-    return offset_term
+    return _parse_covariate_atom(expression)
 
 
 def _parse_formula_power_degree(value: str) -> int:
@@ -2272,12 +2080,16 @@ def _numeric_variable(
             # Numeric transforms already produced floats; reuse them directly.
             return values
         return _floats_or_nan(values)
-    return _numeric_term_values(_term_raw_values(data, term, n), term)
+    return _floats_or_nan(_term_values(data, term, n))
 
 
 def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
+    cache = getattr(data, "variable_cache", {})
+    key = replace(term, special=None) if term.special in {"offset", "cluster"} else term
+    if key in cache:
+        return cache[key]
     if term.strata:
-        values = list(_strata_term_values(data, term.strata))
+        values = _expression_source(_strata_term_values(data, term.strata), term.strata.call)
         if len(values) != n:
             raise ValueError("formula columns must have the same length as the Surv response")
         return values
@@ -2285,10 +2097,9 @@ def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
         raise ValueError(f"unsupported formula term(s): {term.call}")
     if term.arithmetic is not None:
         return _expression_values(data, term.arithmetic, n)
-    if term.transform == "as.numeric":
-        values = _as_numeric_column(data, term.column)
-    else:
-        values = _column(data, term.column)
+    if term.categorical_wrapper is not None:
+        return _expression_values(data, _covariate_term_name(term), n)
+    values = _expression_source(_column_source(data, term.column), term.column)
     if len(values) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
     return values
@@ -2309,6 +2120,11 @@ def _term_values(data: Any, term: _CovariateSpec, n: int) -> list[Any]:
     key = replace(term, special=None) if term.special in {"offset", "cluster"} else term
     if key in cache:
         return cache[key]
+    if term.transform not in {None, "tt"}:
+        argument = (
+            term.arithmetic if term.arithmetic is not None else _column_expression(term.column)
+        )
+        return _expression_values(data, f"{term.transform}({argument})", n)
     values = _term_raw_values(data, term, n)
     if term.transform in {None, "I", "identity"} or term.categorical:
         return values
@@ -2365,14 +2181,19 @@ def _fit_single_design_term(
             # Numeric dtypes already declare this term's type. Avoid materializing
             # and scanning its scalars before constructing the list-valued design.
             return _NumericDesignTerm(term)
-    cache = getattr(data, "variable_cache", {})
-    values = cache[term] if term in cache else _term_raw_values(data, term, n)
+    values = _term_values(data, term, n)
+    kind = getattr(values, "kind", None)
     if (
         term.transform in {None, "I", "identity"}
         and term.categorical_wrapper is None
         and term.strata is None
-        and any(_is_bool_like(value) for value in values)
-        and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
+        and (
+            kind == "logical"
+            or (
+                any(_is_bool_like(value) for value in values)
+                and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
+            )
+        )
         and (
             term.arithmetic is not None
             or _mstate_categories(_column_source(data, term.column)) is None
@@ -2381,6 +2202,13 @@ def _fit_single_design_term(
         # R model.matrix treats logical variables as factors with both levels,
         # even when only TRUE or FALSE remains after subset/NA omission.
         return _CategoricalDesignTerm(term, (False, True))
+    if kind == "factor":
+        levels = tuple(getattr(values, "categories", None) or ())
+        if len(levels) < 2:
+            raise ValueError(
+                f"categorical formula term {term.column!r} must have at least two levels"
+            )
+        return _CategoricalDesignTerm(term, levels)
     if not term.categorical and (
         term.transform is not None
         or term.arithmetic is not None
@@ -2528,7 +2356,14 @@ def _fit_formula_design(
             for term in terms.variables
         ),
         variable_labels=tuple(
-            _covariate_term_name(term) for term in terms.variables if term.special != "cluster"
+            _covariate_term_name(term, frame=True)
+            for term in terms.variables
+            if term.special != "cluster"
+        ),
+        logical_offsets=tuple(
+            f"offset({_covariate_term_name(term, frame=True)})"
+            for term in terms.offsets
+            if getattr(_term_values(data, term, n), "kind", None) == "logical"
         ),
     )
 
@@ -2778,16 +2613,25 @@ def _design_rows_from_spec(
     return list(map(list, zip(*columns, strict=True)))
 
 
-def _covariate_term_name(term: _CovariateTerm) -> str:
+def _covariate_term_name(term: _CovariateTerm, *, frame: bool = False) -> str:
     if term.special is not None:
-        return f"{term.special}({_covariate_term_name(replace(term, special=None))})"
+        return f"{term.special}({_covariate_term_name(replace(term, special=None), frame=frame)})"
     if term.call is not None:
         return term.call
     if term.transform is not None:
-        return f"{term.transform}({term.column})"
+        argument = (
+            _expression_label(term.arithmetic, keep_integer=frame)
+            if term.arithmetic is not None
+            else _column_expression(term.column)
+        )
+        return f"{term.transform}({argument})"
     if term.categorical_wrapper is not None:
-        return f"{term.categorical_wrapper}({term.column})"
-    return term.column
+        return f"{term.categorical_wrapper}({_column_expression(term.column)})"
+    return (
+        _expression_label(term.column, keep_integer=frame)
+        if term.arithmetic is not None
+        else term.column
+    )
 
 
 def _display_single_design_term(spec: _SingleDesignTerm) -> str:
@@ -2860,7 +2704,7 @@ def _formula_model_frame(
     _append_unique(columns, list(design.strata))
     _append_unique(columns, list(extra_columns))
     for column in columns:
-        frame[column] = _column(data, column)
+        frame[column] = _expression_source(_column_source(data, column), column)
     for name, values in (
         ("(weights)", weights),
         ("(offset)", offsets if offsets is not None else offset),
@@ -2907,6 +2751,10 @@ def _offset_vector(
 ) -> list[float] | None:
     if not terms:
         return None
+    for term in terms:
+        values = _term_values(data, term, n)
+        if getattr(values, "kind", None) in {"factor", "character"}:
+            raise ValueError("offset() requires a numeric or logical variable")
     columns = [_numeric_variable(data, term, n, evaluated) for term in terms]
     return [sum(column[i] for column in columns) for i in range(n)]
 
@@ -3491,7 +3339,7 @@ def _model_variables(
     terms = mf.terms
     if include_unused and terms.variables:
         for factor in terms.variables:
-            name = _covariate_term_name(factor)
+            name = _covariate_term_name(factor, frame=True)
             values = (
                 overrides[name]
                 if overrides is not None and name in overrides
@@ -3506,7 +3354,7 @@ def _model_variables(
     for model_term in model_terms:
         if isinstance(model_term, _ModelCovariateTerm):
             for factor in _covariate_factors(model_term.term):
-                name = _covariate_term_name(factor)
+                name = _covariate_term_name(factor, frame=True)
                 values = (
                     overrides[name]
                     if overrides is not None and name in overrides
@@ -3517,8 +3365,8 @@ def _model_variables(
             add(model_term.spec.call, _strata_term_values(mf.data, model_term.spec))
         elif isinstance(model_term, _ModelOffsetTerm):
             term = model_term.term
-            values = _numeric_variable(mf.data, term, mf.n)
-            add(f"offset({_covariate_term_name(term)})", values)
+            values = _term_values(mf.data, term, mf.n)
+            add(f"offset({_covariate_term_name(term, frame=True)})", values)
     return columns
 
 

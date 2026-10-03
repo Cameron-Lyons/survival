@@ -670,7 +670,7 @@ def test_a_comparison_in_surv_is_not_a_variable_name():
 
 def test_unsupported_expressions_raise_the_formula_error():
     lung = datasets.load_lung()
-    for rhs in ("I(sex == 2 & age > 60)", "as.numeric(!sex)", "I(age | sex)", "log(age, 2)"):
+    for rhs in ("I(sex && age > 60)", "as.numeric(sex[1])", "I(system(age))", "log(age, 2)"):
         with pytest.raises(ValueError, match="unsupported formula|requires exactly one"):
             r.coxph(f"Surv(time, status) ~ {rhs}", lung)
     with pytest.raises(ValueError, match="non-numeric argument to binary operator"):

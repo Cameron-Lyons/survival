@@ -9,6 +9,11 @@ env:
   CARGO_PROFILE_BENCH_LTO: "false"
   CARGO_PROFILE_BENCH_CODEGEN_UNITS: "16"
   CARGO_PROFILE_BENCH_STRIP: "none"
+  RAYON_NUM_THREADS: "1"
+
+defaults:
+  run:
+    shell: bash
 
 permissions:
   contents: read
@@ -21,6 +26,11 @@ jobs:
     steps:
       - name: Checkout PR
         uses: actions/checkout@v7
+
+      - name: Set up Python for report comparison
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,50 +48,45 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Smoke test benchmarks (PR)
-        run: cargo bench -- --test
+        run: cargo bench --locked --bench '*' -- --test
 
       - name: Run benchmarks (PR)
-        continue-on-error: true
-        run: cargo bench 2>&1 | tee pr-bench.txt || true
+        # Keep stderr separate: Divan prints timer diagnostics while the first
+        # stdout row is being written. Bash pipefail propagates benchmark errors.
+        run: >-
+          cargo bench --locked --bench '*' -- --color never --sample-count 100 --min-time 0.1 --max-time 1
+          | tee "$RUNNER_TEMP/pr-bench.txt"
 
       - name: Checkout base branch
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          clean: false
+          # Keep the PR's comparison helper and raw reports intact. Both builds
+          # share the runner and the target cache, with Cargo tracking each source.
+          path: .benchmark-base
 
       - name: Run benchmarks (base)
-        continue-on-error: true
-        run: cargo bench 2>&1 | tee base-bench.txt || true
+        working-directory: .benchmark-base
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: >-
+          cargo bench --locked --bench '*' -- --color never --sample-count 100 --min-time 0.1 --max-time 1
+          | tee "$RUNNER_TEMP/base-bench.txt"
 
       - name: Compare benchmarks
-        id: compare
-        continue-on-error: true
         run: |
-          tail -n 300 base-bench.txt > base-bench-tail.txt || true
-          tail -n 300 pr-bench.txt > pr-bench-tail.txt || true
-          echo "## Benchmark Results" > bench-comment.md
-          echo "" >> bench-comment.md
-          echo "<details><summary>Base branch</summary>" >> bench-comment.md
-          echo "" >> bench-comment.md
-          echo '```' >> bench-comment.md
-          cat base-bench-tail.txt >> bench-comment.md
-          echo '```' >> bench-comment.md
-          echo "</details>" >> bench-comment.md
-          echo "" >> bench-comment.md
-          echo "<details><summary>PR branch</summary>" >> bench-comment.md
-          echo "" >> bench-comment.md
-          echo '```' >> bench-comment.md
-          cat pr-bench-tail.txt >> bench-comment.md
-          echo '```' >> bench-comment.md
-          echo "</details>" >> bench-comment.md
+          python scripts/compare_benchmarks.py "$RUNNER_TEMP/base-bench.txt" "$RUNNER_TEMP/pr-bench.txt" --output "$RUNNER_TEMP/bench-comment.md"
+          cat "$RUNNER_TEMP/bench-comment.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload benchmark comment
+      - name: Upload benchmark report and raw measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-comment
-          path: bench-comment.md
+          path: |
+            ${{ runner.temp }}/bench-comment.md
+            ${{ runner.temp }}/pr-bench.txt
+            ${{ runner.temp }}/base-bench.txt
 
   post-benchmark-comment:
     name: Post Benchmark Comment
