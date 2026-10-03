@@ -237,6 +237,11 @@ Multi-state fits with retained model frames also support influence residuals
 and pseudo-values for state probabilities, cumulative transition hazards, and
 integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
+Independent right-censored competing-risk curves compute probability, hazard,
+and integrated-occupancy standard errors with a linear moment sweep.
+Grouped data-frame conversion preserves repeated state selections by column
+position. See [survival curve performance](docs/kaplan-meier-performance.md)
+for the algorithms, numerical fallbacks, and reproducible measurements.
 Ordinary fitted curves support R-style influence residuals and pseudo-values for
 survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
 grouping, estimator settings, and conditional start times. A native query kernel

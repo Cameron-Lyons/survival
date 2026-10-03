@@ -107,3 +107,100 @@ both array output and long tables are checked. Regenerate them with:
 ```sh
 Rscript scripts/generate_grouped_residual_reference.R /tmp/grouped-reference.json
 ```
+
+## Aalen–Johansen uncertainty
+
+Independent right-censored competing-risk curves use a moment sweep when
+all observations in a curve start in the same state, their initial influences
+are zero, and explicit influences are not requested. A fixed initial
+distribution may put probability in other states. Ties, nonnegative case
+weights, source self-transitions, differing source states across strata, and
+conditional start times are supported.
+
+Rows still at risk share weight-scaled probability, cumulative-hazard, and
+integrated-occupancy influence coefficients. Departed rows contribute small
+triangular QR factors: two columns for the source state and three for each
+destination. Event and integration updates preserve triangularity. Adding
+an exiting row uses Givens rotations and `hypot`, so the calculation does not
+subtract nearly equal variance terms or explicitly square extreme weights.
+Backwards risk-weight norms avoid cancellation when a heavy row exits.
+
+After sorting, the kernel takes O((n + t)(s + h)) time, with O(n + s + h)
+auxiliary storage, where t, s, and h denote reporting times, states, and
+transition-hazard columns. The returned matrices still take O(t(s + h))
+storage. Counting-process data, repeated clusters, uncertain initial
+distributions, and explicit influences retain the general influence kernel.
+Numeric overflow, vanished normalized positive weights, zero-weight events
+on empty weighted risk sets, and rounding-sensitive absorbed confidence
+limits also retain the general calculation and its missing-value behavior.
+
+Grouped initial-state preparation scans the global minimum entry time once
+for counting-process data, rather than once per stratum. Right-censored data
+skip that scan. The global minimum is retained because it determines whether
+subjects entering exactly at the initial time are included.
+
+Run complete native-call measurements against each release extension:
+
+```sh
+PYTHONPATH=python .venv/bin/python scripts/benchmark_aj_variance.py --repeats 7
+cargo bench --bench survfitaj_benchmarks -- standard_errors_long_grid
+```
+
+The Python benchmark includes argument conversion and result construction,
+validates probabilities, hazards and counts, and compares all three error
+matrices with explicit influences in independent and repeated-cluster controls.
+Its variance workload uses times 1..n and cycles through two event types and
+censoring. Weighted cases cycle through `0.5 + (i % 7) / 4` and censor the
+final row. Preparation uses two subjects per curve with different initial
+states, with both right-censored and counting-process controls.
+
+Local release-extension medians on Linux x86-64, CPython 3.14.7, NumPy 2.4.6,
+with seven measured calls and default standard errors:
+
+| Observations | Weights | Before | After | Speedup |
+| ---: | :--- | ---: | ---: | ---: |
+| 1,000 | Unit | 5.13 ms | 0.974 ms | 5.3× |
+| 4,000 | Unit | 77.1 ms | 3.70 ms | 20.8× |
+| 8,000 | Unit | 306.6 ms | 7.25 ms | 42.3× |
+| 1,000 | Fractional | 5.43 ms | 1.14 ms | 4.8× |
+| 4,000 | Fractional | 77.6 ms | 4.30 ms | 18.1× |
+| 8,000 | Fractional | 308.2 ms | 8.53 ms | 36.1× |
+
+For 16,000 rows in 8,000 curves, inferred initial-state preparation fell from
+94.7 to 14.4 ms on right-censored data and from 96.7 to 16.5 ms on
+counting-process data. Fixed-`p0` controls stayed near 14 and 16 ms.
+These measurements describe the specified workloads. Returning full
+influences and numerically sensitive inputs still uses the general kernel.
+
+## Grouped multistate tables
+
+Grouped `as_data_frame` output is state-major, then stratum-major, matching R.
+Each curve provides one contiguous time block per state column; assembly
+copies those blocks by position. Repeated or reordered state selections
+therefore retain the requested columns even when labels repeat. Conversion
+scales with the output size rather than rescanning every state label for
+each state. Groups may have different reporting-time grids.
+
+To compare complete conversion calls with an earlier Python implementation:
+
+```sh
+git show MAIN_REVISION:python/survival/r/_models.py > /tmp/previous_models.py
+PYTHONPATH=python .venv/bin/python scripts/benchmark_grouped_multistate_frames.py \
+  --baseline-source /tmp/previous_models.py --repeats 7
+```
+
+This benchmark excludes fitting and checks every output column and its order.
+Stock-R fixtures cover repeated and reordered state selections with and
+without standard errors and initial rows. R's raw selected matrices supply
+the reference: stock `[.survfitms` leaves `n.censor` unsliced, which can break
+`summary(..., data.frame=TRUE)` after selecting states. The fixture selects
+the corresponding original censor columns explicitly.
+
+The same local environment gave these seven-call conversion medians for
+16 groups with 200–202 reporting times each:
+
+| State columns | Output rows | Before | After | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 9 | 28,935 | 14.6 ms | 5.63 ms | 2.6× |
+| 33 | 106,095 | 114.7 ms | 26.0 ms | 4.4× |
+| 129 | 414,735 | 1,351.8 ms | 109.7 ms | 12.3× |
