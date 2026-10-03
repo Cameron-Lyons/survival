@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prepare grouped survival residuals and pseudo-values with one pass over input
+  rows, and check curve endpoints with cumulative offsets. Preserve weighted,
+  clustered and counting-process results while removing repeated scans per stratum.
+
 - Compute independent competing-risk Aalen–Johansen uncertainty from small
   influence moment factors, avoiding subject scans at every reporting time.
   Reuse the earliest entry time across grouped initial-state estimates.

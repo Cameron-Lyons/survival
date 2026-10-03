@@ -299,10 +299,14 @@ def pseudo(
     _warn_approximate(fit, type_)
 
     frame = _survfit_data_from_fit(fit)
-    n_curves = len(fit.strata) if fit.strata else 1
     sizes = list(fit.strata.values()) if fit.strata else [len(fit.time)]
-    ends = [fit.time[sum(sizes[: k + 1]) - 1] for k in range(n_curves) if sizes[k] > 0]
-    if any(end < max(times) for end in ends):
+    offset = 0
+    ends = []
+    for size in sizes:
+        offset += size
+        if size > 0:
+            ends.append(fit.time[offset - 1])
+    if any(end < times[-1] for end in ends):
         warnings.warn(
             "requested time points are beyond the end of one or more curves", stacklevel=2
         )
