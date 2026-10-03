@@ -71,6 +71,12 @@ def _same_number(old: float, new: float, rtol: float, atol: float) -> bool:
 
 
 def _walk(old: object, new: object, path: str, rtol: float, atol: float, out: list[tuple]):
+    # JSON logical values must keep their type. Python equality otherwise makes
+    # True == 1 and False == 0, hiding a logical-to-numeric fixture regression.
+    if isinstance(old, bool) or isinstance(new, bool):
+        if type(old) is not type(new) or old != new:
+            out.append((path, old, new))
+        return
     old_num, new_num = _as_number(old), _as_number(new)
     if old_num is not None and new_num is not None:
         if not _same_number(old_num, new_num, rtol, atol):

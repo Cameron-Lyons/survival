@@ -223,6 +223,9 @@ class _FormulaDesign:
     intercept: bool = False
     variables: tuple[_CovariateTerm, ...] = ()
     variable_labels: tuple[str, ...] = ()
+    # model.matrix records contrasts for logical offsets even though they
+    # contribute no design columns; model.offset uses their numeric values.
+    logical_offsets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -398,12 +401,6 @@ class ModelFrame:
     @property
     def response_columns(self) -> tuple[str, ...]:
         return () if self.spec is None else self.spec.columns
-
-
-@dataclass(frozen=True)
-class _ResponseOperand:
-    column: str | None = None
-    value: Any = None
 
 
 @dataclass(frozen=True)
@@ -895,7 +892,8 @@ class SurvfitResult:
     ``std_chaz`` and ``t0`` are the values R's ``survfit0`` derives, it holds the curves as
     fitted).  As in R, a ``start.time`` of a Kaplan-Meier fit shows only as ``t0`` and
     ``time0`` marks a curve that already starts with its ``t0`` row, the result of
-    ``survfit0``.
+    ``survfit0``. ``na_action`` retains omitted model-frame positions so residuals
+    and pseudo values can restore rows removed by ``na.exclude``.
     """
 
     n: list[int]
@@ -925,6 +923,7 @@ class SurvfitResult:
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitKMResult | None = field(default=None, repr=False, compare=False)
+    na_action: NaAction | None = None
 
     @property
     def strata_names(self) -> list[str]:
@@ -964,7 +963,8 @@ class SurvfitMultiStateResult:
     ``survcheck``'s table of observed transitions (from state x to state or censored), which
     ``fit[, states]`` drops, as it drops ``n_id`` from a fit without strata.  The rows of
     each ``influence_pstate`` array are named, as in R, by the clusters' numbers ``1, 2, ...``
-    in order of first appearance.
+    in order of first appearance. ``na_action`` retains omitted model-frame positions
+    for observation-level residual and pseudo-value outputs.
     """
 
     n: list[int]
@@ -1003,6 +1003,7 @@ class SurvfitMultiStateResult:
     # the states before `fit[, states]` selected some (R's oldstate)
     oldstate: tuple[str, ...] | None = None
     clabel: str | None = None
+    na_action: NaAction | None = None
 
     @property
     def strata_names(self) -> list[str]:
@@ -1249,7 +1250,7 @@ class SurvfitResidualsResult:
     resid: list[Any]
     time: list[float]
     id: list[Any]
-    curve: list[int] | None = None
+    curve: list[int | float] | None = None
     columns: list[str] | None = None
     column_name: str | None = None
     id_name: str | None = None

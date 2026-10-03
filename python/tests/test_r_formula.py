@@ -94,6 +94,34 @@ def test_term_expansion_follows_r_model_formulae():
         r_formula._split_terms(".", None)
 
 
+@pytest.mark.parametrize(
+    ("rhs", "label", "values"),
+    [
+        ('I(label == "a\\"b")', 'I(label == "a\\"b")TRUE', [1, 0, 0, 0]),
+        ("I(label == 'a(b')", 'I(label == "a(b")TRUE', [0, 1, 0, 0]),
+        ("I(label == 'a+b')", 'I(label == "a+b")TRUE', [0, 0, 1, 0]),
+        ("I(label == 'a,b')", 'I(label == "a,b")TRUE', [0, 0, 0, 1]),
+        ("I(`x space`)", "I(`x space`)", [1, 2, 3, 4]),
+        ("I(`x\\`quote`)", "I(`x\\`quote`)", [1, 2, 3, 4]),
+    ],
+)
+def test_expression_literals_and_quoted_symbols_keep_their_meaning(rhs, label, values):
+    # Stock R's model.matrix keeps string punctuation inside the logical
+    # expression, deparses its strings with double quotes, and quotes symbols.
+    data = {
+        "time": [1, 2, 3, 4],
+        "status": [1, 1, 1, 0],
+        "label": ['a"b', "a(b", "a+b", "a,b"],
+        "x space": [1, 2, 3, 4],
+        "x`quote": [1, 2, 3, 4],
+    }
+    fit = importlib.import_module("survival.r._fit")._model_frame(
+        "Surv(time, status) ~ " + rhs, data
+    )
+    assert fit.names == [label]
+    assert fit.x == [[value] for value in values]
+
+
 def test_formula_term_cache_returns_independent_terms():
     first = r_formula._split_terms("group + strata(x1) + offset(x2)", None)
     second = r_formula._split_terms("group + strata(x1) + offset(x2)", None)

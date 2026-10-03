@@ -49,6 +49,7 @@ from ._formula import (
     _covariate_term_name,
     _formula_cluster_values,
     _formula_response_spec,
+    _na_action_record,
     _parse_formula,
     _strata_term_values,
     _subset_formula_inputs,
@@ -60,6 +61,7 @@ from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subse
 from ._types import (
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
+    NaAction,
     NamedMatrix,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
@@ -108,6 +110,7 @@ class _SurvfitData:
     istate: Sequence[Any] | None
     model: dict[str, Any]
     terms: tuple[str, ...]
+    na_action: NaAction | None = None
 
     @property
     def n_curves(self) -> int:
@@ -193,6 +196,7 @@ def _survfit_data(
     extras: dict[str, Any],
     *,
     shortlabel: bool = False,
+    na_action: NaAction | None = None,
 ) -> _SurvfitData:
     """Assemble the model frame and the curve factor from the response and its columns.
 
@@ -219,6 +223,7 @@ def _survfit_data(
         istate=aligned["istate"],
         model=model,
         terms=tuple(columns),
+        na_action=na_action,
     )
 
 
@@ -243,7 +248,7 @@ def _formula_model_frame(
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
     elif subset is not None:
         data, extras = _subset_formula_inputs(formula, data, subset, **extras)
-    data, extras, _removed = _apply_formula_na_action(formula, data, na_action, **extras)
+    data, extras, removed = _apply_formula_na_action(formula, data, na_action, **extras)
     response, terms = _parse_formula(formula, data)
     n = len(response)
 
@@ -277,7 +282,9 @@ def _formula_model_frame(
             columns[name] = _strata_term_values(data, model_term.spec)
         elif not isinstance(model_term, _ModelOffsetTerm | _ModelClusterTerm):
             raise ValueError(f"unsupported survfit formula term {model_term!r}")
-    return _survfit_data(response, response_name, columns, extras)
+    return _survfit_data(
+        response, response_name, columns, extras, na_action=_na_action_record(na_action, removed)
+    )
 
 
 def _surv_model_frame(
@@ -298,13 +305,20 @@ def _surv_model_frame(
             name: _subset_optional_sequence(values, indices, name)
             for name, values in extras.items()
         }
-    response, aligned, _removed = _apply_surv_na_action(
+    response, aligned, removed = _apply_surv_na_action(
         response, na_action, "survfit inputs", group=group, **extras
     )
     group = aligned.pop("group")
     columns = {} if group is None else {"group": group}
     # a bare vector has no variable name to label its levels with
-    return _survfit_data(response, "response", columns, aligned, shortlabel=True)
+    return _survfit_data(
+        response,
+        "response",
+        columns,
+        aligned,
+        shortlabel=True,
+        na_action=_na_action_record(na_action, removed),
+    )
 
 
 def _survfit_data_from_fit(fit: SurvfitResult | SurvfitMultiStateResult) -> _SurvfitData:
@@ -318,7 +332,9 @@ def _survfit_data_from_fit(fit: SurvfitResult | SurvfitMultiStateResult) -> _Sur
         raise ValueError("the model frame of the survfit object has no Surv response")
     columns = {name: model[name] for name in fit.call.terms}
     extras: dict[str, Any] = {name: model.get(f"({name})") for name in _SPECIALS}
-    data = _survfit_data(model[response_name], response_name, columns, extras)
+    data = _survfit_data(
+        model[response_name], response_name, columns, extras, na_action=fit.na_action
+    )
     # residuals.survfit scores the rows of the k-th curve level with fit[k]; a curve that
     # start.time emptied is not in the fit and `[.survfit` stops ("strata k not matched")
     if 0 in fit.n:
@@ -651,7 +667,9 @@ def _survfitKM(frame: _SurvfitData, **options: Any) -> SurvfitResult:
     """Build a formula-model result from the shared engine output."""
     engine, call, clname = _km_engine(frame, **options)
     labels = _curve_labels(engine, frame.x_levels)
-    return _km_result(engine, labels, call, frame.model, options["se_fit"], clname)
+    return _km_result(
+        engine, labels, call, frame.model, options["se_fit"], clname, na_action=frame.na_action
+    )
 
 
 def _curve_labels(
@@ -696,6 +714,7 @@ def _km_result(
     clname: Sequence[Any] | None,
     *,
     time0: bool = False,
+    na_action: NaAction | None = None,
 ) -> SurvfitResult:
     """A ``survfit`` object from the engine output; ``se.fit = FALSE`` drops the se parts.
 
@@ -730,6 +749,7 @@ def _km_result(
         call=call,
         model=model,
         engine=engine,
+        na_action=na_action,
     )
 
 
@@ -807,7 +827,16 @@ def _survfitAJ(
     )
     call = SurvfitCall(frame.terms, stype, ctype, timefix, start, p0=p0, id=id_name, type=type_)
     labels = _curve_labels(engine, frame.x_levels)
-    return _aj_result(engine, labels, call, frame.model, se_fit, time0=time0, clabel=frame.y.clabel)
+    return _aj_result(
+        engine,
+        labels,
+        call,
+        frame.model,
+        se_fit,
+        time0=time0,
+        clabel=frame.y.clabel,
+        na_action=frame.na_action,
+    )
 
 
 def _compact_transitions(
@@ -839,6 +868,7 @@ def _aj_result(
     *,
     time0: bool,
     clabel: str | None = None,
+    na_action: NaAction | None = None,
 ) -> SurvfitMultiStateResult:
     """A ``survfitms`` object from the engine output."""
 
@@ -884,6 +914,7 @@ def _aj_result(
         call=call,
         model=model,
         engine=engine,
+        na_action=na_action,
     )
 
 
@@ -962,7 +993,9 @@ def _survfitTurnbull(
     fitted = sorted({frame.x_codes[row] for row in rows})
     levels = [frame.x_levels[code] for code in fitted]
     call = SurvfitCall(frame.terms, 1, 1, timefix, start, id=id_name)
-    return _km_result(result.fit, levels, call, frame.model, se_fit, None)
+    return _km_result(
+        result.fit, levels, call, frame.model, se_fit, None, na_action=frame.na_action
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1326,7 +1359,14 @@ def _derived_survfit(
     se_fit = x.std_err is not None
     if isinstance(x, SurvfitMultiStateResult) and isinstance(engine, _core.SurvfitAJResult):
         fit = _aj_result(
-            engine, x.strata_names, x.call, x.model, se_fit, time0=time0, clabel=x.clabel
+            engine,
+            x.strata_names,
+            x.call,
+            x.model,
+            se_fit,
+            time0=time0,
+            clabel=x.clabel,
+            na_action=x.na_action,
         )
         return dataclasses.replace(
             fit, n_id=None if x.n_id is None else fit.n_id, oldstate=x.oldstate
@@ -1334,7 +1374,16 @@ def _derived_survfit(
     if isinstance(x, SurvfitResult) and isinstance(engine, _core.SurvfitKMResult):
         influence = x.influence_surv or x.influence_chaz
         clname = influence[0].clname if influence else None
-        return _km_result(engine, x.strata_names, x.call, x.model, se_fit, clname, time0=time0)
+        return _km_result(
+            engine,
+            x.strata_names,
+            x.call,
+            x.model,
+            se_fit,
+            clname,
+            time0=time0,
+            na_action=x.na_action,
+        )
     raise TypeError("the engine result does not belong to this kind of survfit object")
 
 

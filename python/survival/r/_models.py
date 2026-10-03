@@ -640,8 +640,12 @@ def _model_frame_formula(
 
 
 @model_frame.register(CoxphModel)
-def _model_frame_cox(fit: CoxphModel) -> dict[str, list[Any]]:
-    return _plain_model_frame(_coxph_model_frame(fit))
+def _model_frame_cox(fit: CoxphModel, *, _with_metadata: bool = False) -> dict[str, Any]:
+    frame = _coxph_model_frame(fit)
+    if _with_metadata:
+        prepared = _fit_frame(fit)
+        return _model_frame_transport(frame, _data_row_labels(prepared.data, prepared.n))
+    return _plain_model_frame(frame)
 
 
 @model_frame.register(
@@ -659,10 +663,39 @@ def _model_frame_stored(
     | SurvfitMultiStateResult
     | PyearsResult
     | SurvExpResult,
-) -> dict[str, list[Any]]:
+    *,
+    _with_metadata: bool = False,
+) -> dict[str, Any]:
     if fit.model is None:
         raise TypeError("model_frame requires a fit made with model=TRUE")
+    if _with_metadata:
+        labels = getattr(fit, "_prediction_rows", None)
+        action = getattr(fit, "na_action", None)
+        if labels is not None and action is not None:
+            omitted = {row - 1 for row in action.rows}
+            labels = tuple(label for row, label in enumerate(labels) if row not in omitted)
+        return _model_frame_transport(fit.model, labels)
     return _plain_model_frame(fit.model)
+
+
+def _model_frame_transport(
+    frame: Mapping[str, Any], row_names: Sequence[str] | None
+) -> dict[str, Any]:
+    """Flattened public columns with declared types for nullable R conversion."""
+    metadata = {}
+    for name, values in frame.items():
+        kind = getattr(values, "kind", None)
+        if kind in {"logical", "numeric", "character", "factor"}:
+            metadata[str(name)] = {
+                "kind": kind,
+                "levels": getattr(values, "categories", None),
+                "storage": getattr(values, "storage", None),
+            }
+    return {
+        "columns": _plain_model_frame(frame),
+        "metadata": metadata,
+        "row_names": row_names,
+    }
 
 
 @model_frame.register(Mapping)

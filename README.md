@@ -35,8 +35,8 @@ The R-style interface supports penalized Cox and AFT formulas, interval-censored
 AFT models, multi-state Cox models and their curves, multistate summaries and
 expected survival from Cox models. See [R compatibility](docs/r-compatibility.md)
 for examples, seeded Yates risk predictions, validation coverage, every known
-difference from R and the R entry points that are
-[not yet implemented](docs/r-compatibility.md#not-yet-implemented).
+difference from R and the
+[limitations of R itself](docs/r-compatibility.md#reference-limitations).
 Release notes are in the [changelog](CHANGELOG.md).
 
 ## Installation
@@ -1148,7 +1148,7 @@ Format and lint:
 cargo fmt
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 ```
 
 The codebase is organized with:
@@ -1156,7 +1156,7 @@ The codebase is organized with:
 - Matching Python domain modules in `python/survival/`
 - Experimental R bridge package in `r/survivalr/`
 - Package/type stubs in `python/survival/__init__.pyi`,
-  `python/survival/_survival.pyi`, and `survival.pyi`
+  `python/survival/_survival.pyi`, and `python/survival/sklearn_compat.pyi`
 - Runnable examples in `examples/`
 - Developer-facing layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
@@ -1171,7 +1171,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 - [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin) for Python bindings
 - [reticulate](https://rstudio.github.io/reticulate/) for the experimental R bridge package
 - [numpy](https://numpy.org/) and [ndarray](https://github.com/rust-ndarray/ndarray) for array interop
-- [faer](https://github.com/sarah-ek/faer-rs), [rayon](https://github.com/rayon-rs/rayon), and [burn](https://github.com/tracel-ai/burn) for numerical compute
+- [rayon](https://github.com/rayon-rs/rayon) and [burn](https://github.com/tracel-ai/burn) for numerical compute
 
 ## Compatibility
 

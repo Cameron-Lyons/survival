@@ -19,7 +19,6 @@ from ._coerce import (
     _categories,
     _float_vector,
     _floats_or_nan,
-    _is_bool_like,
     _is_missing_value,
     _materialize_1d,
     _materialize_labels,
@@ -32,6 +31,7 @@ from ._coerce import (
     _strata_level_sort_key,
     _strata_value_label,
 )
+from ._expression import _expression_source
 from ._formula import (
     _apply_formula_na_action,
     _column,
@@ -55,6 +55,7 @@ from ._formula import (
     _formula_model_frame,
     _formula_response_spec,
     _formula_response_values,
+    _FormulaRows,
     _na_action_record,
     _offset_vector,
     _parse_formula,
@@ -64,6 +65,7 @@ from ._formula import (
     _strata_specs,
     _strata_term_values,
     _subset_formula_inputs,
+    _term_values,
     _with_evaluated_variables,
     _with_strata_cache,
 )
@@ -219,16 +221,17 @@ def _r_factor_design(
     def relevel(term: _SingleDesignTerm) -> _SingleDesignTerm:
         if not isinstance(term, _CategoricalDesignTerm):
             return term
-        # a logical expression (I(sex == 2)) has no column to declare levels
-        column = term.term.column
         source = (
             _strata_term_values(data, term.term.strata, drop_unused=drop_unused_strata)
             if term.term.strata
-            else None
-            if term.term.arithmetic is not None
-            else _column_source(data, column)
+            else _term_values(data, term.term, _formula_design_row_count(data, design))
         )
-        return replace(term, levels=levels_of(source, term.levels))
+        levels = (
+            tuple(value for value in source if not _is_missing_value(value))
+            if drop_unused_levels and _mstate_categories(source) is not None
+            else term.levels
+        )
+        return replace(term, levels=levels_of(source, levels))
 
     covariates: list[_DesignTerm] = []
     for term in design.covariates:
@@ -353,6 +356,7 @@ def _model_matrix_evaluated(
     """Build from supplied model-frame columns without evaluation or NA removal."""
     n = data.nrow
     evaluated: dict[_CovariateTerm, Any] = {}
+    factor_values: dict[_CovariateTerm, list[Any]] = {}
     fitted_contrasts = _model_matrix_contrasts(design) or {}
     # Stock Cox's reduced-strata call misspells contrasts.arg, so frame
     # contrasts apply there. Other calls override them with fitted contrasts.
@@ -366,29 +370,43 @@ def _model_matrix_evaluated(
         )
     )
     used = {
-        _covariate_term_name(part.term)
+        _covariate_term_name(part.term, frame=True)
         for term in design.covariates
         for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     }
-    offsets = {f"offset({_covariate_term_name(term)})" for term in design.offsets}
+    offsets = {f"offset({_covariate_term_name(term, frame=True)})" for term in design.offsets}
     required = used | offsets
     if not (frame_contrasts or (not cox and covered_strata)):
         labels = design.variable_labels or tuple(
-            f"offset({_covariate_term_name(term)})"
+            f"offset({_covariate_term_name(term, frame=True)})"
             if term in design.offsets
-            else _covariate_term_name(term)
+            else _covariate_term_name(term, frame=True)
             for term in design.variables
         )
         required.update(labels)
     if not required <= data.keys():
         raise ValueError("model frame and formula mismatch in model.matrix()")
+    logical_offsets = []
+    for name in offsets:
+        metadata = data.column_metadata.get(name, {})
+        offset_values = _expression_source(_column_source(data, name), name)
+        logical = metadata.get("kind", offset_values.kind) == "logical"
+        if name in design.logical_offsets and not logical:
+            if offset_values.declared or any(
+                not _is_missing_value(value) for value in offset_values
+            ):
+                raise ValueError("contrasts apply only to factors")
+            logical = True
+        if logical:
+            logical_offsets.append(name)
     factors: dict[_CovariateTerm, _SingleDesignTerm] = {}
 
     def factor(original: _SingleDesignTerm) -> _SingleDesignTerm:
         if original.term in factors:
             return factors[original.term]
-        name = _covariate_term_name(original.term)
-        term = _CovariateTerm(name)
+        name = _covariate_term_name(original.term, frame=True)
+        matrix_name = _covariate_term_name(original.term)
+        term = _CovariateTerm(name, arithmetic=name if name != matrix_name else None)
         source = _column_source(data, name)
         metadata = data.column_metadata.get(name, {})
         matrix = _numeric_ndarray(source, ndim=2)
@@ -398,11 +416,11 @@ def _model_matrix_evaluated(
             width = matrix.shape[1]
             suffixes = metadata.get("matrix_names")
             names = (
-                (name,)
+                (matrix_name,)
                 if width == 1
-                else tuple(name + str(label) for label in suffixes)
+                else tuple(matrix_name + str(label) for label in suffixes)
                 if suffixes
-                else tuple(name + str(i + 1) for i in range(width))
+                else tuple(matrix_name + str(i + 1) for i in range(width))
             )
             if len(names) != width:
                 raise ValueError("matrix column names must match its width")
@@ -418,13 +436,13 @@ def _model_matrix_evaluated(
             logical = metadata.get("kind") == "logical" or (
                 not numeric
                 and levels is None
-                and any(_is_bool_like(value) for value in values)
-                and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
+                and _expression_source(source, name).kind == "logical"
             )
             character = metadata.get("kind") == "character" or (
                 not numeric and any(isinstance(value, str) for value in values)
             )
             if levels is not None or logical or character:
+                factor_values[term] = values
                 levels = (
                     (False, True)
                     if logical
@@ -492,10 +510,15 @@ def _model_matrix_evaluated(
             )
         ),
         offsets=(),
+        logical_offsets=tuple(logical_offsets),
         strata=(),
-        variables=tuple(_CovariateTerm(_covariate_term_name(term)) for term in design.variables),
+        variables=tuple(
+            _CovariateTerm(_covariate_term_name(term, frame=True)) for term in design.variables
+        ),
     )
-    rows = _design_rows_from_spec(data, rebuilt, n, evaluated=evaluated, allow_missing=True)
+    rows = _design_rows_from_spec(
+        data, rebuilt, n, evaluated=evaluated, factor_values=factor_values, allow_missing=True
+    )
     names, assign = _model_matrix_names_and_assign(rebuilt)
     result: dict[str, Any] = {
         "data": rows,
@@ -541,11 +564,12 @@ def _model_matrix_contrasts(
         and not term.penalty.sparse
     }
     contrasts: dict[str, Any] = {}
+    contrasts.update((name, "contr.treatment") for name in design.logical_offsets)
     for term in design.covariates:
         factors = term.factors if isinstance(term, _InteractionDesignTerm) else (term,)
         for factor in factors:
             if isinstance(factor, _CategoricalDesignTerm):
-                name = _covariate_term_name(factor.term)
+                name = _covariate_term_name(factor.term, frame=True)
                 contrasts[name] = (
                     factor.contrast_metadata
                     or factor.contrast_label
@@ -560,14 +584,14 @@ def _model_matrix_contrasts(
                     )
                 )
             elif isinstance(factor, _PenaltyDesignTerm) and factor.contrast_metadata is not None:
-                contrasts[_covariate_term_name(factor.term)] = factor.contrast_metadata
+                contrasts[_covariate_term_name(factor.term, frame=True)] = factor.contrast_metadata
             elif (
                 isinstance(factor, _PenaltyDesignTerm)
                 and factor.kind == "frailty"
                 and not factor.penalty.sparse
             ):
                 labels = [str(i + 1) for i in range(len(factor.levels))]
-                contrasts[_covariate_term_name(factor.term)] = {
+                contrasts[_covariate_term_name(factor.term, frame=True)] = {
                     "data": np.eye(len(labels)).tolist(),
                     "rows": [_strata_value_label(level) for level in factor.levels]
                     if factor.term in releveled
@@ -577,8 +601,9 @@ def _model_matrix_contrasts(
     # R orders contrasts by formula variable order, including interaction-only
     # factors, rather than by the order in which output terms are expanded.
     ordered: dict[str, Any] = {}
-    for variable in design.variables:
-        name = _covariate_term_name(variable)
+    for name in design.variable_labels or tuple(
+        _covariate_term_name(term, frame=True) for term in design.variables
+    ):
         if name in contrasts:
             ordered[name] = contrasts.pop(name)
     ordered.update(contrasts)
@@ -835,6 +860,10 @@ def _newdata_frame(
     valid placeholder. Expected-count predictions ignore a missing event code.
     """
 
+    if isinstance(newdata, _FormulaRows) and not isinstance(newdata, _EvaluatedModelFrame):
+        # A raw R data frame can be reused by separate prediction calls. Keep
+        # evaluated values local to this call, including their domain warnings.
+        newdata = _FormulaRows(dict(newdata), newdata.nrow, newdata.row_names)
     present = set(_newdata_columns(newdata))
     strata_columns = [column for term in strata_terms for column in term.columns]
     if not (need_strata and set(strata_columns) <= present):
@@ -888,6 +917,14 @@ def _newdata_frame(
     variables.extend(term for term in design.variables if term.strata is None)
     variables.extend(_strata_covariate(spec) for spec in strata_terms if strata_columns)
     newdata = _with_evaluated_variables(newdata, [*variables, *design.offsets], n)
+    for term in design.offsets:
+        if f"offset({_covariate_term_name(term, frame=True)})" in design.logical_offsets:
+            values = _term_values(newdata, term, n)
+            if getattr(values, "kind", None) != "logical" and (
+                getattr(values, "declared", False)
+                or any(not _is_missing_value(value) for value in values)
+            ):
+                raise ValueError("contrasts apply only to factors")
     missing = _formula_missing_rows(
         newdata, columns, [*variables, *design.offsets], n, required=response_columns
     )
