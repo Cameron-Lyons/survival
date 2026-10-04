@@ -18,7 +18,9 @@ expression = importlib.import_module("survival.r._expression")
 bridge = importlib.import_module("survival.pybridge")
 coerce = importlib.import_module("survival.r._coerce")
 REFERENCE = json.loads(
-    (Path(__file__).parent / "fixtures/typed_formula_expression_reference.json").read_text()
+    (Path(__file__).parent / "fixtures/typed_formula_expression_reference.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 

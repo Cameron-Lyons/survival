@@ -228,7 +228,9 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
     for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
         se = math.sqrt(variance[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
-        p = 2.0 * (1.0 - 0.5 * math.erfc(-z / math.sqrt(2.0)))  # R: 2*(1-pnorm(Z))
+        # Use the shared R normal CDF to keep 2*(1-pnorm(Z)) rounding platform-independent.
+        cdf = _core.psurvreg([z], [0.0], [1.0], "gaussian")[0]
+        p = 2.0 * (1.0 - cdf)
         rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})
     return {
         "model_type": "cch",

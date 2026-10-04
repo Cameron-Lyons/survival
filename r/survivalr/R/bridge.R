@@ -5217,7 +5217,7 @@ summary.tmerge <- function(object, ...) {
     )
     strata <- read("strata")
     if (!is.null(strata)) {
-      output$strata <- setNames(as.integer(unlist(strata)), names(strata))
+      output$strata <- stats::setNames(as.integer(unlist(strata)), names(strata))
     }
     output$surv <- curve_values("surv")
     output$cumhaz <- curve_values("cumhaz")

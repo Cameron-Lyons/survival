@@ -14,7 +14,9 @@ from survival import r
 from .r_fixture_support import RFactor
 
 REFERENCE = json.loads(
-    (Path(__file__).parent / "fixtures/survfit_missing_residual_reference.json").read_text()
+    (Path(__file__).parent / "fixtures/survfit_missing_residual_reference.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 

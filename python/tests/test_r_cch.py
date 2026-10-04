@@ -1,5 +1,7 @@
 """``survival.r.cch`` case-cohort models against R survival 3.8.11 (the ``nwtco`` example)."""
 
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -87,6 +89,27 @@ def test_prentice_matches_r(ccoh_data):
     assert r.confint(fit)[0]["lower"] == approx(
         0.734570842045653 - 1.959963984540054 * 0.168496197244282, rel=1e-6
     )
+
+
+def test_summary_p_values_preserve_r_rounding_across_platforms(ccoh_data, monkeypatch):
+    fit = r.cch(
+        "Surv(edrel, rel) ~ stage + histol + age",
+        ccoh_data,
+        subcoh="subcohort",
+        id="seqno",
+        cohort_size=4028,
+    )
+    original_erfc = math.erfc
+
+    def platform_erfc(value):
+        result = original_erfc(value)
+        return math.nextafter(result, 0.0) if result < 2.0 else result
+
+    # Emulate the libm rounding difference behind the Windows CI failure.
+    monkeypatch.setattr(math, "erfc", platform_erfc)
+    summary = r.model_summary(fit)
+    assert summary["coefficients"][2]["p"] == pytest.approx(1.40099043477449e-11, rel=1e-6, abs=0.0)
+    assert summary["coefficients"][3]["p"] == 0.0
 
 
 def test_other_estimators_and_checks(ccoh_data):
