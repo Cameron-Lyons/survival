@@ -26,11 +26,11 @@ use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERAN
 use crate::core::risk_sweep::{RecenteredRiskSet, RiskSetSums, spans_a_death};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::exact_ties::{ExactRiskAccumulator, exact_tied_moments};
+use super::exact_ties::{ExactRiskAccumulator, ExactRiskTree, exact_tied_moments};
 
 /// Tie handling of the partial likelihood (R's `coxph(ties = )`), shared by
 /// the fitters and by every residual kernel of the package.  The C kernels
@@ -304,7 +304,14 @@ impl CoxFitBuilder {
         }
         let fitter = match (self.method, self.entry_times.as_ref().map(gather)) {
             (TieMethod::Exact, None) => Fitter::Coxexact,
-            (TieMethod::Exact, Some(entry)) => Fitter::Agexact(entry),
+            (TieMethod::Exact, Some(entry)) => Fitter::Agexact {
+                walk: AgWalk::new(
+                    entry.as_slice().expect("contiguous"),
+                    time.as_slice().expect("contiguous"),
+                    status.as_slice().expect("contiguous"),
+                    &stratum_end,
+                ),
+            },
             (_, None) => Fitter::Coxfit6,
             (_, Some(entry)) => Fitter::Agfit4 {
                 walk: AgWalk::new(
@@ -360,6 +367,10 @@ struct AgWalk {
     by_entry: Vec<(f64, usize)>,
     /// `[start, end)` of each stratum in both orders.
     bounds: Vec<(usize, usize)>,
+    /// Original sorted row bounds before rows that span no death were omitted.
+    row_bounds: Vec<(usize, usize)>,
+    /// All retained entries precede the first death: the risk set only grows.
+    growing: Vec<bool>,
 }
 
 impl AgWalk {
@@ -370,6 +381,8 @@ impl AgWalk {
         let mut by_stop = Vec::with_capacity(n);
         let mut by_entry = Vec::with_capacity(n);
         let mut bounds = Vec::new();
+        let mut row_bounds = Vec::new();
+        let mut growing = Vec::new();
         let mut start = 0;
         for end in 0..n {
             if stratum_end[end] != 1 {
@@ -400,12 +413,17 @@ impl AgWalk {
             by_entry.extend(by_stop[first..].iter().map(|j| (entry[j.row], j.row)));
             by_entry[leaving..].sort_by(|l, r| r.0.total_cmp(&l.0));
             bounds.push((first, by_stop.len()));
+            row_bounds.push((start, end + 1));
+            let first_death = by_stop[first..].iter().rev().find(|row| row.death);
+            growing.push(first_death.is_none_or(|death| by_entry[leaving].0 < death.time));
             start = end + 1;
         }
         Self {
             by_stop,
             by_entry,
             bounds,
+            row_bounds,
+            growing,
         }
     }
 }
@@ -428,8 +446,10 @@ enum Fitter {
         risk_set: RecenteredRiskSet,
     },
     Coxexact,
-    /// With the entry times, in sorted row order.
-    Agexact(Array1<f64>),
+    /// With the prepared entry/stop walk and `agexact` iteration policy.
+    Agexact {
+        walk: AgWalk,
+    },
 }
 
 impl Fitter {
@@ -634,7 +654,7 @@ fn apply_exact_event_moments(
     linear_predictors: &[f64],
     log_denom: f64,
     mean: &[f64],
-    covariance: &Array2<f64>,
+    covariance: ArrayView2<'_, f64>,
 ) -> f64 {
     let mut contribution = -log_denom;
     for &person in death_indices {
@@ -676,7 +696,7 @@ fn add_exact_event_contribution(
         linear_predictors,
         moments.log_denom,
         &moments.mean,
-        &moments.covariance,
+        moments.covariance.view(),
     )
 }
 
@@ -883,7 +903,7 @@ impl CoxData {
                             &linear_predictors,
                             singleton_moments.log_denom,
                             &singleton_moments.mean,
-                            &singleton_moments.covariance,
+                            singleton_moments.covariance.view(),
                         )
                     } else {
                         add_exact_event_contribution(
@@ -908,48 +928,83 @@ impl CoxData {
         loglik
     }
 
-    /// `agexact.c`: exact partial likelihood for (start, stop] data.  As in
-    /// the C code the risk set of each death time (`start < t <= stop`) is
-    /// gathered afresh, which keeps the conditional moments exact even when
-    /// risk scores span many orders of magnitude; the cost is
-    /// `O(deaths * n)` per evaluation, as in R.
-    fn agexact(
-        &self,
-        beta: &[f64],
-        entry_times: &Array1<f64>,
-        u: &mut [f64],
-        imat: &mut Array2<f64>,
-    ) -> f64 {
+    /// Exact partial likelihood for (start, stop] data. Each row joins and
+    /// leaves once in the prepared walk. Growing risk sets use one running
+    /// accumulator; general singleton moments use a blocked tree whose
+    /// ancestors are recomputed after removal, preserving small risk scores.
+    /// Tied deaths still use the exact subset dynamic programme.
+    fn agexact(&self, beta: &[f64], walk: &AgWalk, u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
         let mut loglik = 0.0;
-        let mut stratum_start = 0usize;
         let mut death_indices = Vec::new();
         let mut risk_indices = Vec::new();
 
-        for stratum_end in 0..self.covar.nrows() {
-            if self.stratum_end[stratum_end] != 1 {
+        for (stratum, &(start, end)) in walk.bounds.iter().enumerate() {
+            if start == end {
                 continue;
             }
-            let mut time_end = stratum_end;
-            loop {
-                let event_time = self.time[time_end];
-                let mut time_start = time_end;
-                while time_start > stratum_start && self.time[time_start - 1] == event_time {
-                    time_start -= 1;
+            let growing = walk.growing[stratum];
+            let mut singleton = growing.then(|| ExactRiskAccumulator::new(self.covar.ncols()));
+            let mut singleton_rows = 0;
+            let mut tree = (!growing).then(|| {
+                let (first, last) = walk.row_bounds[stratum];
+                ExactRiskTree::new(first, last - first, self.covar.ncols())
+            });
+            risk_indices.clear();
+            let (mut joined, mut left) = (start, start);
+            while joined < end {
+                let event_time = walk.by_stop[joined].time;
+                if let Some(tree) = tree.as_mut() {
+                    while left < end && walk.by_entry[left].0 >= event_time {
+                        tree.set_active(walk.by_entry[left].1, false);
+                        left += 1;
+                    }
                 }
                 death_indices.clear();
-                death_indices
-                    .extend((time_start..=time_end).filter(|&person| self.status[person] != 0));
-                if !death_indices.is_empty() {
-                    risk_indices.clear();
-                    risk_indices.extend((stratum_start..=stratum_end).filter(|&person| {
-                        entry_times[person] < event_time && self.time[person] >= event_time
-                    }));
-                    loglik += if death_indices.len() == 1 && risk_indices.len() > 1 {
-                        let mut moments = ExactRiskAccumulator::new(self.covar.ncols());
-                        for &person in &risk_indices {
-                            moments.add(person, log_risk[person], &self.covar);
+                while joined < end && walk.by_stop[joined].time == event_time {
+                    let row = walk.by_stop[joined].row;
+                    if let Some(tree) = tree.as_mut() {
+                        tree.set_active(row, true);
+                    } else {
+                        risk_indices.push(row);
+                    }
+                    if walk.by_stop[joined].death {
+                        death_indices.push(row);
+                    }
+                    joined += 1;
+                }
+                if death_indices.is_empty() {
+                    continue;
+                }
+                let nrisk = tree.as_ref().map_or(risk_indices.len(), ExactRiskTree::len);
+                if death_indices.len() == nrisk {
+                    // Selecting the entire risk set has likelihood one and
+                    // zero score/information, regardless of its risk spread.
+                    continue;
+                }
+                if death_indices.len() == 1 {
+                    loglik += if let Some(tree) = tree.as_mut() {
+                        tree.refresh(&log_risk, &self.covar);
+                        apply_exact_event_moments(
+                            &self.covar,
+                            &self.weights,
+                            u,
+                            imat,
+                            &death_indices,
+                            &linear_predictors,
+                            tree.log_denom(),
+                            tree.mean(),
+                            tree.covariance(),
+                        )
+                    } else {
+                        // Tied and complete-risk-set events do not need the
+                        // singleton moments. Grow them lazily, adding each
+                        // row at most once before an untied evaluation.
+                        let moments = singleton.as_mut().expect("growing risk set");
+                        for &row in &risk_indices[singleton_rows..] {
+                            moments.add(row, log_risk[row], &self.covar);
                         }
+                        singleton_rows = risk_indices.len();
                         apply_exact_event_moments(
                             &self.covar,
                             &self.weights,
@@ -959,27 +1014,26 @@ impl CoxData {
                             &linear_predictors,
                             moments.log_denom,
                             &moments.mean,
-                            &moments.covariance,
-                        )
-                    } else {
-                        add_exact_event_contribution(
-                            &self.covar,
-                            &self.weights,
-                            u,
-                            imat,
-                            &death_indices,
-                            &risk_indices,
-                            &linear_predictors,
-                            &log_risk,
+                            moments.covariance.view(),
                         )
                     };
+                } else {
+                    if let Some(tree) = tree.as_ref() {
+                        risk_indices.clear();
+                        risk_indices.extend(tree.active_rows());
+                    }
+                    loglik += add_exact_event_contribution(
+                        &self.covar,
+                        &self.weights,
+                        u,
+                        imat,
+                        &death_indices,
+                        &risk_indices,
+                        &linear_predictors,
+                        &log_risk,
+                    );
                 }
-                if time_start == stratum_start {
-                    break;
-                }
-                time_end = time_start - 1;
             }
-            stratum_start = stratum_end + 1;
         }
         loglik
     }
@@ -1027,7 +1081,7 @@ impl CoxFit {
                         .map_or(0.0, |first| covar[(first.row, i)]),
                     plain_mean,
                 ),
-                Fitter::Coxexact | Fitter::Agexact(_) => (plain_mean, plain_mean),
+                Fitter::Coxexact | Fitter::Agexact { .. } => (plain_mean, plain_mean),
             };
             covar.column_mut(i).mapv_inplace(|value| value - center);
             self.means[i] = mean;
@@ -1041,7 +1095,7 @@ impl CoxFit {
                     let sd = (column.mapv(|v| v * v).sum() / (nused as f64 - 1.0)).sqrt();
                     if sd > 0.0 { 1.0 / sd } else { 1.0 }
                 }
-                Fitter::Agexact(_) => 1.0,
+                Fitter::Agexact { .. } => 1.0,
             };
             covar.column_mut(i).mapv_inplace(|value| value * scale);
             self.scale[i] = scale;
@@ -1061,7 +1115,7 @@ impl CoxFit {
             Fitter::Coxfit6 => data.coxfit6(beta, u, imat),
             Fitter::Agfit4 { walk, risk_set } => data.agfit4(beta, walk, risk_set, u, imat)?,
             Fitter::Coxexact => data.coxexact(beta, u, imat),
-            Fitter::Agexact(entry) => data.agexact(beta, entry, u, imat),
+            Fitter::Agexact { walk } => data.agexact(beta, walk, u, imat),
         })
     }
 
@@ -1111,7 +1165,7 @@ impl CoxFit {
         if self.max_iter == 0 || !self.loglik[0].is_finite() {
             self.finish_inverse();
             // agexact.c returns flag 0 when no iterations were requested.
-            if matches!(self.fitter, Fitter::Agexact(_)) {
+            if matches!(self.fitter, Fitter::Agexact { .. }) {
                 self.flag = 0;
             }
             self.info = self
@@ -1133,7 +1187,7 @@ impl CoxFit {
     fn iterate(&mut self, mut newbeta: Vec<f64>, mut a: Vec<f64>) -> SurvivalResult<()> {
         let (exact, counting) = match self.fitter {
             Fitter::Coxexact => (true, false),
-            Fitter::Agexact(_) => (true, true),
+            Fitter::Agexact { .. } => (true, true),
             _ => (false, false),
         };
         let mut halving = 0usize;

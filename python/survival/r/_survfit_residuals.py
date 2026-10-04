@@ -13,7 +13,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
-from ._coerce import _float_vector, _is_bool_like, _match_string_arg, _pop_dotted_keyword
+from ._coerce import _NA_REAL, _float_vector, _is_bool_like, _match_string_arg, _pop_dotted_keyword
+from ._fit import _excluded_rows, _pad_rows
 from ._survfit import _survfit_data_from_fit, _SurvfitData
 from ._types import (
     CoxSurvfitResult,
@@ -100,9 +101,39 @@ def _row_labels(frame: _SurvfitData, codes: list[int]) -> list[Any]:
     """The id of each residual row: the id values, or R's ``seq(n)`` when there is none."""
 
     if frame.id is None:
-        return [code + 1 for code in codes]
+        if frame.na_action is None:
+            return [code + 1 for code in codes]
+        omitted = set(frame.na_action.rows)
+        retained = [row for row in range(1, len(frame.y) + len(omitted) + 1) if row not in omitted]
+        return [retained[code] for code in codes]
     levels = list(dict.fromkeys(frame.id))
     return [levels[code] for code in codes]
+
+
+def _collapse_rows(frame: _SurvfitData, collapse: bool) -> bool:
+    """R disables collapse when the cluster (or id) has no repeated values."""
+
+    cluster = frame.cluster if frame.cluster is not None else frame.id
+    return collapse and cluster is not None and len(set(cluster)) < len(cluster)
+
+
+def _pad_survfit_rows(values: list[Any], excluded: list[int]) -> list[Any]:
+    """``naresid`` on a residual matrix or a subject/state/time array."""
+
+    if not excluded:
+        return values
+
+    def missing_row(template: Any) -> Any:
+        return (
+            [missing_row(value) for value in template] if isinstance(template, list) else _NA_REAL
+        )
+
+    gaps = set(excluded)
+    retained = iter(values)
+    return [
+        missing_row(values[0]) if row in gaps else next(retained)
+        for row in range(len(values) + len(gaps))
+    ]
 
 
 def _kernel_residuals(
@@ -163,13 +194,22 @@ def _residuals_result(
     frame: _SurvfitData,
     result: Any,
     type_: str,
+    *,
+    excluded: list[int] | None = None,
 ) -> SurvfitResidualsResult:
     multistate = isinstance(fit, SurvfitMultiStateResult)
+    excluded = [] if excluded is None else excluded
+    ids = _pad_rows(_row_labels(frame, result.id), excluded)
+    # naresid.exclude uses the omitted positions as the inserted row names,
+    # even when the retained rows have explicit character id labels.
+    for row in excluded:
+        ids[row] = row + 1
+    curve = [int(code) + 1 for code in result.curve] if fit.strata is not None else None
     return SurvfitResidualsResult(
-        resid=result.values,
+        resid=_pad_survfit_rows(result.values, excluded),
         time=result.times,
-        id=_row_labels(frame, result.id),
-        curve=[int(code) + 1 for code in result.curve] if fit.strata is not None else None,
+        id=ids,
+        curve=None if curve is None else _pad_rows(curve, excluded),
         columns=list(result.columns) if multistate else None,
         column_name=("transition" if type_ == "cumhaz" else "state") if multistate else None,
         # R names the id dimension after the id variable, "(id)" for an id vector
@@ -227,7 +267,9 @@ def survfit_residuals(
     subject (``weighted`` multiplies them by the case weights; it defaults to ``collapse``).
     The result carries the residual matrix (or array), the row ids and the curve of each row;
     ``extra`` is accepted for R compatibility (the curve is always reported) and
-    ``data_frame = True`` returns the long-format columns of R's data frame.
+    ``data_frame = True`` returns the long-format columns of R's data frame. An
+    uncollapsed ``na.exclude`` result restores omitted observations as NaN rows;
+    long tables and collapsed outputs contain the fitted observations only.
     """
 
     data_frame = _pop_dotted_keyword(kwargs, "data.frame", "data_frame", data_frame, False)
@@ -244,9 +286,7 @@ def survfit_residuals(
     _warn_approximate(fit, type_)
 
     frame = _survfit_data_from_fit(fit)
-    cluster = frame.cluster if frame.cluster is not None else frame.id
-    if cluster is None or len(set(cluster)) == len(cluster):
-        collapse = False
+    collapse = _collapse_rows(frame, collapse)
     if collapse and not weighted:
         raise ValueError("invalid combination of options: collapse=TRUE and weighted=FALSE")
     # R sets weighted <- FALSE when there are no case weights, which only skips the
@@ -257,7 +297,8 @@ def survfit_residuals(
             if seen.setdefault(value, code) != code:
                 raise ValueError("same id appears in multiple curves, cannot collapse")
     result = _kernel_residuals(fit, frame, times, type_, collapse=collapse, weighted=weighted)
-    residuals = _residuals_result(fit, frame, result, type_)
+    excluded = _excluded_rows(fit.na_action) if not collapse and not data_frame else []
+    residuals = _residuals_result(fit, frame, result, type_, excluded=excluded)
     return _residual_frame(residuals) if data_frame else residuals
 
 
@@ -284,7 +325,8 @@ def pseudo(
     Rows are the subjects of the fit (observations without an id); the result is the matrix
     of pseudo values (``rows x times``, or ``rows x states x times`` for a multi-state curve),
     dropped to a vector for a single time as R does.  ``data_frame = True`` returns the
-    long-format columns with the residual and the pseudo value.
+    long-format columns with the residual and the pseudo value. ``na.exclude`` restores
+    omitted observation rows for uncollapsed array outputs; long tables keep fitted rows.
     """
 
     data_frame = _pop_dotted_keyword(kwargs, "data.frame", "data_frame", data_frame, False)
@@ -315,7 +357,10 @@ def pseudo(
         fit, frame, times, type_, collapse=None, weighted=None, pseudo_collapse=collapse
     )
     if not data_frame:
-        return _drop(result.values, multistate, len(times))
+        excluded = _excluded_rows(fit.na_action)
+        if excluded and _collapse_rows(frame, collapse):
+            excluded = []
+        return _drop(_pad_survfit_rows(result.values, excluded), multistate, len(times))
     residuals = _kernel_residuals(fit, frame, times, type_, collapse=collapse, weighted=collapse)
     frame_columns = _residual_frame(_residuals_result(fit, frame, residuals, type_))
     columns = result.columns if multistate else [None]

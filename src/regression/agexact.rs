@@ -75,6 +75,7 @@ impl Default for AgexactOptions {
 pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<AgexactFit> {
     let n = data.n();
     let nvar = data.x.ncols();
+    data.validate()?;
     data.check_fit_input()?;
     if let Some(init) = &options.init {
         validate_finite(init, "init")?;
@@ -158,6 +159,9 @@ pub fn agexact_py(
 }
 
 #[cfg(test)]
+mod sweep_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ndarray::Array2;
@@ -230,6 +234,90 @@ mod tests {
         assert!(err.to_string().contains("Case weights are not supported"));
         let err = agexact_fit(tied_data(vec![0.0; 10]), &options(20, Some(vec![0.1]))).unwrap_err();
         assert!(err.to_string().contains("Wrong length for inital values"));
+    }
+
+    #[test]
+    fn mutated_public_response_requires_binary_status_and_positive_intervals() {
+        for status in [-1, 2] {
+            let mut data = tied_data(vec![0.0; 10]);
+            data.status[0] = status;
+            let error = agexact_fit(data, &options(0, None)).unwrap_err();
+            assert!(error.to_string().contains("status must contain only 0/1"));
+        }
+        for advance in [0.0, 1.0] {
+            let mut data = tied_data(vec![0.0; 10]);
+            data.entry.as_mut().unwrap()[0] = data.time[0] + advance;
+            let error = agexact_fit(data, &options(0, None)).unwrap_err();
+            assert!(error.to_string().contains("Stop time must be > start time"));
+        }
+    }
+
+    #[test]
+    fn mutated_public_nonfinite_fields_are_rejected_before_the_exact_kernel() {
+        for value in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
+            let mut cases = Vec::new();
+            let mut data = tied_data(vec![0.0; 10]);
+            data.time[0] = value;
+            cases.push(("time", data));
+            let mut data = tied_data(vec![0.0; 10]);
+            data.entry.as_mut().unwrap()[0] = value;
+            cases.push(("entry", data));
+            let mut data = tied_data(vec![0.0; 10]);
+            data.offset.as_mut().unwrap()[0] = value;
+            cases.push(("offset", data));
+            let mut data = tied_data(vec![0.0; 10]);
+            data.weights = Some(vec![1.0; 10]);
+            data.weights.as_mut().unwrap()[0] = value;
+            cases.push(("weights", data));
+            for (name, data) in cases {
+                let error = agexact_fit(data, &options(0, None)).unwrap_err();
+                assert!(error.to_string().contains(name), "{name}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn mutated_public_shapes_are_checked_with_and_without_events() {
+        for no_events in [false, true] {
+            let mut base = tied_data(vec![0.0; 10]);
+            if no_events {
+                base.status.fill(0);
+            }
+            let mut empty = base.clone();
+            empty.time.clear();
+            let error = agexact_fit(empty, &options(0, None)).unwrap_err();
+            assert!(error.to_string().contains("No (non-missing) observations"));
+            for length in [0, 9, 11] {
+                let mut cases = Vec::new();
+                let mut data = base.clone();
+                data.status = vec![0; length];
+                cases.push(("status", data));
+                let mut data = base.clone();
+                data.x = Array2::zeros((length, 2));
+                cases.push(("x", data));
+                let mut data = base.clone();
+                data.entry = Some(vec![0.0; length]);
+                cases.push(("entry", data));
+                let mut data = base.clone();
+                data.weights = Some(vec![1.0; length]);
+                cases.push(("weights", data));
+                let mut data = base.clone();
+                data.strata = Some(vec![0; length]);
+                cases.push(("strata", data));
+                let mut data = base.clone();
+                data.offset = Some(vec![0.0; length]);
+                cases.push(("offset", data));
+                for (name, data) in cases {
+                    let error = agexact_fit(data, &options(0, None)).unwrap_err();
+                    assert!(
+                        error
+                            .to_string()
+                            .contains(&format!("{name} length mismatch")),
+                        "{name} with {length} rows, no_events={no_events}: {error}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -408,6 +496,44 @@ mod tests {
         assert_eq!(result.u, vec![0.0]);
         assert_eq!(result.var, vec![vec![0.0]]);
         assert_eq!(result.sctest, 0.0);
+        assert_eq!(result.flag, 0);
+    }
+
+    #[test]
+    fn near_complete_tie_matches_r_at_nonzero_initial_coefficients() {
+        let data = counting(
+            vec![0.0; 10],
+            vec![1.0; 10],
+            vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+            matrix(
+                10,
+                vec![
+                    -0.7, -0.4, 0.4, 0.2, 1.2, 1.0, -0.1, -0.5, 0.8, 0.3, 1.5, 1.4, 0.5, -0.8,
+                    -1.1, 0.6, 0.9, 1.1, 1.3, -0.2,
+                ],
+            ),
+            Some(vec![
+                0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1,
+            ]),
+            None,
+        );
+        // R survival 3.8-12, coxph(Surv(start, stop, event) ~ x1 + x2 +
+        // offset(off), ties = "exact", init = c(.25, -.15), iter.max = 0).
+        // Nine deaths in a ten-row risk set use the complementary moments.
+        let result = agexact_fit(data, &options(0, Some(vec![0.25, -0.15]))).unwrap();
+        assert_eq!(result.coefficients, vec![0.25, -0.15]);
+        assert_close(result.loglik[0], -2.670_123_187_720_271, 1e-12);
+        assert_eq!(result.loglik[0], result.loglik[1]);
+        assert_var_close(
+            &result.var,
+            &[
+                [1.641_831_509_030_237, -0.704_721_270_950_720_5],
+                [-0.704_721_270_950_720_5, 2.409_135_730_445_760_4],
+            ],
+            1e-11,
+        );
+        assert_close(result.sctest, 2.546_617_777_343_346_5, 1e-11);
+        assert_eq!(result.iter, 0);
         assert_eq!(result.flag, 0);
     }
 

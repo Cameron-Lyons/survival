@@ -30,6 +30,14 @@ port). Basis construction and penalty optimization run in Rust. Prediction
 reuses training knots and factor levels. Formula options are parsed as
 literals; Python or R code is never evaluated.
 
+Vector expressions support R precedence and three-valued `&`, `|`, and `!`.
+Nested `I()` and `identity()` preserve logical and factor types, while arithmetic
+and `as.numeric()` remain numeric. Logical offsets retain model-frame types and
+contrast metadata. Evaluation precedes subsetting and missing-row removal;
+prediction reuses fitted levels, including empty or entirely missing vectors.
+See [typed formula expressions](typed-formula-expressions.md) for examples and
+the independent stock-R reference checks.
+
 Custom `survreg` distribution dictionaries can supply density, initialization,
 quantile, deviance, variance, and response-transform callbacks. Ordinary and
 penalized fitting, prediction, residuals, distribution functions, and Python
@@ -586,6 +594,12 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   compares separate single-group fits. Neither the installed R namespace nor
   its numerical kernels are changed. Initial interval boundaries without
   events or terminal censoring are omitted, following the 3.8-12 grid rule.
+- Grouped Aalen–Johansen residual and pseudo-value tables work for a single
+  requested time. R 3.8-12 calls `col()` on a three-dimensional residual array
+  and errors; the port agrees with the same rows of R's successful multi-time
+  table. Excluded multi-time residual arrays retain their state and row
+  metadata, which R loses while reinserting missing rows. See
+  [missing survival residual rows](survfit-missing-residuals.md).
 - `survfit(coxfit, newdata, start.time =)` where `start.time` empties a stratum
   gives each newdata row its own curve; R's `split()` drops the empty stratum
   and hands a row the curve of the row before it. With `id =` and a subject
@@ -810,6 +824,11 @@ this does not show.
   lookup.
 - An ordered comparison (`<`, `<=`, `>`, `>=`) with a string or factor operand
   raises; R orders strings by the locale's collation and gives NA for a factor.
+- Formula string escapes decode valid UTF-8 text, including paired Unicode
+  surrogate escapes. Non-UTF-8 byte strings and unpaired Unicode surrogate
+  escapes are explicitly refused; R can retain their raw bytes. The independent
+  [typed-expression reference](typed-formula-expressions.md) preserves those
+  stock byte values and warnings separately from the supported literal cases.
 - `cut()` refuses an argument it does not know; R's `cut.default` swallows it.
 - Last value carried forward in timeline data runs over the data columns the
   formula reads, not R's evaluated model-frame variables: `I(x + z)` carries
@@ -914,6 +933,10 @@ this does not show.
 
 ### Messages
 
+- Formula literals retain R's values and types but omit its decimal or
+  out-of-range `L`-suffix parser warnings (for example, `10.0L`, `1.5L` or
+  `2147483648L`). The fixture records formula-parsing warnings separately;
+  integer arithmetic itself emits R's overflow warning.
 - A `match.arg` miss reads `'arg' should be one of "response", "link", ...` with
   ASCII quotes; R in a UTF-8 locale prints curly quotes.
 - tmerge's not-found message adds "in data2" to R's "object 'x' not found"; a
@@ -926,6 +949,9 @@ this does not show.
 
 ### R bridge (`r/survivalr`)
 
+- Residual and pseudo-value arrays preserve character dimension labels, but
+  names attached to the dimension-label vectors themselves are dropped during
+  id conversion; see [missing survival residual rows](survfit-missing-residuals.md).
 - The bridge follows 3.8-12 response semantics. `Surv2` requires logical,
   numeric or factor statuses; missing binary statuses remain missing, and
   factor censor labels survive construction. `Surv` conversion preserves
@@ -1828,6 +1854,15 @@ PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py
 ```
 
 ## Grouped model outputs
+
+KM/Aalen–Johansen residual and pseudo arrays restore observation rows removed
+by `na.exclude`, while collapsed outputs and long tables retain fitted rows.
+Omitted observation labels preserve their original positions. The 96 stock R
+references cover these policies with weights, histories, grouping and all
+three residual kinds; see
+[missing survival residual rows](survfit-missing-residuals.md).
+The R facade preserves character id dimension-label values while flattening
+names attached to the label vectors themselves.
 
 Grouped ordinary Cox predictions and Cox/AFT residuals preserve declared
 factor order, logical and missing groups, numeric NaN versus NA, and R output

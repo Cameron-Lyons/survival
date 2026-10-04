@@ -247,6 +247,9 @@ if (getRversion() >= "2.15.1") {
 }
 
 .as_python_data_column <- function(column) {
+  if (is.logical(column) && is.null(dim(column))) {
+    return(.pybridge_attr("_r_logical")(as.list(.as_python_vector(column))))
+  }
   if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
       is.null(dim(column)) && length(column) <= .Machine$integer.max &&
       (typeof(column) == "double" || !anyNA(column))) {
@@ -1190,10 +1193,30 @@ attrassign <- function(object, tt) {
   unname(unlist(model[["(id)"]], use.names = FALSE))
 }
 
-.pseudo_id_row_names <- function(fit, n) {
-  id_values <- .pseudo_id_values(fit)
-  if (is.null(id_values)) {
+.pseudo_id_row_names <- function(fit, n, observation = FALSE,
+                                 model = .pseudo_model_frame(fit)) {
+  id_values <- if (is.null(model[["(id)"]])) {
+    NULL
+  } else unname(unlist(model[["(id)"]], use.names = FALSE))
+  if (is.null(id_values) && !observation) {
     return(NULL)
+  }
+  action <- .result_field(.unwrap_grouped_survfit(fit), "na_action")
+  omitted <- as.integer(.as_numeric_vector(.result_field(action, "rows")))
+  if (is.null(id_values)) {
+    if (is.null(model) || !length(model) ||
+        !inherits(model[[1L]], "python.builtin.object")) return(NULL)
+    count <- reticulate::py_len(model[[1L]])
+    id_values <- seq_len(count + length(omitted))
+    if (length(omitted)) id_values <- id_values[-omitted]
+  }
+  # Exclusion restores observation rows before pseudo values reach R. R's
+  # naresid uses omitted positions as row names, also for explicit string ids.
+  if (length(omitted) && n == length(id_values) + length(omitted) &&
+      identical(as.character(.result_field(action, "kind")), "exclude")) {
+    labels <- as.character(seq_len(n))
+    labels[-omitted] <- as.character(id_values)
+    return(labels)
   }
   if (length(id_values) == n) {
     return(id_values)
@@ -5194,7 +5217,7 @@ summary.tmerge <- function(object, ...) {
     )
     strata <- read("strata")
     if (!is.null(strata)) {
-      output$strata <- setNames(as.integer(unlist(strata)), names(strata))
+      output$strata <- stats::setNames(as.integer(unlist(strata)), names(strata))
     }
     output$surv <- curve_values("surv")
     output$cumhaz <- curve_values("cumhaz")
@@ -6447,7 +6470,9 @@ residuals.survival_py_survfit <- function(object, times, type = "pstate",
   }
   resid <- .survival_py_survfit_residual_matrix(result)
   if (isTRUE(extra)) {
-    return(list(resid = resid, curve = result$curve))
+    curve <- result$curve
+    return(list(resid = resid,
+                curve = if (is.null(curve)) NULL else as.integer(.as_numeric_vector(curve))))
   }
   resid
 }
@@ -7532,8 +7557,9 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
 .as_pseudo_result <- function(value, fit, times, columns = NULL) {
   n <- length(value)
   python_fit <- .unwrap_grouped_survfit(fit)
-  rows <- .pseudo_id_row_names(python_fit, n)
-  has_id <- !is.null(rows)
+  model <- .pseudo_model_frame(python_fit)
+  rows <- .pseudo_id_row_names(python_fit, n, observation = TRUE, model = model)
+  has_id <- !is.null(model[["(id)"]])
   if (is.null(rows)) {
     rows <- as.character(seq_len(n))
   }
@@ -9022,8 +9048,40 @@ model.matrix.survival_py_model <- function(object, data = NULL, ...) {
 }
 
 model.frame.survival_py_model <- function(formula, ...) {
-  columns <- .call_r_api("model_frame", formula, ...)
-  as.data.frame(columns, ...)
+  result <- .call_r_api("model_frame", formula, ..., `_with_metadata` = TRUE)
+  columns <- result[["columns"]]
+  metadata <- result[["metadata"]]
+  for (name in names(columns)) {
+    values <- columns[[name]]
+    kind <- metadata[[name]][["kind"]]
+    if (is.null(kind) && is.list(values) && length(values) &&
+        all(vapply(values, function(value) is.null(value) ||
+                   (is.atomic(value) && length(value) == 1L), logical(1)))) {
+      present <- Filter(Negate(is.null), values)
+      kind <- if (length(present) && all(vapply(present, is.logical, logical(1)))) "logical" else
+        if (length(present) && all(vapply(present, is.character, logical(1)))) "character" else "numeric"
+    }
+    if (identical(kind, "factor")) {
+      columns[[name]] <- factor(.as_nullable_character_vector(values),
+                               levels = unlist(metadata[[name]][["levels"]], use.names = FALSE))
+    } else if (is.list(values)) {
+      if (identical(kind, "logical")) columns[[name]] <- .as_nullable_logical_vector(values)
+      else if (identical(kind, "character")) columns[[name]] <- .as_nullable_character_vector(values)
+      else if (identical(kind, "numeric")) {
+        # A scalar NaN is a source value, distinct from a missing list slot.
+        columns[[name]] <- vapply(values, function(value) {
+          if (is.null(value) || length(value) == 0L) NA_real_ else as.numeric(value)[[1L]]
+        }, numeric(1))
+        if (identical(metadata[[name]][["storage"]], "integer")) {
+          columns[[name]] <- as.integer(columns[[name]])
+        }
+      }
+    }
+  }
+  frame <- as.data.frame(columns, ...)
+  labels <- result[["row_names"]]
+  if (!is.null(labels)) row.names(frame) <- unlist(labels, use.names = FALSE)
+  frame
 }
 
 model.frame.survival_py_survfit <- function(formula, ...) {

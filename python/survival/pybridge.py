@@ -63,6 +63,7 @@ def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
         raise ValueError("survival model serialization requires a byte payload")
     if not isinstance(callbacks, (list, tuple)) or not all(callable(f) for f in callbacks):
         raise ValueError("survival model serialization requires R callbacks")
+    callback_table = tuple(callbacks)
 
     class RUnpickler(pickle.Unpickler):
         def persistent_load(self, key: Any) -> Any:
@@ -71,10 +72,10 @@ def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
                 or len(key) != 2
                 or key[0] != "r_callback"
                 or type(key[1]) is not int
-                or not 0 <= key[1] < len(callbacks)
+                or not 0 <= key[1] < len(callback_table)
             ):
                 raise pickle.UnpicklingError("invalid R callback reference")
-            return callbacks[key[1]]
+            return callback_table[key[1]]
 
     return RUnpickler(io.BytesIO(payload)).load()  # noqa: S301 - trusted model files
 
@@ -155,6 +156,13 @@ def _r_subset(rows: list[int]) -> Any:
     from .r._coerce import _RSubset
 
     return _RSubset(rows)
+
+
+def _r_logical(values: Any) -> Any:
+    """Retain R's logical declaration even when every value is NA or absent."""
+    from .r._expression import _ExpressionVector
+
+    return _ExpressionVector(values, "logical")
 
 
 def _r_data_frame(columns: dict[str, Any], n: int, row_names: Any = None) -> Any:

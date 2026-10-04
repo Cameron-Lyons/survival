@@ -666,6 +666,61 @@ mod exact_counting_process_cox {
     use super::*;
 
     #[divan::bench(args = [1000, 2000, 4000])]
+    fn delayed_entry_scaling(bencher: divan::Bencher, n: usize) {
+        let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();
+        let start = generate_entry_times(&stop);
+        let event = (0..n).map(|row| i32::from(row % 4 != 0)).collect();
+        let x = generate_covariates(n, 2);
+        let inputs = (start, stop, event, x);
+        let options = AgexactOptions {
+            init: Some(vec![0.25, -0.15]),
+            iter_max: 0,
+            ..AgexactOptions::default()
+        };
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(start, stop, event, x)| {
+                black_box(
+                    agexact_fit(
+                        CoxphData::try_new(stop, Some(start), event, x, None, None, None)
+                            .expect("benchmark delayed-entry data should be valid"),
+                        &options,
+                    )
+                    .expect("untied delayed-entry exact fit should succeed"),
+                )
+            });
+    }
+
+    /// Almost the entire risk set dies together: the exact likelihood can
+    /// enumerate the one surviving subject instead of n - 1 tied deaths.
+    #[divan::bench(args = [100, 1000, 4000])]
+    fn near_complete_tie(bencher: divan::Bencher, n: usize) {
+        let start = vec![0.0; n];
+        let stop = vec![1.0; n];
+        let event: Vec<i32> = (0..n).map(|person| i32::from(person + 1 < n)).collect();
+        let x = generate_covariates(n, 2);
+        let inputs = (start, stop, event, x);
+        let options = AgexactOptions {
+            init: Some(vec![0.25, -0.15]),
+            iter_max: 0,
+            ..AgexactOptions::default()
+        };
+
+        bencher
+            .with_inputs(|| inputs.clone())
+            .bench_local_values(|(start, stop, event, x)| {
+                black_box(
+                    agexact_fit(
+                        CoxphData::try_new(stop, Some(start), event, x, None, None, None)
+                            .expect("benchmark counting-process data should be valid"),
+                        &options,
+                    )
+                    .expect("near-complete tied exact fit should succeed"),
+                )
+            });
+    }
+
+    #[divan::bench(args = [1000, 2000, 4000])]
     fn untied_scaling(bencher: divan::Bencher, n: usize) {
         let start = vec![0.0; n];
         let stop: Vec<f64> = (1..=n).map(|value| value as f64).collect();

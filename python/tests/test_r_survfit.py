@@ -618,10 +618,7 @@ def test_survfit_confint_matches_r():
 
 def test_survfit_dispatches_cox_fits_to_the_cox_module():
     data = _toy_data()
-    try:
-        fit = r.coxph("Surv(time, status) ~ x1", data)
-    except TypeError as exc:  # pragma: no cover - the Cox module is ported separately
-        pytest.skip(f"coxph is not on the new engine yet: {exc}")
+    fit = r.coxph("Surv(time, status) ~ x1", data)
     curves = r.survfit(fit)
 
     assert hasattr(curves, "surv")

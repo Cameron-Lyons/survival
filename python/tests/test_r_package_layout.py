@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -216,5 +217,19 @@ def test_r_bridge_has_ci_check_with_python_extension():
     assert "maturin develop --release --features extension-module,ml" in workflow
     assert 'Sys.getenv("RSPM"' in workflow
     assert "repos <- if (nzchar(rspm)) c(CRAN = rspm)" in workflow
-    assert "R CMD check --no-manual --no-build-vignettes r/survivalr" in workflow
+    commands = [
+        shlex.split(line.strip())
+        for line in workflow.splitlines()
+        if line.strip().startswith("R CMD ")
+    ]
+    build_index = next(i for i, command in enumerate(commands) if command[2] == "build")
+    check_index = next(i for i, command in enumerate(commands) if command[2] == "check")
+    assert build_index < check_index
+    assert any(argument.endswith("/r/survivalr") for argument in commands[build_index][3:])
+    check_args = commands[check_index][3:]
+    assert {"--no-manual", "--no-build-vignettes"} <= set(check_args)
+    assert "--no-tests" not in check_args
+    assert any(argument.endswith(".tar.gz") for argument in check_args)
+    assert "Status: OK" in workflow
+    assert "survivalr.Rcheck/00check.log" in workflow
     assert "RETICULATE_PYTHON" in workflow
