@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Validate mutable public Rust inputs at Kaplan-Meier, Aalen-Johansen, and
+  log-rank fitting boundaries, returning input errors before accessing rows.
+  Release the Python GIL during convenience and one-sample log-rank tests.
+- Follow R's factor comparison methods in formulas, including declared ordered
+  levels, incompatible-level errors, and unordered-factor warnings. Preserve
+  ordered metadata in pandas inputs, row subsets, and the R bridge.
+  Fit ordered covariates with polynomial contrasts, retain explicit bases and
+  fitted prediction coding, and apply standard named contrasts to prepared
+  model frames. Preserve contrast attributes through R data preparation and
+  factor-valued time-transform callbacks.
+- Reuse native subject/time ordering for carry-forward initialization, fixing
+  missing-time ordering and retaining missing initial factor values. Remove the
+  second Python sort; see [carry-forward validation and timings](docs/carry-forward.md).
+- Compute grouped curve medians by selecting the middle values, with a reusable
+  contiguous group buffer. Check mutable grouping codes and preserve observed
+  group ordering when the product of declared factor levels overflows.
+  See [aggregate curve validation and timings](docs/aggregate-survival-curves.md).
+- Accept three-dimensional NumPy state probabilities directly for curve
+  aggregation, including strided views, with an owned copy before releasing
+  the GIL. Avoid intermediate nested lists in multistate curve aggregation.
+  Align NumPy storage before constructing Rust views at typed input boundaries.
+  Normalize NumPy boolean bytes without borrowing them as Rust `bool` values.
+- Keep constant AFT covariate columns unscaled so the existing rank-aware
+  solver can identify aliases and return finite fitted values. Validate
+  identifiable results against stock R fits; see
+  [rank-deficient AFT designs](docs/aft-rank-deficient-designs.md).
+- Use R's rank-limited polynomial contrast construction when high powers
+  lose numerical rank, with frozen base-R references through 24 levels and
+  documented high-degree platform sensitivity.
+- Match stock Cox terms prediction attributes across centering references,
+  missing-row restoration, grouped predictions, and sparse frailty paths.
+
 - Evaluate restricted formula expressions with R precedence and three-valued
   logical operators. Preserve nested logical and factor identities, logical
   offsets, fitted contrasts, and empty or missing prediction types. Check

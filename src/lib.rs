@@ -72,11 +72,13 @@ pub use error::{SurvivalError, SurvivalResult};
 /// Typed inputs accepted at the Rust and Python boundaries.
 ///
 /// The `*Input`/`*Data` structs validate shapes once, up front; `FloatVec`,
-/// `IntVec`, `BoolVec` and `FloatMatrix` are the `#[pyfunction]` argument
+/// `IntVec`, `BoolVec`, `FloatMatrix` and `FloatArray3` are the `#[pyfunction]` argument
 /// types that accept NumPy arrays, pandas/polars columns or plain sequences
 /// without a `.tolist()` round trip.
 pub mod data_types {
-    pub use crate::internal::numpy_utils::{BoolVec, FloatMatrix, FloatRows, FloatVec, IntVec};
+    pub use crate::internal::numpy_utils::{
+        BoolVec, FloatArray3, FloatMatrix, FloatRows, FloatVec, IntVec,
+    };
     pub use crate::internal::typed_inputs::{
         AndersenGillInput, CountingProcessData, CovariateMatrix, CoxMartInput, CoxRegressionInput,
         SurvivalData, Weights,

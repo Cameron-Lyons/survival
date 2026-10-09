@@ -1,10 +1,10 @@
 //! Boundary input and output types for `#[pyfunction]` signatures.
 //!
-//! [`FloatVec`], [`IntVec`], [`BoolVec`] and [`FloatMatrix`] accept, without a
+//! [`FloatVec`], [`IntVec`], [`BoolVec`], [`FloatMatrix`] and [`FloatArray3`] accept, without a
 //! Python-side `.tolist()`: NumPy arrays of any dtype and memory layout,
 //! pandas/polars columns (anything with `__array__`) and plain sequences. Each
 //! converts exactly once into the owned container core code consumes
-//! (`Vec<f64>`, `Vec<i32>`, `Vec<bool>`, `Array2<f64>`). Returning one from a
+//! (`Vec<f64>`, `Vec<i32>`, `Vec<bool>`, `Array2<f64>`, `Array3<f64>`). Returning one from a
 //! `#[pyfunction]` hands the caller a NumPy array without copying
 //! (`IntoPyArray`), and a `#[pyo3(get)]` field of these types reads back as a
 //! NumPy array.
@@ -14,7 +14,7 @@
 
 use std::ops::Deref;
 
-use ndarray::Array2;
+use ndarray::{Array2, Array3};
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{ValidationError, validate_matrix_shape};
@@ -183,6 +183,54 @@ impl From<FloatMatrix> for Array2<f64> {
     }
 }
 
+/// Three-dimensional `float64` input, owned in row-major (C) layout.
+/// NumPy storage is copied before a receiving kernel releases the GIL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloatArray3(Array3<f64>);
+
+impl FloatArray3 {
+    pub fn new(values: Array3<f64>) -> Self {
+        if values.is_standard_layout() {
+            Self(values)
+        } else {
+            Self(
+                Array3::from_shape_vec(values.dim(), values.iter().copied().collect())
+                    .expect("logical array traversal preserves the three-dimensional shape"),
+            )
+        }
+    }
+
+    pub fn into_inner(self) -> Array3<f64> {
+        self.0
+    }
+
+    pub fn as_flat(&self) -> &[f64] {
+        self.0
+            .as_slice()
+            .expect("FloatArray3 is kept in row-major layout")
+    }
+}
+
+impl Deref for FloatArray3 {
+    type Target = Array3<f64>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Array3<f64>> for FloatArray3 {
+    fn from(values: Array3<f64>) -> Self {
+        Self::new(values)
+    }
+}
+
+impl From<FloatArray3> for Array3<f64> {
+    fn from(values: FloatArray3) -> Self {
+        values.0
+    }
+}
+
 #[cfg(feature = "python")]
 mod python {
     //! `FromPyObject`/`IntoPyObject` for the boundary types.
@@ -193,10 +241,10 @@ mod python {
     //! pandas/polars columns, `array.array`, `range`, ...) is normalised with
     //! `numpy.asarray(obj, dtype=...)` and read as a NumPy array.
 
-    use ndarray::Array2;
+    use ndarray::{Array2, Array3};
     use numpy::{
-        Element, IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyUntypedArray,
-        PyUntypedArrayMethods, ToPyArray, get_array_module,
+        Element, IntoPyArray, PyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods,
+        PyUntypedArray, PyUntypedArrayMethods, ToPyArray, get_array_module,
     };
     use pyo3::Borrowed;
     use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -204,7 +252,7 @@ mod python {
     use pyo3::types::{PyDict, PyFloat, PyList, PyTuple};
     use std::convert::Infallible;
 
-    use super::{BoolVec, FloatMatrix, FloatRows, FloatVec, IntVec};
+    use super::{BoolVec, FloatArray3, FloatMatrix, FloatRows, FloatVec, IntVec};
 
     fn type_error(obj: &Bound<'_, PyAny>, expected: &str, detail: Option<PyErr>) -> PyErr {
         let type_name = obj
@@ -232,13 +280,39 @@ mod python {
             .call((obj,), Some(&kwargs))
     }
 
+    /// NumPy permits unaligned buffers and strides. Normalise those before
+    /// creating Rust references; an owned copy is then made by the caller.
+    fn aligned_array<'py, T: Element, D: ndarray::Dimension>(
+        array: &Bound<'py, PyArray<T, D>>,
+    ) -> PyResult<Bound<'py, PyArray<T, D>>> {
+        if array.is_aligned() || array.is_empty() {
+            return Ok(array.clone());
+        }
+        let kwargs = PyDict::new(array.py());
+        kwargs.set_item("requirements", ["A", "E"])?;
+        let aligned = array
+            .py()
+            .import("numpy")?
+            .getattr("require")?
+            .call((array,), Some(&kwargs))?
+            .cast_into::<PyArray<T, D>>()?;
+        if !aligned.is_aligned() {
+            return Err(PyValueError::new_err("NumPy array storage must be aligned"));
+        }
+        Ok(aligned)
+    }
+
     /// Copies a one-dimensional array out in logical order, whatever its strides.
-    fn read_1d<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>) -> Vec<T> {
+    fn read_1d<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>) -> PyResult<Vec<T>> {
+        if array.is_empty() {
+            return Ok(Vec::new());
+        }
+        let array = aligned_array(array)?;
         let view = array.readonly();
-        match view.as_slice() {
+        Ok(match view.as_slice() {
             Ok(slice) => slice.to_vec(),
             Err(_) => view.as_array().iter().copied().collect(),
-        }
+        })
     }
 
     fn wrong_ndim(obj: &Bound<'_, PyAny>, expected: &str, ndim: usize) -> PyErr {
@@ -253,7 +327,7 @@ mod python {
     /// `expected` names the target type in error messages.
     fn float_values(obj: &Bound<'_, PyAny>, expected: &str) -> PyResult<Vec<f64>> {
         if let Ok(array) = obj.cast::<PyArray1<f64>>() {
-            return Ok(read_1d(array));
+            return read_1d(array);
         }
         if is_plain_sequence(obj) {
             return obj
@@ -262,7 +336,7 @@ mod python {
         }
         let converted = asarray::<f64>(obj).map_err(|err| type_error(obj, expected, Some(err)))?;
         match converted.cast::<PyUntypedArray>()?.ndim() {
-            1 => Ok(read_1d(converted.cast::<PyArray1<f64>>()?)),
+            1 => read_1d(converted.cast::<PyArray1<f64>>()?),
             ndim => Err(wrong_ndim(obj, "a 1-dimensional array", ndim)),
         }
     }
@@ -310,13 +384,17 @@ mod python {
 
     fn int_values(obj: &Bound<'_, PyAny>) -> PyResult<Vec<i32>> {
         if let Ok(array) = obj.cast::<PyArray1<i32>>() {
-            return Ok(read_1d(array));
+            return read_1d(array);
         }
         if let Ok(array) = obj.cast::<PyArray1<i64>>() {
-            return narrow_i64(obj, read_1d(array));
+            return narrow_i64(obj, read_1d(array)?);
         }
-        if let Ok(array) = obj.cast::<PyArray1<bool>>() {
-            return Ok(read_1d(array).into_iter().map(i32::from).collect());
+        if obj.cast::<PyArray1<bool>>().is_ok() {
+            // NumPy bool storage can contain any nonzero byte (for example
+            // frombuffer([2, 255])). Rust bool only permits bytes 0 and 1,
+            // so convert numerically without borrowing that storage as bool.
+            let converted = asarray::<i32>(obj)?;
+            return read_1d(converted.cast::<PyArray1<i32>>()?);
         }
         if is_plain_sequence(obj)
             && let Ok(values) = obj.extract::<Vec<i64>>()
@@ -327,8 +405,12 @@ mod python {
     }
 
     fn bool_values(obj: &Bound<'_, PyAny>) -> PyResult<Vec<bool>> {
-        if let Ok(array) = obj.cast::<PyArray1<bool>>() {
-            return Ok(read_1d(array));
+        if obj.cast::<PyArray1<bool>>().is_ok() {
+            let converted = asarray::<u8>(obj)?;
+            return Ok(read_1d(converted.cast::<PyArray1<u8>>()?)?
+                .into_iter()
+                .map(|value| value != 0)
+                .collect());
         }
         if is_plain_sequence(obj)
             && let Ok(values) = obj.extract::<Vec<bool>>()
@@ -356,19 +438,24 @@ mod python {
     /// layout. `as_slice` is only the memory order for C-contiguous arrays
     /// (NumPy also reports Fortran-contiguous arrays as contiguous), so every
     /// other layout is walked in logical order.
-    fn read_2d(array: &Bound<'_, PyArray2<f64>>) -> Array2<f64> {
+    fn read_2d(array: &Bound<'_, PyArray2<f64>>) -> PyResult<Array2<f64>> {
+        let array = aligned_array(array)?;
+        let shape = array.shape();
+        let (n, p) = (shape[0], shape[1]);
+        if array.is_empty() {
+            return Ok(Array2::zeros((n, p)));
+        }
         let view = array.readonly();
-        let (n, p) = view.as_array().dim();
         let flat = match view.as_slice() {
             Ok(slice) if array.is_c_contiguous() => slice.to_vec(),
             _ => view.as_array().iter().copied().collect(),
         };
-        Array2::from_shape_vec((n, p), flat).expect("(n, p) view yields n * p entries")
+        Ok(Array2::from_shape_vec((n, p), flat).expect("(n, p) view yields n * p entries"))
     }
 
     fn matrix_values(obj: &Bound<'_, PyAny>) -> PyResult<FloatMatrix> {
         if let Ok(array) = obj.cast::<PyArray2<f64>>() {
-            return Ok(FloatMatrix(read_2d(array)));
+            return read_2d(array).map(FloatMatrix);
         }
         if is_plain_sequence(obj) {
             if let Some(matrix) = plain_matrix(obj) {
@@ -382,10 +469,191 @@ mod python {
         let converted =
             asarray::<f64>(obj).map_err(|err| type_error(obj, "a float matrix", Some(err)))?;
         match converted.cast::<PyUntypedArray>()?.ndim() {
-            2 => Ok(FloatMatrix(read_2d(converted.cast::<PyArray2<f64>>()?))),
-            1 => Ok(column_matrix(read_1d(converted.cast::<PyArray1<f64>>()?))),
+            2 => read_2d(converted.cast::<PyArray2<f64>>()?).map(FloatMatrix),
+            1 => read_1d(converted.cast::<PyArray1<f64>>()?).map(column_matrix),
             ndim => Err(wrong_ndim(obj, "a float matrix", ndim)),
         }
+    }
+
+    /// Copy a three-dimensional NumPy array in logical order, normalising
+    /// unaligned storage before constructing Rust references to its values.
+    fn read_3d(array: &Bound<'_, PyArray3<f64>>) -> PyResult<FloatArray3> {
+        let shape = array.shape();
+        let shape = (shape[0], shape[1], shape[2]);
+        if array.is_empty() {
+            return Ok(FloatArray3(Array3::zeros(shape)));
+        }
+        let array = aligned_array(array)?;
+        let view = array.readonly();
+        let flat = match view.as_slice() {
+            Ok(slice) if array.is_c_contiguous() => slice.to_vec(),
+            _ => view.as_array().iter().copied().collect(),
+        };
+        Array3::from_shape_vec(shape, flat)
+            .map(FloatArray3)
+            .map_err(|err| PyValueError::new_err(format!("3-dimensional float array: {err}")))
+    }
+
+    fn array3_values(obj: &Bound<'_, PyAny>) -> PyResult<FloatArray3> {
+        if let Ok(array) = obj.cast::<PyArray3<f64>>() {
+            return read_3d(array);
+        }
+        if is_plain_sequence(obj) {
+            if let Some(array) = plain_array3(obj) {
+                return Ok(array);
+            }
+            return sequence_array3(obj);
+        }
+        let converted = asarray::<f64>(obj)
+            .map_err(|err| type_error(obj, "a 3-dimensional float array", Some(err)))?;
+        match converted.cast::<PyUntypedArray>()?.ndim() {
+            3 => read_3d(converted.cast::<PyArray3<f64>>()?),
+            ndim => Err(wrong_ndim(obj, "a 3-dimensional float array", ndim)),
+        }
+    }
+
+    /// Exact lists/tuples of Python floats have no conversion callbacks, so
+    /// their innermost rows can be read without allocating Python iterators.
+    fn plain_array3(obj: &Bound<'_, PyAny>) -> Option<FloatArray3> {
+        let exact_sequence = |value: &Bound<'_, PyAny>| {
+            value.is_exact_instance_of::<PyList>() || value.is_exact_instance_of::<PyTuple>()
+        };
+        if !exact_sequence(obj) {
+            return None;
+        }
+        let n_time = obj.len().ok()?;
+        let (n_data, n_state) = if n_time == 0 {
+            (0, 0)
+        } else {
+            let first = obj.get_item(0).ok()?;
+            if !exact_sequence(&first) {
+                return None;
+            }
+            let n_data = first.len().ok()?;
+            let n_state = if n_data == 0 {
+                0
+            } else {
+                let first = first.get_item(0).ok()?;
+                if !exact_sequence(&first) {
+                    return None;
+                }
+                first.len().ok()?
+            };
+            (n_data, n_state)
+        };
+        let size = n_time.checked_mul(n_data)?.checked_mul(n_state)?;
+        if size > isize::MAX as usize / std::mem::size_of::<f64>() {
+            return None;
+        }
+        let mut values = Vec::with_capacity(size);
+        for row in obj.try_iter().ok()? {
+            let row = row.ok()?;
+            if !exact_sequence(&row) || row.len().ok()? != n_data {
+                return None;
+            }
+            for states in row.try_iter().ok()? {
+                let states = states.ok()?;
+                if !exact_sequence(&states) || states.len().ok()? != n_state {
+                    return None;
+                }
+                if let Ok(states) = states.cast::<PyList>() {
+                    for value in states.iter() {
+                        values.push(value.cast::<PyFloat>().ok()?.value());
+                    }
+                } else {
+                    for value in states.cast::<PyTuple>().ok()?.iter() {
+                        values.push(value.cast::<PyFloat>().ok()?.value());
+                    }
+                }
+            }
+        }
+        Array3::from_shape_vec((n_time, n_data, n_state), values)
+            .ok()
+            .map(FloatArray3)
+    }
+
+    /// Flatten nested rows directly into their final buffer. This keeps lists,
+    /// tuples, array-valued rows and sequence subclasses compatible without
+    /// allocating an intermediate vector for every data/state row.
+    fn sequence_array3(obj: &Bound<'_, PyAny>) -> PyResult<FloatArray3> {
+        let length = |value: &Bound<'_, PyAny>, context: &str| {
+            value
+                .len()
+                .map_err(|err| type_error(value, context, Some(err)))
+        };
+        let n_time = obj.len()?;
+        let n_data = if n_time == 0 {
+            0
+        } else {
+            length(&obj.get_item(0)?, "a 3-dimensional float array time row")?
+        };
+        let n_state = if n_data == 0 {
+            0
+        } else {
+            length(
+                &obj.get_item(0)?.get_item(0)?,
+                "a 3-dimensional float array state row",
+            )?
+        };
+        let size = n_time
+            .checked_mul(n_data)
+            .and_then(|size| size.checked_mul(n_state))
+            .filter(|&size| size <= isize::MAX as usize / std::mem::size_of::<f64>())
+            .ok_or_else(|| PyValueError::new_err("3-dimensional float array shape is too large"))?;
+        let mut values = Vec::with_capacity(size);
+        let mut times_read = 0;
+        for (t, row) in obj.try_iter()?.enumerate() {
+            let row = row?;
+            times_read += 1;
+            let count = length(&row, "a 3-dimensional float array time row")?;
+            if count != n_data {
+                return Err(PyValueError::new_err(format!(
+                    "array time {t} length mismatch: expected {n_data}, got {count}"
+                )));
+            }
+            let mut data_read = 0;
+            for (j, states) in row.try_iter()?.enumerate() {
+                let states = states?;
+                data_read += 1;
+                let count = length(&states, "a 3-dimensional float array state row")?;
+                if count != n_state {
+                    return Err(PyValueError::new_err(format!(
+                        "array time {t} data {j} length mismatch: expected {n_state}, got {count}"
+                    )));
+                }
+                let first_value = values.len();
+                for value in states.try_iter()? {
+                    let value = value?;
+                    let number = if let Ok(number) = value.cast::<PyFloat>() {
+                        number.value()
+                    } else {
+                        value
+                            .extract::<f64>()
+                            .map_err(|err| type_error(&value, "a float array value", Some(err)))?
+                    };
+                    values.push(number);
+                }
+                let count = values.len() - first_value;
+                if count != n_state {
+                    return Err(PyValueError::new_err(format!(
+                        "array time {t} data {j} length mismatch: expected {n_state}, got {count}"
+                    )));
+                }
+            }
+            if data_read != n_data {
+                return Err(PyValueError::new_err(format!(
+                    "array time {t} length mismatch: expected {n_data}, got {data_read}"
+                )));
+            }
+        }
+        if times_read != n_time {
+            return Err(PyValueError::new_err(format!(
+                "array time margin length mismatch: expected {n_time}, got {times_read}"
+            )));
+        }
+        Array3::from_shape_vec((n_time, n_data, n_state), values)
+            .map(FloatArray3)
+            .map_err(|err| PyValueError::new_err(format!("3-dimensional float array: {err}")))
     }
 
     /// Lists/tuples of float rows go directly into one row-major allocation.
@@ -430,20 +698,24 @@ mod python {
             .map(FloatMatrix)
     }
 
-    fn read_rows(array: &Bound<'_, PyArray2<f64>>) -> FloatRows {
+    fn read_rows(array: &Bound<'_, PyArray2<f64>>) -> PyResult<FloatRows> {
+        let array = aligned_array(array)?;
+        if array.is_empty() {
+            return Ok(FloatRows(vec![Vec::new(); array.shape()[0]]));
+        }
         let view = array.readonly();
-        FloatRows(
+        Ok(FloatRows(
             view.as_array()
                 .rows()
                 .into_iter()
                 .map(|row| row.to_vec())
                 .collect(),
-        )
+        ))
     }
 
     fn row_values(obj: &Bound<'_, PyAny>) -> PyResult<FloatRows> {
         if let Ok(array) = obj.cast::<PyArray2<f64>>() {
-            return Ok(read_rows(array));
+            return read_rows(array);
         }
         let column = |values: Vec<f64>| FloatRows(values.into_iter().map(|x| vec![x]).collect());
         if is_plain_sequence(obj) {
@@ -455,8 +727,8 @@ mod python {
         let converted =
             asarray::<f64>(obj).map_err(|err| type_error(obj, "a float matrix", Some(err)))?;
         match converted.cast::<PyUntypedArray>()?.ndim() {
-            2 => Ok(read_rows(converted.cast::<PyArray2<f64>>()?)),
-            1 => Ok(column(read_1d(converted.cast::<PyArray1<f64>>()?))),
+            2 => read_rows(converted.cast::<PyArray2<f64>>()?),
+            1 => Ok(column(read_1d(converted.cast::<PyArray1<f64>>()?)?)),
             ndim => Err(wrong_ndim(obj, "a float matrix", ndim)),
         }
     }
@@ -496,6 +768,14 @@ mod python {
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
             matrix_values(&obj)
+        }
+    }
+
+    impl<'py> FromPyObject<'_, 'py> for FloatArray3 {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+            array3_values(&obj)
         }
     }
 
@@ -551,6 +831,26 @@ mod python {
     impl<'py> IntoPyObject<'py> for &FloatMatrix {
         type Target = PyArray2<f64>;
         type Output = Bound<'py, PyArray2<f64>>;
+        type Error = Infallible;
+
+        fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
+            Ok(self.0.to_pyarray(py))
+        }
+    }
+
+    impl<'py> IntoPyObject<'py> for FloatArray3 {
+        type Target = PyArray3<f64>;
+        type Output = Bound<'py, PyArray3<f64>>;
+        type Error = Infallible;
+
+        fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
+            Ok(self.0.into_pyarray(py))
+        }
+    }
+
+    impl<'py> IntoPyObject<'py> for &FloatArray3 {
+        type Target = PyArray3<f64>;
+        type Output = Bound<'py, PyArray3<f64>>;
         type Error = Infallible;
 
         fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
@@ -694,6 +994,20 @@ mod tests {
     }
 
     #[test]
+    fn array3_constructor_preserves_shape_and_normalises_layout() {
+        let original = Array3::from_shape_fn((2, 3, 4), |(i, j, k)| (100 * i + 10 * j + k) as f64);
+        let transposed = original.permuted_axes([2, 0, 1]);
+        assert!(!transposed.is_standard_layout());
+        let expected: Vec<f64> = transposed.iter().copied().collect();
+        let owned = FloatArray3::new(transposed);
+        assert_eq!(owned.dim(), (4, 2, 3));
+        assert_eq!(owned.as_flat(), expected);
+        assert_eq!(owned[[3, 1, 2]], 123.0);
+        assert!(owned.into_inner().is_standard_layout());
+        assert_eq!(FloatArray3::new(Array3::zeros((0, 3, 4))).dim(), (0, 3, 4));
+    }
+
+    #[test]
     fn vector_newtypes_deref_and_convert() {
         let values = FloatVec::from(vec![1.0, 2.0]);
         assert_eq!(values.len(), 2);
@@ -710,9 +1024,9 @@ mod python_tests {
     //! Need an interpreter with NumPy: `PYO3_PYTHON` must point at one.
 
     use super::*;
-    use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
+    use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyUntypedArrayMethods};
     use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::types::{PyDict, PySlice};
     use std::ffi::CString;
 
     fn eval<'py>(py: Python<'py>, expr: &str) -> Bound<'py, PyAny> {
@@ -771,6 +1085,118 @@ mod python_tests {
             assert!(err.to_string().contains("cannot convert 'list'"), "{err}");
             let err = floats(py, "None").unwrap_err();
             assert!(err.to_string().contains("NoneType"), "{err}");
+        });
+    }
+
+    #[test]
+    fn unaligned_vectors_matrices_and_rows_are_copied_safely() {
+        Python::initialize();
+        Python::attach(|py| {
+            let input = eval(
+                py,
+                "np.ndarray((3,), dtype='float64', buffer=bytearray(25), offset=1)",
+            );
+            for (index, value) in [1.25, -2.5, 3.75].into_iter().enumerate() {
+                input.set_item(index, value).unwrap();
+            }
+            assert!(!input.cast::<PyArray1<f64>>().unwrap().is_aligned());
+            let owned = input.extract::<FloatVec>().unwrap();
+            let strided = input.get_item(PySlice::new(py, 0, 3, 2)).unwrap();
+            assert_eq!(*strided.extract::<FloatVec>().unwrap(), [1.25, 3.75]);
+            input.set_item(0, -100.0).unwrap();
+            py.detach(|| assert_eq!(*owned, [1.25, -2.5, 3.75]));
+
+            for (dtype, bytes) in [("int32", 13), ("int64", 25)] {
+                let input = eval(
+                    py,
+                    &format!(
+                        "np.ndarray((3,), dtype='{dtype}', buffer=bytearray({bytes}), offset=1)"
+                    ),
+                );
+                for (index, value) in [1, -2, 3].into_iter().enumerate() {
+                    input.set_item(index, value).unwrap();
+                }
+                assert_eq!(*input.extract::<IntVec>().unwrap(), [1, -2, 3]);
+                for (index, value) in [1, 0, 1].into_iter().enumerate() {
+                    input.set_item(index, value).unwrap();
+                }
+                assert_eq!(*input.extract::<BoolVec>().unwrap(), [true, false, true]);
+            }
+            let matrix = eval(
+                py,
+                "np.ndarray((2, 3), dtype='float64', buffer=bytearray(49), offset=1)",
+            );
+            for i in 0..2 {
+                for j in 0..3 {
+                    matrix.set_item((i, j), (3 * i + j + 1) as f64).unwrap();
+                }
+            }
+            let owned = matrix.extract::<FloatMatrix>().unwrap();
+            let rows = matrix.extract::<FloatRows>().unwrap();
+            assert_eq!(owned.as_flat(), &[1., 2., 3., 4., 5., 6.]);
+            assert_eq!(*rows, vec![vec![1., 2., 3.], vec![4., 5., 6.]]);
+            let strided = matrix
+                .get_item((PySlice::new(py, 0, 2, 1), PySlice::new(py, 0, 3, 2)))
+                .unwrap();
+            assert_eq!(
+                strided.extract::<FloatMatrix>().unwrap().as_flat(),
+                &[1., 3., 4., 6.]
+            );
+            matrix.set_item((0, 0), -100.0).unwrap();
+            py.detach(|| {
+                assert_eq!(owned[[0, 0]], 1.0);
+                assert_eq!(rows[0][0], 1.0);
+            });
+
+            for expr in [
+                "np.ndarray((0,), dtype='float64', buffer=bytearray(1), offset=1)",
+                "np.ndarray((0,), dtype='float64', buffer=bytearray(1), offset=1)[::-1]",
+            ] {
+                assert!(eval(py, expr).extract::<FloatVec>().unwrap().is_empty());
+            }
+            for expr in [
+                "np.ndarray((0,), dtype='int32', buffer=bytearray(1), offset=1)[::-1]",
+                "np.ndarray((0,), dtype='int64', buffer=bytearray(1), offset=1)[::-1]",
+            ] {
+                assert!(eval(py, expr).extract::<IntVec>().unwrap().is_empty());
+                assert!(eval(py, expr).extract::<BoolVec>().unwrap().is_empty());
+            }
+            for (expr, shape) in [
+                (
+                    "np.ndarray((0, 3), dtype='float64', buffer=bytearray(1), offset=1)",
+                    (0, 3),
+                ),
+                (
+                    "np.ndarray((2, 0), dtype='float64', buffer=bytearray(1), offset=1)[:, ::-1]",
+                    (2, 0),
+                ),
+            ] {
+                let input = eval(py, expr);
+                assert_eq!(input.extract::<FloatMatrix>().unwrap().dim(), shape);
+                assert_eq!(input.extract::<FloatRows>().unwrap().len(), shape.0);
+            }
+        });
+    }
+
+    #[test]
+    fn numpy_boolean_storage_is_normalised_without_rust_bool_views() {
+        Python::initialize();
+        Python::attach(|py| {
+            for expr in [
+                "np.frombuffer(bytearray([2, 0, 255]), dtype=bool)",
+                "np.frombuffer(bytearray([2, 0, 255]), dtype=bool)[::-1]",
+                "np.frombuffer(bytearray([0, 2, 0, 255]), dtype=bool)[1:]",
+            ] {
+                let input = eval(py, expr);
+                assert_eq!(*input.extract::<BoolVec>().unwrap(), [true, false, true]);
+                assert_eq!(*input.extract::<IntVec>().unwrap(), [1, 0, 1]);
+            }
+            assert!(
+                eval(py, "np.frombuffer(bytearray([2]), dtype=bool)[:0]")
+                    .extract::<BoolVec>()
+                    .unwrap()
+                    .is_empty()
+            );
         });
     }
 
@@ -851,6 +1277,86 @@ mod python_tests {
             assert!(err.to_string().contains("row 1 length mismatch"), "{err}");
             let err = matrix(py, "np.zeros((2, 2, 2))").unwrap_err();
             assert!(err.to_string().contains("3 dimension"), "{err}");
+        });
+    }
+
+    #[test]
+    fn float_array3_accepts_numpy_layouts_dtypes_and_nested_sequences() {
+        Python::initialize();
+        Python::attach(|py| {
+            for expr in [
+                "np.arange(24.).reshape(2, 3, 4)",
+                "np.asfortranarray(np.arange(24.).reshape(2, 3, 4))",
+                "np.arange(48.).reshape(2, 3, 8)[:, :, ::2]",
+                "np.arange(24.).reshape(2, 3, 4)[::-1, :, ::-1]",
+                "np.arange(24.).reshape(4, 3, 2).transpose(2, 1, 0)",
+                "np.broadcast_to(np.arange(4.), (2, 3, 4))",
+                "np.arange(24, dtype='int32').reshape(2, 3, 4)",
+                "np.arange(24, dtype='float32').reshape(2, 3, 4)",
+                "np.arange(24, dtype='>f8').reshape(2, 3, 4)",
+                "np.arange(24).astype(bool).reshape(2, 3, 4)",
+                "np.arange(24).astype(object).reshape(2, 3, 4)",
+                "np.ndarray((2, 3, 4), dtype='float64', buffer=bytearray(193), offset=1)",
+                "[[[1., 2.], [3., 4.]], [[5., 6.], [7., 8.]]]",
+                "(((1, 2), (3, 4)), ((5, 6), (7, 8)))",
+                "[[np.array([1, 2]), (3., 4.)], [range(5, 7), [7, 8]]]",
+                "type('Rows', (list,), {})([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])",
+            ] {
+                let array = eval(py, expr).extract::<FloatArray3>().unwrap();
+                let expected: Vec<f64> = eval(
+                    py,
+                    &format!("np.asarray({expr}, dtype='float64').ravel(order='C').tolist()"),
+                )
+                .extract()
+                .unwrap();
+                assert_eq!(array.as_flat(), expected, "{expr}");
+                assert!(array.is_standard_layout(), "{expr}");
+            }
+            for (expr, shape) in [
+                ("[]", (0, 0, 0)),
+                ("[[], ()]", (2, 0, 0)),
+                ("[[[], ()]]", (1, 2, 0)),
+                ("np.empty((0, 3, 4))", (0, 3, 4)),
+                ("np.empty((2, 0, 4))", (2, 0, 4)),
+                ("np.empty((2, 3, 0))", (2, 3, 0)),
+            ] {
+                assert_eq!(
+                    eval(py, expr).extract::<FloatArray3>().unwrap().dim(),
+                    shape
+                );
+            }
+            for (expr, message) in [
+                ("np.ones((2, 3))", "got 2 dimension"),
+                ("np.ones((2, 3, 4, 1))", "got 4 dimension"),
+                ("[[[1, 2]], [[3, 4], [5, 6]]]", "time 1 length mismatch"),
+                ("[[[1, 2], [3]]]", "data 1 length mismatch"),
+                ("[[1, 2]]", "3-dimensional float array state row"),
+                ("[[[object()]]]", "float array value"),
+                (
+                    "type('Huge', (list,), {'__len__': lambda self: 2**60})([[[1.]]])",
+                    "shape is too large",
+                ),
+            ] {
+                let err = eval(py, expr).extract::<FloatArray3>().unwrap_err();
+                assert!(err.to_string().contains(message), "{expr}: {err}");
+            }
+        });
+    }
+
+    #[test]
+    fn float_array3_owns_values_before_detaching_and_converts_outputs() {
+        Python::initialize();
+        Python::attach(|py| {
+            let input = eval(py, "np.arange(24.).reshape(2, 3, 4)");
+            let owned = input.extract::<FloatArray3>().unwrap();
+            input.set_item((0, 0, 0), -100.0).unwrap();
+            let owned = py.detach(|| {
+                assert_eq!(owned[[0, 0, 0]], 0.0);
+                owned
+            });
+            let output: Bound<'_, PyArray3<f64>> = owned.into_pyobject(py).unwrap();
+            assert_eq!(output.shape(), &[2, 3, 4]);
+            assert_eq!(output.readonly().as_slice().unwrap()[0], 0.0);
         });
     }
 

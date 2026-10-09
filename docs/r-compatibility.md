@@ -794,6 +794,14 @@ this does not show.
   `~ age + g + strata(g, na.group = TRUE)`, expected counts use the estimable
   coefficients; R propagates its aliased coefficient's NA. That reference
   checks expected counts against the equivalent model without `g`.
+- AFT leaves constant design columns unscaled, allowing nonbinary constants
+  and unused Helmert contrasts to reach the existing rank-aware solver.
+  The full fit retains the design, marks singular coefficients as NA, and
+  returns the identified fitted values and covariance. Stock R's automatic
+  zero-standard-deviation scaling can fail; initialized stock fits and an
+  explicit scaling correction provide the independent
+  [rank-deficient AFT reference](aft-rank-deficient-designs.md). New-data and
+  term predictions retain R's propagation of the singular coefficient's NA.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)
@@ -822,8 +830,15 @@ this does not show.
   the data has no such column); a bare word in an rmap string is a label
   (`race = "white"`), where R's `rmap = list(race = white)` is a variable
   lookup.
-- An ordered comparison (`<`, `<=`, `>`, `>=`) with a string or factor operand
-  raises; R orders strings by the locale's collation and gives NA for a factor.
+- An ordered comparison (`<`, `<=`, `>`, `>=`) with a plain string operand
+  raises when neither operand is a factor;
+  R orders strings by the locale's collation. Factor comparisons follow R's
+  ordered and unordered factor methods, including warnings and missing values;
+  see [typed formula expressions](typed-formula-expressions.md).
+- Ordered-factor polynomial contrasts use R's rank-limited QR construction.
+  Very high degree columns are sensitive to floating-point and BLAS differences;
+  exact cross-platform coefficient parity is not guaranteed for those columns.
+  See the [polynomial reference and numerical limits](typed-formula-expressions.md).
 - Formula string escapes decode valid UTF-8 text, including paired Unicode
   surrogate escapes. Non-UTF-8 byte strings and unpaired Unicode surrogate
   escapes are explicitly refused; R can retain their raw bytes. The independent
@@ -1988,6 +2003,18 @@ PYTHONPATH=python .venv/bin/python scripts/generate_stubs.py --check
 The normal fixture run includes the documented expected differences. Add
 `--runxfail` to display their full discrepancies. R itself is needed to regenerate
 the reference data; see [the fixture workflow](../test/r/README.md).
+
+Local validation on October 9, 2026 passed 40,149 Python tests, with 48 skips
+and 37 documented expected failures. Rust passed 1,463 library tests without
+Python, 1,723 with all features, and four public API integration tests.
+Formatting, Clippy, Python lint and typing, generated interfaces, and benchmark
+smoke checks were clean. A release wheel also passed 393 focused tests outside
+the checkout. Live R 4.5.3 with survival 3.8-12 checked all 42 bridge test files,
+including 302 focused prediction-attribute expectations. The R package check
+reported `Status: OK`, with its tests run separately. Regenerated current-stock
+formula, missing-row and exact-risk references matched at the existing
+`rtol=1e-9`, `atol=1e-12` gate; additional AFT and ordered-contrast references
+use their separately documented numerical tolerances.
 
 For curve complexity, benchmark inputs and measured timings, see
 [survival curve performance](kaplan-meier-performance.md), including independent

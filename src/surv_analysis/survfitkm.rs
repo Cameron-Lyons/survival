@@ -182,30 +182,7 @@ impl SurvfitKMData {
         id: Option<Vec<i64>>,
         cluster: Option<Vec<i64>>,
     ) -> SurvivalResult<Self> {
-        validate_non_empty(&time, "time")?;
-        validate_finite(&time, "time")?;
-        validate_length(time.len(), status.len(), "status")?;
-        validate_binary_i32(&status, "status")?;
-        if let Some(start) = &start {
-            validate_length(time.len(), start.len(), "start")?;
-            validate_finite(start, "start")?;
-            validate_intervals(start, &time)?;
-        }
-        if let Some(weights) = &weights {
-            validate_length(time.len(), weights.len(), "weights")?;
-            validate_finite(weights, "weights")?;
-            validate_non_negative(weights, "weights")?;
-        }
-        if let Some(strata) = &strata {
-            validate_length(time.len(), strata.len(), "strata")?;
-        }
-        if let Some(id) = &id {
-            validate_length(time.len(), id.len(), "id")?;
-        }
-        if let Some(cluster) = &cluster {
-            validate_length(time.len(), cluster.len(), "cluster")?;
-        }
-        Ok(Self {
+        let data = Self {
             start,
             time,
             status,
@@ -213,7 +190,38 @@ impl SurvfitKMData {
             strata,
             id,
             cluster,
-        })
+        };
+        data.validate()?;
+        Ok(data)
+    }
+
+    /// Check row alignment and numerical values, including after public fields
+    /// have been modified. [`survfitkm`] performs this check before fitting.
+    pub fn validate(&self) -> SurvivalResult<()> {
+        validate_non_empty(&self.time, "time")?;
+        validate_finite(&self.time, "time")?;
+        validate_length(self.time.len(), self.status.len(), "status")?;
+        validate_binary_i32(&self.status, "status")?;
+        if let Some(start) = &self.start {
+            validate_length(self.time.len(), start.len(), "start")?;
+            validate_finite(start, "start")?;
+            validate_intervals(start, &self.time)?;
+        }
+        if let Some(weights) = &self.weights {
+            validate_length(self.time.len(), weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            validate_non_negative(weights, "weights")?;
+        }
+        if let Some(strata) = &self.strata {
+            validate_length(self.time.len(), strata.len(), "strata")?;
+        }
+        if let Some(id) = &self.id {
+            validate_length(self.time.len(), id.len(), "id")?;
+        }
+        if let Some(cluster) = &self.cluster {
+            validate_length(self.time.len(), cluster.len(), "cluster")?;
+        }
+        Ok(())
     }
 
     fn n(&self) -> usize {
@@ -1252,6 +1260,7 @@ pub fn survfitkm(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
 ) -> SurvivalResult<SurvfitKMResult> {
+    data.validate()?;
     validate_conf_int(options.conf_int)?;
     let n_all = data.n();
     let counting = data.start.is_some();

@@ -538,11 +538,15 @@ def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
     # the response too: coxph(Surv(time, status == "2") ~ sex, lung)
     fit = r.coxph('Surv(time, status == "2") ~ sex', lung)
     assert fit.coefficients == approx([-0.53102353761950816], rel=1e-9)
-    # R orders strings by the locale's collation and gives NA for a factor ('<' not
-    # meaningful for factors)
-    for rhs in ("I(f < 2)", 'I(sex < "2")'):
-        with pytest.raises(ValueError, match="of character or factor values is not supported"):
-            r.coxph(f"Surv(time, status) ~ {rhs}", data)
+    # Unordered-factor ordering warns and yields NA, so every model row is omitted.
+    with (
+        pytest.warns(UserWarning, match="'<' not meaningful for factors"),
+        pytest.raises(ValueError, match=r"No \(non-missing\) observations"),
+    ):
+        r.coxph("Surv(time, status) ~ I(f < 2)", data)
+    # Plain-string ordering still requires R's locale-sensitive collation.
+    with pytest.raises(ValueError, match="of character or factor values is not supported"):
+        r.coxph('Surv(time, status) ~ I(sex < "2")', data)
 
 
 def test_a_comparison_inside_arithmetic_counts_true_as_one():

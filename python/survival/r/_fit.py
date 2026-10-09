@@ -31,6 +31,7 @@ from ._coerce import (
     _strata_level_sort_key,
     _strata_value_label,
 )
+from ._contrasts import _contr_poly, _named_factor_contrast
 from ._expression import _expression_source
 from ._formula import (
     _apply_formula_na_action,
@@ -231,7 +232,19 @@ def _r_factor_design(
             if drop_unused_levels and _mstate_categories(source) is not None
             else term.levels
         )
-        return replace(term, levels=levels_of(source, levels))
+        categorical = replace(term, levels=levels_of(source, levels))
+        contrast = getattr(source, "contrast", None)
+        if contrast is not None:
+            return _with_factor_contrasts(categorical, contrast)
+        if not term.contrasts and getattr(source, "ordered", False):
+            rows, names = _contr_poly(len(categorical.levels))
+            return replace(
+                categorical,
+                contrasts=rows,
+                contrast_names=names,
+                contrast_label="contr.poly",
+            )
+        return categorical
 
     covariates: list[_DesignTerm] = []
     for term in design.covariates:
@@ -240,6 +253,31 @@ def _r_factor_design(
         else:
             covariates.append(relevel(term))
     return replace(design, covariates=tuple(covariates))
+
+
+def _with_factor_contrasts(
+    categorical: _CategoricalDesignTerm, contrast: Mapping[str, Any]
+) -> _CategoricalDesignTerm:
+    """Retain an explicit factor basis separately from its output metadata."""
+
+    rows = np.asarray(contrast["data"], dtype=float)
+    labels = tuple(contrast["columns"] or range(1, rows.shape[1] + 1))
+    if rows.shape != (len(categorical.levels), len(labels)):
+        raise ValueError("wrong number of contrast matrix rows")
+    label = contrast.get("label")
+    return replace(
+        categorical,
+        contrasts=tuple(tuple(float(value) for value in row) for row in rows),
+        contrast_names=labels,
+        contrast_label=label,
+        contrast_metadata=None
+        if label
+        else {
+            "data": rows.tolist(),
+            "rows": [_strata_value_label(level) for level in categorical.levels],
+            "columns": None if contrast["columns"] is None else list(contrast["columns"]),
+        },
+    )
 
 
 def _column_names(term: _SingleDesignTerm) -> list[str]:
@@ -458,33 +496,43 @@ def _model_matrix_evaluated(
                         "contrasts can be applied only to factors with 2 or more levels"
                     )
                 categorical = _CategoricalDesignTerm(term, tuple(levels))
-                contrast = metadata.get("contrast")
+                contrast = metadata.get("contrast", getattr(source, "contrast", None))
                 override = None if frame_contrasts else fitted_contrasts.get(name)
                 if isinstance(override, str) and override == "contr.treatment":
                     contrast = None
+                elif override == "contr.poly" or (
+                    override is None
+                    and contrast is None
+                    and _expression_source(source, name).ordered
+                ):
+                    rows, labels = _contr_poly(len(levels))
+                    contrast = {"data": rows, "columns": labels, "label": "contr.poly"}
                 elif isinstance(override, dict):
                     contrast = override
-                elif isinstance(override, str) and contrast and contrast.get("label") != override:
-                    raise ValueError(f"model frame does not supply {override} contrasts for {name}")
+                elif isinstance(override, str):
+                    generated = _named_factor_contrast(override, tuple(levels))
+                    if generated is not None:
+                        contrast = generated
+                    elif contrast and contrast.get("label") != override:
+                        raise ValueError(
+                            f"model frame does not supply {override} contrasts for {name}"
+                        )
+                    elif contrast is None:
+                        if (
+                            not isinstance(original, _CategoricalDesignTerm)
+                            or not original.contrasts
+                            or tuple(levels) != original.levels
+                        ):
+                            raise ValueError(
+                                f"model frame does not supply {override} contrasts for {name}"
+                            )
+                        contrast = {
+                            "data": original.contrasts,
+                            "columns": original.contrast_names,
+                            "label": override,
+                        }
                 if contrast:
-                    rows = np.asarray(contrast["data"], dtype=float)
-                    labels = tuple(contrast["columns"] or range(1, rows.shape[1] + 1))
-                    if rows.shape != (len(levels), len(labels)):
-                        raise ValueError("wrong number of contrast matrix rows")
-                    label = contrast.get("label")
-                    categorical = replace(
-                        categorical,
-                        contrasts=tuple(tuple(row) for row in rows),
-                        contrast_names=labels,
-                        contrast_label=label,
-                        contrast_metadata=None
-                        if label
-                        else {
-                            "data": rows.tolist(),
-                            "rows": [_strata_value_label(level) for level in levels],
-                            "columns": contrast["columns"],
-                        },
-                    )
+                    categorical = _with_factor_contrasts(categorical, contrast)
                 result = categorical
             else:
                 if not frame_contrasts and name in fitted_contrasts:

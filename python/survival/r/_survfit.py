@@ -1862,7 +1862,7 @@ def _aggregate_coxms(
         raise TypeError("FUN must be the name of a summary: mean, median, min or max")
     result = _core.aggregate_survfit(
         surv=None,
-        pstate=x.pstate.tolist(),
+        pstate=x.pstate,
         by=_grouping_factors(by, x.pstate.shape[1]),
         fun=FUN,
     )

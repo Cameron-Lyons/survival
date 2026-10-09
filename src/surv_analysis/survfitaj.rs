@@ -24,6 +24,7 @@ use crate::internal::validation::{
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 mod independent;
@@ -65,52 +66,7 @@ impl SurvfitAJData {
         istate_levels: Option<Vec<String>>,
         cluster: Option<Vec<i64>>,
     ) -> SurvivalResult<Self> {
-        validate_non_empty(&time, "time")?;
-        validate_finite(&time, "time")?;
-        validate_length(time.len(), state.len(), "state")?;
-        if states.is_empty() {
-            return Err(SurvivalError::invalid_input(
-                "a multi-state outcome needs at least one state",
-            ));
-        }
-        if let Some((index, &code)) = state
-            .iter()
-            .enumerate()
-            .find(|&(_, &code)| code < 0 || code as usize > states.len())
-        {
-            return Err(SurvivalError::invalid_input(format!(
-                "state code {code} at index {index} is not 0 (censored) or 1..{}",
-                states.len()
-            )));
-        }
-        if let Some(start) = &start {
-            validate_length(time.len(), start.len(), "start")?;
-            validate_finite(start, "start")?;
-            validate_intervals(start, &time)?;
-        }
-        if let Some(weights) = &weights {
-            validate_length(time.len(), weights.len(), "weights")?;
-            validate_finite(weights, "weights")?;
-            validate_non_negative(weights, "weights")?;
-        }
-        for (name, values) in [
-            ("strata", strata.as_ref().map(Vec::len)),
-            ("id", id.as_ref().map(Vec::len)),
-            ("cluster", cluster.as_ref().map(Vec::len)),
-            ("istate", istate.as_ref().map(Vec::len)),
-        ] {
-            if let Some(len) = values {
-                validate_length(time.len(), len, name)?;
-            }
-        }
-        if let (Some(istate), Some(levels)) = (&istate, &istate_levels)
-            && let Some(bad) = istate.iter().find(|value| !levels.contains(value))
-        {
-            return Err(SurvivalError::invalid_input(format!(
-                "istate value {bad:?} is not one of istate_levels"
-            )));
-        }
-        Ok(Self {
+        let data = Self {
             start,
             time,
             state,
@@ -121,7 +77,62 @@ impl SurvfitAJData {
             istate,
             istate_levels,
             cluster,
-        })
+        };
+        data.validate()?;
+        Ok(data)
+    }
+
+    /// Check row alignment and state codes, including after public fields have
+    /// been modified. [`survfitaj`] validates these inputs before fitting.
+    pub fn validate(&self) -> SurvivalResult<()> {
+        validate_non_empty(&self.time, "time")?;
+        validate_finite(&self.time, "time")?;
+        validate_length(self.time.len(), self.state.len(), "state")?;
+        if self.states.is_empty() {
+            return Err(SurvivalError::invalid_input(
+                "a multi-state outcome needs at least one state",
+            ));
+        }
+        if let Some((index, &code)) = self
+            .state
+            .iter()
+            .enumerate()
+            .find(|&(_, &code)| code < 0 || code as usize > self.states.len())
+        {
+            return Err(SurvivalError::invalid_input(format!(
+                "state code {code} at index {index} is not 0 (censored) or 1..{}",
+                self.states.len()
+            )));
+        }
+        if let Some(start) = &self.start {
+            validate_length(self.time.len(), start.len(), "start")?;
+            validate_finite(start, "start")?;
+            validate_intervals(start, &self.time)?;
+        }
+        if let Some(weights) = &self.weights {
+            validate_length(self.time.len(), weights.len(), "weights")?;
+            validate_finite(weights, "weights")?;
+            validate_non_negative(weights, "weights")?;
+        }
+        for (name, values) in [
+            ("strata", self.strata.as_ref().map(Vec::len)),
+            ("id", self.id.as_ref().map(Vec::len)),
+            ("cluster", self.cluster.as_ref().map(Vec::len)),
+            ("istate", self.istate.as_ref().map(Vec::len)),
+        ] {
+            if let Some(len) = values {
+                validate_length(self.time.len(), len, name)?;
+            }
+        }
+        if let (Some(istate), Some(levels)) = (&self.istate, &self.istate_levels) {
+            let levels: HashSet<&str> = levels.iter().map(String::as_str).collect();
+            if let Some(bad) = istate.iter().find(|value| !levels.contains(value.as_str())) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "istate value {bad:?} is not one of istate_levels"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1130,6 +1141,7 @@ pub fn survfitaj(
     data: &SurvfitAJData,
     options: &SurvfitAJOptions,
 ) -> SurvivalResult<SurvfitAJResult> {
+    data.validate()?;
     validate_conf_int(options.conf_int)?;
     let n_all = data.time.len();
     let counting = data.start.is_some();

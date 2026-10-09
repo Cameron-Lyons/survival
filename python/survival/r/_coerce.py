@@ -96,9 +96,11 @@ def _coerce_array_like(values: Any, name: str) -> list[Any]:
 class _RFactorVector(Sequence[Any]):
     """Iterable factor values with level metadata preserved across reticulate."""
 
-    def __init__(self, values: Any, levels: Any):
+    def __init__(self, values: Any, levels: Any, ordered: bool = False, contrast: Any = None):
         self._values = tuple(values)
         self.categories = tuple(levels)
+        self.ordered = bool(ordered)
+        self.contrast = contrast
 
     def __iter__(self):
         return iter(self._values)
@@ -121,8 +123,10 @@ def _curve_matrix(values: list[float] | list[list[float]]) -> list[list[float]]:
     return [[value] for value in cast(list[float], values)]
 
 
-def _r_factor(values: Any, levels: Any) -> _RFactorVector:
-    return _RFactorVector(values, levels)
+def _r_factor(
+    values: Any, levels: Any, ordered: bool = False, contrast: Any = None
+) -> _RFactorVector:
+    return _RFactorVector(values, levels, ordered, contrast)
 
 
 def _materialize_1d(values: Any, name: str) -> list[Any]:
@@ -527,7 +531,20 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
         # scale 1 keeps the already scaled values and cutpoints
         return _core.tcut(kept, list(source.cutpoints), list(source.labels), 1.0)
     categories = _mstate_categories(source)
-    return kept if categories is None else _RFactorVector(kept, categories)
+    return (
+        kept
+        if categories is None
+        else _RFactorVector(
+            kept,
+            categories,
+            ordered=bool(
+                getattr(
+                    source, "ordered", getattr(getattr(source, "dtype", None), "ordered", False)
+                )
+            ),
+            contrast=getattr(source, "contrast", None),
+        )
+    )
 
 
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:

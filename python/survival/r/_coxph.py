@@ -74,6 +74,7 @@ from ._fit import (
     _prediction_values,
     _rowsum_excluded,
     _tt_terms,
+    _with_factor_contrasts,
 )
 from ._formula import (
     _column,
@@ -489,19 +490,18 @@ def _time_transform_design(
             raise ValueError("contrasts can be applied only to factors with 2 or more levels")
         contrast = metadata.get("contrasts")
         contrast_names = metadata.get("contrast_names")
+        source_contrast = getattr(source, "contrast", None)
+        if contrast is None and source_contrast is not None:
+            return _with_factor_contrasts(
+                _CategoricalDesignTerm(term, levels), source_contrast
+            ), values
         ordered = getattr(
             source, "ordered", getattr(getattr(source, "dtype", None), "ordered", False)
         )
         if contrast is None and ordered:
-            import numpy as np
+            from ._contrasts import _contr_poly
 
-            scores = np.arange(1, len(levels) + 1, dtype=float)
-            basis, _ = np.linalg.qr(np.vander(scores - scores.mean(), increasing=True))
-            basis *= np.where(basis[-1] < 0, -1.0, 1.0)
-            contrast = basis[:, 1:].tolist()
-            contrast_names = [".L", ".Q", ".C"][: len(levels) - 1] + [
-                f"^{j}" for j in range(4, len(levels))
-            ]
+            contrast, contrast_names = _contr_poly(len(levels))
         if contrast is not None:
             rows = _as_matrix_rows(contrast, "tt factor contrasts", allow_empty_columns=False)
             if (
@@ -2079,8 +2079,19 @@ def predict_coxph(
         se = None if se is None else _pad_rows(se, gaps, width)
     output = PredictResult(pred, se) if include_se else pred
     if with_row_names and group_names is None:
+        keep_terms_constant = (
+            predict_type == "terms"
+            and (_sparse_term(fit) is None or (new is not None and not sparse_only))
+            and not (gaps and (new is None or action == "exclude"))
+        )
+
+        def row_result(fit_names: list[str] | None, se_names: list[str] | None) -> dict[str, Any]:
+            metadata = _prediction_row_result(output, fit_names, se_names)
+            metadata["terms_constant"] = keep_terms_constant
+            return metadata
+
         if new is not None and new.n == 0:
-            return _prediction_row_result(output, None, None)
+            return row_result(None, None)
         uses_x = (
             include_se
             or (_has_strata(fit) and reference_name == "strata")
@@ -2096,7 +2107,7 @@ def predict_coxph(
             se_named = fit_named
         se_named = include_se and se_named
         if not (fit_named or se_named):
-            return _prediction_row_result(output, None, None)
+            return row_result(None, None)
         if new is None:
             omitted_rows = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
             labels = _prediction_row_labels(
@@ -2110,9 +2121,7 @@ def predict_coxph(
             labels = _prediction_row_labels(
                 _data_row_labels(newdata, count), count, new.missing, action != "omit"
             )
-        return _prediction_row_result(
-            output, labels if fit_named else None, labels if se_named else None
-        )
+        return row_result(labels if fit_named else None, labels if se_named else None)
     return {"values": output, "group_names": group_names} if with_group_names else output
 
 

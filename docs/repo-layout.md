@@ -71,11 +71,25 @@ defines the argument types for `#[pyfunction]` signatures:
 | `BoolVec`     | bool arrays, `0`/`1` numerics, sequences                                 | `Vec<bool>`   |
 | `FloatMatrix` | 2-D array of any layout, list of rows, 1-D input (as one column)        | `Array2<f64>` (row-major) |
 | `FloatRows`   | Same matrix inputs, for kernels that consume nested rows                | `Vec<Vec<f64>>` |
+| `FloatArray3` | 3-D arrays of any layout/dtype, rectangular nested lists or tuples      | `Array3<f64>` (row-major) |
 
-The vector types and `FloatMatrix` also implement `IntoPyObject`, so returning
+The vector types, `FloatMatrix` and `FloatArray3` also implement `IntoPyObject`, so returning
 one (or exposing it through a `#[pyo3(get)]` field) hands Python a NumPy array without a `.tolist()` round
 trip; `FloatMatrix::from_flat(values, ncol)` covers flat buffers with an
 explicit column count.
+
+Unaligned NumPy storage is normalized before constructing Rust views. Empty
+inputs return owned empty buffers without constructing a borrowed view. Boolean
+arrays first convert to numeric bytes, so noncanonical NumPy true values never
+become invalid Rust `bool` references. Kernels receive owned buffers before
+the bindings release the GIL.
+
+Rust input structs with public fields must also be validated at the numerical
+entry point: callers can construct them directly or modify them after `try_new`.
+`SurvfitKMData`, `SurvfitAJData`, and `SurvdiffData` expose `validate()` and
+their fitters check all row lengths, times, event codes, and weights before
+accessing rows. The public API integration tests exercise modified inputs with
+time correction both enabled and disabled.
 
 The core bindings take these types for every numeric vector and matrix input
 (`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
@@ -90,6 +104,7 @@ keep working. For new bindings:
    `extract_vec_i32` remain only for `&Bound<PyAny>` arguments of beyond-R
    code. For a kernel that takes nested rows, use the input-only `FloatRows`
    to avoid flattening and rebuilding list inputs; its kernel checks row widths.
+   Use `FloatArray3` for three-dimensional probability arrays.
 2. Keep getters that Python consumers iterate by row (`CoxPHFit.x`,
    `SurvregData.covariates`) returning lists; return `FloatVec`/`FloatMatrix`
    where the consumer wants NumPy.
@@ -114,7 +129,7 @@ The closure may capture owned buffers and `&` references to `#[pyclass]`
 values (none is `unsendable`, so they are `Sync`), never a `Bound`, a `PyRef`
 or a borrowed NumPy view. Code that must call back into Python from a detached
 kernel re-attaches with `Python::attach` (the `coxpenal` callback penalty).
-The core fit, prediction and residual bindings follow this rule, so fits on
+The core fit, prediction, log-rank test and residual bindings follow this rule, so fits on
 several Python threads run in parallel; `python/tests/test_gil_release.py`
 checks it. Two things still run attached: `survmean`, and building the
 nested-list results of methods such as `CoxPHFit.dfbeta`, which bounds how far
