@@ -512,6 +512,28 @@ def test_aggregate_survfit_matches_r_aggregate():
         survival.surv_analysis.aggregate_survfit(by=by)
 
 
+@pytest.mark.parametrize("columns", [1, 2, 17, 257])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_aggregate_survfit_median_matches_numpy_on_scrambled_curves(columns, grouped):
+    rng = np.random.default_rng(831)
+    surv = rng.uniform(size=(4, columns))
+    pstate = rng.uniform(size=(4, columns, 3))
+    codes = np.arange(columns) % 5 if grouped else np.zeros(columns, dtype=int)
+    by = [survival.surv_analysis.GroupingFactor(codes.tolist(), list("abcde"))] if grouped else None
+    result = survival.surv_analysis.aggregate_survfit(
+        surv=surv, pstate=pstate.tolist(), by=by, fun="median"
+    )
+    present = sorted(set(codes))
+    expected_surv = np.stack(
+        [np.median(surv[:, codes == group], axis=1) for group in present], axis=1
+    )
+    expected_pstate = np.stack(
+        [np.median(pstate[:, codes == group], axis=1) for group in present], axis=1
+    )
+    np.testing.assert_allclose(result.surv, expected_surv, rtol=0, atol=1e-14)
+    np.testing.assert_allclose(result.pstate, expected_pstate, rtol=0, atol=1e-14)
+
+
 def test_life_table_public_api_and_validation():
     result = survival.validation.life_table(
         time=[1.0, 2.0, 4.0],

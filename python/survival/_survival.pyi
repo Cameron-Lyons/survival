@@ -11362,7 +11362,7 @@ def agexact(
 ) -> AgexactFit: ...
 def aggregate_survfit(
     surv: ArrayLike | None = None,
-    pstate: Sequence[Sequence[Sequence[float]]] | None = None,
+    pstate: ArrayLike | None = None,
     by: Sequence[GroupingFactor] | None = None,
     fun: str = "mean",
 ) -> AggregateSurvfitResult: ...

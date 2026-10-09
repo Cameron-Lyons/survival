@@ -137,6 +137,8 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
 
     With ``first`` (R's default) a missing first observation of a logical or 0/1
     variable becomes ``False``/``0`` before the values are carried forward.
+    Factor-valued columns keep their unknown initial levels. Supplied times are
+    ordered within each subject with missing times last; results retain input order.
     """
 
     id_values = _materialize_labels(id, "id")
@@ -148,29 +150,24 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
     times = None if time is None else _numeric_or_nan(time, "time")
     if times is not None and len(times) != len(values):
         raise ValueError("time must have the same length as id")
-    if first:
-        seen: set[Any] = set()
-        observed = [value for value in values if not _is_missing_value(value)]
-        logical = all(_is_bool_like(value) for value in observed)
-        binary = not logical and all(
-            not isinstance(value, str) and float(value) in (0.0, 1.0) for value in observed
-        )
-        order = sorted(
-            range(len(values)),
-            key=lambda idx: (
-                _as_character(id_values[idx]),
-                math.inf if times is None else times[idx],
-            ),
-        )
-        for idx in order:
-            key = _as_character(id_values[idx])
-            if key in seen:
-                continue
-            seen.add(key)
-            if _is_missing_value(values[idx]) and (logical or binary):
-                values[idx] = False if logical else 0
     missing = [_is_missing_value(value) for value in values]
     source = _core.lvcf(id_values, missing, times)
+    if first and _categories(x) is None:
+        # A missing row refers to itself only when it is the subject's first
+        # observation. Reuse the native ordering (including missing times last)
+        # instead of sorting the same rows again in Python.
+        initial_missing = [
+            row for row, origin in enumerate(source) if row == origin and missing[row]
+        ]
+        if initial_missing:
+            observed = [value for value, absent in zip(values, missing, strict=True) if not absent]
+            logical = all(_is_bool_like(value) for value in observed)
+            binary = not logical and all(
+                not isinstance(value, str) and float(value) in (0.0, 1.0) for value in observed
+            )
+            if logical or binary:
+                for row in initial_missing:
+                    values[row] = False if logical else 0
     return [values[row] for row in source]
 
 

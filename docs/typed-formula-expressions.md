@@ -34,6 +34,40 @@ Logical offsets retain their logical model-frame values and contrast metadata,
 while the numerical fitter receives their zero/one values. Empty and entirely
 missing prediction vectors retain the fitted design's logical or factor type.
 
+Factor comparisons follow [R's factor methods](https://stat.ethz.ch/R-manual/R-patched/library/base/html/factor.html).
+Equality compares labels and requires matching declared level sets when both
+operands are factors; level order may differ. Ordered factors support all six
+comparisons using their declared level order, and ordering two ordered factors
+requires the same levels in the same order. A plain comparison operand is
+matched to those levels, with unknown labels becoming missing. Ordering an
+unordered factor warns and returns missing values. Mixed ordered and unordered
+factors retain R's incompatible-method warning and integer-code comparison.
+`factor()` preserves an input factor's ordering while dropping unused levels.
+
+Ordered pandas categoricals and R factors use R's default `contr.poly` design
+coding: columns `.L`, `.Q`, `.C`, then `^4`, `^5`, and so on. Scores are the
+declared level positions, independent of numeric labels or observed counts.
+Bare factors and identities retain unused levels; `factor()` drops them before
+subsetting and missing-row omission. Interactions retain R's margin rules, so
+full factor coding uses indicator columns. Fitted matrices, predictions and
+pickle keep the training basis even when new data changes category order or
+supplies plain character values. Explicit R contrast matrices, named contrast
+attributes, and configured R contrast defaults take precedence over polynomial
+coding and retain their fitted output metadata. The default polynomial basis
+supports up to 95 levels, as in R.
+
+The basis follows R's [limited-pivot LINPACK QR](https://github.com/wch/r-source/blob/R-4-5-branch/src/appl/dqrdc2.f)
+and applies only its numerically independent Householder reflections, as
+[`contr.poly`](https://github.com/wch/r-source/blob/R-4-5-branch/src/library/stats/R/contr.poly.R)
+does. This matters once high powers lose numerical rank: a complete LAPACK Q
+can produce a different basis. Frozen base-R references cover two through 24
+levels, including rank loss and column cycling. Higher degree columns are
+ill conditioned and can differ substantially between BLAS implementations,
+including changes in their signs and orthogonal complement. The port keeps a
+finite orthonormal basis through 95 levels; exact high-degree coefficients
+across platforms are not guaranteed. Explicit contrast matrices retain the
+chosen numerical basis when that is required.
+
 Integer and logical operands retain integer results for unary signs and
 `+`, `-`, and `*`. Values outside R's integer range become `NA` with its
 integer-overflow warning, so overflow participates in row omission and
@@ -79,6 +113,20 @@ model serialization against the unmodified stock package.
 CI regenerates this reference with pinned R 4.5.3 and survival 3.8-12 and checks
 every field within the documented numerical tolerance. The frozen references
 also run against installed wheels on macOS and Windows.
+
+`python/tests/test_factor_formula_comparisons.py` additionally checks these
+factor-dispatch rules against the base R methods and compares complete Cox and
+AFT fits, matrices, and predictions with equivalent explicit logical designs.
+These additional checks use source-derived expectations, separate from the
+generated stock-R fixture above.
+`python/tests/test_ordered_factor_contrasts.py` uses independent closed-form
+polynomial values for two through five levels, equivalent numeric Cox/AFT fits,
+and checks of unused levels, subsetting, interactions, explicit contrasts and
+saved models. The R bridge test `test-ordered-factor-contrasts.R` compares the
+same behavior with stock survival when an R test environment is available.
+`scripts/generate_ordered_factor_reference.R` regenerates the additional
+base-R polynomial reference; high-level tests also check finiteness,
+normalization, orthogonality and removal of the constant column.
 
 Measure preparation independently of numerical fitting with:
 

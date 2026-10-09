@@ -835,10 +835,11 @@ pub(crate) fn survreg6(
     })
 }
 
-/// Whether every entry of the column is 0 or 1 (`survreg.fit` leaves such
-/// columns out of the rescaling).
-fn is_binary_column(column: ndarray::ArrayView1<'_, f64>) -> bool {
-    column.iter().all(|&v| v == 0.0 || v == 1.0)
+/// Binary columns retain R's original coding. Constant columns also stay on
+/// their original scale: dividing by their zero standard deviation would
+/// destroy the finite design before Cholesky can identify the redundant term.
+fn is_unscaled_column(column: ndarray::ArrayView1<'_, f64>) -> bool {
+    column.iter().all(|&v| v == 0.0 || v == 1.0) || column.iter().all(|&v| v == column[0])
 }
 
 /// R's `sd`: the sample standard deviation with an `n - 1` denominator.
@@ -1078,7 +1079,7 @@ pub(crate) fn fit_survreg_engine(
     let mut x = x_original.to_owned();
     let mut rescaled: Option<(Vec<f64>, Vec<f64>)> = None;
     if init.is_none() && x.column(0).iter().all(|&v| v == 1.0) && nvar > 1 {
-        let okay: Vec<bool> = x.columns().into_iter().map(is_binary_column).collect();
+        let okay: Vec<bool> = x.columns().into_iter().map(is_unscaled_column).collect();
         if !okay.iter().all(|&ok| ok) {
             let center: Vec<f64> = (0..nvar)
                 .map(|j| if okay[j] { 0.0 } else { means[j] })
@@ -1867,6 +1868,48 @@ mod tests {
         assert!(fit.coefficients[2].is_nan());
         assert!(fit.coefficients[1].is_finite());
         assert_eq!(fit.variance_matrix[2][2], 0.0);
+    }
+
+    #[test]
+    fn nonbinary_constants_preserve_the_identified_aft_fit() {
+        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
+        let control = SurvregControl::default();
+        for robust in [false, true] {
+            for constant in [-1.0, 2.0, -0.1] {
+                let mut data = ovarian();
+                let reference = survreg_fit(&data, &weibull, None, 0.0, &control, robust).unwrap();
+                data.covariates
+                    .push_column(ndarray::Array1::from_elem(data.n(), constant).view())
+                    .unwrap();
+                let fit = survreg_fit(&data, &weibull, None, 0.0, &control, robust).unwrap();
+                assert!(fit.converged);
+                assert!(fit.coefficients[2].is_nan());
+                assert_eq!(fit.coefficients.len(), 4);
+                assert_eq!(fit.covariates.ncols(), 3);
+                assert_eq!(fit.df, 4.0);
+                for (a, b) in [0, 1, 3].into_iter().zip(0..3) {
+                    assert_close(fit.coefficients[a], reference.coefficients[b], 1e-9);
+                    assert_eq!(fit.variance_matrix[a][2], 0.0);
+                    assert_eq!(fit.variance_matrix[2][a], 0.0);
+                    for (c, d) in [0, 1, 3].into_iter().zip(0..3) {
+                        assert_close(
+                            fit.variance_matrix[a][c],
+                            reference.variance_matrix[b][d],
+                            1e-9,
+                        );
+                    }
+                }
+                assert_eq!(fit.variance_matrix[2][2], 0.0);
+                assert_close(fit.log_likelihood, reference.log_likelihood, 1e-10);
+                for (actual, expected) in fit
+                    .linear_predictors
+                    .iter()
+                    .zip(&reference.linear_predictors)
+                {
+                    assert_close(*actual, *expected, 1e-9);
+                }
+            }
+        }
     }
 
     #[test]

@@ -43,26 +43,34 @@ impl SurvdiffData {
         group: Vec<i32>,
         strata: Option<Vec<i32>>,
     ) -> SurvivalResult<Self> {
-        validate_non_empty(&time, "time")?;
-        validate_finite(&time, "time")?;
-        validate_length(time.len(), status.len(), "status")?;
-        validate_binary_i32(&status, "status")?;
-        validate_length(time.len(), group.len(), "group")?;
-        if let Some(start) = &start {
-            validate_length(time.len(), start.len(), "start")?;
-            validate_finite(start, "start")?;
-            validate_intervals(start, &time)?;
-        }
-        if let Some(strata) = &strata {
-            validate_length(time.len(), strata.len(), "strata")?;
-        }
-        Ok(Self {
+        let data = Self {
             start,
             time,
             status,
             group,
             strata,
-        })
+        };
+        data.validate()?;
+        Ok(data)
+    }
+
+    /// Validate values and row alignment, including after public fields have
+    /// been modified. [`survdiff`] checks these invariants before fitting.
+    pub fn validate(&self) -> SurvivalResult<()> {
+        validate_non_empty(&self.time, "time")?;
+        validate_finite(&self.time, "time")?;
+        validate_length(self.time.len(), self.status.len(), "status")?;
+        validate_binary_i32(&self.status, "status")?;
+        validate_length(self.time.len(), self.group.len(), "group")?;
+        if let Some(start) = &self.start {
+            validate_length(self.time.len(), start.len(), "start")?;
+            validate_finite(start, "start")?;
+            validate_intervals(start, &self.time)?;
+        }
+        if let Some(strata) = &self.strata {
+            validate_length(self.time.len(), strata.len(), "strata")?;
+        }
+        Ok(())
     }
 }
 
@@ -267,6 +275,7 @@ fn stratum_curves(
 /// of the Gehan-Wilcoxon test, whose weights are the left-continuous
 /// Kaplan-Meier curve of each stratum ([`survfitkm`]).
 pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
+    data.validate()?;
     if !rho.is_finite() {
         return Err(SurvivalError::invalid_input("rho must be finite"));
     }
@@ -450,11 +459,12 @@ pub fn survdiff_py(
 #[pyfunction(name = "survdiff_one_sample")]
 #[pyo3(signature = (status, expected, rho=0.0))]
 pub fn survdiff_one_sample_py(
+    py: Python<'_>,
     status: IntVec,
     expected: FloatVec,
     rho: f64,
 ) -> PyResult<SurvDiffResult> {
-    Ok(survdiff_one_sample(&status, &expected, rho)?)
+    Ok(py.detach(|| survdiff_one_sample(&status, &expected, rho))?)
 }
 
 #[cfg(test)]

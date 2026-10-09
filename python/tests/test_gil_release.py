@@ -103,6 +103,11 @@ def test_grouped_sum_releases_the_gil():
     _assert_detaches(lambda: core.grouped_sum(values, groups, squares=True))
 
 
+def test_aggregate_multistate_numpy_input_releases_the_gil():
+    values = np.random.default_rng(44).uniform(size=(20, 150_000, 3))
+    _assert_detaches(lambda: sa.aggregate_survfit(pstate=values, fun="median"))
+
+
 def test_grouped_term_predictions_release_the_gil():
     time_, status, x = _cox_data(2000, p=16)
     fit = regression.coxph_fit(time_, status, x)
@@ -143,6 +148,18 @@ def test_finegray_preparation_releases_the_gil():
     status = np.arange(n, dtype=np.int32) % 3
     strata = np.arange(n, dtype=np.int32) % 100
     _assert_detaches(lambda: regression.finegray_expand(times, status, strata=strata))
+
+
+def test_logrank_convenience_binding_releases_the_gil():
+    time_, status, x = _cox_data(2_000_000)
+    group = (x[:, 0] > 0).astype(np.int32)
+    _assert_detaches(lambda: survival.validation.logrank_test(time_, status, group))
+
+
+def test_one_sample_survdiff_releases_the_gil():
+    status = np.ones(4_000_000, dtype=np.int32)
+    expected = np.linspace(0.1, 0.9, len(status))
+    _assert_detaches(lambda: sa.survdiff_one_sample(status, expected, rho=1.5))
 
 
 def test_heavy_kernels_release_the_gil():

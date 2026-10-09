@@ -459,6 +459,7 @@ _ARRAY_NEWTYPES = {
     "IntVec": ("ArrayLike", "NDArray[np.int32]"),
     "BoolVec": ("ArrayLike", "NDArray[np.bool_]"),
     "FloatMatrix": ("ArrayLike", "NDArray[np.float64]"),
+    "FloatArray3": ("ArrayLike", "NDArray[np.float64]"),
     "FloatRows": ("ArrayLike", "list[list[float]]"),
 }
 _NUMPY_ARRAYS = {

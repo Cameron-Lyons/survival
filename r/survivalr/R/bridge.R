@@ -179,12 +179,14 @@ if (getRversion() >= "2.15.1") {
           levels = levels(source),
           ordered = is.ordered(source)
         )
+        attr(frame[[column]], "contrasts") <- attr(source, "contrasts")
       }
       factor_name <- paste0("factor(", column, ")")
       if (factor_name %in% names(frame)) {
         frame[[factor_name]] <- factor(
           as.character(frame[[factor_name]]),
-          levels = levels(factor(source))
+          levels = levels(factor(source)),
+          ordered = is.ordered(source)
         )
       }
     } else if (inherits(source, "Date") && column %in% names(frame)) {
@@ -213,7 +215,18 @@ if (getRversion() >= "2.15.1") {
   } else {
     factor_values <- as.list(factor_values)
   }
-  .python_attr("_r_factor")(factor_values, as.list(levels(value)))
+  declared <- attr(value, "contrasts")
+  configured <- getOption("contrasts")[[if (is.ordered(value)) 2L else 1L]]
+  default <- if (is.ordered(value)) "contr.poly" else "contr.treatment"
+  contrast <- NULL
+  if (nlevels(value) > 1L && (!is.null(declared) || !identical(configured, default))) {
+    basis <- stats::contrasts(value)
+    label <- if (is.null(declared)) configured else if (is.character(declared)) declared else NULL
+    contrast <- list(data = unname(basis), rows = as.list(rownames(basis)),
+      columns = as.list(colnames(basis)), label = label, default = is.null(declared),
+      default_name = if (!identical(configured, default)) configured else NULL)
+  }
+  .python_attr("_r_factor")(factor_values, as.list(levels(value)), is.ordered(value), contrast)
 }
 
 .as_python_vector <- function(value) {
@@ -1448,31 +1461,19 @@ attrassign <- function(object, tt) {
   NULL
 }
 
-.attach_term_prediction_constant <- function(value, object, type, reference = NULL) {
-  if (is.null(type) || !inherits(object, "survival_py_coxph")) {
+.attach_term_prediction_constant <- function(value, object, type, retained = TRUE) {
+  if (!isTRUE(retained) || is.null(type) || !inherits(object, "survival_py_coxph")) {
     return(value)
   }
   type_key <- tolower(gsub("-", "_", trimws(type)))
   if (!startsWith("terms", type_key)) {
     return(value)
   }
-  reference_key <- if (is.null(reference)) {
-    "sample"
-  } else {
-    tolower(gsub("-", "_", trimws(as.character(reference)[[1L]])))
-  }
-  if (identical(reference_key, "strata")) {
+  module <- .survival_python_module()
+  if (!reticulate::py_has_attr(module, "predict_terms_constant")) {
     return(value)
   }
-  if (identical(reference_key, "zero")) {
-    constant <- 0
-  } else {
-    module <- .survival_python_module()
-    if (!reticulate::py_has_attr(module, "predict_terms_constant")) {
-      return(value)
-    }
-    constant <- as.numeric(.call_r_api("predict_terms_constant", object))[[1L]]
-  }
+  constant <- as.numeric(.call_r_api("predict_terms_constant", object))[[1L]]
   if (is.list(value) && all(c("fit", "se.fit") %in% names(value))) {
     attr(value$fit, "constant") <- constant
   } else {
@@ -9123,7 +9124,7 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     value <- .survreg_alias_prediction_missing(value)
   }
   value <- .attach_prediction_row_names(value, row_metadata)
-  .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
+  value
 }
 
 summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
@@ -9265,7 +9266,8 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   }
   value <- .attach_group_names(value, group_names)
   value <- .attach_prediction_row_names(value, row_metadata)
-  .attach_term_prediction_constant(value, object, type, reference = dots[["reference"]])
+  .attach_term_prediction_constant(value, object, type,
+    retained = !grouped && !isFALSE(row_metadata[["terms_constant"]]))
 }
 
 .attach_prediction_row_names <- function(value, metadata) {

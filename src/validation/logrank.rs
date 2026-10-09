@@ -45,11 +45,19 @@ pub fn logrank_test(
         group.to_vec(),
         strata.map(<[i32]>::to_vec),
     )?;
-    let result = survdiff(&data, rho, timefix)?;
+    fit_logrank(&data, rho, timefix)
+}
+
+/// Both interfaces share the summary while the Python boundary transfers its
+/// owned vectors directly into `data` rather than copying them a second time.
+fn fit_logrank(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<LogRankResult> {
+    let result = survdiff(data, rho, timefix)?;
+    let observed = result.obs_totals();
+    let expected = result.exp_totals();
     Ok(LogRankResult {
-        groups: result.group_codes.clone(),
-        observed: result.obs_totals(),
-        expected: result.exp_totals(),
+        groups: result.group_codes,
+        observed,
+        expected,
         variance: result.var,
         statistic: result.chisq,
         df: result.df,
@@ -62,7 +70,9 @@ pub fn logrank_test(
 /// strata=None, entry_times=None, timefix=True)`.
 #[pyfunction(name = "logrank_test")]
 #[pyo3(signature = (time, status, group, rho=0.0, strata=None, entry_times=None, timefix=true))]
+#[allow(clippy::too_many_arguments)]
 pub fn logrank_test_py(
+    py: Python<'_>,
     time: FloatVec,
     status: IntVec,
     group: IntVec,
@@ -71,15 +81,14 @@ pub fn logrank_test_py(
     entry_times: Option<FloatVec>,
     timefix: bool,
 ) -> PyResult<LogRankResult> {
-    Ok(logrank_test(
-        &time,
-        &status,
-        &group,
-        entry_times.as_deref(),
-        strata.as_deref(),
-        rho,
-        timefix,
-    )?)
+    let data = SurvdiffData::try_new(
+        entry_times.map(FloatVec::into_inner),
+        time.into_inner(),
+        status.into_inner(),
+        group.into_inner(),
+        strata.map(IntVec::into_inner),
+    )?;
+    Ok(py.detach(|| fit_logrank(&data, rho, timefix))?)
 }
 
 #[cfg(test)]

@@ -193,6 +193,61 @@ mod matrix_curves {
     }
 }
 
+mod aggregate_curves {
+    use super::*;
+    use survival::surv_analysis::{AggregateFun, GroupingFactor, aggregate_survfit};
+
+    fn run(bencher: divan::Bencher, columns: usize, groups: usize, states: usize) {
+        let times = 20;
+        // Scrambled values avoid measuring median's already-sorted special case.
+        let value = |t: usize, j: usize, s: usize| {
+            ((j * 7919 + t * 101 + s * 37) % 100003) as f64 / 100003.0
+        };
+        let by = if groups == 1 {
+            vec![]
+        } else {
+            vec![
+                GroupingFactor::try_new(
+                    (0..columns).map(|j| j % groups).collect(),
+                    (0..groups).map(|j| j.to_string()).collect(),
+                    None,
+                )
+                .unwrap(),
+            ]
+        };
+        if states == 0 {
+            let surv = Array2::from_shape_fn((times, columns), |(t, j)| value(t, j, 0));
+            bencher.bench_local(|| {
+                black_box(aggregate_survfit(Some(&surv), None, &by, AggregateFun::Median).unwrap())
+            });
+        } else {
+            let pstate = ndarray::Array3::from_shape_fn((times, columns, states), |(t, j, s)| {
+                value(t, j, s)
+            });
+            bencher.bench_local(|| {
+                black_box(
+                    aggregate_survfit(None, Some(&pstate), &by, AggregateFun::Median).unwrap(),
+                )
+            });
+        }
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn median(bencher: divan::Bencher, columns: usize) {
+        run(bencher, columns, 1, 0);
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn grouped_median(bencher: divan::Bencher, columns: usize) {
+        run(bencher, columns, 20, 0);
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn grouped_pstate_median(bencher: divan::Bencher, columns: usize) {
+        run(bencher, columns, 20, 3);
+    }
+}
+
 mod nelson_aalen_bench {
     use super::*;
 

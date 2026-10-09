@@ -19,6 +19,7 @@ from typing import Any
 
 from ._coerce import (
     _NA_REAL,
+    _as_character,
     _floats_or_nan,
     _is_bool_like,
     _is_missing_value,
@@ -42,6 +43,7 @@ class _ExpressionVector(list[Any]):
         ordered: bool = False,
         declared: bool = True,
         storage: str | None = None,
+        contrast: Any = None,
     ) -> None:
         super().__init__(values)
         self.kind = kind
@@ -49,6 +51,7 @@ class _ExpressionVector(list[Any]):
         self.ordered = ordered
         self.declared = declared
         self.storage = (storage or "double") if kind == "numeric" else None
+        self.contrast = contrast
 
     def take(self, rows: Iterable[int]) -> _ExpressionVector:
         missing = None if self.kind in {"logical", "character", "factor"} else _NA_REAL
@@ -59,6 +62,7 @@ class _ExpressionVector(list[Any]):
             ordered=self.ordered,
             declared=self.declared,
             storage=getattr(self, "storage", None),
+            contrast=getattr(self, "contrast", None),
         )
 
 
@@ -128,6 +132,7 @@ def _expression_source(source: Any, name: str) -> _ExpressionVector:
         ordered=bool(getattr(source, "ordered", getattr(dtype, "ordered", False))),
         declared=declared,
         storage=storage,
+        contrast=getattr(source, "contrast", None),
     )
 
 
@@ -538,6 +543,65 @@ def _integer_result(values: Iterable[float]) -> _ExpressionVector:
     return _ExpressionVector(result, "numeric", storage="integer")
 
 
+def _comparison_values(
+    left: _ExpressionVector,
+    operator: str,
+    right: _ExpressionVector,
+    compare: Callable[[Any, str, Any], bool | None],
+) -> _ExpressionVector:
+    """Apply R's factor methods before comparing the underlying atomic values."""
+
+    left_factor, right_factor = left.kind == "factor", right.kind == "factor"
+    if not (left_factor or right_factor):
+        return _ExpressionVector(
+            (compare(a, operator, b) for a, b in zip(left, right, strict=True)), "logical"
+        )
+
+    def levels(values: _ExpressionVector) -> tuple[str, ...]:
+        return tuple(_as_character(value) for value in values.categories or ())
+
+    def labels(values: _ExpressionVector) -> Iterable[Any]:
+        if values.kind != "factor":
+            return values
+        return (None if _is_missing_value(value) else _as_character(value) for value in values)
+
+    def codes(values: Iterable[Any], factor_levels: tuple[str, ...]) -> Iterable[int | None]:
+        index = {value: i + 1 for i, value in enumerate(factor_levels)}
+        return (
+            None if _is_missing_value(value) else index.get(_as_character(value))
+            for value in values
+        )
+
+    if left_factor and right_factor and left.ordered != right.ordered:
+        # R's group dispatch falls back to the integer codes when the two
+        # operands choose different methods, even for equality comparisons.
+        left_method = "Ops.ordered" if left.ordered else "Ops.factor"
+        right_method = "Ops.ordered" if right.ordered else "Ops.factor"
+        _warn_outside_package(
+            f'Incompatible methods ("{left_method}", "{right_method}") for "{operator}"'
+        )
+        left_values, right_values = codes(left, levels(left)), codes(right, levels(right))
+    elif operator in {"==", "!="}:
+        if left_factor and right_factor and set(levels(left)) != set(levels(right)):
+            raise ValueError("level sets of factors are different")
+        left_values, right_values = labels(left), labels(right)
+    else:
+        ordered = left if left_factor else right
+        if not ordered.ordered:
+            _warn_outside_package(f"'{operator}' not meaningful for factors")
+            return _ExpressionVector([None] * len(left), "logical")
+        factor_levels = levels(ordered)
+        if left_factor and right_factor and levels(right) != factor_levels:
+            raise ValueError("level sets of factors are different")
+        # A nonfactor operand is matched against the ordered levels. Unknown
+        # labels become missing rather than taking a lexical ordering.
+        left_values, right_values = codes(left, factor_levels), codes(right, factor_levels)
+    return _ExpressionVector(
+        (compare(a, operator, b) for a, b in zip(left_values, right_values, strict=True)),
+        "logical",
+    )
+
+
 def _evaluate_expression(
     tree: _ExpressionNode,
     n: int,
@@ -579,7 +643,24 @@ def _evaluate_expression(
                     if left.categories is not None
                     else sorted(present, key=_strata_level_sort_key)
                 )
-                return _ExpressionVector(left, "factor", levels)
+                contrast = getattr(left, "contrast", None)
+                default_contrast = None
+                default_name = (
+                    contrast.get("default_name")
+                    or (contrast.get("label") if contrast.get("default") else None)
+                    if contrast is not None
+                    else None
+                )
+                if default_name is not None and len(levels) > 1:
+                    from ._contrasts import _named_factor_contrast
+
+                    default_contrast = _named_factor_contrast(default_name, tuple(levels))
+                    if default_contrast is None:
+                        raise ValueError(f"factor() requires reevaluated {default_name} contrasts")
+                    default_contrast["default"] = True
+                return _ExpressionVector(
+                    left, "factor", levels, ordered=left.ordered, contrast=default_contrast
+                )
             numeric = _numeric_values(left, cast=operator == "as.numeric")
             label = node.children[0].expression or str(node.children[0].value)
             return _ExpressionVector(transform(numeric, operator, label), "numeric")
@@ -612,17 +693,7 @@ def _evaluate_expression(
                 return _ExpressionVector([None] * n, "logical")
             return _ExpressionVector((_logical_binary(a, operator, b) for a, b in pairs), "logical")
         if operator in {"==", "!=", "<", "<=", ">", ">="}:
-            from ._coerce import _as_character
-
-            def labels(values: _ExpressionVector) -> Iterable[Any]:
-                if values.kind != "factor":
-                    return values
-                return (None if _is_missing_value(v) else _as_character(v) for v in values)
-
-            return _ExpressionVector(
-                (compare(a, operator, b) for a, b in zip(labels(left), labels(right), strict=True)),
-                "logical",
-            )
+            return _comparison_values(left, operator, right, compare)
         a_values, b_values = _numeric_values(left), _numeric_values(right)
         if operator in {"+", "-", "*"}:
             operation = {"+": add, "-": sub, "*": mul}[operator]
