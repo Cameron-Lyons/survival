@@ -57,6 +57,8 @@ class DeepSurvEstimator(FlatModelPredictMixin, SurvivalScoreMixin, BaseEstimator
         Number of features seen during fit.
     """
 
+    model_: _surv.DeepSurv
+
     def __init__(
         self,
         hidden_layers: list[int] | None = None,

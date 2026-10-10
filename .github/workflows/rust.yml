@@ -141,6 +141,26 @@ jobs:
             "$GITHUB_WORKSPACE/python/tests/test_r_fixtures.py" \
             "$GITHUB_WORKSPACE/python/tests/test_array_inputs.py" \
             "$GITHUB_WORKSPACE/python/tests/test_survreg_callbacks.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_aft_prediction_probabilities.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_summary_counts.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_aj_entry_grid.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_neardate_sortable.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_survmean_reference.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_confidence_band_reference.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_strata_iterable_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_surv_iterable_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_factor_iterable_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_formula_iterator_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_population_iterable_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_model_matrix_iterator_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_masked_matrix_formula_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_population_summary_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_km_infinite_times.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_survfit_frame_endpoints.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_curve_quantile_boundaries.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_curve_quantile_scales.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_rmst_comparison_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_surv_repetition.py" \
             "$GITHUB_WORKSPACE/python/tests/test_aft_rank_deficient.py" \
             "$GITHUB_WORKSPACE/python/tests/test_factor_formula_comparisons.py" \
             "$GITHUB_WORKSPACE/python/tests/test_ordered_factor_contrasts.py" \
@@ -387,17 +407,65 @@ jobs:
         env:
           R_SURVIVAL_VERSION: '3.8-12'
 
-      - name: Regenerate current-stock formula, survival-row and exact-risk references
+      - name: Regenerate current-stock formula, survival and exact-risk references
         run: |
           fixture_dir="$RUNNER_TEMP/current-stock-fixtures"
           mkdir -p "$fixture_dir/committed" "$fixture_dir/regenerated"
           cp python/tests/fixtures/typed_formula_expression_reference.json "$fixture_dir/committed/"
           cp python/tests/fixtures/survfit_missing_residual_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/summary_counts_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/aj_entry_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survmean_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/confidence_band_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/strata_iterable_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/surv_iterable_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/factor_iterable_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/formula_iterator_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/population_iterable_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/model_matrix_iterator_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/masked_matrix_formula_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/km_infinite_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survfit_frame_endpoint_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/curve_quantile_boundary_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/aft_prediction_probability_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/surv_repetition_reference.json "$fixture_dir/committed/"
           cp test/r/kernel_references/exact_counting_sweep.json "$fixture_dir/committed/"
           Rscript scripts/generate_typed_formula_expression_reference.R \
             "$fixture_dir/regenerated/typed_formula_expression_reference.json"
           Rscript scripts/generate_survfit_missing_residual_reference.R \
             "$fixture_dir/regenerated/survfit_missing_residual_reference.json"
+          Rscript scripts/generate_summary_counts_reference.R \
+            "$fixture_dir/regenerated/summary_counts_reference.json"
+          Rscript scripts/generate_aj_entry_reference.R \
+            "$fixture_dir/regenerated/aj_entry_reference.json"
+          Rscript scripts/generate_survmean_reference.R \
+            "$fixture_dir/regenerated/survmean_reference.json"
+          Rscript scripts/generate_confidence_band_reference.R \
+            "$fixture_dir/regenerated/confidence_band_reference.json"
+          Rscript scripts/generate_strata_iterable_reference.R \
+            "$fixture_dir/regenerated/strata_iterable_reference.json"
+          Rscript scripts/generate_surv_iterable_reference.R \
+            "$fixture_dir/regenerated/surv_iterable_reference.json"
+          Rscript scripts/generate_factor_iterable_reference.R \
+            "$fixture_dir/regenerated/factor_iterable_reference.json"
+          Rscript scripts/generate_formula_iterator_reference.R \
+            "$fixture_dir/regenerated/formula_iterator_reference.json"
+          Rscript scripts/generate_population_iterable_reference.R \
+            "$fixture_dir/regenerated/population_iterable_reference.json"
+          Rscript scripts/generate_model_matrix_iterator_reference.R \
+            "$fixture_dir/regenerated/model_matrix_iterator_reference.json"
+          Rscript scripts/generate_masked_matrix_formula_reference.R \
+            "$fixture_dir/regenerated/masked_matrix_formula_reference.json"
+          Rscript scripts/generate_km_infinite_reference.R \
+            "$fixture_dir/regenerated/km_infinite_reference.json"
+          Rscript scripts/generate_survfit_frame_endpoint_reference.R \
+            "$fixture_dir/regenerated/survfit_frame_endpoint_reference.json"
+          Rscript scripts/generate_curve_quantile_boundary_reference.R \
+            "$fixture_dir/regenerated/curve_quantile_boundary_reference.json"
+          Rscript scripts/generate_aft_prediction_probability_reference.R \
+            "$fixture_dir/regenerated/aft_prediction_probability_reference.json"
+          Rscript scripts/generate_surv_repetition_reference.R \
+            "$fixture_dir/regenerated/surv_repetition_reference.json"
           Rscript scripts/generate_exact_counting_reference.R \
             "$fixture_dir/regenerated/exact_counting_sweep.json"
           python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \

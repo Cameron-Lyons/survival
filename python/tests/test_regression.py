@@ -459,8 +459,15 @@ def test_survreg_fit_predictions_match_r():
 
     with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.predict(predict_type="bogus")
-    with pytest.raises(ValueError, match="probabilities between 0 and 1"):
-        fit.predict(newdata=newdata, predict_type="quantile", p=[1.5])
+    # Stock R keeps an undefined probability's column and the neighboring
+    # quantiles; the missing column propagates through estimated-scale SEs.
+    with_invalid = fit.predict(
+        newdata=newdata, predict_type="quantile", p=[0.1, 1.5, 0.5], se_fit=True
+    )
+    np.testing.assert_array_equal(np.asarray(with_invalid.fit)[:, [0, 2]], quantile.fit)
+    np.testing.assert_array_equal(np.asarray(with_invalid.se_fit)[:, [0, 2]], quantile.se_fit)
+    assert np.isnan(np.asarray(with_invalid.fit)[:, 1]).all()
+    assert np.isnan(np.asarray(with_invalid.se_fit)[:, 1]).all()
     with pytest.raises(ValueError, match="newdata must be 1 x 2, got 1 x 1"):
         fit.predict(newdata=[[1.0]], predict_type="lp")
 

@@ -90,6 +90,14 @@ def test_survobrien_releases_the_gil():
     _assert_detaches(lambda: survival.validation.survobrien(times, events, columns))
 
 
+def test_confidence_bands_release_the_gil():
+    probabilities = np.full(2_000_000, 0.5)
+    standard_errors = np.full(len(probabilities), 0.1)
+    _assert_detaches(
+        lambda: sa.survfit_confint(probabilities, standard_errors, conf_type="log-log")
+    )
+
+
 def test_penalty_controller_releases_the_gil():
     events = np.arange(2_000_000, dtype=float) % 19
     controller = regression.PenaltyController("gamma", theta=0.4)
@@ -160,6 +168,37 @@ def test_one_sample_survdiff_releases_the_gil():
     status = np.ones(4_000_000, dtype=np.int32)
     expected = np.linspace(0.1, 0.9, len(status))
     _assert_detaches(lambda: sa.survdiff_one_sample(status, expected, rho=1.5))
+
+
+def test_survmean_releases_the_gil():
+    n = 2_000_000
+    time_values = np.arange(1, n + 1, dtype=float)
+    fit = sa.SurvfitKMResult.from_stacked(
+        time_values,
+        time_values[::-1],
+        np.ones(n),
+        np.linspace(1.0, 0.0, n),
+        [n],
+    )
+    _assert_detaches(lambda: sa.survmean(fit))
+
+
+def test_survmean_curves_releases_the_gil():
+    n = 2_000_000
+    times = np.arange(1, n + 1, dtype=float)
+    survival_values = np.linspace(1.0, 0.0, n)
+    events = np.ones(n)
+    _assert_detaches(
+        lambda: survival.validation.survmean_curves(
+            times, survival_values, times[::-1], events, [n]
+        )
+    )
+
+
+def test_rmst_comparison_releases_the_gil():
+    times, status, x = _cox_data(600_000)
+    groups = (x[:, 0] > 0).astype(np.int32)
+    _assert_detaches(lambda: survival.validation.rmst_comparison(times, status, groups, 1.0))
 
 
 def test_heavy_kernels_release_the_gil():

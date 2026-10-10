@@ -61,6 +61,7 @@ from ._formula import (
     _offset_vector,
     _parse_formula,
     _penalty_arguments,
+    _prepare_formula_inputs,
     _strata_covariate,
     _strata_keep,
     _strata_specs,
@@ -688,16 +689,20 @@ def _model_frame(
         raise TypeError("a formula argument is required")
     if data is None:
         raise ValueError("a data argument is required with a formula")
+    data, supplied = _prepare_formula_inputs(
+        data,
+        **{
+            "weights": weights,
+            "offset": offset,
+            "strata": strata_arg,
+            "cluster": cluster,
+            "id": id,
+            "istate": istate,
+            **dict(extra or {}),
+        },
+    )
     full_data = data
-    aligned = {
-        "weights": _column_or_values(data, weights, "weights"),
-        "offset": _column_or_values(data, offset, "offset"),
-        "strata": _column_or_values(data, strata_arg, "strata"),
-        "cluster": _column_or_values(data, cluster, "cluster"),
-        "id": _column_or_values(data, id, "id"),
-        "istate": _column_or_values(data, istate, "istate"),
-        **{name: _column_or_values(data, value, name) for name, value in (extra or {}).items()},
-    }
+    aligned = {name: _column_or_values(data, value, name) for name, value in supplied.items()}
     if subset is not None:
         data, aligned = _subset_formula_inputs(formula, data, subset, **aligned)
     row_names = _data_row_labels(data, _data_row_count(data, formula))
@@ -908,6 +913,7 @@ def _newdata_frame(
     valid placeholder. Expected-count predictions ignore a missing event code.
     """
 
+    newdata, _ = _prepare_formula_inputs(newdata)
     if isinstance(newdata, _FormulaRows) and not isinstance(newdata, _EvaluatedModelFrame):
         # A raw R data frame can be reused by separate prediction calls. Keep
         # evaluated values local to this call, including their domain warnings.

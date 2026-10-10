@@ -3,6 +3,7 @@
 //! The port itself is `surv_analysis::survmean`.
 
 use super::kaplan_meier;
+use crate::data_types::{FloatVec, IntVec};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{pchisq, pnorm, qnorm};
 use crate::internal::matrix::{cholesky2, chsolve2};
@@ -10,6 +11,7 @@ use crate::internal::validation::validate_length;
 use crate::surv_analysis::{RmeanOption, StackedCurves, SurvfitKMResult, SurvmeanTable, survmean};
 use ndarray::Array2;
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 
 /// One row of the table.  `NaN` stands for R's `NA` (a median the curve
 /// never reaches); the restricted mean is absent when `rmean` is `None`
@@ -96,22 +98,30 @@ pub fn rmst_comparison(
     tau: f64,
     conf_level: f64,
 ) -> SurvivalResult<RmstComparisonResult> {
+    // Group selection indexes these original vectors before the KM fitter
+    // validates a subset, so every observation must be aligned here.
+    validate_length(time.len(), status.len(), "status")?;
     validate_length(time.len(), group.len(), "group")?;
+    if let Some(weights) = weights {
+        validate_length(time.len(), weights.len(), "weights")?;
+    }
     if !tau.is_finite() || tau <= 0.0 {
         return Err(SurvivalError::invalid_input("tau must be positive"));
     }
-    let mut labels = group.to_vec();
-    labels.sort_unstable();
-    labels.dedup();
-    if labels.len() < 2 {
+    // Gather each group's rows once, keeping their input order and the
+    // sorted labels that determine the reference group.
+    let mut grouped_rows = BTreeMap::<i32, Vec<usize>>::new();
+    for (row, &label) in group.iter().enumerate() {
+        grouped_rows.entry(label).or_default().push(row);
+    }
+    if grouped_rows.len() < 2 {
         return Err(SurvivalError::invalid_input(
             "at least two groups are needed for a comparison",
         ));
     }
     let z = qnorm((1.0 + conf_level) / 2.0, true, false);
-    let mut groups = Vec::with_capacity(labels.len());
-    for &label in &labels {
-        let rows: Vec<usize> = (0..time.len()).filter(|&i| group[i] == label).collect();
+    let mut groups = Vec::with_capacity(grouped_rows.len());
+    for (label, rows) in grouped_rows {
         let time: Vec<f64> = rows.iter().map(|&i| time[i]).collect();
         let status: Vec<i32> = rows.iter().map(|&i| status[i]).collect();
         let weights: Option<Vec<f64>> =
@@ -186,15 +196,16 @@ pub fn rmst_comparison(
 #[pyo3(signature = (time, surv, n_risk, n_event, n, lower=None, upper=None, strata=None, n_id=None, start_time=0.0, rmean="common", rmean_at=None, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
 pub fn survmean_curves_py(
-    time: Vec<f64>,
-    surv: Vec<f64>,
-    n_risk: Vec<f64>,
-    n_event: Vec<f64>,
-    n: Vec<f64>,
-    lower: Option<Vec<f64>>,
-    upper: Option<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    surv: FloatVec,
+    n_risk: FloatVec,
+    n_event: FloatVec,
+    n: FloatVec,
+    lower: Option<FloatVec>,
+    upper: Option<FloatVec>,
     strata: Option<Vec<usize>>,
-    n_id: Option<Vec<f64>>,
+    n_id: Option<FloatVec>,
     start_time: f64,
     rmean: &str,
     rmean_at: Option<f64>,
@@ -205,15 +216,25 @@ pub fn survmean_curves_py(
         None => RmeanOption::parse(rmean)?,
     };
     let counts = |values: Vec<f64>| values.into_iter().map(|count| count as usize).collect();
-    let fit = SurvfitKMResult::from_stacked(StackedCurves {
-        lower,
-        upper,
-        n_id: n_id.map(counts),
+    let curves = StackedCurves {
+        lower: lower.map(FloatVec::into_inner),
+        upper: upper.map(FloatVec::into_inner),
+        n_id: n_id.map(|values| counts(values.into_inner())),
         t0: start_time,
-        ..StackedCurves::new(time, n_risk, n_event, surv, strata, counts(n))
-    })?;
-    let table = survmean(&fit, scale, option)?;
-    Ok(SurvfitSummaryRow::from_table(&table))
+        ..StackedCurves::new(
+            time.into_inner(),
+            n_risk.into_inner(),
+            n_event.into_inner(),
+            surv.into_inner(),
+            strata,
+            counts(n.into_inner()),
+        )
+    };
+    Ok(py.detach(|| -> SurvivalResult<_> {
+        let fit = SurvfitKMResult::from_stacked(curves)?;
+        let table = survmean(&fit, scale, option)?;
+        Ok(SurvfitSummaryRow::from_table(&table))
+    })?)
 }
 
 /// Python entry point: `rmst_comparison(time, status, group, tau,
@@ -221,21 +242,19 @@ pub fn survmean_curves_py(
 #[pyfunction(name = "rmst_comparison")]
 #[pyo3(signature = (time, status, group, tau, weights=None, conf_level=0.95))]
 pub fn rmst_comparison_py(
-    time: Vec<f64>,
-    status: Vec<i32>,
-    group: Vec<i32>,
+    py: Python<'_>,
+    time: FloatVec,
+    status: IntVec,
+    group: IntVec,
     tau: f64,
-    weights: Option<Vec<f64>>,
+    weights: Option<FloatVec>,
     conf_level: f64,
 ) -> PyResult<RmstComparisonResult> {
-    Ok(rmst_comparison(
-        &time,
-        &status,
-        &group,
-        weights.as_deref(),
-        tau,
-        conf_level,
-    )?)
+    let time = time.into_inner();
+    let status = status.into_inner();
+    let group = group.into_inner();
+    let weights = weights.map(FloatVec::into_inner);
+    Ok(py.detach(|| rmst_comparison(&time, &status, &group, weights.as_deref(), tau, conf_level))?)
 }
 
 #[cfg(test)]

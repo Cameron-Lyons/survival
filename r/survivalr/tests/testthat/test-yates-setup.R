@@ -116,7 +116,7 @@ test_that("Yates survival uses no reference numerical functions", {
     survfit.coxph=function(...) stop("reference Cox curve called"),
     coxsurv.fit=function(...) stop("reference assembly called"),
     agsurv=function(...) stop("reference baseline called"),.package="survival")
-  local_mocked_bindings(.call_r_api=function(...) stop("Python formula called"))
+  local_mocked_bindings(.call_r_api=function(...) stop("Python formula called"),.package="survivalr")
   expect_equal(bridge(fit,"survival")$predict(c(-1,0,1)),expected)
 })
 

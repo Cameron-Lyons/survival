@@ -109,7 +109,8 @@ test_that("person-years does not forward formulas to reference or Python parsers
   data <- .py_data()
   bridge <- pyears
   local_mocked_bindings(pyears = function(...) stop("reference called"), .package = "survival")
-  local_mocked_bindings(.call_r_api = function(...) stop("Python formula called"))
+  local_mocked_bindings(.call_r_api = function(...) stop("Python formula called"),
+    .package = "survivalr")
   expect_s3_class(bridge(time ~ group, data), "pyears")
   expect_s3_class(bridge(time ~ group, data, ratetable = survival::survexp.us), "pyears")
 })

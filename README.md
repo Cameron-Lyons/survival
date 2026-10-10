@@ -237,6 +237,10 @@ Multi-state fits with retained model frames also support influence residuals
 and pseudo-values for state probabilities, cumulative transition hazards, and
 integrated state occupancy, including grouped, weighted, and subject-collapsed
 counting-process results.
+Ordinary and multistate summaries accept R's `dosum` option to select
+cumulative or per-time counts, including Cox predictions. Dense ordinary
+summary queries sweep reporting times once; see
+[summary counts and benchmarks](docs/summary-counts.md).
 Independent right-censored competing-risk curves compute probability, hazard,
 and integrated-occupancy standard errors with a linear moment sweep.
 Grouped data-frame conversion preserves repeated state selections by column
@@ -962,6 +966,10 @@ Use `print(report)` for formatted text and `r.as_data_frame(report)` for
 full-precision columns. See [survival reports](docs/survival-reports.md) for
 cutoffs, units, formatting and allocation measurements.
 
+Ordinary compact tables stream restricted means and median searches without
+observation-sized temporary vectors. See
+[summary-table validation and timings](docs/survival-summary-tables.md).
+
 For detailed time rows, use `r.print_summary_survfit(r.summary_survfit(fit, times=[100, 300]))`.
 Expected curves and their summaries have `r.print_survexp` and
 `r.print_summary_survexp`. These reports also expose full-precision tables and
@@ -1184,7 +1192,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 Where R's own results are wrong (for example the martingale residuals of
 stratified penalized Cox fits, or the offsets of `predict.coxph`'s expected
 counts), the port returns the intended values; every such case is listed in
-[R compatibility](docs/r-compatibility.md#deliberate-fixes-of-r-defects-no-fixture).
+[R compatibility](docs/r-compatibility.md#deliberate-fixes-of-r-defects).
 
 ## License
 

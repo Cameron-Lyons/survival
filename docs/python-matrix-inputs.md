@@ -46,3 +46,7 @@ Tests verify matrix ordering and empty/ragged shapes, compare list and NumPy
 model fits, and check custom numeric conversions and row iteration. The
 complete R reference suite exercises the converted matrices through fitting
 and prediction.
+
+Formula response matrices also accept masked NumPy rows supplied through
+iterators or mixed reusable inputs. See [masked matrix inputs](masked-matrix-inputs.md)
+for missing-row behavior, stock references and complete-call controls.

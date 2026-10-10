@@ -15,7 +15,7 @@ fn kaplan_meier_rejects_modified_inputs_before_fitting() {
         |d| d.status[0] = 2,
         |d| d.start = Some(vec![0.0]),
         |d| d.start = Some(vec![0.0, 2.0, 0.0]),
-        |d| d.start = Some(vec![0.0, f64::NEG_INFINITY, 0.0]),
+        |d| d.start = Some(vec![0.0, f64::NAN, 0.0]),
         |d| d.weights = Some(vec![1.0]),
         |d| d.weights = Some(vec![1.0, -1.0, 1.0]),
         |d| d.weights = Some(vec![1.0, f64::INFINITY, 1.0]),

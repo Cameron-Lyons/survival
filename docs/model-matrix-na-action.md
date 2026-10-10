@@ -27,6 +27,10 @@ retain their input columns independently: a missing `age` leaves an observed
 becoming R NA. Nullable pandas logical values no longer trigger ambiguous
 boolean comparisons during factor coding.
 
+Fresh Cox frailty matrices also retain used iterator columns before group
+processing. See [model-matrix iterator inputs](model-matrix-iterator-inputs.md)
+for independent sparse and dense frailty controls and current measurements.
+
 ## Independent checks and persistence
 
 Seventy-two unmodified stock fits cover 18 formulas, both model families and

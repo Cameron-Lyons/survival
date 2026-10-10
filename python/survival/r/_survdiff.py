@@ -20,6 +20,7 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _prepare_formula_inputs,
     _strata_keep,
     _strata_specs,
     _subset_formula_inputs,
@@ -162,6 +163,9 @@ def survdiff(
             raise ValueError("No groups to test")
         codes, levels = _curve_factor(columns, len(y))
     elif isinstance(response, Surv):
+        data, supplied = _prepare_formula_inputs(data, group=group, subset=subset)
+        group = supplied["group"]
+        subset = supplied["subset"]
         if subset is not None:
             indices = _subset_indices(subset, len(response))
             response = _subset_surv(response, indices)

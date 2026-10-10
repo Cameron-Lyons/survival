@@ -1,0 +1,5565 @@
+{
+  "r_version": "R version 4.5.3 (2026-03-11)",
+  "survival_version": "3.8.12",
+  "inputs": {
+    "complete": {
+      "Y": [
+        [
+          2,
+          1
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          4,
+          0.5
+        ],
+        [
+          6,
+          1
+        ]
+      ],
+      "group": [
+        "b",
+        "a",
+        "b",
+        "a",
+        "c",
+        "b"
+      ],
+      "wt": [
+        1,
+        0.5,
+        2,
+        1,
+        1.5,
+        0.5
+      ]
+    },
+    "missing_event": {
+      "Y": [
+        [
+          2,
+          1
+        ],
+        [
+          5,
+          null
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          4,
+          0.5
+        ],
+        [
+          6,
+          1
+        ]
+      ],
+      "group": [
+        "b",
+        "a",
+        "b",
+        "a",
+        "c",
+        "b"
+      ],
+      "wt": [
+        1,
+        0.5,
+        2,
+        1,
+        1.5,
+        0.5
+      ]
+    },
+    "missing_time": {
+      "Y": [
+        [
+          2,
+          1
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          null,
+          0
+        ],
+        [
+          4,
+          0.5
+        ],
+        [
+          6,
+          1
+        ]
+      ],
+      "group": [
+        "b",
+        "a",
+        "b",
+        "a",
+        "c",
+        "b"
+      ],
+      "wt": [
+        1,
+        0.5,
+        2,
+        1,
+        1.5,
+        0.5
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "complete/all/omit/1",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            28.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            6
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/omit/group",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            2,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/exclude/1",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            28.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            6
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/exclude/group",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            2,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/fail/1",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            28.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            6
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/fail/group",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            2,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/pass/1",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            28.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            6
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/all/pass/group",
+      "input": "complete",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            2,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 6,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "4", "5", "6"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/omit/1",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/omit/group",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            2,
+            3
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/exclude/1",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/exclude/group",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            2,
+            3
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/fail/1",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/fail/group",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            2,
+            3
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/pass/1",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/reordered/pass/group",
+      "input": "complete",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            11.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            2,
+            3
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1", "4"],
+            "na_action": null
+          },
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/omit/1",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "3", "4", "5", "6"],
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            26
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "3", "4", "5", "6"],
+            "na_action": {
+              "rows": [2],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/omit/group",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "3", "4", "5", "6"],
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            9,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            1,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "3", "4", "5", "6"],
+            "na_action": {
+              "rows": [2],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/exclude/1",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "3", "4", "5", "6"],
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            26
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "3", "4", "5", "6"],
+            "na_action": {
+              "rows": [2],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/exclude/group",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "3", "4", "5", "6"],
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            9,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            1,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              9,
+              0
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  9,
+                  0
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "b",
+                "a",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                2,
+                1,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "3", "4", "5", "6"],
+            "na_action": {
+              "rows": [2],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/fail/1",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/fail/group",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/pass/1",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                null
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/all/pass/group",
+      "input": "missing_event",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                null
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                9,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/omit/1",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "1", "6.1", "4"],
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            17
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            4
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "1", "6.1", "4"],
+            "na_action": {
+              "rows": [2],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/omit/group",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "1", "6.1", "4"],
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            9,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            1,
+            3
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "1", "6.1", "4"],
+            "na_action": {
+              "rows": [2],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/exclude/1",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "1", "6.1", "4"],
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            17
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            4
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "1", "6.1", "4"],
+            "na_action": {
+              "rows": [2],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/exclude/group",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "1", "6.1", "4"],
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            9,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            1,
+            3
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ],
+            [
+              9,
+              0
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ],
+            [
+              1
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  9,
+                  0
+                ]
+              ],
+              "group": [
+                "b",
+                "b",
+                "b",
+                "a"
+              ],
+              "(weights)": [
+                0.5,
+                1,
+                0.5,
+                1
+              ]
+            },
+            "row_names": ["6", "1", "6.1", "4"],
+            "na_action": {
+              "rows": [2],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/fail/1",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/fail/group",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/pass/1",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                null
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_event/reordered/pass/group",
+      "input": "missing_event",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                null
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                9,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/omit/1",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "5", "6"],
+          "na_action": {
+            "rows": [4],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "5", "6"],
+            "na_action": {
+              "rows": [4],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [4],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/omit/group",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "5", "6"],
+          "na_action": {
+            "rows": [4],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            2.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            1,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "5", "6"],
+            "na_action": {
+              "rows": [4],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [4],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/exclude/1",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "5", "6"],
+          "na_action": {
+            "rows": [4],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            19.5
+          ],
+          "event": [
+            6.25
+          ],
+          "n": [
+            5
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "5", "6"],
+            "na_action": {
+              "rows": [4],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [4],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/exclude/group",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "5", "6"],
+          "na_action": {
+            "rows": [4],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            2.5,
+            11,
+            6
+          ],
+          "event": [
+            0,
+            5.5,
+            0.75
+          ],
+          "n": [
+            1,
+            3,
+            1
+          ],
+          "offtable": 0,
+          "observations": 5,
+          "dim": [3],
+          "dimnames": {
+            "group": ["a", "b", "c"]
+          },
+          "y": [
+            [
+              2,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              3,
+              2
+            ],
+            [
+              4,
+              0.5
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  2,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  3,
+                  2
+                ],
+                [
+                  4,
+                  0.5
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "c",
+                "b"
+              ],
+              "(weights)": [
+                1,
+                0.5,
+                2,
+                1.5,
+                0.5
+              ]
+            },
+            "row_names": ["1", "2", "3", "5", "6"],
+            "na_action": {
+              "rows": [4],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [4],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/fail/1",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/fail/group",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/pass/1",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                null,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/all/pass/group",
+      "input": "missing_time",
+      "subset": null,
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                2,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                3,
+                2
+              ],
+              [
+                null,
+                0
+              ],
+              [
+                4,
+                0.5
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "a",
+              "c",
+              "b"
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2,
+              1,
+              1.5,
+              0.5
+            ]
+          },
+          "row_names": ["1", "2", "3", "4", "5", "6"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/omit/1",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1"],
+          "na_action": {
+            "rows": [5],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            10.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            4
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1"],
+            "na_action": {
+              "rows": [5],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [5],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/omit/group",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1"],
+          "na_action": {
+            "rows": [5],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            2.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            1,
+            3
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1"],
+            "na_action": {
+              "rows": [5],
+              "kind": "omit"
+            }
+          },
+          "na_action": {
+            "rows": [5],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/exclude/1",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1"],
+          "na_action": {
+            "rows": [5],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            10.5
+          ],
+          "event": [
+            2
+          ],
+          "n": [
+            4
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [],
+          "dimnames": [],
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": null,
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1"],
+            "na_action": {
+              "rows": [5],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [5],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/exclude/group",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1"],
+          "na_action": {
+            "rows": [5],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "pyears": [
+            2.5,
+            8
+          ],
+          "event": [
+            0,
+            2
+          ],
+          "n": [
+            1,
+            3
+          ],
+          "offtable": 0,
+          "observations": 4,
+          "dim": [2],
+          "dimnames": {
+            "group": ["a", "b"]
+          },
+          "y": [
+            [
+              6,
+              1
+            ],
+            [
+              5,
+              0
+            ],
+            [
+              2,
+              1
+            ],
+            [
+              6,
+              1
+            ]
+          ],
+          "x": [
+            [
+              2
+            ],
+            [
+              1
+            ],
+            [
+              2
+            ],
+            [
+              2
+            ]
+          ],
+          "model": {
+            "columns": {
+              "Y": [
+                [
+                  6,
+                  1
+                ],
+                [
+                  5,
+                  0
+                ],
+                [
+                  2,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ]
+              ],
+              "group": [
+                "b",
+                "a",
+                "b",
+                "b"
+              ],
+              "(weights)": [
+                0.5,
+                0.5,
+                1,
+                0.5
+              ]
+            },
+            "row_names": ["6", "2", "1", "6.1"],
+            "na_action": {
+              "rows": [5],
+              "kind": "exclude"
+            }
+          },
+          "na_action": {
+            "rows": [5],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/fail/1",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/fail/group",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/pass/1",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ 1",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                null,
+                0
+              ]
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing_time/reordered/pass/group",
+      "input": "missing_time",
+      "subset": [5, 1, 0, 5, 3],
+      "formula": "Y ~ group",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              [
+                6,
+                1
+              ],
+              [
+                5,
+                0
+              ],
+              [
+                2,
+                1
+              ],
+              [
+                6,
+                1
+              ],
+              [
+                null,
+                0
+              ]
+            ],
+            "group": [
+              "b",
+              "a",
+              "b",
+              "b",
+              "a"
+            ],
+            "(weights)": [
+              0.5,
+              0.5,
+              1,
+              0.5,
+              1
+            ]
+          },
+          "row_names": ["6", "2", "1", "6.1", "4"],
+          "na_action": null
+        },
+        "warnings": []
+      },
+      "pyears": {
+        "value": {
+          "error": "missing value where TRUE/FALSE needed"
+        },
+        "warnings": []
+      }
+    }
+  ],
+  "vector_cases": [
+    {
+      "name": "complete/omit",
+      "input": "complete",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              5,
+              3
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2
+            ]
+          },
+          "row_names": ["1", "2", "3"],
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/exclude",
+      "input": "complete",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              5,
+              3
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2
+            ]
+          },
+          "row_names": ["1", "2", "3"],
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/fail",
+      "input": "complete",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              5,
+              3
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2
+            ]
+          },
+          "row_names": ["1", "2", "3"],
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "complete/pass",
+      "input": "complete",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              5,
+              3
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2
+            ]
+          },
+          "row_names": ["1", "2", "3"],
+          "na_action": null
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing/omit",
+      "input": "missing",
+      "na_action": "omit",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              3
+            ],
+            "(weights)": [
+              1,
+              2
+            ]
+          },
+          "row_names": ["1", "3"],
+          "na_action": {
+            "rows": [2],
+            "kind": "omit"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing/exclude",
+      "input": "missing",
+      "na_action": "exclude",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              3
+            ],
+            "(weights)": [
+              1,
+              2
+            ]
+          },
+          "row_names": ["1", "3"],
+          "na_action": {
+            "rows": [2],
+            "kind": "exclude"
+          }
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing/fail",
+      "input": "missing",
+      "na_action": "fail",
+      "frame": {
+        "value": {
+          "error": "missing values in object"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing/pass",
+      "input": "missing",
+      "na_action": "pass",
+      "frame": {
+        "value": {
+          "columns": {
+            "Y": [
+              2,
+              null,
+              3
+            ],
+            "(weights)": [
+              1,
+              0.5,
+              2
+            ]
+          },
+          "row_names": ["1", "2", "3"],
+          "na_action": null
+        },
+        "warnings": []
+      }
+    }
+  ]
+}

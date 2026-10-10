@@ -91,6 +91,28 @@ their fitters check all row lengths, times, event codes, and weights before
 accessing rows. The public API integration tests exercise modified inputs with
 time correction both enabled and disabled.
 
+Cox risk-set counting, score, Schoenfeld and martingale boundaries also check
+mutable right/counting responses, covariate shapes, scores, weights and strata
+before sorting or indexing. Weighted numerical controls and malformed-input
+regressions cover tied events and delayed entry. This includes refusing a NaN
+time before a risk-set sweep that would otherwise fail to advance.
+
+Standalone Cox baseline construction checks its raw observation values.
+Fitted-Cox prediction boundaries also check stored row, design and covariance
+dimensions before using cached baselines or prediction shortcuts. Unknown
+training stratum codes return input errors within the existing grouping pass.
+Public curve expansion and subject trajectories check mutable baseline vector
+lengths, covariate widths and finite ordered time grids before indexing them.
+Trajectory intervals may be empty (`start == stop`) but cannot run backwards.
+Fitted-model drivers reuse internally constructed baselines through the same
+numerical loops, avoiding a new scan for every subject or prediction row.
+
+Population boundaries revalidate mutable `RateTable` attributes and rates before
+matching or integration. Internal subject loops reuse the validated table.
+Expected-survival group dimensions and public rate offsets use checked arithmetic;
+damaged-table formatting also avoids out-of-range indexing. See
+[rate-table input validation](ratetable-inputs.md).
+
 The core bindings take these types for every numeric vector and matrix input
 (`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
 `aareg_fit`, `pyears`, `survexp`, `survdiff`, `survfitkm`, `survfitaj`, the
@@ -131,9 +153,10 @@ or a borrowed NumPy view. Code that must call back into Python from a detached
 kernel re-attaches with `Python::attach` (the `coxpenal` callback penalty).
 The core fit, prediction, log-rank test and residual bindings follow this rule, so fits on
 several Python threads run in parallel; `python/tests/test_gil_release.py`
-checks it. Two things still run attached: `survmean`, and building the
-nested-list results of methods such as `CoxPHFit.dfbeta`, which bounds how far
-those calls overlap.
+checks it. Survival-summary tables, restricted-mean comparisons, stacked curve
+quantiles and confidence-band transforms also run detached. Building the
+nested-list results of methods such as `CoxPHFit.dfbeta`
+still runs attached, which bounds how far those calls overlap.
 
 ## Python Layout
 

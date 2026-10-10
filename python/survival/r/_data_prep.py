@@ -12,9 +12,13 @@ from __future__ import annotations
 import math
 import numbers
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
+from itertools import chain
 from typing import Any, TypeVar, cast
+
+import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
@@ -23,6 +27,7 @@ from ._coerce import (
     _categories,
     _finite_float,
     _float_vector,
+    _floats_or_nan,
     _is_bool_like,
     _is_missing_value,
     _match_string_arg,
@@ -30,6 +35,7 @@ from ._coerce import (
     _materialize_labels,
     _normalize_bool_option,
     _normalize_positive_scale,
+    _numeric_ndarray,
     _pop_dotted_keyword,
     _scalar_or_vector,
     _warn_outside_package,
@@ -42,6 +48,7 @@ from ._formula import (
     _formula_name,
     _model_strata,
     _model_variables,
+    _prepare_formula_inputs,
     _response_spec,
     _timeline_counting,
     _unsupported_formula_name,
@@ -53,6 +60,21 @@ from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation, _SurvR
 # ---------------------------------------------------------------------------
 # tcut, neardate, lvcf, nostutter
 # ---------------------------------------------------------------------------
+
+_NEARDATE_TIME_UNITS = {
+    "D": 86_400 * 10**18,
+    "h": 3_600 * 10**18,
+    "m": 60 * 10**18,
+    "s": 10**18,
+    "ms": 10**15,
+    "us": 10**12,
+    "ns": 10**9,
+    "ps": 10**6,
+    "fs": 10**3,
+    "as": 1,
+}
+_NEARDATE_EPOCH = datetime(1970, 1, 1)
+_NEARDATE_UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def _numeric_or_nan(values: Any, name: str) -> list[float]:
@@ -84,6 +106,73 @@ def tcut(x: Any, breaks: Any, labels: Any | None = None, scale: Any = 1) -> Tcut
     )
 
 
+def _neardate_calendar_key(value: Any) -> int:
+    """An exact calendar instant, retaining NumPy subsecond units and Python time zones."""
+
+    if hasattr(value, "to_datetime64"):
+        value = value.to_datetime64()
+    if isinstance(value, np.datetime64):
+        unit, step = np.datetime_data(value.dtype)
+        if unit in {"Y", "M", "W"}:
+            value = value.astype("datetime64[D]")
+            unit, step = "D", 1
+        return int(value.astype(np.int64)) * step * _NEARDATE_TIME_UNITS[unit]
+    if isinstance(value, datetime):
+        epoch = _NEARDATE_UTC_EPOCH if value.utcoffset() is not None else _NEARDATE_EPOCH
+        elapsed = value - epoch
+        return (elapsed.days * 86_400 + elapsed.seconds) * 10**18 + elapsed.microseconds * 10**12
+    return (value.toordinal() - _NEARDATE_EPOCH.toordinal()) * 86_400 * 10**18
+
+
+def _neardate_date_vectors(y1: Any, y2: Any) -> tuple[list[float], list[float]]:
+    """R ranks the union of sortable dates; numeric dates can use their values directly."""
+
+    if _categories(y1) is not None or _categories(y2) is not None:
+        raise ValueError("y1 and y2 must be sortable")
+    array1, array2 = _numeric_ndarray(y1), _numeric_ndarray(y2)
+    if array1 is not None and array2 is not None:
+        return array1.astype(float, copy=False).tolist(), array2.astype(float, copy=False).tolist()
+
+    # ndarray.tolist() converts nanosecond datetime64 values to integers and
+    # loses their date type, so retain their scalars for exact common ranking.
+    vectors = [
+        [None if np.ma.is_masked(value) else value for value in values]
+        if isinstance(values, np.ndarray) and values.ndim == 1 and values.dtype.kind == "M"
+        else _materialize_1d(values, name)
+        for values, name in ((y1, "y1"), (y2, "y2"))
+    ]
+    types = {type(value) for value in chain.from_iterable(vectors)}
+    character = any(issubclass(kind, str) for kind in types)
+    calendar = any(issubclass(kind, (date, np.datetime64)) for kind in types)
+    if not character and not calendar:
+        if types <= {int, float, bool, type(None)}:
+            if type(None) in types:
+                return (
+                    [math.nan if value is None else float(value) for value in vectors[0]],
+                    [math.nan if value is None else float(value) for value in vectors[1]],
+                )
+            return list(map(float, vectors[0])), list(map(float, vectors[1]))
+        try:
+            return _floats_or_nan(vectors[0]), _floats_or_nan(vectors[1])
+        except (TypeError, ValueError):
+            return _numeric_or_nan(vectors[0], "y1"), _numeric_or_nan(vectors[1], "y2")
+    dates = [value for value in chain.from_iterable(vectors) if not _is_missing_value(value)]
+    key: Callable[[Any], Any]
+    if character:
+        # R's c(y1, y2) promotes a numeric/character pair to character.
+        key = _as_character
+    elif all(isinstance(value, date | np.datetime64) for value in dates):
+        key = _neardate_calendar_key
+    else:
+        raise ValueError("y1 and y2 must be sortable")
+    levels = {value: position for position, value in enumerate(sorted({key(v) for v in dates}))}
+    result = [
+        [math.nan if _is_missing_value(value) else float(levels[key(value)]) for value in vector]
+        for vector in vectors
+    ]
+    return result[0], result[1]
+
+
 def neardate(
     id1: Any,
     id2: Any,
@@ -96,13 +185,15 @@ def neardate(
 
     The row numbers are Python (zero-based) indices into ``id2``/``y2``; ``nomatch``
     replaces the ``None`` of rows without a match, as R's ``nomatch`` argument does.
+    Dates may be numeric, character, or calendar dates/timestamps. Character dates
+    retain lexical ordering, and timestamps retain their full input precision.
+    Naive datetimes and dates use UTC; aware datetimes use their absolute instant.
     """
 
     best_value = _match_string_arg(best, "best", ("after", "prior"), "best must be after or prior")
     id1_values = _materialize_labels(id1, "id1")
     id2_values = _materialize_labels(id2, "id2")
-    y1_values = _numeric_or_nan(y1, "y1")
-    y2_values = _numeric_or_nan(y2, "y2")
+    y1_values, y2_values = _neardate_date_vectors(y1, y2)
     if len(id1_values) != len(y1_values):
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
@@ -392,7 +483,9 @@ def survSplit(
         raise ValueError("either a formula or the end and event arguments are required")
     if data is None:
         raise ValueError("a data argument is required")
-    idname = id if isinstance(id, str) else None
+    data, supplied = _prepare_formula_inputs(data, id=id)
+    id_values = supplied["id"]
+    idname = id_values if isinstance(id_values, str) else None
     names = _data_column_names(data) or []
     added_id = False
     if idname is not None and idname not in names:
@@ -409,7 +502,7 @@ def survSplit(
         data,
         subset=subset,
         na_action=na_action,
-        id=id if idname is None else id_column,
+        id=id_values if idname is None else id_column,
         timeline=True,
     )
     # R only invents the id column for right-censored (time, status) data

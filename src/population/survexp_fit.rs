@@ -2,7 +2,7 @@
 //! survival's `src/pyears3b.c` and of `R/survexp.fit.R`, the routine
 //! `survexp` calls once the model frame has been matched to the table.
 
-use super::match_ratetable::align_us_year_axis;
+use super::match_ratetable::align_us_year_axis_validated;
 use super::pystep::{PystepTable, pystep_cell};
 use super::ratetable::RateTable;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -163,7 +163,12 @@ pub fn survexp_fit(
     let n = positions.nrows();
     ratetable.validate_positions(positions)?;
     validate_length(n, group.len(), "group")?;
-    let n_groups = group.iter().max().map_or(0, |g| g + 1);
+    let n_groups = match group.iter().max() {
+        Some(g) => g
+            .checked_add(1)
+            .ok_or_else(|| SurvivalError::invalid_input("group codes exceed addressable memory"))?,
+        None => 0,
+    };
     validate_finite(times, "times")?;
     validate_non_negative(times, "times")?;
     let mut times = times.to_vec();
@@ -172,6 +177,10 @@ pub fn survexp_fit(
     if times.is_empty() {
         return Err(SurvivalError::invalid_input("times must not be empty"));
     }
+    n_groups
+        .checked_mul(times.len())
+        .filter(|&cells| cells <= isize::MAX as usize / size_of::<f64>())
+        .ok_or_else(|| SurvivalError::invalid_input("group codes exceed addressable memory"))?;
     let y = match y {
         Some(values) => {
             validate_length(n, values.len(), "y")?;
@@ -182,7 +191,7 @@ pub fn survexp_fit(
     };
 
     let mut positions = positions.clone();
-    align_us_year_axis(ratetable, &mut positions)?;
+    align_us_year_axis_validated(ratetable, &mut positions)?;
     let factors = ratetable.factor_flags();
     let cuts = ratetable.cut_slices();
     let table = PystepTable {

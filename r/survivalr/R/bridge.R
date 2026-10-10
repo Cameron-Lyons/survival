@@ -1068,8 +1068,8 @@ attrassign <- function(object, tt) {
     if (!is.numeric(times)) {
       stop("times must be a numeric vector", call. = FALSE)
     }
-    if (any(!is.finite(times))) {
-      stop("times contains missing or infinite values", call. = FALSE)
+    if (any(is.na(times))) {
+      stop("times contains missing values", call. = FALSE)
     }
     if (missing(dosum)) {
       dosum <- all(diff(times) > 0)
@@ -2521,7 +2521,7 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (missing(best)) {
     best <- "after"
   }
-  best <- match.arg(best, c("after", "prior", "closest"))
+  best <- match.arg(best, c("after", "prior"))
   if (length(id1) != length(y1)) {
     stop("id1 and y1 must have the same length", call. = FALSE)
   }
@@ -2533,6 +2533,24 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   }
   if (is.factor(y1) || is.factor(y2)) {
     stop("y1 and y2 must be sortable", call. = FALSE)
+  }
+  # Plain numeric dates already preserve the common order. Character and
+  # classed dates need the common ranks used by survival::neardate, including
+  # R's locale collation and Date/POSIXt coercion before the native match.
+  plain_numeric <- function(values) {
+    !is.object(values) && (is.numeric(values) || is.logical(values))
+  }
+  if (!plain_numeric(y1) || !plain_numeric(y2)) {
+    if (inherits(y1, "POSIXt")) {
+      if (!inherits(y2, "POSIXt")) {
+        y2 <- if (inherits(y1, "POSIXlt")) as.POSIXlt(y2) else as.POSIXct(y2)
+      } else {
+        y1 <- if (inherits(y2, "POSIXlt")) as.POSIXlt(y1) else as.POSIXct(y1)
+      }
+    }
+    dates <- sort(unique(c(y1, y2)))
+    y1 <- match(y1, dates)
+    y2 <- match(y2, dates)
   }
   python_na <- function(values) {
     lapply(as.numeric(values), function(value) if (is.na(value)) NULL else value)
@@ -5174,7 +5192,7 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
   attr(x, "tm.retain") <- NULL
   attr(x, "tcount") <- NULL
   attr(x, "call") <- NULL
-  do.call(`[.data.frame`, c(list(x), list(...), list(drop = drop)))
+  NextMethod("[")
 }
 
 summary.tmerge <- function(object, ...) {
@@ -6010,20 +6028,27 @@ xtfrm.survival_py_surv <- function(x) {
   }
   lower <- .as_numeric_vector(.result_field(curve, "lower"))
   upper <- .as_numeric_vector(.result_field(curve, "upper"))
+  firstx <- .result_field(curve, "start_time")
+  if (is.null(firstx)) firstx <- 0
   if (length(lower) == 0L || length(upper) == 0L) {
     conf.int <- FALSE
-  } else {
-    terminal <- !is.na(surv) & surv <= 0
-    lower[terminal] <- NA_real_
-    upper[terminal] <- NA_real_
   }
   if (isTRUE(conf.int)) {
     return(.survfit_quantile_doquant(
       probs, time, surv, upper, lower,
-      firstx = 0, scale = scale, tol = tolerance
+      firstx = firstx, scale = scale, tol = tolerance
     ))
   }
-  .survfit_quantile_doquant(probs, time, surv, firstx = 0, scale = scale, tol = tolerance)
+  .survfit_quantile_doquant(probs, time, surv, firstx = firstx, scale = scale, tol = tolerance)
+}
+
+.survfit_quantile_curve_matrix <- function(value) {
+  if (is.matrix(value)) return(value)
+  if (is.list(value) && length(value) > 0L &&
+      (is.list(value[[1L]]) || length(value[[1L]]) > 1L)) {
+    return(.as_numeric_matrix(value))
+  }
+  matrix(.as_numeric_vector(value), ncol = 1L)
 }
 
 .survfit_curve_has_confint <- function(curve) {
@@ -6056,9 +6081,9 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
     curves <- unclass(x)
     nstrat <- length(curves)
     qmat <- matrix(0, nstrat, length(probs), dimnames = list(names(curves), pname))
-    if (isTRUE(conf.int) && !all(vapply(curves, .survfit_curve_has_confint, logical(1L)))) {
-      conf.int <- FALSE
-    }
+    conf.int <- if (!all(vapply(curves, .survfit_curve_has_confint, logical(1L)))) {
+      FALSE
+    } else if (conf.int) TRUE else FALSE
     if (isTRUE(conf.int)) {
       qlower <- qupper <- qmat
       for (idx in seq_along(curves)) {
@@ -6075,7 +6100,55 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
     return(qmat)
   }
 
-  if (isTRUE(conf.int)) {
+  conf.int <- if (!.survfit_curve_has_confint(x)) FALSE else if (conf.int) TRUE else FALSE
+  surv <- .survfit_quantile_curve_matrix(.result_field(x, "surv"))
+  strata <- .result_field(x, "strata")
+  ncurve <- ncol(surv)
+  if (ncurve > 1L || length(strata) > 0L) {
+    time <- .as_numeric_vector(.result_field(x, "time"))
+    sizes <- if (length(strata)) as.integer(.as_numeric_vector(strata)) else length(time)
+    ends <- cumsum(sizes)
+    starts <- c(0L, head(ends, -1L))
+    lower <- if (conf.int) .survfit_quantile_curve_matrix(.result_field(x, "lower")) else NULL
+    upper <- if (conf.int) .survfit_quantile_curve_matrix(.result_field(x, "upper")) else NULL
+    firstx <- .result_field(x, "start_time")
+    curve_names <- .result_field(x, "colnames")
+    if (!is.null(curve_names)) curve_names <- as.character(unlist(curve_names, use.names = FALSE))
+    if (length(strata) && ncurve > 1L) {
+      qmat <- array(0, c(length(sizes), ncurve, length(probs)),
+                    dimnames = list(names(strata), curve_names, pname))
+    } else {
+      labels <- if (length(strata)) names(strata) else curve_names
+      qmat <- matrix(0, length(sizes) * ncurve, length(probs),
+                     dimnames = list(labels, pname))
+    }
+    if (conf.int) qlower <- qupper <- qmat
+    for (group in seq_along(sizes)) for (column in seq_len(ncurve)) {
+      rows <- starts[[group]] + seq_len(sizes[[group]])
+      curve <- list(time = time[rows], surv = surv[rows, column], start_time = firstx,
+                    lower = if (conf.int) lower[rows, column] else NULL,
+                    upper = if (conf.int) upper[rows, column] else NULL)
+      temp <- .survfit_curve_quantile(curve, probs, conf.int, scale, tolerance)
+      if (length(dim(qmat)) == 3L) {
+        qmat[group, column, ] <- if (conf.int) temp[1L, ] else temp
+        if (conf.int) {
+          qlower[group, column, ] <- temp[2L, ]
+          qupper[group, column, ] <- temp[3L, ]
+        }
+      } else {
+        row <- if (length(strata)) group else column
+        qmat[row, ] <- if (conf.int) temp[1L, ] else temp
+        if (conf.int) {
+          qlower[row, ] <- temp[2L, ]
+          qupper[row, ] <- temp[3L, ]
+        }
+      }
+    }
+    if (conf.int) return(list(quantile = qmat, lower = qlower, upper = qupper))
+    return(qmat)
+  }
+
+  if (conf.int) {
     temp <- .survfit_curve_quantile(x, probs, TRUE, scale, tolerance)
     dimnames(temp) <- list(NULL, pname)
     return(list(quantile = temp[1L, ], lower = temp[2L, ], upper = temp[3L, ]))
@@ -9237,6 +9310,11 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
+  # Explicit p=NULL denotes an empty probability vector, whereas an omitted
+  # p uses the prediction defaults. Keep it through .compact_null dispatch.
+  if (inherits(object, "survival_py_survreg") && "p" %in% names(dots) && is.null(dots$p)) {
+    dots["p"] <- list(numeric(0))
+  }
   with_row_names <- !.is_coxphms_fit(object)
   if (with_row_names) dots[["_as_arrays"]] <- TRUE
   grouped <- inherits(object, "survival_py_coxph") && with_row_names &&
@@ -9388,7 +9466,8 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
       censored = censored,
       scale = scale,
       extend = extend,
-      rmean = rmean
+      rmean = rmean,
+      dosum = if (missing(dosum)) NULL else dosum
     )))
   }
   .survival_py_survfit_summary_frame(
@@ -9699,6 +9778,7 @@ dim.survival_py_survfit <- function(x) {
 # row, state or transition) arrays, the counts as (time, state) matrices.
 .as_summary_coxms_curves <- function(result) {
   states <- as.character(.result_field(result, "states"))
+  transitions <- .result_field(result, "n_transition")
   counts <- function(name) {
     values <- .as_numeric_matrix(.result_field(result, name))
     if (ncol(values) == length(states)) colnames(values) <- states
@@ -9709,6 +9789,7 @@ dim.survival_py_survfit <- function(x) {
     n.risk = counts("n_risk"),
     n.event = counts("n_event"),
     n.censor = counts("n_censor"),
+    n.transition = if (is.null(transitions)) NULL else .as_numeric_matrix(transitions),
     pstate = .result_field(result, "pstate"),
     cumhaz = .result_field(result, "cumhaz"),
     states = states,

@@ -99,24 +99,33 @@ impl fmt::Display for RateTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, " Rate table with {} dimensions:", self.dims.len())?;
         for (d, name) in self.dimid.iter().enumerate() {
-            let cuts = self.cutpoints[d].as_deref().unwrap_or_default();
+            let (Some(&dim), Some(labels), Some(cuts), Some(kind)) = (
+                self.dims.get(d),
+                self.dimnames.get(d),
+                self.cutpoints.get(d),
+                self.types.get(d),
+            ) else {
+                writeln!(f, "\t{name} has incomplete dimension attributes")?;
+                continue;
+            };
+            let cuts = cuts.as_deref().unwrap_or_default();
             let first = cuts.first().copied().unwrap_or(f64::NAN);
             let last = cuts.last().copied().unwrap_or(f64::NAN);
-            match self.types[d] {
+            match kind {
                 DimType::Factor => {
-                    writeln!(f, "\t{name} has levels of: {}", self.dimnames[d].join(" "))?;
+                    writeln!(f, "\t{name} has levels of: {}", labels.join(" "))?;
                 }
                 DimType::Continuous => writeln!(
                     f,
                     "\t{name} ranges from {first} to {last}; with {} categories",
-                    self.dims[d]
+                    dim
                 )?,
                 DimType::Date | DimType::UsYear => writeln!(
                     f,
                     "\t{name} ranges from {} to {}; with {} categories",
                     calendar_label(first),
                     calendar_label(last),
-                    self.dims[d]
+                    dim
                 )?,
             }
         }
@@ -211,18 +220,16 @@ pub fn ratetable_problems(
 }
 
 impl RateTable {
-    /// Build and validate a rate table from R's attributes.
-    pub fn try_new(
-        dims: Vec<usize>,
-        dimid: Vec<String>,
-        dimnames: Vec<Vec<String>>,
-        cutpoints: Vec<Option<Vec<f64>>>,
-        types: Vec<DimType>,
-        rates: Vec<f64>,
-    ) -> SurvivalResult<Self> {
+    fn validate_parts(
+        dims: &[usize],
+        dimid: &[String],
+        dimnames: &[Vec<String>],
+        cutpoints: &[Option<Vec<f64>>],
+        types: &[DimType],
+        rates: &[f64],
+    ) -> SurvivalResult<()> {
         let codes: Vec<i64> = types.iter().map(|t| i64::from(t.code())).collect();
-        let problems =
-            ratetable_problems(&dims, &dimid, &dimnames, &cutpoints, &codes, rates.len());
+        let problems = ratetable_problems(dims, dimid, dimnames, cutpoints, &codes, rates.len());
         if !problems.is_empty() {
             return Err(SurvivalError::invalid_input(format!(
                 "not a valid ratetable: {}",
@@ -234,6 +241,31 @@ impl RateTable {
                 "ratetable rates must be finite and non-negative",
             ));
         }
+        Ok(())
+    }
+
+    /// Check the constructor invariants again after public fields are changed.
+    pub fn validate(&self) -> SurvivalResult<()> {
+        Self::validate_parts(
+            &self.dims,
+            &self.dimid,
+            &self.dimnames,
+            &self.cutpoints,
+            &self.types,
+            &self.rates,
+        )
+    }
+
+    /// Build and validate a rate table from R's attributes.
+    pub fn try_new(
+        dims: Vec<usize>,
+        dimid: Vec<String>,
+        dimnames: Vec<Vec<String>>,
+        cutpoints: Vec<Option<Vec<f64>>>,
+        types: Vec<DimType>,
+        rates: Vec<f64>,
+    ) -> SurvivalResult<Self> {
+        Self::validate_parts(&dims, &dimid, &dimnames, &cutpoints, &types, &rates)?;
         Ok(Self {
             dims,
             dimid,
@@ -267,14 +299,14 @@ impl RateTable {
         if index.len() != self.dims.len() {
             return None;
         }
-        let mut offset = 0;
-        let mut stride = 1;
+        let mut offset = 0usize;
+        let mut stride = 1usize;
         for (&i, &n) in index.iter().zip(&self.dims) {
             if i >= n {
                 return None;
             }
-            offset += i * stride;
-            stride *= n;
+            offset = offset.checked_add(i.checked_mul(stride)?)?;
+            stride = stride.checked_mul(n)?;
         }
         self.rates.get(offset).copied()
     }
@@ -309,6 +341,15 @@ impl RateTable {
     /// levels, the invariants `match.ratetable` establishes and the C
     /// person-years code relies on when it indexes the rate array.
     pub fn validate_positions(&self, positions: &Array2<f64>) -> SurvivalResult<()> {
+        self.validate()?;
+        self.validate_positions_validated(positions)
+    }
+
+    /// Position checks for callers that have already checked the table itself.
+    pub(crate) fn validate_positions_validated(
+        &self,
+        positions: &Array2<f64>,
+    ) -> SurvivalResult<()> {
         if positions.ncols() != self.ndim() {
             return Err(SurvivalError::invalid_input(format!(
                 "ratetable positions must have one column per dimension: {} expected, got {}",

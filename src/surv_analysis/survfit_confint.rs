@@ -4,6 +4,7 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
+use crate::internal::numpy_utils::FloatVec;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
@@ -150,6 +151,9 @@ pub fn survfit_confint(
     if let Some(selow) = selow {
         validate_length(p.len(), selow.len(), "selow")?;
     }
+    if conf_type == ConfType::None {
+        return Err(SurvivalError::invalid_input("invalid conf.int type"));
+    }
     let zval = qnorm(1.0 - (1.0 - conf_int) / 2.0, true, false);
     let n = p.len();
     let mut lower = Vec::with_capacity(n);
@@ -254,25 +258,32 @@ pub fn survfit_confint(
 /// Python binding of [`survfit_confint`].
 #[pyfunction(name = "survfit_confint")]
 #[pyo3(signature = (p, se, logse=true, conf_type="log", conf_int=0.95, selow=None, ulimit=true))]
+#[allow(clippy::too_many_arguments)]
 pub fn survfit_confint_py(
-    p: Vec<f64>,
-    se: Vec<f64>,
+    py: Python<'_>,
+    p: FloatVec,
+    se: FloatVec,
     logse: bool,
     conf_type: &str,
     conf_int: f64,
-    selow: Option<Vec<f64>>,
+    selow: Option<FloatVec>,
     ulimit: bool,
 ) -> PyResult<ConfidenceBands> {
     let conf_type = ConfType::parse(conf_type)?;
-    Ok(survfit_confint(
-        &p,
-        &se,
-        logse,
-        conf_type,
-        conf_int,
-        selow.as_deref(),
-        ulimit,
-    )?)
+    let p = p.into_inner();
+    let se = se.into_inner();
+    let selow = selow.map(FloatVec::into_inner);
+    Ok(py.detach(move || {
+        survfit_confint(
+            &p,
+            &se,
+            logse,
+            conf_type,
+            conf_int,
+            selow.as_deref(),
+            ulimit,
+        )
+    })?)
 }
 
 #[cfg(test)]
@@ -370,6 +381,7 @@ mod tests {
         assert_eq!(ConfType::parse("Log-Log").unwrap(), ConfType::LogLog);
         assert!(survfit_confint(&[0.5], &[0.1], true, ConfType::Log, 1.0, None, true).is_err());
         assert!(survfit_confint(&[0.5], &[0.1], true, ConfType::None, 0.95, None, true).is_err());
+        assert!(survfit_confint(&[], &[], true, ConfType::None, 0.95, None, true).is_err());
         assert!(
             survfit_confint(&[0.5], &[0.1, 0.2], true, ConfType::Log, 0.95, None, true).is_err()
         );

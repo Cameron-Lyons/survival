@@ -1,20 +1,20 @@
 # R survival compatibility
 
 The Python formula interface is `survival.r`; its numerical routines run in
-Rust and are also exposed through the Rust crate's domain modules. The checked-in
+Rust and are also exposed through the Rust crate's domain modules. The original
 reference fixtures were generated with R survival **3.8.11**. They cover model
 fits, covariance matrices, predictions, residuals, survival curves and utilities.
 They establish compatibility for the tested inputs, rather than a claim that
 every R expression, plotting method or extension package is supported.
-Regression tests added since then hard-code values from R survival 3.8-12
-(R 4.5.3); the few places where 3.8-12 changed behaviour are listed under
+Newer regression tests and generated fixtures use values from R survival
+3.8-12 (R 4.5.3); the few places where 3.8-12 changed behaviour are listed under
 [Versions](#versions).
 
 This page records every known difference from R:
 
 - [Reference differences retained deliberately](#reference-differences-retained-deliberately):
   the fixture checks that are expected to fail;
-- [Deliberate fixes of R defects](#deliberate-fixes-of-r-defects-no-fixture):
+- [Deliberate fixes of R defects](#deliberate-fixes-of-r-defects):
   inputs where R errors, crashes or returns wrong numbers and the port returns
   the intended result;
 - [Other deliberate differences](#other-deliberate-differences): versions,
@@ -75,11 +75,54 @@ Responses are also normalized before missing-row removal without a subset;
 invalid statuses and interval endpoints share the constructor's missingness rules.
 R native model frames use the same constructor and bulk response conversion;
 see [response normalization](response-normalization.md).
+
+Python `Surv` and `Surv2` consume one-shot event inputs once, keeping all event
+rows aligned with their times. Declared factor levels survive preparation,
+and numeric arrays retain their dtypes for status coding. See
+[response input validation](surv-iterable-inputs.md) for independent stock
+constructor references and complete-construction measurements.
+
+KM fitting accepts infinite right/counting endpoints and `start.time`, and
+ordinary curve summaries accept infinite query times. Finite near-tie
+normalization retains nonfinite endpoints and response rows, correcting
+stock `aeqSurv` truncation and row-recycling defects. Infinite-origin summary
+tables retain R's undefined arithmetic. Independent complete fits, summaries,
+quantiles and raw stock discrepancies are described in
+[infinite KM times](km-infinite-times.md).
+
+Python `strata()` consumes one-shot iterator columns once and preserves
+declared factor levels. Its returned `StrataFactor` retains categorical level
+order when reused in a response, model column, nested strata or prediction.
+Numeric short labels therefore remain categories rather than becoming a
+continuous predictor. A literal `"NA"` event-state label stays distinct from a
+missing factor value. The 142 independent source cases and a numerical
+three-group AFT fit are described in [reusable strata factors](strata-factor-inputs.md).
 `scripts/generate_strata_expression_reference.R` checks model fits,
 predictions, missing-value actions, survival curves, and log-rank tests.
 On the local 100,000-row NumPy benchmark, constructing the model frame for
 `age * strata(sex)` fell from 97.1 ms to 71.5 ms; ordinary additive strata stayed
 near 24 ms. `scripts/bench_strata.py` measures this independently of model fitting.
+
+Inferred factors prepare one-shot grouping columns once for curve aggregation
+and deprecated concordance strata. Clustered concordance separately prepares
+iterator clusters before ordering them, retaining declared category order.
+The 51 independent stock cases check aggregate values and full concordance
+outputs; see [factor and cluster inputs](factor-iterable-inputs.md).
+
+Formula frames, fitters and new-data predictions retain used iterator columns
+and direct row-aligned arguments within each call. Shared iterator aliases read
+one buffer; unrelated columns remain unread through fitting, copying and pickle.
+Declared factor metadata, numeric expression types, matrix response missingness
+and stock model-frame row counts are preserved. Independent controls include
+88 fits/frames, 24 row-count cases and 124 complete new-data predictions; see
+[formula iterator inputs](formula-iterator-inputs.md).
+Population models prepare cut/time-cut and rate-map inputs before evaluating
+them. Response-free formulas use actual weights, referenced rate sources and
+external rate vectors to determine rows, with scalar mappings expanded before
+integration. See [population formula inputs](population-iterable-inputs.md),
+including the stock scalar-map limitation and its expanded-vector oracle.
+Public Rust population calculations also revalidate mutable rate-table fields
+and check index/group arithmetic; see [rate-table inputs](ratetable-inputs.md).
 
 `scripts/generate_strata_interaction_reference.R` checks coefficients,
 covariances, design matrices, predictions, residuals, curves, and proportional
@@ -172,6 +215,39 @@ times are sorted and deduplicated; events and censors accumulate between them.
 restricted-mean options are supported. Rust callers can use
 `surv_analysis::{summary_survfit_aj, survmean_aj}`.
 
+Ordinary and multistate summaries support explicit `dosum` selection for
+cumulative or per-time counts, including Cox prediction curves. Dense ordinary
+summary queries sweep the observed time grid once; sparse queries retain
+binary search. Native time inputs accept NumPy vectors directly. See
+[summary counts](summary-counts.md) for defaults, Rust entry points, stock-R
+comparisons and reproducible benchmarks.
+
+Curve data frames preserve fitted terminal uncertainty and confidence limits.
+Robust fits can have zero standard errors and zero bounds at survival zero;
+these values remain zero in `as_data_frame` and R curve quantiles. Undefined
+native values remain missing, and logarithmic standard errors still convert
+to the survival scale. Twenty-four independent full-column stock references
+cover finite and infinite endpoints, grouped curves, robust and naive fits,
+and both ordinary estimate types.
+
+Compact ordinary summary tables stream restricted means and their variance
+without copying the observed arrays, and release the Python interpreter lock.
+Median searches stop at the required crossing or plateau endpoint. See
+[summary-table validation and timings](survival-summary-tables.md) for the 400
+independent stock-R tables and measured native calls.
+
+Restricted-mean comparisons validate observation lengths before selecting
+groups, gather each group's rows once and preserve sorted reference labels.
+The comparison and stacked-table bindings accept owned NumPy vectors and run
+without the Python interpreter lock. See
+[comparison validation and timings](rmst-comparison.md).
+
+Survival-response repetition follows R's first-element warnings, nonfinite
+defaults, fractional truncation and argument precedence. The Python interface
+repeats immutable response columns without allocating expanded row indices.
+See [repetition validation and timings](surv-repetition.md) for the 392 stock
+calls across seven response kinds and complete-call allocation measurements.
+
 `survfit` also accepts a square matrix of ordinary KM or Cox curves, with
 `None` for missing transitions (`survfit.matrix`). It supports both `discrete`
 and `matexp`, vector or per-curve `p0`, grouped curves, multiple Cox prediction
@@ -215,7 +291,7 @@ for the callback contract, reference coverage and ownership rules.
 
 The Python fixture suite (`python/tests/test_r_fixtures.py`) has **37 expected
 numerical differences**, with no missing-feature or API-error exemptions. None
-of the reference JSON files were changed. The differences are:
+of the historical reference JSON files were changed. The differences are:
 
 | Checks | Fixture family | Reason |
 | ---: | --- | --- |
@@ -238,13 +314,28 @@ IEEE floating-point expressions before fitting. Output time comparisons allow
 only the JSON format's 15-significant-digit rounding. Counts and the number of
 distinct times remain checked separately.
 
-## Deliberate fixes of R defects (no fixture)
+## Deliberate fixes of R defects
 
 In each case below R errors, crashes, reads uninitialised memory or returns a
 result that contradicts its own documentation or code comments, and the port
-returns what R intends. No fixture covers these inputs, since R's output there
-is not a usable reference; regression tests pin the port's values, usually
-next to R's own output.
+returns what R intends. Regression tests pin the intended values. Where a
+current-stock reference records defective output, it retains that output
+alongside the corrected oracle described below.
+
+The current-stock summary-count reference also records one R defect separately
+from the historical fixtures: without requested times, grouped multistate
+summaries index count matrices as vectors and lose state/transition columns.
+The port accumulates each column within its stratum. The new reference retains
+R's raw output and computes intended counts from R's original fitted matrices;
+see [summary counts](summary-counts.md).
+
+Stock `neardate` fails when converting POSIXct/POSIXlt dates because it passes
+the two-element class vector to `methods::as`. The bridge converts to the
+single calendar class and matches the intended numeric epoch reference.
+Python also preserves exact timestamp ordering and character dates, rejects
+factor dates, and speeds numeric preparation. Python character comparisons
+use Unicode order; the R facade uses R's locale collation. See
+[sortable date matching](neardate-sortable.md) for validation and timings.
 
 ### Cox models
 
@@ -600,6 +691,10 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   table. Excluded multi-time residual arrays retain their state and row
   metadata, which R loses while reinserting missing rows. See
   [missing survival residual rows](survfit-missing-residuals.md).
+- Wholly censored multistate curves return their initial-state probabilities
+  with zero-column cumulative-hazard and transition matrices. R 3.8-12's
+  `survfitAJ` errors with "subscript out of bounds" in `grabit1` when there
+  are no observed transitions, including valid contiguous subject histories.
 - `survfit(coxfit, newdata, start.time =)` where `start.time` empties a stratum
   gives each newdata row its own curve; R's `split()` drops the empty stratum
   and hands a row the curve of the row before it. With `id =` and a subject
@@ -714,6 +809,10 @@ this does not show.
   then removed by the na.action) and a missing factor outcome is censored
   without 3.8-11's level shift. The multi-state `parsecovar2` and `survfitAJ`
   paths follow 3.8-12 as well.
+  With `entry=True`, multistate reporting times include actual subject entries,
+  transitions and final exits, omitting censored continuation boundaries.
+  The independent [entry-grid reference generator](../scripts/generate_aj_entry_reference.R)
+  checks 64 current-stock cases, including uncertainty and influence tensors.
 - `Surv` and `Surv2` retain the censoring factor's first level in `clabel`
   and format it as `:label`, following 3.8-12. Legacy objects without `clabel`
   keep the `+` marker. The old formatting fixture reconstructs that legacy
@@ -913,11 +1012,12 @@ this does not show.
   repeated or missing labels names the curves 1..m; a 0-based integer index
   names them by its values ("0", "2" where R's row names are "1", "3"); the
   columns of an unstratified newdata matrix are unnamed.
-- `quantile()` of a stratified `survfit.coxph` object with several curves has
-  one row per (stratum, curve), ordered as `summary()`'s table; R returns a
-  stratum x curve x probability array. Quantiles and medians always return a
-  `SurvfitQuantileResult`, including single-response and single-probability
-  calls. Tolerance-induced interpolation ties use R's averaged indices
+- Python/native quantiles of a stratified `survfit.coxph` object with several
+  curves have one row per (stratum, curve), ordered as `summary()`'s table;
+  R and the R bridge return a stratum x curve x probability array.
+  Python/native quantiles and medians always return a `SurvfitQuantileResult`,
+  including single-response and single-probability calls.
+  Tolerance-induced interpolation ties use R's averaged indices
   without emitting its "collapsing to unique x values" warning.
 - A Turnbull fit reports `cumhaz` and `std.chaz` (R's object has them only after
   `survfit0`).
@@ -1575,6 +1675,10 @@ operation. These methods return structured data without printing. Expected
 curves and summaries, rate tables and their summaries, and the merged-data
 count table all support `as_data_frame`.
 
+The R bridge drops retained `tmerge` metadata on subsetting and follows normal
+data-frame dispatch, including single-index column selection and omitted row
+or column arguments.
+
 `scripts/generate_population_summary_reference.R` regenerates curve-selection
 edge cases, population-method examples, all three bundled rate-table
 summaries, and merged-data counts from R survival 3.8-12.
@@ -1611,6 +1715,30 @@ refuse multiple-endpoint responses as R does. `median(Surv(...))` includes
 confidence bounds by default, while `median(survfit(...))` returns point
 estimates. Both preserve the curve-by-probability result layout of
 `quantile_survfit`.
+
+Both Python confidence-band interfaces accept owned numeric arrays and run the
+native transform without the interpreter lock. The R-style interface accepts
+scalar estimates and missing numeric containers. See
+[confidence-band inputs and validation](confidence-bands.md) for 720 independent
+stock-R references across all five transforms, endpoints and lower-band options.
+
+Curve quantiles refuse logical, character, categorical and missing
+probabilities as R does. Infinite tolerances retain R's undefined results and
+zero-probability origin rules; NaN tolerance remains invalid.
+Scalar scales retain R's zero, negative, infinite and missing-value arithmetic.
+The native binding copies numeric arrays in bulk and releases the interpreter
+lock during curve construction and inversion. Another 4,352 stock calls and
+complete-call measurements are described in [curve quantile boundaries](curve-quantiles.md).
+
+The R bridge preserves conditional Cox origins and stock vector, matrix and
+stratum-by-curve array layouts for quantiles and medians. It inverts each
+prediction column within each stratum rather than flattening the curves.
+Direct stock namespace comparisons cover absent confidence bands, repeated
+and empty probabilities, conditional starts and scalar scale boundaries.
+The bridge uses R's conditional coercion for `conf.int` when bands exist,
+retaining stock errors for invalid conditions. Absent bands bypass evaluation
+of that argument, including a promise that would otherwise error. Independent
+comparisons also retain R tolerance arithmetic, recycling, warnings and errors.
 
 The native quantile routine handles non-monotone confidence bands, duplicate
 levels, missing band entries, and tolerance-induced ties using R's sorting
@@ -1824,6 +1952,14 @@ explicit population designs also retain the fit's custom contrasts.
 
 ## Native Cox prediction memory and performance
 
+Public Rust fitted-Cox predictions check stored row, covariate and covariance
+dimensions before shortcuts or cached-baseline access. Missing stored strata
+and unknown training stratum codes return input errors. These checks preserve
+fitted-value and derived-risk arithmetic; they validate dimensions and lookups
+without an added observation scan. External API regressions include cached and
+uncached predictions, 1,735 malformed calls and valid controls for every tested
+method.
+
 Expected-event predictions, survival at requested times, and cohort expected
 survival compute relative risks with one reusable centered row. Temporary
 covariate storage is O(p), replacing an O(n × p) centered copy; the owned
@@ -1942,6 +2078,21 @@ See [missing values and omitted prediction rows](prediction-missing-values.md)
 for recorded stock failures, stored-model compatibility and complete-call
 measurements with missing data.
 
+AFT quantile predictions pass the complete numeric probability vector to the
+distribution, preserving missing and out-of-range columns alongside valid
+columns. Custom quantile callbacks determine their own behavior for those
+values. Other prediction types ignore `p`, following R. Nullable list, NumPy,
+pandas and Polars query values also work in `dsurvreg`, `psurvreg` and
+`qsurvreg`. The current-stock generator
+`scripts/generate_aft_prediction_probability_reference.R` records 464 prediction
+and distribution-query cases across eight families and estimated, fixed and
+stratified scales. The R bridge preserves explicit empty probability requests,
+returning the same zero-column shape as `p=numeric(0)`. Stock Gaussian,
+lognormal and t predictions reject `p=NULL`, and estimated-scale empty predictions with
+`se.fit=TRUE` fail in stock R; the port returns empty fit and error matrices.
+Some stock fixed-scale predictions retain a nonempty error vector despite an
+empty fit; the independent empty-result checks also pin the corrected width.
+
 Logical covariates retain FALSE/TRUE factor coding, including constant levels
 and interaction widths. R model matrices preserve source row names and contrast
 declarations, and missing logical new-data rows survive input conversion as
@@ -1992,9 +2143,10 @@ table and fails with "'list' object cannot be coerced to type 'double'".
 ## Reproduce validation
 
 ```sh
-cargo test --lib --no-default-features --offline
+cargo test --lib --tests --no-default-features --offline
 PYO3_PYTHON=$PWD/.venv/bin/python PATH=$PWD/.venv/bin:$PATH \
-  cargo test --lib --all-features --offline
+  PYTHONPATH=$("$PWD/.venv/bin/python" -c 'import site; print(site.getsitepackages()[0])') \
+  cargo test --lib --tests --all-features --offline
 PYTHONPATH=python .venv/bin/python -m pytest python/tests -q
 python3 scripts/generate_binding_manifest.py --check
 PYTHONPATH=python .venv/bin/python scripts/generate_stubs.py --check
@@ -2004,16 +2156,34 @@ The normal fixture run includes the documented expected differences. Add
 `--runxfail` to display their full discrepancies. R itself is needed to regenerate
 the reference data; see [the fixture workflow](../test/r/README.md).
 
-Local validation on October 9, 2026 passed 40,149 Python tests, with 48 skips
-and 37 documented expected failures. Rust passed 1,463 library tests without
-Python, 1,723 with all features, and four public API integration tests.
-Formatting, Clippy, Python lint and typing, generated interfaces, and benchmark
-smoke checks were clean. A release wheel also passed 393 focused tests outside
-the checkout. Live R 4.5.3 with survival 3.8-12 checked all 42 bridge test files,
-including 302 focused prediction-attribute expectations. The R package check
+Local validation on October 9, 2026 passed 67,593 Python tests, with 48 skips
+and 37 documented expected failures. All 48 skips are cases where stock R
+could not compute a reference. Rust passed 1,472
+library tests without Python, 1,732 with all features, and 40 public API
+integration tests in each configuration.
+Formatting, Clippy, Python lint and typing across all 88 source files,
+generated interfaces were clean. A release wheel
+also passed 52,128 focused tests in 73
+files from an isolated environment with `/tmp` as the working directory,
+including every CI numerical file. All 88 loaded
+package modules remained under the wheel environment, and the 17 changed
+Python adapters matched the frozen source bytes.
+Live R 4.5.3 with survival 3.8-12 passed 478,094 expectations across all 50
+current-source bridge test files. That source run had one persistence skip
+requiring an installed package and 24 existing factor-contrast warnings.
+A fresh run of the eight files affected by iterator and subset preparation
+passed another 31,450 expectations without warnings or skips.
+All 64 persistence expectations also passed against the installed source
+archive, including the fresh-process check. The earlier installed-package AFT
+run passed 31,689 expectations. The final R source archive check
 reported `Status: OK`, with its tests run separately. Regenerated current-stock
-formula, missing-row and exact-risk references matched at the existing
-`rtol=1e-9`, `atol=1e-12` gate; additional AFT and ordered-contrast references
+formula, missing-row, exact-risk, summary-count, entry-grid, compact-table,
+AFT probability, response-repetition, confidence-band, reusable-strata,
+response input, curve-quantile, factor/cluster, formula/population iterator,
+frailty model-matrix iterator, masked numeric matrix,
+infinite-KM and endpoint-frame references
+matched at the existing `rtol=1e-9`, `atol=1e-12` gate; additional AFT and
+ordered-contrast references
 use their separately documented numerical tolerances.
 
 For curve complexity, benchmark inputs and measured timings, see

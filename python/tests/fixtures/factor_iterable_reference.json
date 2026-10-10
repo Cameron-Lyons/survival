@@ -1,0 +1,1697 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_factor_iterable_reference.R",
+    "r_version": "4.5.3",
+    "survival_version": "3.8.12"
+  },
+  "factors": [
+    {
+      "name": "character",
+      "input": {
+        "values": [
+          "b",
+          "a",
+          "b",
+          null,
+          "c",
+          "a"
+        ],
+        "levels": null,
+        "kind": "character"
+      },
+      "codes": [1, 0, 1, null, 2, 0],
+      "levels": ["a", "b", "c"]
+    },
+    {
+      "name": "numeric",
+      "input": {
+        "values": [
+          30,
+          10,
+          30,
+          null,
+          20,
+          10
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "codes": [2, 0, 2, null, 1, 0],
+      "levels": ["10", "20", "30"]
+    },
+    {
+      "name": "logical",
+      "input": {
+        "values": [
+          true,
+          false,
+          true,
+          null,
+          false,
+          true
+        ],
+        "levels": null,
+        "kind": "logical"
+      },
+      "codes": [1, 0, 1, null, 0, 1],
+      "levels": ["FALSE", "TRUE"]
+    },
+    {
+      "name": "zero",
+      "input": {
+        "values": [
+          -0,
+          0,
+          2,
+          null,
+          1,
+          2
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "codes": [0, 0, 2, null, 1, 2],
+      "levels": ["0", "1", "2"]
+    },
+    {
+      "name": "infinite",
+      "input": {
+        "values": [
+          "Inf",
+          "-Inf",
+          2,
+          null,
+          2,
+          "Inf"
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "codes": [2, 0, 1, null, 1, 2],
+      "levels": ["-Inf", "2", "Inf"]
+    },
+    {
+      "name": "missing",
+      "input": {
+        "values": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "levels": null,
+        "kind": "logical"
+      },
+      "codes": [null, null, null, null],
+      "levels": []
+    },
+    {
+      "name": "empty",
+      "input": {
+        "values": [],
+        "levels": null,
+        "kind": "character"
+      },
+      "codes": [],
+      "levels": []
+    },
+    {
+      "name": "declared",
+      "input": {
+        "values": [
+          "b",
+          "a",
+          "b",
+          null,
+          "c",
+          "a"
+        ],
+        "levels": ["c", "unused", "b", "a"],
+        "kind": "factor"
+      },
+      "codes": [2, 3, 2, null, 0, 3],
+      "levels": ["c", "unused", "b", "a"]
+    }
+  ],
+  "aggregate": [
+    {
+      "name": "surv/character/mean",
+      "margin": "surv",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.69999999999999996],
+          [0.20000000000000001, 0.60000000000000009]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "surv/character/median",
+      "margin": "surv",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.69999999999999996],
+          [0.20000000000000001, 0.60000000000000009]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "surv/character/min",
+      "margin": "surv",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.5],
+          [0.20000000000000001, 0.40000000000000002]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "surv/character/max",
+      "margin": "surv",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002],
+          [0.20000000000000001, 0.80000000000000004]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "surv/numeric/mean",
+      "margin": "surv",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.69999999999999996],
+          [0.20000000000000001, 0.60000000000000009]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "surv/numeric/median",
+      "margin": "surv",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.69999999999999996],
+          [0.20000000000000001, 0.60000000000000009]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "surv/numeric/min",
+      "margin": "surv",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.5],
+          [0.20000000000000001, 0.40000000000000002]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "surv/numeric/max",
+      "margin": "surv",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002],
+          [0.20000000000000001, 0.80000000000000004]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "surv/declared/mean",
+      "margin": "surv",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.69999999999999996, 0.29999999999999999],
+          [0.60000000000000009, 0.20000000000000001]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "surv/declared/median",
+      "margin": "surv",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.69999999999999996, 0.29999999999999999],
+          [0.60000000000000009, 0.20000000000000001]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "surv/declared/min",
+      "margin": "surv",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.5, 0.29999999999999999],
+          [0.40000000000000002, 0.20000000000000001]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "surv/declared/max",
+      "margin": "surv",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [0.90000000000000002, 0.29999999999999999],
+          [0.80000000000000004, 0.20000000000000001]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "surv/compound/mean",
+      "margin": "surv",
+      "fun": "mean",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002, 0.5],
+          [0.20000000000000001, 0.80000000000000004, 0.40000000000000002]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "surv/compound/median",
+      "margin": "surv",
+      "fun": "median",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002, 0.5],
+          [0.20000000000000001, 0.80000000000000004, 0.40000000000000002]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "surv/compound/min",
+      "margin": "surv",
+      "fun": "min",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002, 0.5],
+          [0.20000000000000001, 0.80000000000000004, 0.40000000000000002]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "surv/compound/max",
+      "margin": "surv",
+      "fun": "max",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [0.29999999999999999, 0.90000000000000002, 0.5],
+          [0.20000000000000001, 0.80000000000000004, 0.40000000000000002]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "pstate/character/mean",
+      "margin": "pstate",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.69999999999999996, 0.29999999999999999]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.60000000000000009, 0.40000000000000002]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "pstate/character/median",
+      "margin": "pstate",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.69999999999999996, 0.29999999999999999]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.60000000000000009, 0.40000000000000002]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "pstate/character/min",
+      "margin": "pstate",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.5, 0.10000000000000001]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.40000000000000002, 0.20000000000000001]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "pstate/character/max",
+      "margin": "pstate",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["a", "b"]
+        }
+      }
+    },
+    {
+      "name": "pstate/numeric/mean",
+      "margin": "pstate",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.69999999999999996, 0.29999999999999999]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.60000000000000009, 0.40000000000000002]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "pstate/numeric/median",
+      "margin": "pstate",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.69999999999999996, 0.29999999999999999]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.60000000000000009, 0.40000000000000002]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "pstate/numeric/min",
+      "margin": "pstate",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.5, 0.10000000000000001]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.40000000000000002, 0.20000000000000001]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "pstate/numeric/max",
+      "margin": "pstate",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["1", "2"]
+        }
+      }
+    },
+    {
+      "name": "pstate/declared/mean",
+      "margin": "pstate",
+      "fun": "mean",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.69999999999999996, 0.29999999999999999],
+            [0.29999999999999999, 0.69999999999999996]
+          ],
+          [
+            [0.60000000000000009, 0.40000000000000002],
+            [0.20000000000000001, 0.80000000000000004]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "pstate/declared/median",
+      "margin": "pstate",
+      "fun": "median",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.69999999999999996, 0.29999999999999999],
+            [0.29999999999999999, 0.69999999999999996]
+          ],
+          [
+            [0.60000000000000009, 0.40000000000000002],
+            [0.20000000000000001, 0.80000000000000004]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "pstate/declared/min",
+      "margin": "pstate",
+      "fun": "min",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.5, 0.10000000000000001],
+            [0.29999999999999999, 0.69999999999999996]
+          ],
+          [
+            [0.40000000000000002, 0.20000000000000001],
+            [0.20000000000000001, 0.80000000000000004]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "pstate/declared/max",
+      "margin": "pstate",
+      "fun": "max",
+      "named": false,
+      "by": [
+        {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": ["b", "a"],
+          "kind": "factor"
+        }
+      ],
+      "result": {
+        "values": [
+          [
+            [0.90000000000000002, 0.5],
+            [0.29999999999999999, 0.69999999999999996]
+          ],
+          [
+            [0.80000000000000004, 0.59999999999999998],
+            [0.20000000000000001, 0.80000000000000004]
+          ]
+        ],
+        "newdata": {
+          "aggregate": ["b", "a"]
+        }
+      }
+    },
+    {
+      "name": "pstate/compound/mean",
+      "margin": "pstate",
+      "fun": "mean",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.10000000000000001],
+            [0.5, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.20000000000000001],
+            [0.40000000000000002, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "pstate/compound/median",
+      "margin": "pstate",
+      "fun": "median",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.10000000000000001],
+            [0.5, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.20000000000000001],
+            [0.40000000000000002, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "pstate/compound/min",
+      "margin": "pstate",
+      "fun": "min",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.10000000000000001],
+            [0.5, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.20000000000000001],
+            [0.40000000000000002, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    },
+    {
+      "name": "pstate/compound/max",
+      "margin": "pstate",
+      "fun": "max",
+      "named": true,
+      "by": {
+        "g": {
+          "values": [
+            "b",
+            "a",
+            "b"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        "h": {
+          "values": [
+            1,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      },
+      "result": {
+        "values": [
+          [
+            [0.29999999999999999, 0.69999999999999996],
+            [0.90000000000000002, 0.10000000000000001],
+            [0.5, 0.5]
+          ],
+          [
+            [0.20000000000000001, 0.80000000000000004],
+            [0.80000000000000004, 0.20000000000000001],
+            [0.40000000000000002, 0.59999999999999998]
+          ]
+        ],
+        "newdata": {
+          "g": ["a", "b", "b"],
+          "h": [1, 1, 2]
+        }
+      }
+    }
+  ],
+  "concordance": [
+    {
+      "name": "character/FALSE",
+      "cluster": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": null,
+        "kind": "character"
+      },
+      "weighted": false,
+      "result": {
+        "concordance": 0.40476190476190477,
+        "count": {
+          "concordant": 8,
+          "discordant": 12,
+          "tied.x": 1,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.017145633763709561,
+        "cvar": 0.028304178814382897,
+        "dfbeta": [0.10544217687074829, -0.037414965986394565, -0.068027210884353734],
+        "dfbeta_labels": ["a", "b", "c"],
+        "influence": [
+          [2, 5, 0, 0, 0],
+          [4, 2, 1, 0, 0],
+          [1, 1, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [0, 4, 0, 0, 0],
+          [1, 3, 1, 0, 0],
+          [2, 3, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.375, 0.42857142857142855, -0.40000000000000002, -0.75, 0.5, 0],
+          "timewt": [8, 7, 5, 4, 2, 1],
+          "casewt": [1, 1, 1, 1, 1, 1]
+        }
+      }
+    },
+    {
+      "name": "character/TRUE",
+      "cluster": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": null,
+        "kind": "character"
+      },
+      "weighted": true,
+      "result": {
+        "concordance": 0.39114391143911442,
+        "count": {
+          "concordant": 12.25,
+          "discordant": 19.625,
+          "tied.x": 2,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.028903031029046025,
+        "cvar": 0.022598982423058894,
+        "dfbeta": [0.12497106520880708, -0.010157813755259325, -0.11481325145354773],
+        "dfbeta_labels": ["a", "b", "c"],
+        "influence": [
+          [2.5, 6.25, 0, 0, 0],
+          [3.75, 3, 1, 0, 0],
+          [2, 1, 0, 0, 0],
+          [4.5, 3.75, 0, 0, 0],
+          [4, 3.75, 0, 0, 0],
+          [0, 5.5, 0, 0, 0],
+          [0.75, 3.5, 2, 0, 0],
+          [3, 3.5, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.38461538461538464, 0.20000000000000001, -0.35999999999999999, -0.7142857142857143, 0.42857142857142855, 0],
+          "timewt": [9.75, 8.75, 6.25, 5.25, 1.75, 0.75],
+          "casewt": [1, 2, 1, 1.5, 1, 0.75]
+        }
+      }
+    },
+    {
+      "name": "numeric/FALSE",
+      "cluster": {
+        "values": [
+          30,
+          10,
+          20,
+          30,
+          10,
+          20,
+          30,
+          10
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "weighted": false,
+      "result": {
+        "concordance": 0.40476190476190477,
+        "count": {
+          "concordant": 8,
+          "discordant": 12,
+          "tied.x": 1,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.017145633763709561,
+        "cvar": 0.028304178814382897,
+        "dfbeta": [0.10544217687074829, -0.068027210884353734, -0.037414965986394565],
+        "dfbeta_labels": ["10", "20", "30"],
+        "influence": [
+          [2, 5, 0, 0, 0],
+          [4, 2, 1, 0, 0],
+          [1, 1, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [0, 4, 0, 0, 0],
+          [1, 3, 1, 0, 0],
+          [2, 3, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.375, 0.42857142857142855, -0.40000000000000002, -0.75, 0.5, 0],
+          "timewt": [8, 7, 5, 4, 2, 1],
+          "casewt": [1, 1, 1, 1, 1, 1]
+        }
+      }
+    },
+    {
+      "name": "numeric/TRUE",
+      "cluster": {
+        "values": [
+          30,
+          10,
+          20,
+          30,
+          10,
+          20,
+          30,
+          10
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "weighted": true,
+      "result": {
+        "concordance": 0.39114391143911442,
+        "count": {
+          "concordant": 12.25,
+          "discordant": 19.625,
+          "tied.x": 2,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.028903031029046025,
+        "cvar": 0.022598982423058894,
+        "dfbeta": [0.12497106520880708, -0.11481325145354773, -0.010157813755259325],
+        "dfbeta_labels": ["10", "20", "30"],
+        "influence": [
+          [2.5, 6.25, 0, 0, 0],
+          [3.75, 3, 1, 0, 0],
+          [2, 1, 0, 0, 0],
+          [4.5, 3.75, 0, 0, 0],
+          [4, 3.75, 0, 0, 0],
+          [0, 5.5, 0, 0, 0],
+          [0.75, 3.5, 2, 0, 0],
+          [3, 3.5, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.38461538461538464, 0.20000000000000001, -0.35999999999999999, -0.7142857142857143, 0.42857142857142855, 0],
+          "timewt": [9.75, 8.75, 6.25, 5.25, 1.75, 0.75],
+          "casewt": [1, 2, 1, 1.5, 1, 0.75]
+        }
+      }
+    },
+    {
+      "name": "declared/FALSE",
+      "cluster": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": ["c", "unused", "b", "a"],
+        "kind": "factor"
+      },
+      "weighted": false,
+      "result": {
+        "concordance": 0.40476190476190477,
+        "count": {
+          "concordant": 8,
+          "discordant": 12,
+          "tied.x": 1,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.017145633763709561,
+        "cvar": 0.028304178814382897,
+        "dfbeta": [-0.068027210884353734, -0.037414965986394565, 0.10544217687074829],
+        "dfbeta_labels": ["c", "b", "a"],
+        "influence": [
+          [2, 5, 0, 0, 0],
+          [4, 2, 1, 0, 0],
+          [1, 1, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [0, 4, 0, 0, 0],
+          [1, 3, 1, 0, 0],
+          [2, 3, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.375, 0.42857142857142855, -0.40000000000000002, -0.75, 0.5, 0],
+          "timewt": [8, 7, 5, 4, 2, 1],
+          "casewt": [1, 1, 1, 1, 1, 1]
+        }
+      }
+    },
+    {
+      "name": "declared/TRUE",
+      "cluster": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": ["c", "unused", "b", "a"],
+        "kind": "factor"
+      },
+      "weighted": true,
+      "result": {
+        "concordance": 0.39114391143911442,
+        "count": {
+          "concordant": 12.25,
+          "discordant": 19.625,
+          "tied.x": 2,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.028903031029046025,
+        "cvar": 0.022598982423058894,
+        "dfbeta": [-0.11481325145354773, -0.010157813755259325, 0.12497106520880708],
+        "dfbeta_labels": ["c", "b", "a"],
+        "influence": [
+          [2.5, 6.25, 0, 0, 0],
+          [3.75, 3, 1, 0, 0],
+          [2, 1, 0, 0, 0],
+          [4.5, 3.75, 0, 0, 0],
+          [4, 3.75, 0, 0, 0],
+          [0, 5.5, 0, 0, 0],
+          [0.75, 3.5, 2, 0, 0],
+          [3, 3.5, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.38461538461538464, 0.20000000000000001, -0.35999999999999999, -0.7142857142857143, 0.42857142857142855, 0],
+          "timewt": [9.75, 8.75, 6.25, 5.25, 1.75, 0.75],
+          "casewt": [1, 2, 1, 1.5, 1, 0.75]
+        }
+      }
+    },
+    {
+      "name": "numeric_declared/FALSE",
+      "cluster": {
+        "values": [
+          "30",
+          "10",
+          "20",
+          "30",
+          "10",
+          "20",
+          "30",
+          "10"
+        ],
+        "levels": ["30", "99", "20", "10"],
+        "kind": "factor"
+      },
+      "weighted": false,
+      "result": {
+        "concordance": 0.40476190476190477,
+        "count": {
+          "concordant": 8,
+          "discordant": 12,
+          "tied.x": 1,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.017145633763709561,
+        "cvar": 0.028304178814382897,
+        "dfbeta": [-0.037414965986394565, -0.068027210884353734, 0.10544217687074829],
+        "dfbeta_labels": ["30", "20", "10"],
+        "influence": [
+          [2, 5, 0, 0, 0],
+          [4, 2, 1, 0, 0],
+          [1, 1, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [3, 3, 0, 0, 0],
+          [0, 4, 0, 0, 0],
+          [1, 3, 1, 0, 0],
+          [2, 3, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.375, 0.42857142857142855, -0.40000000000000002, -0.75, 0.5, 0],
+          "timewt": [8, 7, 5, 4, 2, 1],
+          "casewt": [1, 1, 1, 1, 1, 1]
+        }
+      }
+    },
+    {
+      "name": "numeric_declared/TRUE",
+      "cluster": {
+        "values": [
+          "30",
+          "10",
+          "20",
+          "30",
+          "10",
+          "20",
+          "30",
+          "10"
+        ],
+        "levels": ["30", "99", "20", "10"],
+        "kind": "factor"
+      },
+      "weighted": true,
+      "result": {
+        "concordance": 0.39114391143911442,
+        "count": {
+          "concordant": 12.25,
+          "discordant": 19.625,
+          "tied.x": 2,
+          "tied.y": 0,
+          "tied.xy": 0
+        },
+        "n": 8,
+        "var": 0.028903031029046025,
+        "cvar": 0.022598982423058894,
+        "dfbeta": [-0.010157813755259325, -0.11481325145354773, 0.12497106520880708],
+        "dfbeta_labels": ["30", "20", "10"],
+        "influence": [
+          [2.5, 6.25, 0, 0, 0],
+          [3.75, 3, 1, 0, 0],
+          [2, 1, 0, 0, 0],
+          [4.5, 3.75, 0, 0, 0],
+          [4, 3.75, 0, 0, 0],
+          [0, 5.5, 0, 0, 0],
+          [0.75, 3.5, 2, 0, 0],
+          [3, 3.5, 0, 0, 0]
+        ],
+        "ranks": {
+          "time": [1, 2, 4, 5, 7, 8],
+          "rank": [-0.38461538461538464, 0.20000000000000001, -0.35999999999999999, -0.7142857142857143, 0.42857142857142855, 0],
+          "timewt": [9.75, 8.75, 6.25, 5.25, 1.75, 0.75],
+          "casewt": [1, 2, 1, 1.5, 1, 0.75]
+        }
+      }
+    }
+  ],
+  "legacy": [
+    {
+      "name": "character",
+      "strata": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": null,
+        "kind": "character"
+      },
+      "result": [
+        {
+          "concordant": 1,
+          "discordant": 2,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        },
+        {
+          "concordant": 2,
+          "discordant": 1,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        },
+        {
+          "concordant": 0,
+          "discordant": 0,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 0
+        }
+      ],
+      "names": ["a", "b", "c"]
+    },
+    {
+      "name": "numeric",
+      "strata": {
+        "values": [
+          30,
+          10,
+          20,
+          30,
+          10,
+          20,
+          30,
+          10
+        ],
+        "levels": null,
+        "kind": "double"
+      },
+      "result": [
+        {
+          "concordant": 1,
+          "discordant": 2,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        },
+        {
+          "concordant": 0,
+          "discordant": 0,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 0
+        },
+        {
+          "concordant": 2,
+          "discordant": 1,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        }
+      ],
+      "names": ["10", "20", "30"]
+    },
+    {
+      "name": "declared",
+      "strata": {
+        "values": [
+          "b",
+          "a",
+          "c",
+          "b",
+          "a",
+          "c",
+          "b",
+          "a"
+        ],
+        "levels": ["c", "unused", "b", "a"],
+        "kind": "factor"
+      },
+      "result": [
+        {
+          "concordant": 0,
+          "discordant": 0,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 0
+        },
+        {
+          "concordant": 2,
+          "discordant": 1,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        },
+        {
+          "concordant": 1,
+          "discordant": 2,
+          "tied.risk": 0,
+          "tied.time": 0,
+          "std(c-d)": 1.9148542155126762
+        }
+      ],
+      "names": ["c", "b", "a"]
+    }
+  ],
+  "data": {
+    "time": [1, 2, 2, 4, 5, 6, 7, 8],
+    "event": [1, 1, 0, 1, 1, 0, 1, 1],
+    "x": [3, 1, 2, 4, 5, 0, 1, 2],
+    "weights": [1, 2, 0.5, 1, 1.5, 2, 1, 0.75]
+  },
+  "curves": {
+    "surv": [
+      [0.90000000000000002, 0.29999999999999999, 0.5],
+      [0.80000000000000004, 0.20000000000000001, 0.40000000000000002]
+    ],
+    "pstate": [
+      [
+        [0.90000000000000002, 0.10000000000000001],
+        [0.29999999999999999, 0.69999999999999996],
+        [0.5, 0.5]
+      ],
+      [
+        [0.80000000000000004, 0.20000000000000001],
+        [0.20000000000000001, 0.80000000000000004],
+        [0.40000000000000002, 0.59999999999999998]
+      ]
+    ]
+  }
+}

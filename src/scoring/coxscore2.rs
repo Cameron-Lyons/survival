@@ -29,6 +29,7 @@ pub fn coxscore2(
     method: TieMethod,
 ) -> SurvivalResult<Array2<f64>> {
     let n = survival.len();
+    SurvivalData::validate_parts(&survival.time, &survival.status)?;
     validate_binary_i32(&survival.status, "status")?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
     method.reject_exact("score")?;

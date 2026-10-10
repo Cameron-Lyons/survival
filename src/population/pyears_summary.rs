@@ -80,21 +80,30 @@ pub struct PyearsSummary {
     pub observations: usize,
 }
 
-/// Column-major offset of a multi-index.
-fn offset(index: &[usize], dims: &[usize]) -> usize {
-    let mut result = 0;
-    let mut stride = 1;
-    for (&i, &n) in index.iter().zip(dims) {
-        result += i * stride;
-        stride *= n;
+/// Addressable f64 cells, including each extent of an empty table. A zero
+/// extent makes the product zero without multiplying the unused extents.
+fn checked_cells(dims: &[usize]) -> SurvivalResult<usize> {
+    let maximum = isize::MAX as usize / size_of::<f64>();
+    let invalid = || SurvivalError::invalid_input("table dimensions exceed addressable memory");
+    if dims.iter().any(|&dim| dim > maximum) {
+        return Err(invalid());
     }
-    result
+    if dims.contains(&0) {
+        return Ok(0);
+    }
+    dims.iter().try_fold(1usize, |cells, &dim| {
+        cells
+            .checked_mul(dim)
+            .filter(|&cells| cells <= maximum)
+            .ok_or_else(invalid)
+    })
 }
 
 /// R's `pytot`: append a "Total" margin to the first two dimensions (or
 /// the only one).  With `na` the totals are `NA`, which `summary.pyears`
-/// uses for `n` when time-dependent cuts make it meaningless.
-fn pytot(x: &[f64], dims: &[usize], na: bool) -> (Vec<f64>, Vec<usize>) {
+/// uses for `n` when time-dependent cuts make it meaningless. The caller
+/// checks the expanded shape once before any component is allocated.
+fn pytot(x: &[f64], dims: &[usize], na: bool, n_cells: usize) -> (Vec<f64>, Vec<usize>) {
     let total = |values: &[f64]| if na { f64::NAN } else { values.iter().sum() };
     if dims.len() == 1 {
         let mut out = x.to_vec();
@@ -104,39 +113,36 @@ fn pytot(x: &[f64], dims: &[usize], na: bool) -> (Vec<f64>, Vec<usize>) {
     let mut new_dims = dims.to_vec();
     new_dims[0] += 1;
     new_dims[1] += 1;
-    let n_cells: usize = new_dims.iter().product();
     let mut out = vec![0.0; n_cells];
-    let outer: usize = dims[2..].iter().product();
+    if n_cells == 0 {
+        return (out, new_dims);
+    }
+    let rows = dims[0];
+    let columns = dims[1];
+    let out_rows = new_dims[0];
+    let in_slab = rows * columns;
+    let out_slab = out_rows * new_dims[1];
+    let outer = n_cells / out_slab;
     for slab in 0..outer {
-        // Decompose the slab into the trailing indices (shared by x and out).
-        let mut trailing = Vec::with_capacity(dims.len() - 2);
-        let mut rest = slab;
-        for &n in &dims[2..] {
-            trailing.push(rest % n);
-            rest /= n;
-        }
-        let at = |i: usize, j: usize, dims: &[usize]| {
-            let mut index = vec![i, j];
-            index.extend_from_slice(&trailing);
-            offset(&index, dims)
-        };
+        let in_base = slab * in_slab;
+        let out_base = slab * out_slab;
         let mut grand = 0.0;
-        let mut col_sums = vec![0.0; dims[1]];
-        for i in 0..dims[0] {
+        let mut col_sums = vec![0.0; columns];
+        for i in 0..rows {
             let mut row_sum = 0.0;
-            for j in 0..dims[1] {
-                let value = x[at(i, j, dims)];
-                out[at(i, j, &new_dims)] = value;
+            for j in 0..columns {
+                let value = x[in_base + i + j * rows];
+                out[out_base + i + j * out_rows] = value;
                 row_sum += value;
                 col_sums[j] += value;
                 grand += value;
             }
-            out[at(i, dims[1], &new_dims)] = if na { f64::NAN } else { row_sum };
+            out[out_base + i + columns * out_rows] = if na { f64::NAN } else { row_sum };
         }
         for (j, col_sum) in col_sums.into_iter().enumerate() {
-            out[at(dims[0], j, &new_dims)] = if na { f64::NAN } else { col_sum };
+            out[out_base + rows + j * out_rows] = if na { f64::NAN } else { col_sum };
         }
-        out[at(dims[0], dims[1], &new_dims)] = if na { f64::NAN } else { grand };
+        out[out_base + rows + columns * out_rows] = if na { f64::NAN } else { grand };
     }
     (out, new_dims)
 }
@@ -161,7 +167,7 @@ pub fn summary_pyears(
     } else {
         result.dims.clone()
     };
-    let n_cells: usize = dims.iter().product();
+    let n_cells = checked_cells(&dims)?;
     for (name, len) in [
         ("pyears", result.pyears.len()),
         ("n", result.n.len()),
@@ -188,10 +194,23 @@ pub fn summary_pyears(
     let total_pyears = result.pyears.iter().sum();
 
     let (n, pyears, event, expected, out_dims) = if options.totals {
-        let (n, out_dims) = pytot(&result.n, &dims, tcut);
-        let (pyears, _) = pytot(&result.pyears, &dims, false);
-        let event = result.event.as_ref().map(|e| pytot(e, &dims, false).0);
-        let expected = result.expected.as_ref().map(|e| pytot(e, &dims, false).0);
+        let mut expanded = dims.clone();
+        for dim in expanded.iter_mut().take(2) {
+            *dim = dim.checked_add(1).ok_or_else(|| {
+                SurvivalError::invalid_input("table dimensions exceed addressable memory")
+            })?;
+        }
+        let expanded_cells = checked_cells(&expanded)?;
+        let (n, out_dims) = pytot(&result.n, &dims, tcut, expanded_cells);
+        let (pyears, _) = pytot(&result.pyears, &dims, false, expanded_cells);
+        let event = result
+            .event
+            .as_ref()
+            .map(|e| pytot(e, &dims, false, expanded_cells).0);
+        let expected = result
+            .expected
+            .as_ref()
+            .map(|e| pytot(e, &dims, false, expanded_cells).0);
         (n, pyears, event, expected, out_dims)
     } else {
         (
@@ -334,19 +353,19 @@ mod tests {
 
     #[test]
     fn totals_append_margins_to_the_first_two_dimensions() {
-        let (one, dims) = pytot(&[1.0, 2.0, 3.0], &[3], false);
+        let (one, dims) = pytot(&[1.0, 2.0, 3.0], &[3], false, 4);
         assert_eq!(one, vec![1.0, 2.0, 3.0, 6.0]);
         assert_eq!(dims, vec![4]);
-        assert!(pytot(&[1.0, 2.0], &[2], true).0[2].is_nan());
+        assert!(pytot(&[1.0, 2.0], &[2], true, 3).0[2].is_nan());
 
         // 2 x 2 column-major: [[1, 3], [2, 4]] in R's display.
-        let (two, dims) = pytot(&[1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let (two, dims) = pytot(&[1.0, 2.0, 3.0, 4.0], &[2, 2], false, 9);
         assert_eq!(dims, vec![3, 3]);
         assert_eq!(two, vec![1.0, 2.0, 3.0, 3.0, 4.0, 7.0, 4.0, 6.0, 10.0]);
 
         // 2 x 2 x 2: each slab gets its own margins.
         let x: Vec<f64> = (1..=8).map(f64::from).collect();
-        let (three, dims) = pytot(&x, &[2, 2, 2], false);
+        let (three, dims) = pytot(&x, &[2, 2, 2], false, 18);
         assert_eq!(dims, vec![3, 3, 2]);
         assert_eq!(&three[..9], &[1.0, 2.0, 3.0, 3.0, 4.0, 7.0, 4.0, 6.0, 10.0]);
         assert_eq!(

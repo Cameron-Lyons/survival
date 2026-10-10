@@ -288,6 +288,21 @@ pub fn summary_survfit_aj(
     censored: bool,
     extend: bool,
 ) -> SurvivalResult<SurvfitAJResult> {
+    summary_survfit_aj_with_counts(fit, times, censored, extend, true)
+}
+
+/// Select multistate summary rows, choosing how counts are reported at
+/// requested times. With `dosum`, counts accumulate since the preceding
+/// requested time; otherwise they come from the preceding observed row.
+/// Requested times are always sorted and deduplicated. When times are absent,
+/// `dosum` has no effect, matching R's `summary.survfitms`.
+pub fn summary_survfit_aj_with_counts(
+    fit: &SurvfitAJResult,
+    times: Option<&[f64]>,
+    censored: bool,
+    extend: bool,
+    dosum: bool,
+) -> SurvivalResult<SurvfitAJResult> {
     let requested = summary_times(times)?;
     let source = if requested.is_some() {
         survfit0_aj(fit)
@@ -318,6 +333,13 @@ pub fn summary_survfit_aj(
             })
             .collect()
     };
+    let counts = |values: &[Vec<f64>]| {
+        if requested.is_some() && !dosum {
+            pick(values)
+        } else {
+            sum(values)
+        }
+    };
     out.time = output_times;
     out.strata = source.strata.as_ref().map(|_| sizes);
     out.n_risk = risk_selection
@@ -330,13 +352,13 @@ pub fn summary_survfit_aj(
         })
         .collect();
     out.n_event = if requested.is_some() {
-        sum(&source.n_event)
+        counts(&source.n_event)
     } else {
         pick(&source.n_event)
     };
-    out.n_censor = sum(&source.n_censor);
-    out.n_enter = source.n_enter.as_ref().map(|values| sum(values));
-    out.n_transition = sum(&source.n_transition);
+    out.n_censor = counts(&source.n_censor);
+    out.n_enter = source.n_enter.as_ref().map(|values| counts(values));
+    out.n_transition = counts(&source.n_transition);
     out.pstate = pick(&source.pstate);
     out.cumhaz = pick(&source.cumhaz);
     out.std_err = source.std_err.as_ref().map(|values| pick(values));
@@ -349,4 +371,204 @@ pub fn summary_survfit_aj(
     out.influence_pstate = None;
     out.counts = None;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
+
+    fn counting_fit() -> SurvfitAJResult {
+        // Stock survival 3.8-12:
+        // survfit(Surv(start, stop, factor(event, levels=c("censor", "a", "b")))
+        //         ~ group, d, id=id, istate=istate, entry=TRUE)
+        let data = SurvfitAJData::try_new(
+            Some(vec![0., 1., 0., 2., 0., 0., 3., 0.]),
+            vec![1., 4., 2., 5., 3., 6., 6., 7.],
+            vec![1, 2, 1, 0, 2, 0, 1, 0],
+            vec!["a".into(), "b".into()],
+            None,
+            Some(vec![0, 0, 1, 1, 0, 1, 0, 1]),
+            Some(vec![1, 1, 2, 2, 3, 4, 5, 6]),
+            Some(
+                [
+                    "healthy", "a", "healthy", "a", "healthy", "healthy", "healthy", "healthy",
+                ]
+                .map(String::from)
+                .to_vec(),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        survfitaj(
+            &data,
+            &SurvfitAJOptions {
+                entry: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn rows<const N: usize>(values: [[f64; 3]; N]) -> Vec<Vec<f64>> {
+        values.map(Vec::from).to_vec()
+    }
+
+    #[test]
+    fn requested_multistate_counts_sample_preceding_rows_when_dosum_is_false() {
+        let fit = counting_fit();
+        let out =
+            summary_survfit_aj_with_counts(&fit, Some(&[0., 2., 6., 8., 2.]), false, true, false)
+                .unwrap();
+        // summary(f, times=c(0,2,6,8,2), extend=TRUE, dosum=FALSE)
+        assert_eq!(out.time, vec![0., 2., 6., 8., 0., 2., 6., 8.]);
+        assert_eq!(out.strata, Some(vec![4, 4]));
+        assert_eq!(
+            out.n_risk,
+            rows([
+                [0., 0., 0.],
+                [1., 1., 0.],
+                [1., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [3., 0., 0.],
+                [2., 0., 0.],
+                [0., 0., 0.],
+            ])
+        );
+        assert_eq!(
+            out.n_event,
+            rows([
+                [0., 0., 0.],
+                [0., 1., 0.],
+                [0., 1., 0.],
+                [0., 1., 0.],
+                [0., 0., 0.],
+                [0., 1., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ])
+        );
+        assert_eq!(
+            out.n_censor,
+            rows([
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [1., 0., 0.],
+            ])
+        );
+        assert_eq!(
+            out.n_enter,
+            Some(rows([
+                [2., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [3., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ]))
+        );
+        assert_eq!(
+            out.n_transition,
+            rows([
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [1., 0., 0.],
+                [1., 0., 0.],
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ])
+        );
+        let accumulated =
+            summary_survfit_aj(&fit, Some(&[0., 2., 6., 8., 2.]), false, true).unwrap();
+        assert_eq!(out.pstate, accumulated.pstate);
+        assert_eq!(out.cumhaz, accumulated.cumhaz);
+        assert_eq!(out.std_err, accumulated.std_err);
+        assert_eq!(out.lower, accumulated.lower);
+        assert_eq!(out.upper, accumulated.upper);
+    }
+
+    #[test]
+    fn requested_multistate_counts_accumulate_by_default() {
+        let fit = counting_fit();
+        let out = summary_survfit_aj(&fit, Some(&[0., 2., 6., 8.]), false, true).unwrap();
+        // summary(f, times=c(0,2,6,8), extend=TRUE, dosum=TRUE)
+        assert_eq!(
+            out.n_event,
+            rows([
+                [0., 0., 0.],
+                [0., 1., 0.],
+                [0., 1., 2.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 1., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ])
+        );
+        assert_eq!(
+            out.n_censor,
+            rows([
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [1., 1., 0.],
+                [1., 0., 0.],
+            ])
+        );
+        assert_eq!(
+            out.n_enter,
+            Some(rows([
+                [2., 0., 0.],
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [0., 0., 0.],
+                [3., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ]))
+        );
+        assert_eq!(
+            out.n_transition,
+            rows([
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [1., 1., 1.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+                [1., 0., 0.],
+                [0., 0., 0.],
+                [0., 0., 0.],
+            ])
+        );
+    }
+
+    #[test]
+    fn dosum_does_not_change_multistate_summaries_without_requested_times() {
+        let fit = counting_fit();
+        for censored in [false, true] {
+            let accumulated = summary_survfit_aj(&fit, None, censored, false).unwrap();
+            let sampled =
+                summary_survfit_aj_with_counts(&fit, None, censored, false, false).unwrap();
+            assert_eq!(sampled.time, accumulated.time);
+            assert_eq!(sampled.n_event, accumulated.n_event);
+            assert_eq!(sampled.n_censor, accumulated.n_censor);
+            assert_eq!(sampled.n_enter, accumulated.n_enter);
+            assert_eq!(sampled.n_transition, accumulated.n_transition);
+        }
+    }
 }

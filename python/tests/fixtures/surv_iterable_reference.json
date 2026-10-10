@@ -1,0 +1,2029 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_surv_iterable_reference.R",
+    "r_version": "4.5.3",
+    "survival_version": "3.8.12"
+  },
+  "cases": [
+    {
+      "name": "right_binary",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_codes12",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_logical",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            false,
+            true,
+            null,
+            true,
+            false,
+            null
+          ],
+          "levels": null,
+          "kind": "logical"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_all_missing",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "levels": null,
+          "kind": "logical"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            null
+          ],
+          [
+            2,
+            null
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            null
+          ],
+          [
+            "Inf",
+            null
+          ],
+          [
+            6,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_invalid",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            8,
+            2,
+            0
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": ["Invalid status value, converted to NA"],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            null
+          ],
+          [
+            "Inf",
+            null
+          ],
+          [
+            6,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_mixed_codes",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": ["Invalid status value, converted to NA"],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            null
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "right_origin",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "origin": 2
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            -1,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            4,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "left_codes12",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "type": "left"
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "left",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "counting_binary",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "counting",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            1
+          ],
+          [
+            0,
+            null,
+            null
+          ],
+          [
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            "Inf",
+            0
+          ],
+          [
+            4,
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "counting_logical",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            false,
+            true,
+            null,
+            true,
+            false,
+            null
+          ],
+          "levels": null,
+          "kind": "logical"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "counting",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            1
+          ],
+          [
+            0,
+            null,
+            null
+          ],
+          [
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            "Inf",
+            0
+          ],
+          [
+            4,
+            6,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "counting_backwards",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            1,
+            0,
+            5,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            2,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": ["Stop time must be > start time, NA created"],
+      "response": {
+        "type": "counting",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            null,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            1
+          ],
+          [
+            0,
+            null,
+            null
+          ],
+          [
+            null,
+            4,
+            1
+          ],
+          [
+            3,
+            "Inf",
+            0
+          ],
+          [
+            4,
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "counting_origin",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "origin": 0.5
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "counting",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            -0.5,
+            0.5,
+            0
+          ],
+          [
+            0.5,
+            1.5,
+            1
+          ],
+          [
+            -0.5,
+            null,
+            null
+          ],
+          [
+            1.5,
+            3.5,
+            1
+          ],
+          [
+            2.5,
+            "Inf",
+            0
+          ],
+          [
+            3.5,
+            5.5,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "interval",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            2,
+            4,
+            5,
+            6,
+            9,
+            8
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            2,
+            3,
+            null,
+            3
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "type": "interval"
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "interval",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            2,
+            1,
+            1
+          ],
+          [
+            null,
+            1,
+            2
+          ],
+          [
+            4,
+            6,
+            3
+          ],
+          [
+            "Inf",
+            1,
+            null
+          ],
+          [
+            6,
+            8,
+            3
+          ]
+        ]
+      }
+    },
+    {
+      "name": "interval_invalid",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            2,
+            4,
+            5,
+            2,
+            9,
+            8
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            2,
+            3,
+            8,
+            3
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "type": "interval"
+      },
+      "unused": [],
+      "warnings": ["Status must be 0, 1, 2 or 3; converted to NA", "Invalid interval: start > stop, NA created"],
+      "response": {
+        "type": "interval",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            2,
+            1,
+            1
+          ],
+          [
+            null,
+            1,
+            2
+          ],
+          [
+            4,
+            1,
+            null
+          ],
+          [
+            "Inf",
+            1,
+            null
+          ],
+          [
+            6,
+            8,
+            3
+          ]
+        ]
+      }
+    },
+    {
+      "name": "interval_unused_right",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            "ignored",
+            "right"
+          ],
+          "levels": null,
+          "kind": "character"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "type": "interval"
+      },
+      "unused": [1],
+      "warnings": [],
+      "response": {
+        "type": "interval",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            2,
+            1,
+            1
+          ],
+          [
+            null,
+            1,
+            null
+          ],
+          [
+            4,
+            1,
+            1
+          ],
+          [
+            "Inf",
+            1,
+            0
+          ],
+          [
+            6,
+            1,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "interval2",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            null,
+            3,
+            4,
+            "-Inf",
+            null
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            null,
+            2,
+            3,
+            5,
+            6,
+            null
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": {
+        "type": "interval2"
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "interval",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            1,
+            1,
+            0
+          ],
+          [
+            2,
+            1,
+            2
+          ],
+          [
+            3,
+            1,
+            1
+          ],
+          [
+            4,
+            5,
+            3
+          ],
+          [
+            6,
+            1,
+            2
+          ],
+          [
+            null,
+            1,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mright",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["censor", "event", null, "NA", "event", "censor"],
+          "levels": ["censor", "NA", "unused", "event"],
+          "kind": "factor"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "mright",
+        "states": ["NA", "unused", "event"],
+        "clabel": "censor",
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            3
+          ],
+          [
+            6,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mcounting",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["censor", "event", null, "NA", "event", "censor"],
+          "levels": ["censor", "NA", "unused", "event"],
+          "kind": "factor"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "mcounting",
+        "states": ["NA", "unused", "event"],
+        "clabel": "censor",
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            0,
+            null,
+            null
+          ],
+          [
+            2,
+            4,
+            1
+          ],
+          [
+            3,
+            "Inf",
+            3
+          ],
+          [
+            4,
+            6,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "name": "numeric_mright",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["10", "2", null, "30", "2", "10"],
+          "levels": ["30", "10", "2", "99"],
+          "kind": "factor"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "mright",
+        "states": ["10", "2", "99"],
+        "clabel": "30",
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            "Inf",
+            2
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "numeric_mcounting",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["10", "2", null, "30", "2", "10"],
+          "levels": ["30", "10", "2", "99"],
+          "kind": "factor"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "mcounting",
+        "states": ["10", "2", "99"],
+        "clabel": "30",
+        "repeated": null,
+        "ncol": 3,
+        "matrix": [
+          [
+            0,
+            1,
+            1
+          ],
+          [
+            1,
+            2,
+            2
+          ],
+          [
+            0,
+            null,
+            null
+          ],
+          [
+            2,
+            4,
+            0
+          ],
+          [
+            3,
+            "Inf",
+            2
+          ],
+          [
+            4,
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "timeline_binary",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            0,
+            1,
+            null,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": null,
+        "states": [],
+        "clabel": null,
+        "repeated": false,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "timeline_logical",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [
+            false,
+            true,
+            null,
+            true,
+            false,
+            null
+          ],
+          "levels": null,
+          "kind": "logical"
+        }
+      ],
+      "options": {
+        "repeated": true
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": null,
+        "states": [],
+        "clabel": null,
+        "repeated": true,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            0
+          ],
+          [
+            6,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "timeline_factor",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["censor", "event", null, "NA", "event", "censor"],
+          "levels": ["censor", "NA", "unused", "event"],
+          "kind": "factor"
+        }
+      ],
+      "options": {
+        "repeated": "first"
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": null,
+        "states": ["NA", "unused", "event"],
+        "clabel": "censor",
+        "repeated": "first",
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            0
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            3
+          ],
+          [
+            6,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "name": "numeric_timeline",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": ["10", "2", null, "30", "2", "10"],
+          "levels": ["30", "10", "2", "99"],
+          "kind": "factor"
+        }
+      ],
+      "options": {
+        "repeated": true
+      },
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": null,
+        "states": ["10", "2", "99"],
+        "clabel": "30",
+        "repeated": true,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            null,
+            null
+          ],
+          [
+            4,
+            0
+          ],
+          [
+            "Inf",
+            2
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "empty_right",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [],
+          "levels": null,
+          "kind": "logical"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": []
+      }
+    },
+    {
+      "name": "time_only",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            null,
+            4,
+            "Inf",
+            6
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "right",
+        "states": [],
+        "clabel": null,
+        "repeated": null,
+        "ncol": 2,
+        "matrix": [
+          [
+            1,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            null,
+            1
+          ],
+          [
+            4,
+            1
+          ],
+          [
+            "Inf",
+            1
+          ],
+          [
+            6,
+            1
+          ]
+        ]
+      }
+    },
+    {
+      "name": "empty_factor",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [],
+          "levels": ["censor", "event", "unused"],
+          "kind": "factor"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": "mright",
+        "states": ["event", "unused"],
+        "clabel": "censor",
+        "repeated": null,
+        "ncol": 2,
+        "matrix": []
+      }
+    },
+    {
+      "name": "empty_timeline",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [],
+          "levels": null,
+          "kind": "double"
+        },
+        {
+          "values": [],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "response": {
+        "type": null,
+        "states": [],
+        "clabel": null,
+        "repeated": false,
+        "ncol": 2,
+        "matrix": []
+      }
+    },
+    {
+      "name": "short_event",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            3
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "error": "Time and status are different lengths"
+    },
+    {
+      "name": "long_event",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            3
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            0,
+            1,
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "error": "Time and status are different lengths"
+    },
+    {
+      "name": "short_counting_event",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            0,
+            1,
+            2
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            1,
+            2,
+            3
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "error": "Start and event are different lengths"
+    },
+    {
+      "name": "short_timeline_event",
+      "constructor": "Surv2",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            3
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            0,
+            1
+          ],
+          "levels": null,
+          "kind": "double"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "error": "Time and event are different lengths"
+    },
+    {
+      "name": "invalid_character_event",
+      "constructor": "Surv",
+      "arguments": [
+        {
+          "values": [
+            1,
+            2,
+            3
+          ],
+          "levels": null,
+          "kind": "integer"
+        },
+        {
+          "values": [
+            "a",
+            "b",
+            "a"
+          ],
+          "levels": null,
+          "kind": "character"
+        }
+      ],
+      "options": [],
+      "unused": [],
+      "warnings": [],
+      "error": "Invalid status value, must be logical or numeric"
+    }
+  ],
+  "kaplan_meier": {
+    "time": [1, 2, 2, 4, 5, 6],
+    "event": [1, 2, 1, 2, 1, 2],
+    "result": {
+      "n": [6],
+      "time": [1, 2, 4, 5, 6],
+      "n_risk": [6, 5, 3, 2, 1],
+      "n_event": [0, 1, 1, 0, 1],
+      "n_censor": [1, 1, 0, 1, 0],
+      "surv": [1, 0.80000000000000004, 0.53333333333333333, 0.53333333333333333, 0]
+    }
+  }
+}

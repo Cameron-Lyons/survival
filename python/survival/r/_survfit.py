@@ -23,7 +23,9 @@ from ._coerce import (
     _encode_labels,
     _factor,
     _finite_float,
+    _float_or_nan,
     _float_vector,
+    _floats_or_nan,
     _is_bool_like,
     _is_missing_value,
     _label_levels,
@@ -31,8 +33,8 @@ from ._coerce import (
     _materialize_labels,
     _mstate_categories,
     _mstate_event_label,
+    _numeric_ndarray,
     _pop_dotted_keyword,
-    _quantile_vector,
     _r_factor,
     _scalar_or_vector,
     _start_time_value,
@@ -51,6 +53,7 @@ from ._formula import (
     _formula_response_spec,
     _na_action_record,
     _parse_formula,
+    _prepare_formula_inputs,
     _strata_term_values,
     _subset_formula_inputs,
     _term_values,
@@ -239,6 +242,7 @@ def _formula_model_frame(
     timeline data (a ``Surv2`` response) is converted before the ``na.action``, as
     survfit.R does."""
 
+    data, extras = _prepare_formula_inputs(data, **extras)
     response_name = _formula_response_spec(formula).name
     extras = {
         name: _column_source(data, values) if isinstance(values, str) else values
@@ -297,6 +301,10 @@ def _surv_model_frame(
 ) -> _SurvfitData:
     """The model frame of ``survfit(Surv(...), group = )``: the Surv object is the response."""
 
+    _, aligned = _prepare_formula_inputs(None, group=group, subset=subset, **extras)
+    group = aligned.pop("group")
+    subset = aligned.pop("subset")
+    extras = aligned
     if subset is not None:
         indices = _subset_indices(subset, len(response))
         response = _subset_surv(response, indices)
@@ -632,7 +640,7 @@ def _km_engine(
             _warn_outside_package("cluster specified with robust=FALSE, cluster ignored")
         if influence > 0 and not robust:
             _warn_outside_package("robust=FALSE implies influence=FALSE")
-    start = _start_time_value(start_time)
+    start = _start_time_value(start_time, allow_infinite=True)
     engine = _core.survfitkm(
         frame.y.time,
         frame.y._event_codes(),
@@ -1291,12 +1299,13 @@ def _summary_coxms(
     scale: float,
     extend: bool,
     rmean: str,
+    dosum: bool,
 ) -> SummarySurvfitCoxmsResult:
     """``summary.survfitms`` of multi-state Cox curves: the engine's counts at the
     reported rows, the curves at the same rows, and ``survmean2``'s table."""
 
     engine = _coxms_engine(x, "summary")
-    counts = engine.summary(times=times, censored=censored, extend=extend)
+    counts = engine.summary(times=times, censored=censored, extend=extend, dosum=dosum)
     rows = np.asarray(
         engine.summary_rows(times=times, censored=censored, extend=extend), dtype=np.intp
     )
@@ -1448,6 +1457,7 @@ def summary_survfit(
     scale: Any = 1,
     extend: Any = False,
     rmean: Any | None = None,
+    dosum: Any | None = None,
 ) -> SummarySurvfitCoxmsResult: ...
 
 
@@ -1459,6 +1469,7 @@ def summary_survfit(
     scale: Any = 1,
     extend: Any = False,
     rmean: Any | None = None,
+    dosum: Any | None = None,
 ) -> SummarySurvfitResult: ...
 
 
@@ -1470,6 +1481,7 @@ def summary_survfit(
     scale: Any = 1,
     extend: Any = False,
     rmean: Any | None = None,
+    dosum: Any | None = None,
 ) -> SummarySurvfitResult | SummarySurvfitCoxmsResult: ...
 
 
@@ -1480,6 +1492,7 @@ def summary_survfit(
     scale: Any = 1,
     extend: Any = False,
     rmean: Any | None = None,
+    dosum: Any | None = None,
 ) -> SummarySurvfitResult | SummarySurvfitCoxmsResult:
     """R's ``summary.survfit``: the curves at their event times (or at ``times``) and the table.
 
@@ -1488,6 +1501,10 @@ def summary_survfit(
     For a ``survfit.coxph`` object with a curve per newdata row, ``surv``, ``std_err``,
     ``cumhaz``, ``std_chaz``, ``lower`` and ``upper`` are ``time x curve`` matrices and the
     table has a row per curve (per stratum and curve, the strata varying fastest).
+    With requested times, ``dosum=True`` accumulates event, censoring and entry
+    counts between them; ``False`` looks up counts at each preceding curve row.
+    Ordinary curves default to accumulation only for strictly increasing times;
+    multi-state curves sort/deduplicate times and default to accumulation.
     """
 
     if not isinstance(
@@ -1499,13 +1516,18 @@ def summary_survfit(
     extend = _logical(extend, "extend must be TRUE/FALSE")
     scale = _finite_float(scale, "scale")
     rmean_option = _rmean_option(rmean, object)
+    if times is not None and dosum is not None:
+        dosum = _logical(dosum, "dosum must be TRUE/FALSE")
+    multi_counts = True if dosum is None or times is None else dosum
     if isinstance(object, CoxSurvfitMultiStateResult):
         requested = (
             None
             if times is None
             else _float_vector([times] if isinstance(times, int | float) else times, "times")
         )
-        return _summary_coxms(object, requested, censored, scale, extend, rmean_option)
+        return _summary_coxms(
+            object, requested, censored, scale, extend, rmean_option, multi_counts
+        )
     if isinstance(object, SurvfitMultiStateResult):
         engine = _engine_of(object)
         requested = (
@@ -1513,7 +1535,7 @@ def summary_survfit(
             if times is None
             else _float_vector([times] if isinstance(times, int | float) else times, "times")
         )
-        rows = engine.summary(times=requested, censored=censored, extend=extend)
+        rows = engine.summary(times=requested, censored=censored, extend=extend, dosum=multi_counts)
         values, ends, columns = engine.mean_table(scale=scale, rmean=rmean_option)
         labels = [f"{group}, {state}" for state in object.states for group in object.strata_names]
         strata = (
@@ -1557,18 +1579,28 @@ def summary_survfit(
     else:
         engines = [_engine_of(object)]
         strata_names = labels = object.strata_names
-    # survmean's table of survfit0(fit), which R's summary reads, is that of the fit itself
-    tables = [_core.survmean(engine, scale, rmean_option) for engine in engines]
+    # Finite zero-width rectangles do not change the table, so ordinary
+    # summaries can read the original fit without copying it. An infinite
+    # origin needs the actual time-zero row to retain R's Inf-Inf arithmetic.
+    tables = [
+        _core.survmean(
+            engine if math.isfinite(engine.t0) else _core.survfit0(engine),
+            scale,
+            rmean_option,
+        )
+        for engine in engines
+    ]
     if times is None:
         summaries = [_core.summary_survfit(engine, censored=censored) for engine in engines]
     else:
         times = _float_vector([times] if isinstance(times, int | float) else times, "times")
         if not times:
             raise ValueError("no values in times vector")
-        if any(not math.isfinite(value) for value in times):
+        if any(math.isnan(value) for value in times):
             raise ValueError("times contains missing values")
         summaries = [
-            _core.summary_survfit(engine, times=times, extend=extend) for engine in engines
+            _core.summary_survfit(engine, times=times, extend=extend, dosum=dosum)
+            for engine in engines
         ]
     rows = summaries[0]
     strata = None
@@ -1641,6 +1673,70 @@ def _summary_table(
     )
 
 
+def _curve_quantile_probabilities(probs: Any) -> list[float] | np.ndarray:
+    """Numeric probabilities, with R's refusal of logical and missing values."""
+    dtype = getattr(probs, "dtype", None)
+    if _mstate_categories(probs) is not None:
+        raise ValueError("invalid probability")
+    kind = getattr(dtype, "kind", None)
+    is_numeric = getattr(dtype, "is_numeric", None)
+    if (kind is not None and kind not in {"i", "u", "f", "O"}) or (
+        callable(is_numeric) and not is_numeric()
+    ):
+        raise ValueError("invalid probability")
+    if str(dtype).lower() in {
+        "boolean",
+        "string",
+        "utf8",
+        "category",
+        "categorical",
+    } or str(dtype).lower().startswith("period["):
+        raise ValueError("invalid probability")
+    array = _numeric_ndarray(probs)
+    if array is not None:
+        if array.dtype.kind == "b" or np.isnan(array).any():
+            raise ValueError("invalid probability")
+        if ((array < 0.0) | (array > 1.0)).any():
+            raise ValueError("Invalid probability")
+        return array
+    try:
+        values = _scalar_or_vector(probs, "probs")
+        if any(_is_bool_like(value) or isinstance(value, str | bytes) for value in values):
+            raise ValueError("invalid probability")
+        probabilities = _floats_or_nan(values)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid probability") from None
+    if any(math.isnan(value) for value in probabilities):
+        raise ValueError("invalid probability")
+    if any(value < 0.0 or value > 1.0 for value in probabilities):
+        raise ValueError("Invalid probability")
+    return probabilities
+
+
+def _curve_quantile_scale(scale: Any) -> float:
+    """A numeric scalar divisor, retaining R's nonfinite scaling arithmetic."""
+    dtype = getattr(scale, "dtype", None)
+    if scale is None or _mstate_categories(scale) is not None:
+        raise TypeError("scale must be a single numeric value")
+    kind = getattr(dtype, "kind", None)
+    if kind is not None and kind not in {"b", "i", "u", "f", "O"}:
+        raise TypeError("scale must be numeric")
+    if isinstance(scale, str | bytes):
+        raise TypeError("scale must be numeric")
+    values = _scalar_or_vector(scale, "scale")
+    if len(values) != 1:
+        raise TypeError("scale must be a single numeric value")
+    value = values[0]
+    if getattr(value, "ndim", None) == 0 and hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, str | bytes):
+        raise TypeError("scale must be numeric")
+    try:
+        return _float_or_nan(value)
+    except (TypeError, ValueError, OverflowError):
+        raise TypeError("scale must be numeric") from None
+
+
 def quantile_survfit(
     x: Any,
     probs: Any = (0.25, 0.5, 0.75),
@@ -1673,14 +1769,13 @@ def quantile_survfit(
         start_time = 0.0
     else:
         raise TypeError("Must be a survfit object")
-    probs = _quantile_vector(probs, "probs")
-    if any(math.isnan(value) for value in probs):
-        raise ValueError("invalid probability")
-    if any(value < 0.0 or value > 1.0 for value in probs):
-        raise ValueError("Invalid probability")
+    probs = _curve_quantile_probabilities(probs)
     conf_int = _logical(conf_int, "conf.int must be TRUE/FALSE")
-    scale = _finite_float(scale, "scale")
-    tolerance = None if tolerance is None else _finite_float(tolerance, "tolerance")
+    scale = _curve_quantile_scale(scale)
+    if tolerance is not None:
+        tolerance = float(tolerance)
+        if math.isnan(tolerance):
+            raise ValueError("tolerance must not be NaN")
     results = [
         _core.quantile_survfit(
             engine,
@@ -1899,12 +1994,19 @@ def survfit_confint(
         raise TypeError('argument "conf.type" is missing, with no default')
     if not isinstance(conf_type, str) or conf_type not in _CONF_TYPES or conf_type == "none":
         raise ValueError("invalid conf.int type")
-    p_values = _float_vector(p, "p")
 
-    def recycled(values: Any, name: str) -> list[float]:
+    def numeric_vector(values: Any, name: str) -> list[float] | np.ndarray:
+        array = _numeric_ndarray(values)
+        return array if array is not None else _floats_or_nan(_scalar_or_vector(values, name))
+
+    p_values = numeric_vector(p, "p")
+
+    def recycled(values: Any, name: str) -> list[float] | np.ndarray:
         # R's arithmetic recycles a single standard error over p
-        vector = _float_vector(_scalar_or_vector(values, name), name)
-        return vector * len(p_values) if len(vector) == 1 and len(p_values) != 1 else vector
+        vector = numeric_vector(values, name)
+        if len(vector) == 1 and len(p_values) != 1:
+            return np.full(len(p_values), vector[0], dtype=np.float64)
+        return vector
 
     return _core.survfit_confint(
         p_values,

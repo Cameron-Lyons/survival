@@ -52,9 +52,13 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
     any_tied.then_some(cuts)
 }
 
-/// R's `cuts[findInterval(x, cuts)]`: the largest cut not above `x`, or
-/// `NaN` (R's `NA`) below the first cut.
+/// The largest finite cut not above `x`. Nonfinite endpoints remain unchanged:
+/// applying R's finite-cut indexing to them truncates positive infinity and
+/// drops negative-infinity rows when the resulting zero index is subscripted.
 fn snap(x: f64, cuts: &[f64]) -> f64 {
+    if !x.is_finite() {
+        return x;
+    }
     let index = cuts.partition_point(|&cut| cut <= x);
     if index == 0 {
         f64::NAN
@@ -202,9 +206,22 @@ mod tests {
     }
 
     #[test]
-    fn infinite_times_map_onto_the_last_finite_cut_as_in_r() {
-        let result = aeq_surv(&[1.0, 1.0 + 1e-12, f64::INFINITY], None, None).unwrap();
-        assert_eq!(result.time, vec![1.0, 1.0, 1.0]);
+    fn near_ties_preserve_nonfinite_endpoints_and_row_alignment() {
+        let time = [f64::NEG_INFINITY, 1.0, 1.0 + 1e-12, f64::INFINITY, f64::NAN];
+        let result = aeq_surv(&time, None, None).unwrap();
+        assert_eq!(
+            &result.time[..4],
+            &[f64::NEG_INFINITY, 1.0, 1.0, f64::INFINITY]
+        );
+        assert!(result.time[4].is_nan());
+        let result = aeq_surv(
+            &[f64::NEG_INFINITY, 0.0, 1.0],
+            Some(&[1.0, 1.0 + 1e-12, f64::INFINITY]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.time, vec![f64::NEG_INFINITY, 0.0, 1.0]);
+        assert_eq!(result.time2, Some(vec![1.0, 1.0, f64::INFINITY]));
     }
 
     #[test]

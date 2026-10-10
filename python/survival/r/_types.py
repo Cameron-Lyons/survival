@@ -483,6 +483,12 @@ class StrataFactor:
     labels: list[str | None]
     counts: list[int]
 
+    @property
+    def categories(self) -> tuple[str, ...]:
+        """Declared levels for factor consumers, returned as an immutable snapshot."""
+
+        return tuple(self.levels)
+
     def __iter__(self):
         return iter(self.labels)
 

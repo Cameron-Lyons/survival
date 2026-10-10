@@ -19,13 +19,14 @@
 //! [`cox_survfit_baseline`] for one stratum and [`step_values_at`] for reading
 //! a curve at given times.
 
+use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::internal::step::{find_interval, sort_unique, step_at};
 use crate::internal::validation::{
-    ValidationError, validate_binary_f64, validate_finite, validate_length, validate_non_negative,
-    validate_positive, validate_sorted,
+    ValidationError, validate_binary_f64, validate_binary_i32, validate_finite, validate_length,
+    validate_non_negative, validate_positive, validate_sorted,
 };
 use ndarray::{Array1, Array2, ArrayView2};
 use pyo3::prelude::*;
@@ -106,6 +107,29 @@ impl AgsurvData<'_> {
         Ok(())
     }
 
+    /// Standalone callers supply raw inputs; fitted-model row kernels receive
+    /// data already checked by the fitting boundary and retain R's numeric
+    /// behavior for risks produced by exponentiation.
+    fn validate_values(&self) -> SurvivalResult<()> {
+        validate_finite(self.stop, "stop")?;
+        validate_binary_i32(self.status, "status")?;
+        if let Some(start) = self.start {
+            validate_finite(start, "start")?;
+            validate_intervals(start, self.stop)?;
+        }
+        if self.x.iter().any(|value| !value.is_finite()) {
+            return Err(SurvivalError::invalid_input("x must be finite"));
+        }
+        if let Some(means) = self.means {
+            validate_finite(means, "means")?;
+        }
+        validate_finite(self.weights, "weights")?;
+        validate_non_negative(self.weights, "weights")?;
+        validate_finite(self.risk, "risk")?;
+        validate_positive(self.risk, "risk")?;
+        Ok(())
+    }
+
     /// `x[i, k] - means[k]`.
     fn centered(&self, i: usize, k: usize) -> f64 {
         self.x[(i, k)] - self.means.map_or(0.0, |means| means[k])
@@ -150,6 +174,32 @@ pub struct AgsurvCurve {
     /// Kalbfleisch-Prentice survival increments (`survtype == 1` only).
     #[pyo3(get)]
     pub surv: Option<Vec<f64>>,
+}
+
+impl AgsurvCurve {
+    /// The baseline is publicly mutable in Rust. Expansion needs aligned
+    /// vectors and a sorted finite time grid even when it came from `agsurv`.
+    fn validate(&self) -> SurvivalResult<()> {
+        let ntime = self.time.len();
+        for (name, length) in [
+            ("n_event", self.n_event.len()),
+            ("n_risk", self.n_risk.len()),
+            ("n_censor", self.n_censor.len()),
+            ("hazard", self.hazard.len()),
+            ("cumhaz", self.cumhaz.len()),
+            ("varhaz", self.varhaz.len()),
+            ("ndeath", self.ndeath.len()),
+            ("xbar", self.xbar.nrows()),
+        ] {
+            validate_length(ntime, length, name)?;
+        }
+        if let Some(surv) = &self.surv {
+            validate_length(ntime, surv.len(), "surv")?;
+        }
+        validate_finite(&self.time, "time")?;
+        validate_sorted(&self.time, "time")?;
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -276,6 +326,7 @@ pub fn agsurv(
     vartype: CoxSurvType,
 ) -> SurvivalResult<AgsurvCurve> {
     data.validate()?;
+    data.validate_values()?;
     let rows: Vec<usize> = (0..data.stop.len()).collect();
     Ok(agsurv_of_rows(data, &rows, survtype, vartype))
 }
@@ -540,6 +591,26 @@ pub fn expand_curve(
     risk2: &[f64],
     varmat: Option<&Array2<f64>>,
 ) -> SurvivalResult<CoxSurvCurve> {
+    curve.validate()?;
+    if x2.iter().any(|value| !value.is_finite()) {
+        return Err(SurvivalError::invalid_input("newdata must be finite"));
+    }
+    validate_finite(risk2, "risk2")?;
+    validate_non_negative(risk2, "risk2")?;
+    validate_variance_values(varmat)?;
+    expand_curve_validated(curve, survtype, x2, risk2, varmat)
+}
+
+/// Expansion of internally constructed baselines and checked prediction data.
+/// Fitted models reuse their baselines without scanning their time grids for
+/// every prediction row or subject. The numerical loop is shared unchanged.
+pub(crate) fn expand_curve_validated(
+    curve: &AgsurvCurve,
+    survtype: CoxSurvType,
+    x2: ArrayView2<'_, f64>,
+    risk2: &[f64],
+    varmat: Option<&Array2<f64>>,
+) -> SurvivalResult<CoxSurvCurve> {
     let m = x2.nrows();
     let nvar = curve.xbar.ncols();
     if x2.ncols() != nvar {
@@ -604,6 +675,41 @@ pub struct IndividualInterval<'a> {
 /// `survfit(fit, newdata, id = )`.  The output time axis is shifted so
 /// that the intervals abut (`toffset`).
 pub fn individual_curve(
+    curves: &[AgsurvCurve],
+    survtype: CoxSurvType,
+    intervals: &[IndividualInterval<'_>],
+    varmat: Option<&Array2<f64>>,
+) -> SurvivalResult<CoxSurvCurve> {
+    validate_variance_values(varmat)?;
+    let mut checked = vec![false; curves.len()];
+    for interval in intervals {
+        let curve = curves.get(interval.stratum).ok_or_else(|| {
+            SurvivalError::invalid_input(format!(
+                "interval stratum {} is not a fitted stratum",
+                interval.stratum
+            ))
+        })?;
+        if !checked[interval.stratum] {
+            curve.validate()?;
+            checked[interval.stratum] = true;
+        }
+        if !interval.start.is_finite()
+            || !interval.stop.is_finite()
+            || interval.start > interval.stop
+        {
+            return Err(SurvivalError::invalid_input(
+                "interval requires finite start <= stop",
+            ));
+        }
+        validate_finite(interval.x2, "interval covariates")?;
+        validate_finite(&[interval.risk2], "risk2")?;
+        validate_non_negative(&[interval.risk2], "risk2")?;
+    }
+    individual_curve_validated(curves, survtype, intervals, varmat)
+}
+
+/// Shared numerical loop for internal baselines and checked intervals.
+pub(crate) fn individual_curve_validated(
     curves: &[AgsurvCurve],
     survtype: CoxSurvType,
     intervals: &[IndividualInterval<'_>],
@@ -690,6 +796,13 @@ pub fn individual_curve(
         cumhaz: column(cumhaz),
         std_err: std_err.map(column),
     })
+}
+
+fn validate_variance_values(varmat: Option<&Array2<f64>>) -> SurvivalResult<()> {
+    if varmat.is_some_and(|matrix| matrix.iter().any(|value| !value.is_finite())) {
+        return Err(SurvivalError::invalid_input("varmat must be finite"));
+    }
+    Ok(())
 }
 
 /// Cumulative hazard of a curve just after `t`: `c(0, cumhaz)[findInterval(t, time) + 1]`.

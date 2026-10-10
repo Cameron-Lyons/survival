@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from itertools import chain
 from typing import Any, cast
 
+import numpy as np
+
 from ._coerce import (
+    _is_missing_value,
     _normalize_bool_option,
     _pop_dotted_keyword,
     _scalar_or_vector,
+    _warn_outside_package,
 )
 from ._surv import Surv
 
@@ -62,11 +67,42 @@ def concat_surv(*objects: Surv) -> Surv:
 def _count(value: Any, name: str) -> int:
     try:
         numeric = float(value)
-        if not math.isfinite(numeric) or numeric < 0:
-            raise ValueError
-        return int(numeric)
     except (TypeError, ValueError, OverflowError) as exc:
+        if isinstance(value, str | bytes):
+            _warn_outside_package("NAs introduced by coercion")
         raise ValueError(f"invalid '{name}' argument") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"invalid '{name}' argument")
+    count = int(numeric)
+    if count < 0:
+        raise ValueError(f"invalid '{name}' argument")
+    return count
+
+
+def _rep_values(value: Any, name: str) -> list[Any]:
+    return (
+        [value]
+        if value is None or isinstance(value, str | bytes)
+        else _scalar_or_vector(value, name)
+    )
+
+
+def _rep_scalar(value: Any, name: str) -> float:
+    """R uses the first each/length.out value, with nonfinite values taking the default."""
+
+    values = _rep_values(value, name)
+    try:
+        numeric = float(values[0]) if values and not _is_missing_value(values[0]) else math.nan
+    except (TypeError, ValueError, OverflowError):
+        _warn_outside_package("NAs introduced by coercion")
+        numeric = math.nan
+    if math.isfinite(numeric):
+        _count(numeric, name)
+    else:
+        numeric = math.nan
+    if len(values) != 1:
+        _warn_outside_package(f"first element used of '{name}' argument")
+    return numeric
 
 
 def _scalar(value: Any, name: str) -> float:
@@ -79,6 +115,32 @@ def _scalar(value: Any, name: str) -> float:
         raise ValueError(f"invalid '{name}' argument") from exc
 
 
+def _each_column(column: tuple[Any, ...], each: int) -> tuple[Any, ...]:
+    if each == 0:
+        return ()
+    if each == 1 or not column:
+        return column
+    if len(column) == 1:
+        return column * each
+    # Object storage repeats the original float/int objects without coercing
+    # missing statuses or allocating a new Python float for every copy.
+    return tuple(np.repeat(np.asarray(column, dtype=object), each).tolist())
+
+
+def _repeat_response(x: Surv, operation: Callable[[tuple[Any, ...]], tuple[Any, ...]]) -> Surv:
+    """Repeat immutable normalized columns without an output-sized vector of row indices."""
+
+    return Surv._from_normalized(
+        time=operation(x.time),
+        event=operation(x.event),
+        start=None if x.start is None else operation(x.start),
+        time2=None if x.time2 is None else operation(x.time2),
+        surv_type=x.type,
+        states=x.states,
+        clabel=x.clabel,
+    )
+
+
 def rep_surv(
     x: Surv, times: Any = 1, *, each: Any = 1, length_out: Any = None, **kwargs: Any
 ) -> Surv:
@@ -87,33 +149,54 @@ def rep_surv(
     ``each`` repeats each row before ``times`` repeats the whole sequence (or
     repeats its entries by a vector of counts). ``length_out``/``length.out``
     recycles that sequence to the given length and takes precedence over times.
-    Counts truncate towards zero. Empty responses remain empty.
+    Counts truncate towards zero. Vector each/length arguments use their first
+    element with R's warning; nonfinite or empty values take the default.
+    Empty responses remain empty.
     """
 
     x = _response(x)
     length_out = _pop_dotted_keyword(kwargs, "length.out", "length_out", length_out, None)
     if kwargs:
         raise TypeError(f"rep_surv got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
-    each_value = _scalar(each, "each")
+    # Base R parses length.out before each, including validation and warnings.
+    length = None if length_out is None else _rep_scalar(length_out, "length.out")
+    each_value = _rep_scalar(each, "each")
     each_count = 1 if math.isnan(each_value) else _count(each_value, "each")
     n = len(x)
-    length = None if length_out is None else _scalar(length_out, "length.out")
     if length is not None and not math.isnan(length):
         size = _count(length, "length.out")
         if size and not each_count:
             raise ValueError("invalid 'each' argument")
-        indices = [(index // each_count) % n for index in range(size)] if n and size else []
+        full, remainder = divmod(size, n * each_count) if n and each_count else (0, 0)
+
+        def operation(column: tuple[Any, ...]) -> tuple[Any, ...]:
+            result = _each_column(column, each_count) * full if full else ()
+            if remainder:
+                rows, partial = divmod(remainder, each_count)
+                prefix = _each_column(column[:rows], each_count)
+                if partial:
+                    prefix += (column[rows],) * partial
+                return result + prefix
+            return result
+
     else:
-        counts = [_count(value, "times") for value in _scalar_or_vector(times, "times")]
+        counts = [_count(value, "times") for value in _rep_values(times, "times")]
         if len(counts) == 1:
-            indices = [row for _ in range(counts[0]) for row in range(n) for _ in range(each_count)]
+
+            def operation(column: tuple[Any, ...]) -> tuple[Any, ...]:
+                return _each_column(column, each_count) * counts[0] if counts[0] else ()
+
         elif len(counts) == n * each_count:
-            indices = [
-                index // each_count for index, count in enumerate(counts) for _ in range(count)
-            ]
+            row_counts = np.asarray(counts, dtype=np.intp)
+            if each_count != 1:
+                row_counts = row_counts.reshape(n, each_count).sum(axis=1)
+
+            def operation(column: tuple[Any, ...]) -> tuple[Any, ...]:
+                return tuple(np.repeat(np.asarray(column, dtype=object), row_counts).tolist())
+
         else:
             raise ValueError("invalid 'times' argument")
-    return x.subset(indices)
+    return _repeat_response(x, operation)
 
 
 def rev_surv(x: Surv) -> Surv:

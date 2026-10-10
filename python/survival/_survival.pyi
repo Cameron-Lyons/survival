@@ -9254,9 +9254,10 @@ class SurvfitAJResult:
     def select_states(self, states: Sequence[int]) -> SurvfitAJResult: ...
     def summary(
         self,
-        times: Sequence[float] | None = None,
+        times: ArrayLike | None = None,
         censored: bool = False,
         extend: bool = False,
+        dosum: bool = True,
     ) -> SurvfitAJResult: ...
     def summary_rows(
         self,
@@ -13470,19 +13471,19 @@ def quantile_regression_intervals(
 ) -> QuantileRegressionResult: ...
 def quantile_survfit(
     fit: SurvfitKMResult,
-    probs: Sequence[float] | None = None,
+    probs: ArrayLike | None = None,
     conf_int: bool = True,
     scale: float = 1.0,
     tolerance: float | None = None,
     start_time: float = 0.0,
 ) -> SurvfitQuantiles: ...
 def quantile_survfit_curves(
-    time: Sequence[float],
-    surv: Sequence[float],
-    lower: Sequence[float] | None = None,
-    upper: Sequence[float] | None = None,
+    time: ArrayLike,
+    surv: ArrayLike,
+    lower: ArrayLike | None = None,
+    upper: ArrayLike | None = None,
     strata: Sequence[int] | None = None,
-    probs: Sequence[float] | None = None,
+    probs: ArrayLike | None = None,
     conf_int: bool = True,
     start_time: float = 0.0,
     scale: float = 1.0,
@@ -13553,11 +13554,11 @@ def risk_stratification(
     n_groups: int | None = None,
 ) -> RiskStratificationResult: ...
 def rmst_comparison(
-    time: Sequence[float],
-    status: Sequence[int],
-    group: Sequence[int],
+    time: ArrayLike,
+    status: ArrayLike,
+    group: ArrayLike,
     tau: float,
-    weights: Sequence[float] | None = None,
+    weights: ArrayLike | None = None,
     conf_level: float = 0.95,
 ) -> RmstComparisonResult: ...
 def rmst_optimal_threshold(
@@ -13786,9 +13787,10 @@ def summary_survexp(
 ) -> SurvExpResult: ...
 def summary_survfit(
     fit: SurvfitKMResult,
-    times: Sequence[float] | None = None,
+    times: ArrayLike | None = None,
     censored: bool = False,
     extend: bool = False,
+    dosum: bool | None = None,
 ) -> SurvfitKMResult: ...
 def super_landmark_model(
     event_time: Sequence[float],
@@ -13884,12 +13886,12 @@ def survexp_usr() -> RateTable: ...
 def survfit0(fit: SurvfitKMResult) -> SurvfitKMResult: ...
 def survfit0_aj(fit: SurvfitAJResult) -> SurvfitAJResult: ...
 def survfit_confint(
-    p: Sequence[float],
-    se: Sequence[float],
+    p: ArrayLike,
+    se: ArrayLike,
     logse: bool = True,
     conf_type: str = "log",
     conf_int: float = 0.95,
-    selow: Sequence[float] | None = None,
+    selow: ArrayLike | None = None,
     ulimit: bool = True,
 ) -> ConfidenceBands: ...
 def survfit_matrix(
@@ -14007,15 +14009,15 @@ def survival_meta_analysis(
 ) -> MetaAnalysisResult: ...
 def survmean(fit: SurvfitKMResult, scale: float = 1.0, rmean: str = "common") -> SurvmeanTable: ...
 def survmean_curves(
-    time: Sequence[float],
-    surv: Sequence[float],
-    n_risk: Sequence[float],
-    n_event: Sequence[float],
-    n: Sequence[float],
-    lower: Sequence[float] | None = None,
-    upper: Sequence[float] | None = None,
+    time: ArrayLike,
+    surv: ArrayLike,
+    n_risk: ArrayLike,
+    n_event: ArrayLike,
+    n: ArrayLike,
+    lower: ArrayLike | None = None,
+    upper: ArrayLike | None = None,
     strata: Sequence[int] | None = None,
-    n_id: Sequence[float] | None = None,
+    n_id: ArrayLike | None = None,
     start_time: float = 0.0,
     rmean: str = "common",
     rmean_at: float | None = None,

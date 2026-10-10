@@ -4,7 +4,7 @@
 //! on, and its C kernel `survfitaj` (`src/survfitaj.c`).
 
 use super::survfit_aj_summary::{
-    AJMeanTable, summary_rows, summary_survfit_aj, survmean_aj, survmean_coxms,
+    AJMeanTable, summary_rows, summary_survfit_aj_with_counts, survmean_aj, survmean_coxms,
 };
 use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
 use super::survfit_summary::{RmeanOption, survfit0_aj_rows};
@@ -475,16 +475,20 @@ impl SurvfitAJResult {
         crate::internal::pickle::reduce(py, self)
     }
 
-    #[pyo3(signature=(times=None, censored=false, extend=false))]
+    #[pyo3(signature=(times=None, censored=false, extend=false, dosum=true))]
     fn summary(
         &self,
         py: Python<'_>,
-        times: Option<Vec<f64>>,
+        times: Option<FloatVec>,
         censored: bool,
         extend: bool,
+        dosum: bool,
     ) -> PyResult<Self> {
-        py.detach(|| summary_survfit_aj(self, times.as_deref(), censored, extend))
-            .map_err(Into::into)
+        let times = times.map(FloatVec::into_inner);
+        py.detach(|| {
+            summary_survfit_aj_with_counts(self, times.as_deref(), censored, extend, dosum)
+        })
+        .map_err(Into::into)
     }
 
     #[pyo3(signature=(scale=1.0, rmean="common"))]
@@ -1329,18 +1333,21 @@ pub fn survfitaj(
         }
         let sort1 = ordered_subset(&keep, &time1, single);
         let sort2 = ordered_subset(&keep, &time, single);
-        // reporting times, survival 3.8-11's rule (the fixture version)
-        let mut utime: Vec<f64> = if entry {
-            keep.iter()
-                .filter(|&&i| !(position[i] == 0 && stat2[i] == 0))
-                .flat_map(|&i| [time1[i], time[i]])
-                .collect()
-        } else {
-            keep.iter()
-                .filter(|&&i| !(position[i] < 2 && stat2[i] == 0))
-                .map(|&i| time[i])
-                .collect()
-        };
+        // R survival 3.8-12 reports transitions and final stops. With entry
+        // counts, include subject starts within each curve as well.
+        // Censored continuation boundaries do not add rows.
+        let mut utime: Vec<f64> = keep
+            .iter()
+            .filter(|&&i| stat2[i] != 0 || position[i] > 1)
+            .map(|&i| time[i])
+            .collect();
+        if entry {
+            utime.extend(
+                keep.iter()
+                    .filter(|&&i| position[i] & 1 == 1)
+                    .map(|&i| time1[i]),
+            );
+        }
         utime.sort_by(f64::total_cmp);
         utime.dedup();
         let utime: Vec<f64> = if options.time0 {
