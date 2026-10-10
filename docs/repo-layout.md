@@ -43,6 +43,16 @@ Guidelines used in the current layout:
   makes `?` work there). Results crossing into Python are typed `#[pyclass]`
   structs with named fields.
 
+The Cox model's `regression/coxph.rs` is a facade over `coxph/types.rs`,
+`fitting.rs`, `prediction.rs`, `curves.rs`, and `bindings.rs`. Numerical methods
+live separately from Python argument conversion and result packaging; existing
+Rust exports and Python class names remain the compatibility boundary. Result
+fields retain their serialization order. The optimizer builder accepts borrowed
+slices and strided matrix views, then gathers owned sorted data once. Breslow and
+Efron evaluations reuse predictor, risk and risk-set buffers, resetting them for
+every trial coefficient vector, including rejected steps. Exact evaluators keep
+their existing numerical paths.
+
 ### Feature flags and the PyO3 shim
 
 The crate compiles with and without the `python` feature. Without it,
@@ -218,6 +228,25 @@ imports from the ones above it):
   survobrien, survcheck, nsk, pspline; `_aareg`; `_cch`
 - `_yates`: population marginal means, joint-variable contrasts, and SAS type
   III tests; `_yates_model`: adapter for externally fitted linear models
+
+Ordinary right/counting Cox formula fits use owned float64 array designs for
+numeric terms and interactions, reusing the prediction design builder. Factors,
+matrix terms, penalties, time transforms and multistate responses retain their
+row-list fitting paths. Public model matrices and fitted design getters remain
+lists. Explicit initial-value checks retain scalar accumulation and error
+behavior. Other model-frame consumers retain their existing list designs.
+
+`benches/python/bench_formula_cox_fit.py` measures complete formula and native
+Cox fits. Run a saved package and the current package in separate processes by
+selecting `PYTHONPATH`; use `--compare` with the earlier run's NPZ file to require
+identical fitted values, prediction errors, residuals and baseline hazards.
+Build both packages with the same toolchain and release settings and pin them
+to the same CPU when comparing timings. The
+[Cox architecture measurements](benchmarks/cox-architecture-2026-10-10.json)
+record raw samples and compatibility checks: complete numeric formula fits took
+31–60% less time at 10,000 rows and 43–55% less at 100,000 rows on this machine.
+These measurements cover unstratified right-censored Efron fits. Counting,
+exact and special-term behavior is checked separately by regression tests.
 
 `survival.r` has no stub: the inline annotations of its modules are the typed
 surface (the package ships `py.typed`), so a signature is changed in one place.

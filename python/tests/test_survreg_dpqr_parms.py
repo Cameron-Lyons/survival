@@ -174,3 +174,53 @@ def test_multiplication_missing_kinds_follow_stock_operand_lengths(interface, un
         result = query()
     assert all(math.isnan(value) for value in result)
     assert [is_na(value) for value in result] == ([False, True, True] if unequal else [True, False])
+
+
+@pytest.mark.parametrize("interface", ["native", "facade", "query_object"])
+@pytest.mark.parametrize(
+    ("distribution", "parms"),
+    [pytest.param("gaussian", None, id="gaussian"), pytest.param("t", [4, 5], id="t-recycled")],
+)
+@pytest.mark.parametrize(
+    ("probabilities", "means", "expected_na", "warning_count"),
+    [
+        pytest.param([NA_REAL, math.nan], [math.nan, NA_REAL], [True, False], 0, id="equal"),
+        pytest.param(
+            [NA_REAL, math.nan], [math.nan, NA_REAL, 0], [False, True, True], 1, id="longer-mean"
+        ),
+        pytest.param(
+            [NA_REAL, math.nan, NA_REAL],
+            [math.nan, NA_REAL],
+            [False, True, False],
+            1,
+            id="longer-query",
+        ),
+        pytest.param([NA_REAL, math.nan], [math.nan], [True, False], 0, id="scalar-mean"),
+        pytest.param([NA_REAL], [math.nan, NA_REAL], [False, True], 0, id="scalar-query"),
+    ],
+)
+def test_addition_missing_kinds_follow_stock_operand_lengths(
+    interface, distribution, parms, probabilities, means, expected_na, warning_count
+):
+    # Independent stock survival 3.8-12: equal-length addition and scalar
+    # means preserve the scaled quantile's NA/NaN kind; unequal nonscalar
+    # means supply their own kind. qt(NA, c(4, 5)) first expands to c(NA, NA),
+    # making the scalar-query Student-t addition equal-length too.
+    if distribution == "t" and len(probabilities) == 1:
+        expected_na = [True, True]
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        if interface == "query_object":
+            result = core.SurvregDistribution.for_query(distribution, parms).quantile_values(
+                probabilities, means, [1]
+            )
+        else:
+            api = core if interface == "native" else r
+            result = api.qsurvreg(probabilities, means, [1], distribution, parms)
+
+    assert [str(warning.message) for warning in recorded] == [
+        "longer object length is not a multiple of shorter object length"
+    ] * warning_count
+    assert all(math.isnan(value) for value in result)
+    assert [is_na(value) for value in result] == expected_na

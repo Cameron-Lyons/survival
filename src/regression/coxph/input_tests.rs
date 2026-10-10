@@ -1,4 +1,6 @@
 use super::*;
+use crate::error::SurvivalResult;
+use ndarray::Array2;
 
 fn training_data() -> CoxphData {
     CoxphData::try_new(
