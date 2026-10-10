@@ -3,8 +3,7 @@
 //! `survdiff2` (`src/survdiff2.c`), including the one-sample test against
 //! expected survival probabilities.
 
-use super::survfit_confint::ConfType;
-use super::survfitkm::{SurvfitKMData, SurvfitKMOptions, SurvfitKMResult, strata_index, survfitkm};
+use super::survfitkm::strata_index;
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::aeq_counting;
@@ -12,7 +11,6 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
-use crate::internal::step::find_interval;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
 };
@@ -114,26 +112,52 @@ impl SurvDiffResult {
     }
 }
 
-/// The Kaplan-Meier curve of one stratum as `survdiff2.c` uses it for the
-/// G-rho weights: a left-continuous function, `S(t-)`, read off the
-/// `survfitkm` curve of the stratum.
-struct LeftContinuousKM<'a> {
-    time: &'a [f64],
-    surv: &'a [f64],
-}
-
-impl LeftContinuousKM<'_> {
-    fn at(&self, t: f64) -> f64 {
-        match find_interval(self.time, t, true) {
-            0 => 1.0,
-            k => self.surv[k - 1],
+/// The left-continuous KM values in this stratum's existing stop-time order.
+/// The reverse test sweep reads them directly, as in R's `survdiff2.c`.
+/// Counting-process risk sets exclude starts at the current event time.
+fn left_continuous_km(
+    rows: &[usize],
+    entries_desc: &[usize],
+    start: Option<&[f64]>,
+    time: &[f64],
+    status: &[i32],
+) -> Vec<f64> {
+    let n = rows.len();
+    let mut kaplan = vec![1.0; n];
+    let mut km = 1.0;
+    let mut entered = 0;
+    let mut i = 0;
+    while i < n {
+        let current = time[rows[i]];
+        let nrisk = if let Some(start) = start {
+            while entered < n && start[entries_desc[n - 1 - entered]] < current {
+                entered += 1;
+            }
+            // Every row that already ended also entered before this time.
+            entered - i
+        } else {
+            n - i
+        };
+        let mut end = i;
+        let mut deaths = 0.0;
+        while end < n && time[rows[end]] == current {
+            kaplan[end] = km;
+            deaths += f64::from(status[rows[end]]);
+            end += 1;
         }
+        if deaths > 0.0 {
+            let nrisk = nrisk as f64;
+            // Keep the multiplication order used by the shared KM engine.
+            km *= (nrisk - deaths) / nrisk;
+        }
+        i = end;
     }
+    kaplan
 }
 
 /// Port of `survdiff2` (`src/survdiff2.c`) for one stratum, given its rows
-/// ordered by `(time, -status)` and, for `rho != 0`, its Kaplan-Meier
-/// curve.  Accumulates into `obs[group][stratum]`, `exp[group][stratum]`
+/// ordered by `(time, -status)`. For `rho != 0`, reuse this ordering to
+/// compute Kaplan-Meier weights. Accumulates into `obs[group][stratum]`, `exp[group][stratum]`
 /// and `var`.
 #[allow(clippy::too_many_arguments)]
 fn survdiff_stratum(
@@ -144,7 +168,6 @@ fn survdiff_stratum(
     status: &[i32],
     group: &[usize],
     rho: f64,
-    kaplan: Option<LeftContinuousKM<'_>>,
     obs: &mut [Vec<f64>],
     exp: &mut [Vec<f64>],
     var: &mut Array2<f64>,
@@ -160,6 +183,7 @@ fn survdiff_stratum(
         }
         None => Vec::new(),
     };
+    let kaplan = (rho != 0.0).then(|| left_continuous_km(rows, &entries_desc, start, time, status));
 
     // Walk backwards so risk sets accumulate.
     let mut risk = vec![0.0; ngroup];
@@ -169,7 +193,7 @@ fn survdiff_stratum(
         let current = time[rows[i - 1]];
         // the G-rho weight is the left-continuous Kaplan-Meier, S(t-)^rho
         let wt = match &kaplan {
-            Some(kaplan) => kaplan.at(current).powf(rho),
+            Some(kaplan) => kaplan[i - 1].powf(rho),
             None => 1.0,
         };
         let mut deaths = 0.0;
@@ -243,37 +267,11 @@ fn survdiff_chisq(
     Ok((chisq, df))
 }
 
-/// `survfit(Surv(...) ~ strata)` on the (already binned) data: the
-/// Kaplan-Meier curves the G-rho weights are read from.
-fn stratum_curves(
-    start: Option<&[f64]>,
-    time: &[f64],
-    status: &[i32],
-    stratum: &[usize],
-) -> SurvivalResult<SurvfitKMResult> {
-    let data = SurvfitKMData::try_new(
-        start.map(<[f64]>::to_vec),
-        time.to_vec(),
-        status.to_vec(),
-        None,
-        Some(stratum.iter().map(|&s| s as i32).collect()),
-        None,
-        None,
-    )?;
-    let options = SurvfitKMOptions {
-        se_fit: false,
-        conf_type: ConfType::None,
-        timefix: false,
-        ..SurvfitKMOptions::default()
-    };
-    survfitkm(&data, &options)
-}
-
 /// Port of `survdiff` (`R/survdiff.R`) for the k-sample test.
 ///
 /// `rho = 0` is the log-rank test, `rho = 1` the Peto & Peto modification
 /// of the Gehan-Wilcoxon test, whose weights are the left-continuous
-/// Kaplan-Meier curve of each stratum ([`survfitkm`]).
+/// Kaplan-Meier curve of each stratum.
 pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
     data.validate()?;
     if !rho.is_finite() {
@@ -292,18 +290,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     }
     let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
     let nstrat = strata_levels.len();
-    let kaplan = if rho == 0.0 {
-        None
-    } else {
-        Some(stratum_curves(
-            start.as_deref(),
-            &time,
-            &data.status,
-            &stratum,
-        )?)
-    };
-    let curve_ranges = kaplan.as_ref().map(SurvfitKMResult::curve_ranges);
-
     // the rows of each stratum in order(strat, time, -status): one pass
     // to bucket them, then a sort per stratum; sorting (time, -status,
     // row) keys rather than indices keeps the comparisons local in memory
@@ -336,16 +322,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     let mut var = Array2::zeros((ngroup, ngroup));
     let strata_counts: Vec<usize> = rows_by_stratum.iter().map(Vec::len).collect();
     for (s, rows) in rows_by_stratum.iter().enumerate() {
-        let curve = kaplan
-            .as_ref()
-            .zip(curve_ranges.as_ref())
-            .map(|(km, ranges)| {
-                let range = ranges[s].clone();
-                LeftContinuousKM {
-                    time: &km.time[range.clone()],
-                    surv: &km.surv[range],
-                }
-            });
         survdiff_stratum(
             rows,
             s,
@@ -354,7 +330,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
             &data.status,
             &group,
             rho,
-            curve,
             &mut obs,
             &mut exp,
             &mut var,
@@ -618,6 +593,39 @@ mod tests {
         .unwrap();
         assert_eq!(result.chisq, 0.0);
         assert_eq!(result.df, 0);
+    }
+
+    #[test]
+    fn weighted_tests_ignore_a_stratum_without_events() {
+        for counting in [false, true] {
+            let event_data = SurvdiffData::try_new(
+                counting.then(|| vec![0.0, 0.0, 1.0, 2.0]),
+                vec![1.0, 2.0, 3.0, 4.0],
+                vec![1, 1, 0, 1],
+                vec![0, 1, 0, 1],
+                None,
+            )
+            .unwrap();
+            let mixed_data = SurvdiffData::try_new(
+                counting.then(|| vec![0.0, 0.0, 1.0, 2.0, 0.0, 1.0]),
+                vec![1.0, 2.0, 3.0, 4.0, 2.0, 5.0],
+                vec![1, 1, 0, 1, 0, 0],
+                vec![0, 1, 0, 1, 0, 1],
+                Some(vec![7, 7, 7, 7, 9, 9]),
+            )
+            .unwrap();
+            for rho in [-1.0, 0.25, 1.0] {
+                let event = survdiff(&event_data, rho, false).unwrap();
+                let mixed = survdiff(&mixed_data, rho, false).unwrap();
+                for group in 0..2 {
+                    assert_eq!(mixed.obs[group], vec![event.obs[group][0], 0.0]);
+                    assert_eq!(mixed.exp[group], vec![event.exp[group][0], 0.0]);
+                }
+                assert_eq!(mixed.var, event.var);
+                assert_eq!(mixed.chisq, event.chisq);
+                assert_eq!(mixed.pvalue, event.pvalue);
+            }
+        }
     }
 
     #[test]

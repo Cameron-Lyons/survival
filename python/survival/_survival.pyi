@@ -9940,6 +9940,7 @@ class SurvregDistribution:
         state: bytes,
         callbacks: dict[str, Any] | None,
         transform: dict[str, Any] | None,
+        query_parms: str | None = None,
     ) -> SurvregDistribution: ...
     def cdf_values(self, q: ArrayLike, mean: ArrayLike, scale: ArrayLike) -> list[float]: ...
     @staticmethod
@@ -9957,6 +9958,13 @@ class SurvregDistribution:
         scale: float | None = None,
     ) -> SurvregDistribution: ...
     def dtest(self) -> list[str]: ...
+    @staticmethod
+    def for_query(
+        name: str,
+        parms: ArrayLike | None = None,
+        *,
+        _parms_null: bool = False,
+    ) -> SurvregDistribution: ...
     @staticmethod
     def from_callbacks(
         name: str,
@@ -9982,6 +9990,12 @@ class SurvregDistribution:
     ) -> list[float]: ...
     def variance(self) -> float: ...
     def with_parms(self, parms: ArrayLike) -> SurvregDistribution: ...
+    def with_query_parms(
+        self,
+        parms: ArrayLike,
+        *,
+        _parms_null: bool = False,
+    ) -> SurvregDistribution: ...
     def with_transform(self, trans: Any, dtrans: Any, itrans: Any) -> SurvregDistribution: ...
     @property
     def family(self) -> SurvregFamily: ...
@@ -11365,7 +11379,8 @@ def aggregate_survfit(
     surv: ArrayLike | None = None,
     pstate: ArrayLike | None = None,
     by: Sequence[GroupingFactor] | None = None,
-    fun: str = "mean",
+    fun: str | Callable[[NDArray[np.float64]], float | np.number[Any] | NDArray[Any]] | None = None,
+    **_kwargs: Any,
 ) -> AggregateSurvfitResult: ...
 def aggregate_survshap(
     shap_values: Sequence[Sequence[Sequence[float]]],

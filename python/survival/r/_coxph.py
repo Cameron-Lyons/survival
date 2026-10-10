@@ -460,6 +460,7 @@ def _time_transform_design(
             "penalty": value.penalty,
             "penalty_names": value.column_names,
             "exact_names": value.column_names is not None,
+            "levels": getattr(value, "levels", ()),
         }
     metadata = value if isinstance(value, Mapping) and "_survival_tt_kind" in value else {}
     source = metadata.get("values", value)
@@ -559,6 +560,7 @@ def _time_transform_design(
                 (term.column,),
                 names,
                 penalty,
+                levels=tuple(metadata.get("levels", ())),
                 report=metadata.get("report"),
                 controller_history=metadata.get("history"),
                 matrix_names=matrix_names,

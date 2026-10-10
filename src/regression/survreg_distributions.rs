@@ -14,9 +14,8 @@
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{dnorm, dt, erf, erfc, pnorm, pt, qnorm, qt};
 use crate::internal::match_arg::match_arg;
-use crate::internal::validation::{validate_equal_len, validate_finite, validate_positive};
 use crate::regression::survreg_callbacks::{
-    RuntimeCallback, SurvregCallbacks, SurvregTransformCallbacks, callback_serde,
+    QueryParms, RuntimeCallback, SurvregCallbacks, SurvregTransformCallbacks, callback_serde,
 };
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -143,6 +142,8 @@ pub struct SurvregDistribution {
     /// the `t` family, empty otherwise.
     #[pyo3(get)]
     pub parms: Vec<f64>,
+    #[serde(skip)]
+    pub(crate) query_parms: QueryParms,
     #[serde(with = "callback_serde")]
     pub(crate) callbacks: Option<RuntimeCallback<dyn SurvregCallbacks>>,
     #[serde(with = "callback_serde")]
@@ -268,13 +269,22 @@ impl SurvregDistribution {
     /// The lookup of `dsurvreg`/`psurvreg`/`qsurvreg`/`rsurvreg`,
     /// `survreg.distributions[[casefold(distribution)]]`: an exact name after
     /// case folding (`"Weibull"` is found, the prefix `"weib"` is not).
-    fn lookup(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
+    pub fn for_query(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
         let key = name.to_lowercase();
         let index = BUILTIN_DISTRIBUTIONS
             .iter()
             .position(|(builtin, ..)| *builtin == key)
             .ok_or_else(|| invalid("Distribution not found"))?;
-        Self::builtin(index, parms)
+        let mut result = Self::builtin(index, None)?;
+        if result.family == SurvregFamily::T {
+            result.parms = parms.unwrap_or_default().to_vec();
+            result.query_parms = if parms.is_some() {
+                QueryParms::Values
+            } else {
+                QueryParms::Missing
+            };
+        }
+        Ok(result)
     }
 
     /// Entry `index` of `survreg.distributions` with the `parms` handling of
@@ -304,6 +314,7 @@ impl SurvregDistribution {
             transform,
             scale,
             parms,
+            query_parms: QueryParms::Values,
             callbacks: None,
             transform_callbacks: None,
         };
@@ -332,6 +343,7 @@ impl SurvregDistribution {
             transform,
             scale,
             parms,
+            query_parms: QueryParms::Values,
             callbacks: None,
             transform_callbacks: None,
         }
@@ -615,7 +627,7 @@ impl SurvregDistribution {
 
     /// `density(z, parms)[, 3]`: `f(z)`, skipping the other columns where
     /// they cost more than `f` itself.
-    fn base_pdf(&self, z: f64) -> SurvivalResult<f64> {
+    pub(crate) fn base_pdf(&self, z: f64) -> SurvivalResult<f64> {
         Ok(match self.family {
             SurvregFamily::Custom => self.density(z)?.pdf,
             SurvregFamily::Gaussian => dnorm(z, false),
@@ -626,7 +638,7 @@ impl SurvregDistribution {
 
     /// `density(z, parms)[, 1]`: `F(z)`, skipping the other columns where
     /// they cost more than `F` itself.
-    fn base_cdf(&self, z: f64) -> SurvivalResult<f64> {
+    pub(crate) fn base_cdf(&self, z: f64) -> SurvivalResult<f64> {
         Ok(match self.family {
             SurvregFamily::Custom => self.density(z)?.cdf,
             SurvregFamily::Gaussian => pnorm(z, true, false),
@@ -721,36 +733,41 @@ impl SurvregDistribution {
     }
 
     /// `dsurvreg(x, mean, scale, distribution, parms)` for one value.
+    /// Vector parameter views must reduce to exactly one result.
     pub fn pdf(&self, x: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
-        let (tx, dx) = if self.transform_callbacks.is_some() {
-            (
-                self.transform_values(&[x])?[0],
-                self.transform_derivatives(&[x])?[0],
-            )
+        if self.simple_builtin_query() && self.transform_callbacks.is_none() {
+            self.query_probability_one(x, mean, scale, true, 1)
         } else {
-            (self.transform.apply(x)?, self.transform.derivative(x)?)
-        };
-        Ok(self.base_pdf((tx - mean) / scale)? * dx / scale)
+            single_query_value(self.pdf_values(&[x], &[mean], &[scale])?)
+        }
     }
 
     /// `psurvreg(q, mean, scale, distribution, parms)` for one value.
     pub fn cdf(&self, q: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
-        let tq = if self.transform_callbacks.is_some() {
-            self.transform_values(&[q])?[0]
+        if self.simple_builtin_query() && self.transform_callbacks.is_none() {
+            self.query_probability_one(q, mean, scale, false, 1)
         } else {
-            self.transform.apply(q)?
-        };
-        self.base_cdf((tq - mean) / scale)
+            single_query_value(self.cdf_values(&[q], &[mean], &[scale])?)
+        }
     }
 
     /// `qsurvreg(p, mean, scale, distribution, parms)` for one value.
     pub fn quantile_at(&self, p: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
-        let z = self.quantile(p)? * scale + mean;
-        if self.transform_callbacks.is_some() {
-            Ok(self.inverse_values(&[z])?[0])
+        if self.simple_builtin_query() && self.transform_callbacks.is_none() {
+            self.query_quantile_at_one(p, mean, scale)
         } else {
-            self.transform.inverse(z)
+            single_query_value(self.quantile_values(&[p], &[mean], &[scale])?)
         }
+    }
+}
+
+fn single_query_value(values: Vec<f64>) -> SurvivalResult<f64> {
+    if values.len() == 1 {
+        Ok(values[0])
+    } else {
+        Err(invalid(
+            "a scalar distribution query requires exactly one result",
+        ))
     }
 }
 
@@ -761,37 +778,12 @@ pub fn survreg_dtest(distribution: &SurvregDistribution) -> Vec<String> {
     distribution.dtest()
 }
 
-/// Shared argument checking of `dsurvreg`/`psurvreg`/`qsurvreg`: `mean` and
-/// `scale` must be finite, positive scales, and either match the length of
-/// the values or be a single number that recycles.
-pub(crate) fn recycled<'a>(
-    values: &'a [f64],
-    name: &str,
-    n: usize,
-) -> SurvivalResult<impl Fn(usize) -> f64 + 'a> {
-    if values.len() != 1 {
-        validate_equal_len(&[("x", n), (name, values.len())])?;
-    }
-    validate_finite(values, name)?;
-    let single = values.len() == 1;
-    Ok(move |index: usize| if single { values[0] } else { values[index] })
-}
+#[cfg(feature = "python")]
+use crate::regression::survreg_callbacks::python::dpqr_python_warning;
 
-pub(crate) fn distribution_values(
-    values: &[f64],
-    mean: &[f64],
-    scale: &[f64],
-    distribution: &SurvregDistribution,
-    f: impl Fn(&SurvregDistribution, f64, f64, f64) -> SurvivalResult<f64>,
-) -> SurvivalResult<Vec<f64>> {
-    let mean = recycled(mean, "mean", values.len())?;
-    validate_positive(scale, "scale")?;
-    let scale = recycled(scale, "scale", values.len())?;
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, &value)| f(distribution, value, mean(index), scale(index)))
-        .collect()
+#[cfg(not(feature = "python"))]
+fn dpqr_python_warning(_: crate::regression::survreg_callbacks::DpqrWarning) -> PyResult<()> {
+    Ok(())
 }
 
 /// `dsurvreg(x, mean, scale, distribution, parms)`: the density of the
@@ -805,14 +797,8 @@ pub fn dsurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
-    Ok(distribution_values(
-        &x,
-        &mean,
-        &scale,
-        &distribution,
-        |d, x, m, s| d.pdf(x, m, s),
-    )?)
+    let distribution = SurvregDistribution::for_query(distribution, parms.as_deref())?;
+    distribution.pdf_values_with_warnings(&x, &mean, &scale, &mut dpqr_python_warning)
 }
 
 /// `psurvreg(q, mean, scale, distribution, parms)`: the distribution function.
@@ -825,14 +811,8 @@ pub fn psurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
-    Ok(distribution_values(
-        &q,
-        &mean,
-        &scale,
-        &distribution,
-        |d, q, m, s| d.cdf(q, m, s),
-    )?)
+    let distribution = SurvregDistribution::for_query(distribution, parms.as_deref())?;
+    distribution.cdf_values_with_warnings(&q, &mean, &scale, &mut dpqr_python_warning)
 }
 
 /// `qsurvreg(p, mean, scale, distribution, parms)`: the quantile function.
@@ -845,14 +825,8 @@ pub fn qsurvreg(
     distribution: &str,
     parms: Option<Vec<f64>>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
-    Ok(distribution_values(
-        &p,
-        &mean,
-        &scale,
-        &distribution,
-        |d, p, m, s| d.quantile_at(p, m, s),
-    )?)
+    let distribution = SurvregDistribution::for_query(distribution, parms.as_deref())?;
+    distribution.quantile_values_with_warnings(&p, &mean, &scale, &mut dpqr_python_warning)
 }
 
 /// `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`.
@@ -871,8 +845,8 @@ pub fn rsurvreg(
     parms: Option<Vec<f64>>,
     seed: Option<i32>,
 ) -> PyResult<Vec<f64>> {
-    let distribution = SurvregDistribution::lookup(distribution, parms.as_deref())?;
-    Ok(distribution.sample(n, &mean, &scale, seed)?)
+    let distribution = SurvregDistribution::for_query(distribution, parms.as_deref())?;
+    distribution.sample_with_warnings(n, &mean, &scale, seed, &mut dpqr_python_warning)
 }
 
 #[cfg(test)]
@@ -1116,10 +1090,10 @@ mod tests {
 
     #[test]
     fn dpq_reject_bad_arguments() {
-        assert!(dsurvreg(vec![1.0], vec![0.0, 1.0], vec![1.0], "weibull", None).is_err());
-        assert!(dsurvreg(vec![1.0], vec![0.0], vec![0.0], "weibull", None).is_err());
-        assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", None).is_ok());
-        assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", Some(vec![1.0])).is_err());
+        assert!(dsurvreg(vec![1.0], vec![0.0, 1.0], vec![1.0], "weibull", None).is_ok());
+        assert!(dsurvreg(vec![1.0], vec![0.0], vec![0.0], "weibull", None).is_ok());
+        assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", None).is_err());
+        assert!(qsurvreg(vec![0.5], vec![0.0], vec![1.0], "t", Some(vec![1.0])).is_ok());
     }
 
     #[test]

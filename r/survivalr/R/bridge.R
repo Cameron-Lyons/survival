@@ -1053,6 +1053,16 @@ attrassign <- function(object, tt) {
   }
   frame <- as.data.frame.survival_py_survfit(object, optional = TRUE)
 
+  # Repeated display names identify distinct stratum blocks. Keep their unique
+  # keys while accumulating summary rows, then restore the original labels.
+  display_labels <- if (.is_cox_curves(object)) .result_field(object, "strata_labels") else NULL
+  if (!is.null(display_labels) && "strata" %in% names(frame)) {
+    blocks <- .result_field(object, "strata")
+    internal_labels <- names(blocks)
+    frame$strata <- rep(rep(internal_labels, as.integer(unlist(blocks, use.names = FALSE))),
+      times = as.integer(.result_field(object, "ncurve")))
+  }
+
   if (!has_times) {
     if (!censored && "n.event" %in% names(frame)) {
       frame <- .survival_py_summary_event_frame(frame)
@@ -1093,6 +1103,15 @@ attrassign <- function(object, tt) {
 
   if ("time" %in% names(frame) && scale != 1) {
     frame$time <- frame$time / scale
+  }
+  if (!is.null(display_labels) && "strata" %in% names(frame)) {
+    frame$strata <- as.character(display_labels)[match(as.character(frame$strata), internal_labels)]
+  }
+  if (.is_cox_curves(object)) {
+    if (isTRUE(.result_field(object, "logse")) && "std.err" %in% names(frame))
+      frame$std.err <- frame$std.err * frame$surv
+    if ("strata" %in% names(frame)) frame$strata <- factor(frame$strata,
+      levels = unique(as.character(.result_field(object, "strata_names"))))
   }
   class(frame) <- c("summary.survival_py_survfit", class(frame))
   frame
@@ -1673,7 +1692,15 @@ attrassign <- function(object, tt) {
     }
   }
   arguments <- lapply(.compact_null(arguments), .unwrap_grouped_survfit)
-  if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted", "model_matrix",
+  if (name %in% c("dsurvreg", "psurvreg", "qsurvreg")) {
+    argument_names <- names(arguments)
+    if (is.null(argument_names)) argument_names <- rep("", length(arguments))
+    positional <- unname(arguments[argument_names == ""])
+    keywords <- arguments[argument_names != ""]
+    if (!length(keywords)) keywords <- reticulate::dict()
+    result <- .pybridge_attr("_call_dpqr_with_warnings")(.python_attr(name), keywords,
+      positional = positional, warning = function(message) warning(message, call. = FALSE))
+  } else if (name %in% c("coxph", "survreg", "clogit", "survreg_fit", "predict", "fitted", "model_matrix",
       "survfit", "survdiff", "aareg", "cch", "pyears", "concordance", "rttright",
       "survobrien", "survexp", "finegray", "survSplit") ||
       (name == "residuals" && isTRUE(arguments[["_with_group_names"]]))) {
@@ -2053,7 +2080,6 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       )
     }
   }
-  dots <- list(...)
   printfun <- .frailty_printfun(include_loglik = TRUE)
 
   if (method == "fixed") {
@@ -2064,7 +2090,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = c("x", "status", "loglik"),
       cfun = .frailty_controlgam,
-      cparm = c(list(theta = theta), dots)
+      cparm = list(theta = theta, ...)
     )
   } else if (method == "em") {
     temp <- list(
@@ -2074,7 +2100,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       sparse = sparse,
       cargs = c("x", "status", "loglik"),
       cfun = .frailty_controlgam,
-      cparm = c(list(eps = eps), dots)
+      cparm = c(list(eps = eps), ...)
     )
   } else if (method == "aic") {
     temp <- list(
@@ -2083,7 +2109,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       diag = TRUE,
       sparse = sparse,
       cargs = c("x", "status", "loglik", "neff", "df", "plik"),
-      cparm = c(list(eps = eps, lower = 0, init = c(0.1, 1)), dots),
+      cparm = list(eps = eps, lower = 0, init = c(0.1, 1), ...),
       cfun = .frailty_gamma_aic_cfun
     )
   } else {
@@ -2096,7 +2122,7 @@ frailty.gamma <- function(x, sparse = (nclass > 5), theta, df, eps = 1e-05,
       diag = TRUE,
       sparse = sparse,
       cargs = c("df", "x", "status", "loglik"),
-      cparm = c(list(df = df, thetas = 0, dfs = 0, eps = eps, guess = 3 * df / length(unclass(x))), dots),
+      cparm = list(df = df, thetas = 0, dfs = 0, eps = eps, guess = 3 * df / length(unclass(x)), ...),
       cfun = .frailty_gamma_df_cfun
     )
   }
@@ -6103,6 +6129,8 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
   conf.int <- if (!.survfit_curve_has_confint(x)) FALSE else if (conf.int) TRUE else FALSE
   surv <- .survfit_quantile_curve_matrix(.result_field(x, "surv"))
   strata <- .result_field(x, "strata")
+  strata_names <- if (.is_cox_curves(x)) as.character(.result_field(x, "strata_names"))
+    else names(strata)
   ncurve <- ncol(surv)
   if (ncurve > 1L || length(strata) > 0L) {
     time <- .as_numeric_vector(.result_field(x, "time"))
@@ -6116,9 +6144,9 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
     if (!is.null(curve_names)) curve_names <- as.character(unlist(curve_names, use.names = FALSE))
     if (length(strata) && ncurve > 1L) {
       qmat <- array(0, c(length(sizes), ncurve, length(probs)),
-                    dimnames = list(names(strata), curve_names, pname))
+                    dimnames = list(strata_names, curve_names, pname))
     } else {
-      labels <- if (length(strata)) names(strata) else curve_names
+      labels <- if (length(strata)) strata_names else curve_names
       qmat <- matrix(0, length(sizes) * ncurve, length(probs),
                      dimnames = list(labels, pname))
     }
@@ -7423,7 +7451,7 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
 }
 
 survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
-  .call_r_api(
+  result <- .call_r_api(
     "survfit",
     response = formula,
     newdata = .as_python_data(newdata),
@@ -7431,6 +7459,8 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
     ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
+  if (!is.null(newdata)) attr(result, "survival_aggregate_context") <- list(newdata = newdata)
+  result
 }
 
 # Prepared factor/Surv input and raw output shapes; all estimation, confidence
@@ -7515,12 +7545,13 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 }
 
 survfit0 <- function(x, ...) {
-  .call_r_api(
+  result <- .call_r_api(
     "survfit0",
     x,
     ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
+  .copy_survival_py_aggregate_context(x, result)
 }
 
 survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
@@ -8207,6 +8238,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
     parent.frame(),
     vector_args = c("weights", "offset", "strata", "cluster", "id", "istate")
   )
+  if (!is.null(evaluated_dots$init)) evaluated_dots$init <- as.list(.as_python_vector(evaluated_dots$init))
   if (!is.null(evaluated_dots$tt)) evaluated_dots$tt <- .time_transform_functions(evaluated_dots$tt)
   if (!is.null(dots$weights) && is.name(dots$weights)) {
     evaluated_dots[["_weights_column"]] <- as.character(dots$weights)
@@ -8443,36 +8475,74 @@ survregDtest <- function(dlist, verbose = FALSE) {
   }
 }
 
+.as_python_dpqr_vector <- function(value) {
+  if (!is.numeric(value)) return(as.list(.as_python_vector(value)))
+  lapply(as.vector(value), function(item) {
+    if (is.na(item) && !is.nan(item)) reticulate::py_none() else item
+  })
+}
+
+.as_python_dpqr_parameters <- function(value) {
+  if (is.null(value) || is.numeric(value)) .as_python_dpqr_vector(value) else value
+}
+
+.dpqr_uses_parameters <- function(distribution) {
+  !is.character(distribution) || length(distribution) != 1L ||
+    !casefold(distribution) %in% c("weibull", "exponential", "rayleigh", "lognormal",
+      "loglogistic", "gaussian", "logistic", "extreme")
+}
+
+.check_dpqr_null_query <- function(value, distribution, quantile = FALSE) {
+  if (!is.null(value) || !is.character(distribution) || length(distribution) != 1L) return(invisible(NULL))
+  name <- casefold(distribution)
+  # NULL differs from numeric(0) for the stock R mathematical primitives.
+  # Numeric transport uses an empty list for both; retain these R-only errors.
+  if (quantile && name %in% c("gaussian", "lognormal", "t"))
+    stop("Non-numeric argument to mathematical function")
+  if (!quantile && name %in% c("weibull", "exponential", "rayleigh", "lognormal", "loglogistic"))
+    stop("non-numeric argument to mathematical function")
+  invisible(NULL)
+}
+
 dsurvreg <- function(x, mean, scale = 1, distribution = "weibull", parms) {
+  .check_dpqr_null_query(x, distribution)
+  uses_parms <- .dpqr_uses_parameters(distribution)
   .as_numeric_vector(.call_r_api(
     "dsurvreg",
-    x = .as_python_vector(x),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
+    x = .as_python_dpqr_vector(x),
+    mean = .as_python_dpqr_vector(mean),
+    scale = .as_python_dpqr_vector(scale),
     distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
+    parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
+    `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
   ))
 }
 
 psurvreg <- function(q, mean, scale = 1, distribution = "weibull", parms) {
+  .check_dpqr_null_query(q, distribution)
+  uses_parms <- .dpqr_uses_parameters(distribution)
   .as_numeric_vector(.call_r_api(
     "psurvreg",
-    q = .as_python_vector(q),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
+    q = .as_python_dpqr_vector(q),
+    mean = .as_python_dpqr_vector(mean),
+    scale = .as_python_dpqr_vector(scale),
     distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
+    parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
+    `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
   ))
 }
 
 qsurvreg <- function(p, mean, scale = 1, distribution = "weibull", parms) {
+  .check_dpqr_null_query(p, distribution, quantile = TRUE)
+  uses_parms <- .dpqr_uses_parameters(distribution)
   .as_numeric_vector(.call_r_api(
     "qsurvreg",
-    p = .as_python_vector(p),
-    mean = .as_python_vector(mean),
-    scale = .as_python_vector(scale),
+    p = .as_python_dpqr_vector(p),
+    mean = .as_python_dpqr_vector(mean),
+    scale = .as_python_dpqr_vector(scale),
     distribution = distribution,
-    parms = if (missing(parms)) NULL else parms
+    parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
+    `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
   ))
 }
 
@@ -9468,9 +9538,9 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
       extend = extend,
       rmean = rmean,
       dosum = if (missing(dosum)) NULL else dosum
-    )))
+    ), object))
   }
-  .survival_py_survfit_summary_frame(
+  result <- .survival_py_survfit_summary_frame(
     object,
     times = times,
     censored = censored,
@@ -9480,6 +9550,24 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
     dosum = dosum,
     ...
   )
+  .copy_survival_py_aggregate_context(object, result)
+}
+
+`$.summary.survival_py_survfit` <- function(x, name) {
+  context <- attr(x, "survival_aggregate_context", exact = TRUE)
+  if (identical(name, "newdata") && !is.null(context) && !(name %in% names(x))) {
+    return(context$newdata)
+  }
+  NextMethod("$")
+}
+
+`[[.summary.survival_py_survfit` <- function(x, i, ..., exact = TRUE) {
+  context <- attr(x, "survival_aggregate_context", exact = TRUE)
+  if (identical(i, "newdata") && ...length() == 0L && !is.null(context) &&
+      !(i %in% names(x))) {
+    return(context$newdata)
+  }
+  NextMethod("[[")
 }
 
 summary.survival_py_basehaz <- function(object, ...) {
@@ -9651,13 +9739,20 @@ summary.survival_py_anova <- function(object, ...) {
 }
 
 .as_survival_py_survfit_list <- function(x) {
+  if (.is_coxms_curves(x)) {
+    return(.as_survival_py_coxms_curve_list(x))
+  }
   if (.is_survival_py_multistate_survfit(x)) {
     return(.as_survival_py_multistate_list(x))
   }
   if (.is_grouped_survival_py_survfit(x)) {
     return(unclass(x))
   }
-  as.list(as.data.frame.survival_py_survfit(x, optional = TRUE))
+  if (.is_cox_curves(x)) return(.as_survival_py_cox_curve_list(x))
+  out <- as.list(as.data.frame.survival_py_survfit(x, optional = TRUE))
+  context <- attr(x, "survival_aggregate_context", exact = TRUE)
+  if (!is.null(context)) out$newdata <- context$newdata
+  out
 }
 
 .as_survival_py_survfit_curve <- function(x) {
@@ -9686,9 +9781,24 @@ summary.survival_py_anova <- function(object, ...) {
   idx
 }
 
+.copy_survival_py_aggregate_context <- function(source, target, data_indices = NULL) {
+  context <- attr(source, "survival_aggregate_context", exact = TRUE)
+  if (is.null(context)) return(target)
+  if (!is.null(data_indices) && !is.null(context$newdata)) {
+    context$newdata <- context$newdata[data_indices, , drop = FALSE]
+  }
+  attr(target, "survival_aggregate_context") <- context
+  target
+}
+
+.survival_py_survfit_newdata <- function(x) {
+  context <- attr(x, "survival_aggregate_context", exact = TRUE)
+  if (!is.null(context)) context$newdata else .result_field(x, "newdata")
+}
+
 .survival_py_survfit_aggregate_groups <- function(by, data_count) {
   if (is.null(by)) {
-    return(NULL)
+    return(list(index = NULL, by = NULL, count = 1L))
   }
   by_list <- if (is.list(by)) by else list(by)
   if (length(by_list) == 0L) {
@@ -9698,37 +9808,101 @@ summary.survival_py_anova <- function(object, ...) {
   if (any(lengths != data_count)) {
     stop("arguments must have the same length", call. = FALSE)
   }
-  if (length(by_list) == 1L) {
-    groups <- as.integer(as.factor(by_list[[1L]]))
-  } else {
-    group_frame <- as.data.frame(by_list, stringsAsFactors = TRUE)
-    groups <- as.integer(interaction(group_frame, drop = TRUE))
-  }
+  # Match stock tapply coding, including declared factor order and absent combinations.
+  groups <- tapply(by_list[[1L]], by_list)
+  groups <- match(groups, sort(unique(groups)))
   if (all(groups == groups[[1L]])) {
-    NULL
+    list(index = NULL, by = NULL, count = 1L)
   } else {
-    groups
+    list(index = groups, by = by_list, count = max(groups))
   }
 }
 
 aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
+  default_fun <- missing(FUN)
   dims <- dim(x)
   data_count <- dims["data"]
   if (is.null(data_count) || is.na(data_count)) {
     stop("survfit object does not have a 'data' margin", call. = FALSE)
   }
-  if (!identical(FUN, mean)) {
-    stop("FUN must be mean for Python-backed survfit objects", call. = FALSE)
+  groups <- .survival_py_survfit_aggregate_groups(by, data_count)
+  FUN <- match.fun(FUN)
+  builtins <- list(mean = base::mean, median = stats::median,
+    min = base::min, max = base::max, sum = base::sum)
+  fast <- names(builtins)[vapply(builtins, identical, logical(1L), FUN)]
+  if (length(fast) == 1L && fast %in% c("mean", "median")) {
+    caller <- parent.frame()
+    specialized <- vapply(c("integer", "numeric"), function(kind) {
+      !is.null(utils::getS3method(fast, kind, optional = TRUE, envir = caller))
+    }, logical(1L))
+    canonical <- get(paste0(fast, ".default"), envir = environment(FUN))
+    default <- utils::getS3method(fast, "default", envir = caller)
+    registry <- get(".__S3MethodsTable__.", envir = environment(FUN))
+    default_key <- paste0(fast, ".default")
+    registered <- if (exists(default_key, envir = registry, inherits = FALSE)) {
+      get(default_key, envir = registry, inherits = FALSE)
+    } else canonical
+    if (any(specialized) || !identical(default, canonical) ||
+        !identical(registered, canonical)) fast <- character()
   }
-  if (length(list(...)) > 0L) {
-    stop("additional FUN arguments are not supported", call. = FALSE)
+  if (default_fun && !length(fast) && is.null(groups$by) && !.is_coxms_curves(x)) {
+    # Stock's default ordinary survival path still validates mean, including
+    # overridden methods, before rowMeans bypasses those methods for curve values.
+    test <- tapply(seq.int(data_count), rep.int(1L, data_count), FUN)
+    if (is.list(test) || length(test) != 1L || !is.numeric(test)) {
+      stop("FUN must return a single value summary", call. = FALSE)
+    }
+    summary <- NULL
+  } else if (length(fast) == 1L) {
+    summary <- if (default_fun) NULL else fast
+  } else {
+    # Native preflight visits each group's one-based data indices before reducing
+    # curve values. Preserve R's integer indices and numeric curve vectors.
+    remaining <- groups$count
+    curve_names <- .result_field(x, "colnames")
+    group_rows <- if (is.null(curve_names)) NULL else split(seq_len(data_count),
+      if (is.null(groups$index)) rep.int(1L, data_count) else groups$index)
+    value_calls <- 0L
+    summary <- function(values) {
+      if (remaining > 0L) {
+        remaining <<- remaining - 1L
+        values <- as.integer(values)
+      } else {
+        values <- as.numeric(values)
+        if (!is.null(curve_names)) {
+          group <- value_calls %% groups$count + 1L
+          names(values) <- as.character(curve_names)[group_rows[[group]]]
+          value_calls <<- value_calls + 1L
+        }
+      }
+      # Stock tapply calls FUN through base lapply. Its evaluation environment
+      # determines which default S3 method is visible to mean/median dispatch.
+      answer <- lapply(list(values), FUN)[[1L]]
+      # Stock tapply simplifies integer/double scalars, dropping classes such as
+      # factor/Date. Converting here also preserves NA_integer_ through reticulate.
+      if (typeof(answer) %in% c("integer", "double") && length(answer) == 1L) {
+        answer <- as.numeric(answer)
+      }
+      answer
+    }
   }
-  .call_r_api(
+  result <- .call_r_api(
     "aggregate_survfit",
     x,
-    by = .survival_py_survfit_aggregate_groups(by, data_count),
+    by = groups$index,
+    FUN = summary,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
+  newdata <- if (is.null(groups$by)) NULL else {
+    if (length(groups$by) == 1L && is.null(names(groups$by))) {
+      data.frame(aggregate = levels(as.factor(groups$by[[1L]])))
+    } else {
+      table <- stats::aggregate(integer(data_count), groups$by, sum)
+      table[-ncol(table)]
+    }
+  }
+  attr(result, "survival_aggregate_context") <- list(newdata = newdata)
+  result
 }
 
 as.list.survival_py_survfit <- function(x, ...) {
@@ -9747,6 +9921,7 @@ dim.survival_py_survfit <- function(x) {
   if (.is_coxms_curves(x)) {
     return(unlist(.result_field(x, "dim")))
   }
+  if (.is_cox_curves(x)) return(unlist(.result_field(x, "dim")))
   if (.is_survival_py_multistate_survfit(x)) {
     state_count <- length(.survival_py_multistate_states(x))
     if (.is_grouped_survival_py_survfit(x)) {
@@ -9776,7 +9951,7 @@ dim.survival_py_survfit <- function(x) {
 
 # summary.survfitms of survfit.coxphms curves: pstate and cumhaz as (time, newdata
 # row, state or transition) arrays, the counts as (time, state) matrices.
-.as_summary_coxms_curves <- function(result) {
+.as_summary_coxms_curves <- function(result, object = NULL) {
   states <- as.character(.result_field(result, "states"))
   transitions <- .result_field(result, "n_transition")
   counts <- function(name) {
@@ -9802,7 +9977,8 @@ dim.survival_py_survfit <- function(x) {
     labels <- as.character(unlist(strata))
     out$strata <- factor(labels, levels = unique(labels))
   }
-  newdata <- .result_field(result, "newdata")
+  context <- attr(object, "survival_aggregate_context", exact = TRUE)
+  newdata <- if (!is.null(context)) context$newdata else .result_field(result, "newdata")
   if (!is.null(newdata)) {
     out$newdata <- as.data.frame(newdata, stringsAsFactors = FALSE)
   }
@@ -9813,6 +9989,173 @@ dim.survival_py_survfit <- function(x) {
 
 .is_coxms_curves <- function(x) {
   inherits(x, "survival.r._types.CoxSurvfitMultiStateResult")
+}
+
+.is_cox_curves <- function(x) {
+  inherits(x, c("survival.r_api.CoxSurvfitResult", "survival.r._types.CoxSurvfitResult"))
+}
+
+.as_survival_py_cox_curve_list <- function(x) {
+  vector <- function(name) .as_numeric_vector(.result_field(x, name))
+  matrix <- isTRUE(.result_field(x, "has_data_margin"))
+  curves <- function(name) {
+    value <- .result_field(x, name)
+    if (is.null(value) || length(value) == 0L && name != "surv" && length(vector("time")))
+      return(NULL)
+    if (!matrix) return(.as_numeric_vector(value))
+    result <- base::matrix(as.numeric(unlist(value, recursive = TRUE, use.names = FALSE)),
+      nrow = length(vector("time")), ncol = as.integer(.result_field(x, "ncurve")), byrow = TRUE)
+    labels <- .result_field(x, "colnames")
+    if (name == "surv" && !is.null(labels)) colnames(result) <- as.character(labels)
+    else dimnames(result) <- NULL
+    result
+  }
+  strata <- .result_field(x, "strata")
+  if (!is.null(strata)) strata <- stats::setNames(as.integer(unlist(strata, use.names = FALSE)),
+    as.character(.result_field(x, "strata_names")))
+  .compact_null(list(n = as.integer(vector("n")), time = vector("time"),
+    n.risk = vector("n_risk"), n.event = vector("n_event"), n.censor = vector("n_censor"),
+    surv = curves("surv"), cumhaz = curves("cumhaz"), std.err = curves("std_err"),
+    std.chaz = curves("std_chaz"), lower = curves("lower"), upper = curves("upper"),
+    strata = strata, logse = .result_field(x, "logse"),
+    conf.int = .result_field(x, "conf_int"), conf.type = .result_field(x, "conf_type"),
+    start.time = .result_field(x, "start_time"), newdata = .survival_py_survfit_newdata(x)))
+}
+
+.subset_cox_curves <- function(x, subscripts, drop) {
+  dims <- dim(x)
+  if (!length(dims)) {
+    if (length(subscripts) > 1L) stop("incorrect number of dimensions", call. = FALSE)
+    if (all(vapply(subscripts, is.null, logical(1)))) return(x)
+    if (!all(subscripts[[1L]] == 1)) stop("subscript out of bounds", call. = FALSE)
+    return(.wrap_python(.python_attr("_subset_cox_survfit")(x, `_implicit` = TRUE),
+      c("survival_py_survfit", "survival_py_object")))
+  }
+  if (length(subscripts) > length(dims)) stop("incorrect number of dimensions", call. = FALSE)
+  if (all(vapply(subscripts, is.null, logical(1)))) return(x)
+  labels <- list(strata = as.character(.result_field(x, "strata_names")),
+    data = .result_field(x, "colnames"), curves = NULL)
+  positions <- function(index, count, names, dimension) {
+    if (is.null(index)) return(NULL)
+    target <- seq_len(count)
+    if (!is.null(names) && length(names) == count) names(target) <- names
+    selected <- unname(target[index])
+    if (anyNA(selected)) {
+      if (dimension == "strata" && is.character(index))
+        stop(paste("strata", paste(index[is.na(selected)], collapse = " "), "not matched"), call. = FALSE)
+      stop("subscript out of bounds", call. = FALSE)
+    }
+    as.list(as.integer(selected) - 1L)
+  }
+  selectors <- list()
+  if (length(subscripts) == 1L && length(dims) == 2L) {
+    dimension <- if (dims[[1L]] == 1L) "data" else if (dims[[2L]] == 1L) "strata" else "curves"
+    count <- if (dimension == "curves") prod(dims) else dims[[dimension]]
+    selectors[[dimension]] <- positions(subscripts[[1L]], count, labels[[dimension]], dimension)
+  } else for (index in seq_along(subscripts)) {
+    dimension <- names(dims)[[index]]
+    selectors[[dimension]] <- positions(subscripts[[index]], dims[[index]], labels[[dimension]], dimension)
+  }
+  if (length(subscripts) == 2L && is.character(subscripts[[2L]]) &&
+      any(vapply(c("cumhaz", "std_err", "std_chaz", "lower", "upper"),
+        function(name) !is.null(.result_field(x, name)) && length(.result_field(x, name)) > 0L,
+        logical(1)))) stop("no 'dimnames' attribute for array", call. = FALSE)
+  if ("strata" %in% names(selectors) && is.null(.result_field(x, "strata"))) {
+    if (identical(selectors$strata, list(0L))) return(x)
+    stop("subscript out of bounds", call. = FALSE)
+  }
+  result <- .wrap_python(do.call(.python_attr("_subset_cox_survfit"),
+    c(list(x, drop = drop), selectors)), c("survival_py_survfit", "survival_py_object"))
+  if (!is.null(.result_field(result, "newdata"))) {
+    indices <- selectors[["data"]]
+    if (!is.null(indices)) indices <- unlist(indices, use.names = FALSE) + 1L
+    context <- attr(x, "survival_aggregate_context", exact = TRUE)
+    if (!is.null(context)) {
+      if (is.data.frame(context$newdata)) {
+        rows <- if (is.null(indices)) seq_len(nrow(context$newdata)) else indices
+        context$newdata <- context$newdata[rows, ]
+      } else if (!is.null(indices)) context$newdata <- context$newdata[indices]
+      attr(result, "survival_aggregate_context") <- context
+    }
+  }
+  result
+}
+
+.as_survival_py_coxms_curve_list <- function(x) {
+  states <- as.character(.result_field(x, "states"))
+  transition_names <- as.character(.result_field(x, "cumhaz_names"))
+  engine <- .result_field(x, "engine")
+  observed_from <- .as_numeric_vector(.result_field(engine, "hazard_from"))
+  observed_to <- .as_numeric_vector(.result_field(engine, "hazard_to"))
+  observed_names <- if (length(observed_from)) {
+    paste0(observed_from + 1L, ":", observed_to + 1L)
+  } else character()
+  counts <- function(name, labels, object = x) {
+    value <- .result_field(object, name)
+    if (is.null(value)) return(NULL)
+    value <- .as_numeric_matrix(value)
+    if (!nrow(value)) value <- matrix(numeric(), 0L, length(labels))
+    colnames(value) <- labels
+    value
+  }
+  curves <- function(name, labels) {
+    value <- .result_field(x, name)
+    if (!is.null(value)) dimnames(value) <- list(NULL, NULL, labels)
+    value
+  }
+  strata <- .result_field(x, "strata")
+  if (!is.null(strata)) {
+    labels <- names(strata)
+    strata <- stats::setNames(as.integer(unlist(strata, use.names = FALSE)), labels)
+  }
+  p0 <- .as_numeric_matrix(.result_field(x, "p0"))
+  if (!nrow(p0)) p0 <- matrix(numeric(), 0L, length(states))
+  if (is.null(strata)) {
+    p0 <- stats::setNames(as.numeric(p0), states)
+  } else {
+    dimnames(p0) <- list(names(strata), states)
+    if (nrow(p0) == 1L || ncol(p0) == 1L) p0 <- drop(p0)
+  }
+  transitions <- .result_field(x, "transitions")
+  if (!is.null(transitions)) {
+    transitions <- .as_named_matrix(transitions)
+    names(dimnames(transitions)) <- c("from", "to")
+    transitions <- as.table(transitions)
+  }
+  newdata <- .survival_py_survfit_newdata(x)
+  if (!is.null(newdata) && !is.data.frame(newdata)) {
+    newdata <- as.data.frame(newdata, stringsAsFactors = FALSE)
+  }
+  oldstate <- .result_field(x, "oldstate")
+  if (!is.null(oldstate)) oldstate <- as.character(oldstate)
+  unweighted <- .result_field(engine, "counts")
+  count_matrix <- if (is.null(unweighted)) NULL else do.call(cbind, .compact_null(list(
+    counts("n_risk", paste0("nrisk:", seq_along(states)), unweighted),
+    counts("n_transition", paste0("nevent:", observed_names), unweighted),
+    counts("n_censor", paste0("ncensor:", seq_along(states)), unweighted),
+    counts("n_enter", paste0("nenter:", seq_along(states)), unweighted)
+  )))
+  .compact_null(list(
+    n = as.integer(.as_numeric_vector(.result_field(x, "n"))),
+    time = .as_numeric_vector(.result_field(x, "time")),
+    n.risk = counts("n_risk", states),
+    n.event = counts("n_event", states),
+    n.censor = counts("n_censor", states),
+    pstate = curves("pstate", states),
+    n.transition = counts("n_transition", observed_names),
+    n.id = as.integer(.as_numeric_vector(.result_field(x, "n_id"))),
+    cumhaz = curves("cumhaz", transition_names),
+    counts = count_matrix,
+    p0 = p0,
+    strata = strata,
+    start.time = .result_field(x, "start_time"),
+    transitions = transitions,
+    states = states,
+    type = as.character(.result_field(x, "type")),
+    t0 = .result_field(x, "t0"),
+    newdata = newdata,
+    oldstate = oldstate
+  ))
 }
 
 # [.survfitms for survfit.coxphms curves: one subscript per dimension of dim(x)
@@ -9853,10 +10196,13 @@ dim.survival_py_survfit <- function(x) {
     as.list(as.integer(selected) - 1L)
   }, subscripts, names(dims))
   names(positions) <- names(dims)
-  .wrap_python(
+  result <- .wrap_python(
     do.call(.python_attr("_subset_coxms_curves"), c(list(x), .compact_null(positions))),
     c("survival_py_survfit", "survival_py_object")
   )
+  data_indices <- positions[["data"]]
+  if (!is.null(data_indices)) data_indices <- unlist(data_indices, use.names = FALSE) + 1L
+  .copy_survival_py_aggregate_context(x, result, data_indices)
 }
 
 `[.survival_py_cox_zph` <- function(x, ..., drop = FALSE) {
@@ -9878,6 +10224,12 @@ dim.survival_py_survfit <- function(x) {
 }
 
 `[.survival_py_survfit` <- function(x, i, j, ..., drop = TRUE) {
+  if (.is_cox_curves(x)) {
+    n_subscripts <- nargs() - 1L - as.integer(!missing(drop))
+    subscripts <- list(if (missing(i)) NULL else i, if (missing(j)) NULL else j)
+    if (...length() > 0L || n_subscripts > 2L) stop("incorrect number of dimensions", call. = FALSE)
+    return(.subset_cox_curves(x, subscripts[seq_len(n_subscripts)], drop))
+  }
   if (.is_coxms_curves(x)) {
     n_subscripts <- nargs() - 1L - as.integer(!missing(drop))
     subscripts <- list(

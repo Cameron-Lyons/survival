@@ -810,12 +810,47 @@ class CoxSurvfitResult:
     start_time: float | None = None
     newdata: Any | None = field(default=None, repr=False)
     colnames: list[str] | None = None
+    strata_labels: list[str] | None = field(default=None, repr=False)
+
+    @property
+    def strata_names(self) -> list[str]:
+        return self.strata_labels if self.strata_labels is not None else list(self.strata or {})
+
+    @property
+    def has_data_margin(self) -> bool:
+        # aggregate() keeps its native one-column storage but removes the
+        # data margin when it has no grouped newdata labels.
+        if self.logse is None and self.newdata is None:
+            return False
+        ndim = getattr(self.surv, "ndim", None)
+        if ndim is not None:
+            return bool(ndim == 2)
+        return isinstance(self.surv[0], list) if self.surv else self.colnames is not None
+
+    @property
+    def dim(self) -> dict[str, int]:
+        dims = {"strata": len(self.strata)} if self.strata is not None else {}
+        if self.has_data_margin:
+            dims["data"] = self.ncurve
+        return dims
 
     @property
     def ncurve(self) -> int:
+        ndim = getattr(self.surv, "ndim", None)
+        if ndim is not None:
+            shape: Any = getattr(self.surv, "shape", None)
+            return int(shape[1]) if ndim == 2 else 1
         if not self.surv and self.colnames is not None:
             return len(self.colnames)
         return len(self.surv[0]) if self.surv and isinstance(self.surv[0], list) else 1
+
+    def subset(
+        self, *, strata: Any | None = None, data: Any | None = None, drop: bool = True
+    ) -> CoxSurvfitResult:
+        """Select stratum blocks and prediction rows using labels or zero-based indices."""
+        from ._survfit import _subset_cox_survfit
+
+        return _subset_cox_survfit(self, strata=strata, data=data, drop=drop)
 
 
 @dataclass(frozen=True)

@@ -99,6 +99,15 @@ from ._models import (
     residuals,
     vcov,
 )
+from ._penalties import (
+    FrailtyResult,
+    RidgeResult,
+    frailty,
+    frailty_gamma,
+    frailty_gaussian,
+    frailty_t,
+    ridge,
+)
 from ._population_print import print_pyears, print_survcheck, print_yates
 from ._pyears import (
     PyearsSummary,
@@ -239,6 +248,13 @@ from ._yates_model import YatesModel
 from ._yates_setup import YatesLinkPrediction, YatesSurvivalSetup, yates_setup
 
 __all__ = [
+    "RidgeResult",
+    "FrailtyResult",
+    "ridge",
+    "frailty",
+    "frailty_gamma",
+    "frailty_gaussian",
+    "frailty_t",
     "CoxPenaltyBasis",
     "YatesLinkPrediction",
     "YatesSurvivalSetup",

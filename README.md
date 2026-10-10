@@ -134,6 +134,17 @@ including strided arrays, pandas/polars columns, and Python sequences. Status
 values must be binary; integral floating-point arrays are accepted with checked
 conversion. The numerical fit runs in Rust with the Python GIL released.
 
+Weighted log-rank tests reuse the test's time ordering for their KM weights,
+avoiding a separate survival-curve fit. Multistate point estimates omit unused
+influence workspaces when `se_fit=False`. See
+[weighted log-rank](docs/weighted-logrank-performance.md) and
+[Aalen-Johansen performance](docs/aalen-johansen-performance.md) for algorithms,
+reference coverage and measurements.
+
+Time-dependent `r.tmerge` updates also accept shared one-shot iterator inputs,
+including categorical events, and read only referenced update columns. See
+[time-dependent iterator inputs](docs/tmerge-iterable-inputs.md).
+
 Cox and AFT matrix inputs also accept these array layouts. Lists and tuples
 of float rows fill a single Rust matrix allocation. See
 [matrix input conversion and benchmarks](docs/python-matrix-inputs.md).
@@ -296,6 +307,10 @@ freedom, defaulting to half the number of columns in each ridge term;
 `ridge(..., df=..., eps=.1)` sets the target and its tolerance, and
 `control={"outer.max": 10}` limits the outer search. A penalty term inside an
 interaction is refused with R's "Penalty terms cannot be in an interaction".
+Python time-transform callbacks can return standalone `r.ridge()` or
+`r.frailty()` bases, retaining original scaling and factor labels. See
+[Cox time-transform penalties](docs/cox-time-transform-penalties.md) for the
+constructor and `CoxPenaltyBasis` interfaces.
 `survreg` fits `ridge()` and `pspline()` terms through a port of R's
 `survpenal.fit`. The typed kernel is `survival.regression.coxpenal_fit` (R's
 `coxpenal.fit`), which takes the design with its `CoxPenalty` terms.
@@ -392,6 +407,10 @@ The distribution functions are ports of R's nmath routines (`pnorm`, `qnorm`,
 `qsurvreg`/`rsurvreg` alike; the t family takes `distribution="t", parms=df`.
 For example, `qsurvreg(1e-20, 0, distribution="t", parms=4)` returns
 `-131607.4013`, as R does.
+Standalone distribution queries follow R's vector recycling and missing-value
+arithmetic, including empty inputs, parameter vectors and warnings. Random
+generation draws the requested number of uniforms before recycling; fitting
+continues to validate distribution parameters and model scales strictly.
 Gaussian, logistic, extreme-value, and Student-t AFT models accept finite real-valued
 responses, including negative values and zero, for all censoring types. Log-time
 families retain their positive-response requirement. Right-censored concordance
@@ -958,6 +977,17 @@ population calculations and accepts date and duration columns. See
 the shared Rust lookup implementation.
 
 ## Survival curve reports
+
+Ordinary Cox curves support `curves.subset(strata=..., data=..., drop=False)`
+with zero-based positions or row labels. The R bridge supports both selection
+margins; see [Cox curve selection](docs/r-compatibility.md#ordinary-cox-curve-selection).
+
+`r.aggregate_survfit(curves, by=groups, FUN="sum")` summarises prediction
+rows within each group. `FUN` also accepts a Python callback returning one
+numeric value from its NumPy input vector, such as `FUN=np.mean`.
+Rust callers can use `aggregate_survfit_with` with a closure. See
+[curve aggregation](docs/aggregate-survival-curves.md) for callback order,
+validation, arithmetic and timings.
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and
 median survival. Add `rmean="common"` for restricted means. Multistate fits

@@ -37,7 +37,17 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
     if y.len() < 2 {
         return None;
     }
-    let mean_abs = y.iter().map(|v| v.abs()).sum::<f64>() / y.len() as f64;
+    let total_abs = y.iter().map(|v| v.abs()).sum::<f64>();
+    let mean_abs = if total_abs.is_finite() {
+        total_abs / y.len() as f64
+    } else {
+        // The mean of finite magnitudes is finite even if their sum overflows.
+        // An infinite denominator would turn every finite gap into a near tie.
+        // Scale only on overflow to preserve the ordinary arithmetic exactly.
+        let largest = y[0].abs().max(y[y.len() - 1].abs());
+        let scaled_sum = y.iter().map(|v| v.abs() / largest).sum::<f64>();
+        (scaled_sum / y.len() as f64) * largest
+    };
     let mut cuts = Vec::with_capacity(y.len());
     cuts.push(y[0]);
     let mut any_tied = false;
@@ -179,6 +189,147 @@ mod tests {
         // The fixture case `right_1e9`: 2.000000001 is tied with 2.
         let result = aeq_surv(&[1.0, 1.00000000000001, 2.0, 2.000000001, 3.0], None, None).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 2.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn large_finite_times_do_not_create_spurious_near_ties() {
+        // Independent stock-R aeqSurv results: mean(abs(time)) remains finite.
+        for time in [
+            vec![1e308, 1.1e308, 1.2e308],
+            vec![-1e308, 0.0, 1e308],
+            vec![f64::MAX / 2.0, f64::MAX * 0.7, f64::MAX],
+        ] {
+            assert_eq!(aeq_surv(&time, None, None).unwrap().time, time);
+        }
+        let time = [1e308, 1e308 * (1.0 + 1e-12), 1.2e308];
+        assert_eq!(
+            aeq_surv(&time, None, None).unwrap().time,
+            vec![1e308, 1e308, 1.2e308]
+        );
+        assert_eq!(
+            aeq_surv(&[1e308, 1.1e308, 1.2e308], None, Some(0.1))
+                .unwrap()
+                .time,
+            vec![1e308; 3]
+        );
+    }
+
+    #[test]
+    fn large_counting_times_and_nonfinite_endpoints_stay_aligned() {
+        let start = [0.0, 1e308, 1.1e308];
+        let stop = [1e308, 1.1e308, 1.2e308];
+        let result = aeq_surv(&start, Some(&stop), None).unwrap();
+        assert_eq!(result.time, start);
+        assert_eq!(result.time2.unwrap(), stop);
+
+        let time = [
+            f64::NEG_INFINITY,
+            1e308,
+            1e308 * (1.0 + 1e-12),
+            1.2e308,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        let result = aeq_surv(&time, None, None).unwrap();
+        assert_eq!(
+            &result.time[..5],
+            &[f64::NEG_INFINITY, 1e308, 1e308, 1.2e308, f64::INFINITY]
+        );
+        assert!(result.time[5].is_nan());
+    }
+
+    #[test]
+    fn large_time_normalization_and_curves_match_independent_stock_r() {
+        use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
+        use serde_json::Value;
+
+        fn numbers(value: &Value) -> Vec<f64> {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|number| {
+                    if number.is_null() {
+                        f64::NAN
+                    } else if let Some(text) = number.as_str() {
+                        text.parse().unwrap()
+                    } else {
+                        number.as_f64().unwrap()
+                    }
+                })
+                .collect()
+        }
+
+        let reference: Value = serde_json::from_str(include_str!(
+            "../../python/tests/fixtures/aeq_large_time_reference.json"
+        ))
+        .unwrap();
+        for case in reference["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let time = numbers(&case["time"]);
+            let start = (!case["start"].is_null()).then(|| numbers(&case["start"]));
+            let tolerance = case["tolerance"].as_f64();
+            let normalized = match start.as_deref() {
+                Some(start) => aeq_surv(start, Some(&time), tolerance),
+                None => aeq_surv(&time, None, tolerance),
+            };
+            if let Some(error) = case["expected"]["error"].as_str() {
+                assert_eq!(normalized.unwrap_err().to_string(), error, "{name}");
+                continue;
+            }
+            let normalized = normalized.unwrap();
+            let normalized_time = normalized.time2.as_ref().unwrap_or(&normalized.time);
+            assert_eq!(
+                normalized_time,
+                &numbers(&case["expected"]["time"]),
+                "{name} time"
+            );
+            if start.is_some() {
+                assert_eq!(
+                    normalized.time,
+                    numbers(&case["expected"]["start"]),
+                    "{name} start"
+                );
+            }
+            if case["fit"].is_null() {
+                continue;
+            }
+            let status = numbers(&case["status"])
+                .into_iter()
+                .map(|status| status as i32)
+                .collect();
+            let data = SurvfitKMData::try_new(start, time, status, None, None, None, None).unwrap();
+            let fit = survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+            for (field, actual) in [
+                ("time", &fit.time),
+                ("n_risk", &fit.n_risk),
+                ("n_event", &fit.n_event),
+                ("n_censor", &fit.n_censor),
+                ("surv", &fit.surv),
+                ("cumhaz", &fit.cumhaz),
+                ("std_err", fit.std_err.as_ref().unwrap()),
+                ("std_chaz", fit.std_chaz.as_ref().unwrap()),
+                ("lower", fit.lower.as_ref().unwrap()),
+                ("upper", fit.upper.as_ref().unwrap()),
+            ] {
+                let expected = numbers(&case["fit"][field]);
+                assert_eq!(actual.len(), expected.len(), "{name} {field}");
+                if field == "time" || field.starts_with("n_") {
+                    assert_eq!(actual, &expected, "{name} {field}");
+                    continue;
+                }
+                for (&actual, expected) in actual.iter().zip(expected) {
+                    assert!(
+                        actual == expected
+                            || (actual.is_nan() && expected.is_nan())
+                            || (actual.is_finite()
+                                && expected.is_finite()
+                                && (actual - expected).abs() <= 1e-14 + expected.abs() * 1e-12),
+                        "{name} {field}: {actual:?} != {expected:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

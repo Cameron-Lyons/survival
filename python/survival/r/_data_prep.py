@@ -374,11 +374,9 @@ def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> d
     return {name: list(map(values.__getitem__, rows)) for name, values in columns.items()}
 
 
-def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
-    """Every column of a mapping or data frame as a list, in data order."""
+def _data_column_sources(data: Any, name: str) -> dict[str, Any]:
+    """Validate the column names without reading their values."""
 
-    if isinstance(data, TMergeFrame):
-        return {column: list(values) for column, values in data.columns.items()}
     names = _data_column_names(data)
     if names is None:
         raise TypeError(f"{name} must be a mapping or data frame")
@@ -386,7 +384,16 @@ def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
         raise ValueError(f"{name} column names must be non-empty strings")
     if len(set(names)) != len(names):
         raise ValueError(f"{name} column names must be unique")
-    columns = {column: _column(data, column) for column in names}
+    return {column: _column_source(data, column) for column in names}
+
+
+def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
+    """Every retained column as a list, in data order."""
+
+    columns = {
+        column: _materialize_1d(source, column)
+        for column, source in _data_column_sources(data, name).items()
+    }
     if len({len(values) for values in columns.values()}) > 1:
         raise ValueError(f"{name} columns must have equal lengths")
     return columns
@@ -1410,6 +1417,39 @@ def _tmerge_first_call(
     return _first_call_frame(columns1, base_ids, range_ids, start_values, range_stop, control)
 
 
+def _tmerge_inputs(
+    data1: Any,
+    data2: Any,
+    id: Any,
+    tstart: Any,
+    tstop: Any,
+    operations: Mapping[str, TMergeOperation],
+) -> tuple[Any, Any, Any, Any, Any, dict[str, TMergeOperation]]:
+    """Prepare shared one-shot sources once across both frames and all updates.
+
+    Only data1 is retained in the result; unused data2 iterators remain unread.
+    The formula input adapter supplies reusable buffers and factor metadata.
+    """
+
+    inputs = {"id": id, "tstart": tstart, "tstop": tstop}
+    base = _data_column_sources(data1, "data1")
+    base_keys = {name: f"base_{index}" for index, name in enumerate(base)}
+    inputs.update({base_keys[name]: source for name, source in base.items()})
+    operation_keys = {
+        name: (f"time_{index}", f"value_{index}") for index, name in enumerate(operations)
+    }
+    for name, operation in operations.items():
+        time_key, value_key = operation_keys[name]
+        inputs[time_key], inputs[value_key] = operation.time, operation.value
+    data2, inputs = _prepare_formula_inputs(_data_column_sources(data2, "data2"), **inputs)
+    data1 = {name: inputs[key] for name, key in base_keys.items()}
+    prepared = {}
+    for name, operation in operations.items():
+        time_key, value_key = operation_keys[name]
+        prepared[name] = replace(operation, time=inputs[time_key], value=inputs[value_key])
+    return data1, data2, inputs["id"], inputs["tstart"], inputs["tstop"], prepared
+
+
 def tmerge(
     data1: Any,
     data2: Any,
@@ -1448,22 +1488,27 @@ def tmerge(
             control["idname"] = str(options["idname"])
     else:
         control = _tmerge_control(options, tname)
-    columns2 = _data_columns(data2, "data2")
-    n2 = len(next(iter(columns2.values()), []))
-    if isinstance(id, str):
-        if id not in columns2:
+    try:
+        data2_rows = None if isinstance(data2, Mapping) else len(data2)
+    except TypeError:
+        data2_rows = None
+    data1, data2, id_source, tstart, tstop, parsed = _tmerge_inputs(
+        data1, data2, id, tstart, tstop, parsed
+    )
+    if isinstance(id_source, str):
+        if id_source not in data2:
             raise ValueError("id variable not found in data2")
-        id2 = list(columns2[id])
+        id2 = _materialize_labels(data2[id_source], "id")
     else:
-        id2 = _materialize_labels(id, "id")
-        if len(id2) != n2:
+        id2 = _materialize_labels(id_source, "id")
+        if data2_rows is not None and len(id2) != data2_rows:
             raise ValueError("id variable not found in data2")
     if any(_is_missing_value(value) for value in id2):
         raise ValueError("id variable cannot have missing values")
 
     if first_call:
         newdata = _tmerge_first_call(
-            data1, data2, id, id2, tstart, tstop, next(iter(parsed.items()), None), control
+            data1, data2, id_source, id2, tstart, tstop, next(iter(parsed.items()), None), control
         )
     else:
         if tstart is not None or tstop is not None:

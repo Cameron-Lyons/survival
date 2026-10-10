@@ -20,6 +20,7 @@ from .r._models import (  # noqa: F401
     _survfit_strata_curves,
 )
 from .r._penalties import _penalty_control  # noqa: F401
+from .r._survfit import _subset_cox_survfit  # noqa: F401
 from .r._survreg import survreg_vcov_names as _survreg_vcov_names  # noqa: F401
 
 __all__ = _r.__all__

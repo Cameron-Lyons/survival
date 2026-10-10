@@ -2620,7 +2620,8 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_error(aggregate(survfit(response, se.fit = FALSE)), "data.*margin")
   expect_error(aggregate(cox_aggregate_curves, by = "lo"), "same length")
-  expect_error(aggregate(cox_aggregate_curves, FUN = max), "FUN must be mean")
+  expect_equal(as.data.frame(aggregate(cox_aggregate_curves, FUN = max))$surv,
+    apply(do.call(cbind, cox_surv_by_curve), 1L, max), tolerance = 1e-8)
   stratified_curves <- survfit(
     coxph(Surv(time, status) ~ x + strata(group), data = data, iter.max = 0),
     newdata = data.frame(x = c(0.5, 0.7), group = c("control", "treated")),

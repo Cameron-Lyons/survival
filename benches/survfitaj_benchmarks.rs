@@ -2,6 +2,9 @@ use std::hint::black_box;
 
 use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
 
+#[global_allocator]
+static ALLOCATOR: divan::AllocProfiler = divan::AllocProfiler::system();
+
 /// Competing-risks data: one interval per subject, a quarter of them ending
 /// in the second state, on a grid of `max_times` distinct times.
 fn benchmark_inputs(n: usize, max_times: usize) -> SurvfitAJData {
@@ -52,6 +55,40 @@ fn point_estimates_long_grid(bencher: divan::Bencher, n: usize) {
     bencher
         .with_inputs(|| (data.clone(), options.clone()))
         .bench_local_values(|(data, options)| run_benchmark(data, options));
+}
+
+/// Many subjects, states and tied times make unnecessary per-subject
+/// influence workspaces visible in the allocation profile.
+#[divan::bench(args = [10000, 100000])]
+fn point_estimates_tied_states(bencher: divan::Bencher, n: usize) {
+    let data = SurvfitAJData::try_new(
+        None,
+        (0..n).map(|idx| (idx % 32 + 1) as f64).collect(),
+        (0..n)
+            .map(|idx| {
+                if idx % 4 == 0 {
+                    0
+                } else {
+                    (idx % 16 + 1) as i32
+                }
+            })
+            .collect(),
+        (1..=16).map(|state| format!("event{state}")).collect(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("benchmark inputs should define a valid multistate curve");
+    let options = SurvfitAJOptions {
+        se_fit: false,
+        ..Default::default()
+    };
+    bencher.bench_local(|| {
+        black_box(survfitaj(&data, &options).expect("valid multistate curve"));
+    });
 }
 
 #[divan::bench(args = [100, 1000, 5000])]

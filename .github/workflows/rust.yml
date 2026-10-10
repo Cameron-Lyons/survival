@@ -429,6 +429,14 @@ jobs:
           cp python/tests/fixtures/curve_quantile_boundary_reference.json "$fixture_dir/committed/"
           cp python/tests/fixtures/aft_prediction_probability_reference.json "$fixture_dir/committed/"
           cp python/tests/fixtures/surv_repetition_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/aeq_large_time_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/tmerge_iterable_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/weighted_logrank_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/aggregate_fun_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/cox_survfit_subset_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/cox_survfit_single_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/rsurvreg_count_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/penalty_constructor_reference.json "$fixture_dir/committed/"
           cp test/r/kernel_references/exact_counting_sweep.json "$fixture_dir/committed/"
           Rscript scripts/generate_typed_formula_expression_reference.R \
             "$fixture_dir/regenerated/typed_formula_expression_reference.json"
@@ -466,6 +474,22 @@ jobs:
             "$fixture_dir/regenerated/aft_prediction_probability_reference.json"
           Rscript scripts/generate_surv_repetition_reference.R \
             "$fixture_dir/regenerated/surv_repetition_reference.json"
+          Rscript scripts/generate_aeq_large_time_reference.R \
+            "$fixture_dir/regenerated/aeq_large_time_reference.json"
+          Rscript scripts/generate_tmerge_iterable_reference.R \
+            "$fixture_dir/regenerated/tmerge_iterable_reference.json"
+          Rscript scripts/generate_weighted_logrank_reference.R \
+            "$fixture_dir/regenerated/weighted_logrank_reference.json"
+          Rscript scripts/generate_aggregate_fun_reference.R \
+            "$fixture_dir/regenerated/aggregate_fun_reference.json"
+          Rscript scripts/generate_cox_survfit_subset_reference.R \
+            "$fixture_dir/regenerated/cox_survfit_subset_reference.json"
+          Rscript scripts/generate_cox_survfit_single_reference.R \
+            "$fixture_dir/regenerated/cox_survfit_single_reference.json"
+          Rscript scripts/generate_rsurvreg_count_reference.R \
+            "$fixture_dir/regenerated/rsurvreg_count_reference.json"
+          Rscript scripts/generate_penalty_constructor_reference.R \
+            "$fixture_dir/regenerated/penalty_constructor_reference.json"
           Rscript scripts/generate_exact_counting_reference.R \
             "$fixture_dir/regenerated/exact_counting_sweep.json"
           python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \
@@ -480,6 +504,20 @@ jobs:
             "$fixture_dir/regenerated/aft_rank_deficient_reference.json"
           python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \
             --rtol 3e-7 --atol 3e-8
+
+      - name: Regenerate AFT distribution query references
+        run: |
+          fixture_dir="$RUNNER_TEMP/current-stock-fixtures/survreg-dpqr"
+          mkdir -p "$fixture_dir/committed" "$fixture_dir/regenerated"
+          cp python/tests/fixtures/survreg_dpqr_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survreg_dpqr_callback_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survreg_dpqr_callback_edges.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survreg_dpqr_empty_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/survreg_dpqr_parms_reference.json "$fixture_dir/committed/"
+          Rscript scripts/generate_survreg_dpqr_reference.R "$fixture_dir/regenerated"
+          Rscript scripts/generate_survreg_dpqr_parms_reference.R "$fixture_dir/regenerated"
+          python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \
+            --rtol 0 --atol 0
 
       # High-degree polynomial columns amplify BLAS rounding in R's QR.
       # Keep this independent comparison separate from the established gate.

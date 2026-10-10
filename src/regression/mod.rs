@@ -50,7 +50,7 @@ pub(crate) mod spline_hazard;
 pub(crate) mod survpenal;
 mod survreg_callbacks;
 pub(crate) mod survreg_density;
-pub use survreg_callbacks::{SurvregCallbacks, SurvregTransformCallbacks};
+pub use survreg_callbacks::{DpqrWarning, SurvregCallbacks, SurvregTransformCallbacks};
 pub(crate) mod survreg_distributions;
 pub(crate) mod survreg_lowlevel;
 pub(crate) mod survreg_predict;

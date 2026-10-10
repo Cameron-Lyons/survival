@@ -3,8 +3,84 @@
 `aggregate_survfit` summarises the newdata columns of survival and multistate
 probability curves at each time, following R's
 [`aggregate.survfit`](https://github.com/therneau/survival/blob/master/R/aggregate.survfit.R).
-It supports `mean`, `median`, `min` and `max`, with the first grouping variable
-varying fastest. Only observed combinations produce output columns.
+It supports `mean`, `median`, `min`, `max`, `sum` and custom scalar summaries,
+with the first grouping variable varying fastest. Only observed combinations
+produce output columns.
+
+```python
+import numpy as np
+from survival import r
+
+totals = r.aggregate_survfit(curves, by=groups, FUN="sum")
+spread = r.aggregate_survfit(curves, by=groups, FUN=lambda values: np.ptp(values))
+```
+
+Rust callers use `aggregate_survfit_with(surv, pstate, by, callback)`, where
+the closure accepts `&[f64]` and returns `SurvivalResult<f64>`. Python's native
+`aggregate_survfit(..., fun=callback)` accepts the same callbacks as the facade.
+Every Python call receives a fresh one-dimensional `float64` NumPy array;
+modifying or retaining that array cannot change the inputs or another call.
+Built-in names release the interpreter lock; Python callbacks retain it.
+
+Omitting `FUN` (or passing `None` in Python) preserves R's default distinction:
+ungrouped ordinary survival curves use `rowMeans`, while explicit `"mean"`
+uses R's residual-refined mean. A constant grouping vector also follows the
+ungrouped path. Multistate probabilities and several observed groups always
+use the mean reducer. These operations can differ for extreme cancellation;
+for `[MAX, MAX, -MAX, -MAX, 1]`, the pinned R platform's default ordinary
+average is `0.2`, while an explicit mean is `0.36`.
+
+Following stock R, callbacks first receive each group's one-based prediction-row
+indices. All these preliminary results are collected before checking that each
+is a numeric scalar. Survival values then arrive in time/group order, followed
+by state probabilities in state/time/group order. Values within a group retain
+the original prediction-row order. A callback exception stops immediately and
+retains its Python exception type and message. Extra keyword arguments are
+accepted and ignored, matching R's unused `...`; a callback requiring another
+argument consequently raises its own missing-argument error.
+
+Python accepts real numeric scalars and numeric NumPy arrays containing one
+element, including NaN and infinities. Boolean, string, list and vector results
+are rejected. The result must remain scalar when called on curve values; a
+callback that changes its return length receives a clear error. Stock R only
+checks the preliminary calls and can subsequently produce an incompatible
+curve shape from such a callback.
+
+The R bridge accepts a function or function name and preserves the original
+R group table, including factor order, column types and names, in `newdata`.
+Its callback indices retain R's integer type, and ignored `...` expressions
+are left unevaluated. Both ordinary Cox curves and multistate Cox curves retain
+counts, times, strata and state metadata while dropping uncertainty components
+and cumulative hazards. Stock R drops these components except `std.chaz`, which
+incorrectly retains errors for the original prediction columns. After grouping,
+those columns can describe different curves; the port clears them as well.
+An R function name is resolved once when aggregation begins; rebinding that
+name from inside a callback does not switch the function during later passes.
+Stock R can resolve the name again when entering a subsequent `apply` call.
+
+Mean and sum use compensated arithmetic for ordinary same-sign normal values.
+Exceptional groups replay the pinned R platform's sequential arithmetic with
+a 64-bit significand and a separate exponent. This preserves signed infinities,
+subnormal values and cancellation across intermediate binary64 overflow.
+For example, the sum of `[1e308, 1e308, -1e308]` is `1e308`, and a mean containing
+one signed infinity retains it. Sequential extended arithmetic still rounds:
+`sum([1e300, 1, -1e300])` returns zero on that R platform. Ordinary results may
+differ in the final binary64 bits; R platforms with another long-double
+precision can also differ.
+
+An additional arithmetic audit compared 4,333 exponent-gap, cancellation,
+subnormal, overflow and randomized inputs with the pinned R runtime. Sums
+matched bit for bit. Mean and default row-mean differences were at most
+`2.22e-16` relative in that corpus and remained within the ordinary bound
+`8*EPSILON + 8*n*2^-64`. Exceptional cases retain sequential rounding instead
+of substituting a mathematically exact sum.
+
+Empty time/state axes retain the native API's shaped empty results. Stock R's
+`apply` instead probes callbacks with zeros and sometimes errors while permuting
+an empty multistate result. Zero data columns and missing grouping values are
+rejected before callbacks. Native/Python group labels include observed levels;
+R's bare factor `newdata` can include unused declared levels even when they do
+not produce curve columns, and the R bridge retains that table.
 
 The native kernel prepares stable positions for all members of each group once.
 Every time and state then fills one reusable contiguous buffer containing exactly
@@ -88,6 +164,39 @@ row and flattening all those vectors again. Fortran input still needs a logical
 axis-order copy into the owned C-layout array. The final samples were collected
 after compilation and the full test runs had finished.
 
+The callback and arithmetic changes were compared separately with the preceding
+release extension, using eleven alternating before/after pairs on CPU 0 after
+the broad test jobs finished. Each sample includes the complete native Python
+call, input conversion, grouping and output construction; outputs and group
+labels were checked before timing. Both builds use the same owned-array boundary.
+These inputs contain ordinary nonnegative values, not exceptional arithmetic.
+
+| Complete Python call | Before | After |
+| --- | ---: | ---: |
+| Mean, 40,000 columns, eight times, twenty groups | 1.02 ms | 0.93 ms |
+| Mean, 100,000 columns, twenty times, twenty groups | 5.28 ms | 5.03 ms |
+| Three-state mean, 40,000 columns, eight times, twenty groups | 2.47 ms | 2.33 ms |
+| Median control, 100,000 columns, twenty times, twenty groups | 6.23 ms | 6.37 ms |
+
+The normal complete-call timings stayed close in this comparison; the new
+arithmetic does not imply a general speedup. A separate reduction-only audit
+over twenty million values measured a mean-loop cost increase of about 1–7%.
+Exceptional groups use the slower sequential replay to preserve R's rounding.
+
+The reproducible callback benchmark uses 40,000 columns, eight times, twenty
+groups, and both survival and two-state probability components. The following
+medians cover seven complete calls on the same CPU. Facade calls also prepare
+the grouping vector. Every callback receives and returns its actual arrays;
+all outputs and labels are validated before timing.
+
+| Summary | Native built-in | Native NumPy callback | Facade built-in | Facade NumPy callback |
+| --- | ---: | ---: | ---: | ---: |
+| Mean | 2.27 ms | 2.56 ms | 3.70 ms | 3.88 ms |
+| Sum | 2.37 ms | 2.14 ms | 3.99 ms | 3.94 ms |
+
+These NumPy callbacks use their own vectorized reduction arithmetic, so their
+timings and exceptional-value behavior need not match the named Rust reducers.
+
 Reproduce the checks and measurements with:
 
 ```sh
@@ -99,7 +208,9 @@ cargo bench --offline --bench survival_benchmarks -- aggregate_curves \
   -k 'aggregate_survfit or unaligned or noncanonical or finegray_normalizes'
 .venv/bin/python -m pytest python/tests/test_survfit_coxphms.py -k aggregate
 .venv/bin/python -m pytest python/tests/test_gil_release.py -k aggregate_multistate
+.venv/bin/python -m pytest python/tests/test_aggregate_fun.py
 .venv/bin/python scripts/benchmark_aggregate_survfit.py --columns 100000 --repeat 7
+.venv/bin/python scripts/benchmark_aggregate_callbacks.py
 ```
 
 The direct Rust tests compare medians across 1–257 members, sorted, reverse,
@@ -110,6 +221,16 @@ declared level product of `2^usize::BITS`. Python tests compare both numerical
 components against NumPy for one or several groups and odd or even member
 counts. The existing R fixture topic `km-aggregate_survfit` checks reported
 survival curves, multistate probabilities and group labels.
+
+The independent `aggregate_fun_reference.json` records stock-R callback values
+and invocation traces for ordinary, multistate and combined components,
+grouped and ungrouped curves, factor order, missing values, ignored arguments,
+malformed returns and exceptional arithmetic. Its generator also records empty
+axes and missing-group behavior separately so the deliberate validation and
+shape differences remain reviewable. Python checks both input containers and
+both interfaces, together with retained dataclass metadata, callback exceptions,
+ownership and one-element numeric array returns. The R bridge tests compare
+complete group metadata and curve components with stock R.
 
 Typed-input Rust tests additionally verify array ownership before detaching,
 NumPy dtype/layout conversion, unaligned buffers, empty axes, array-valued nested

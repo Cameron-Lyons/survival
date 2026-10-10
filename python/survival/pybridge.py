@@ -114,6 +114,36 @@ def _call_fit_with_warnings(
     return {"result": result, "warnings": [str(issue.message) for issue in recorded]}
 
 
+def _call_dpqr_with_warnings(
+    function: Callable[..., Any],
+    keywords: Mapping[str, Any],
+    *,
+    positional: Sequence[Any] | None = None,
+    warning: Callable[[str], Any],
+) -> Any:
+    """Forward distribution arithmetic warnings when they occur, including R warn=2."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("always", RuntimeWarning)
+        warnings.simplefilter("always", UserWarning)
+        previous = warnings.showwarning
+
+        def emit(
+            message: Warning | str,
+            category: type[Warning],
+            filename: str,
+            lineno: int,
+            file: Any = None,
+            line: str | None = None,
+        ) -> None:
+            if issubclass(category, (RuntimeWarning, UserWarning)):
+                warning(str(message))
+            else:
+                previous(message, category, filename, lineno, file, line)
+
+        warnings.showwarning = emit
+        return function(*(positional or ()), **keywords)
+
+
 def _raise_captured_error(error: Exception) -> None:
     """R re-signals a captured Python error after emitting its preceding warnings."""
     raise error

@@ -1,124 +1,10 @@
 use super::*;
 use crate::regression::survreg_density::check_density_batch;
 use crate::regression::survreg_distributions::{
-    SurvregDistribution, SurvregFamily, SurvregTransform, distribution_values, recycled,
+    SurvregDistribution, SurvregFamily, SurvregTransform,
 };
 
 impl SurvregDistribution {
-    /// Density on the original response scale; scalar means/scales recycle.
-    /// Custom functions receive one batch, including for derived families.
-    pub fn pdf_values(&self, x: &[f64], mean: &[f64], scale: &[f64]) -> SurvivalResult<Vec<f64>> {
-        self.probability_values(x, mean, scale, true)
-    }
-
-    /// CDF on the original response scale; scalar means/scales recycle.
-    pub fn cdf_values(&self, q: &[f64], mean: &[f64], scale: &[f64]) -> SurvivalResult<Vec<f64>> {
-        self.probability_values(q, mean, scale, false)
-    }
-
-    fn probability_values(
-        &self,
-        x: &[f64],
-        mean: &[f64],
-        scale: &[f64],
-        density: bool,
-    ) -> SurvivalResult<Vec<f64>> {
-        if self.callbacks.is_none() && self.transform_callbacks.is_none() {
-            return distribution_values(
-                x,
-                mean,
-                scale,
-                self,
-                if density { Self::pdf } else { Self::cdf },
-            );
-        }
-        let mean = recycled(mean, "mean", x.len())?;
-        crate::internal::validation::validate_positive(scale, "scale")?;
-        let scale = recycled(scale, "scale", x.len())?;
-        let transformed = self.transform_values(x)?;
-        let derivative = if density {
-            Some(self.transform_derivatives(x)?)
-        } else {
-            None
-        };
-        // NaN query values propagate, without requiring a density callback to
-        // invent valid probability columns for an undefined endpoint.
-        let endpoints: Vec<_> = transformed
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| (v - mean(i)) / scale(i))
-            .collect();
-        let valid: Vec<_> = endpoints.iter().copied().filter(|z| !z.is_nan()).collect();
-        let values = if valid.is_empty() {
-            Vec::new()
-        } else {
-            self.density_batch(&valid)?
-        };
-        let mut values = values.iter();
-        Ok(endpoints
-            .iter()
-            .enumerate()
-            .map(|(i, z)| {
-                if z.is_nan() {
-                    return f64::NAN;
-                }
-                let v = values.next().expect("density batch length checked");
-                if let Some(d) = &derivative {
-                    v.pdf * d[i] / scale(i)
-                } else {
-                    v.cdf
-                }
-            })
-            .collect())
-    }
-
-    /// Quantiles on the original response scale; scalar means/scales recycle.
-    pub fn quantile_values(
-        &self,
-        p: &[f64],
-        mean: &[f64],
-        scale: &[f64],
-    ) -> SurvivalResult<Vec<f64>> {
-        if self.callbacks.is_none() && self.transform_callbacks.is_none() {
-            return distribution_values(p, mean, scale, self, Self::quantile_at);
-        }
-        let mean = recycled(mean, "mean", p.len())?;
-        crate::internal::validation::validate_positive(scale, "scale")?;
-        let scale = recycled(scale, "scale", p.len())?;
-        let mut quantiles = self.quantiles(p)?;
-        for (i, q) in quantiles.iter_mut().enumerate() {
-            *q = *q * scale(i) + mean(i);
-        }
-        self.inverse_values(&quantiles)
-    }
-
-    /// Random draws with R-compatible uniforms when a seed is supplied.
-    pub fn sample(
-        &self,
-        n: usize,
-        mean: &[f64],
-        scale: &[f64],
-        seed: Option<i32>,
-    ) -> SurvivalResult<Vec<f64>> {
-        use crate::internal::rng::{RUniform, Rng};
-        let uniform: Vec<_> = match seed {
-            Some(i32::MIN) => {
-                return Err(SurvivalError::invalid_input(
-                    "supplied seed is not a valid integer",
-                ));
-            }
-            Some(seed) => {
-                let mut rng = RUniform::new(seed as u32);
-                (0..n).map(|_| rng.unif_rand()).collect()
-            }
-            None => {
-                let mut rng = Rng::new();
-                (0..n).map(|_| rng.f64()).collect()
-            }
-        };
-        self.quantile_values(&uniform, mean, scale)
-    }
-
     /// Define a location-scale family in native Rust. Fits retain an `Arc`
     /// to these callbacks. Runtime callables have no automatic serde form.
     pub fn from_callbacks(
@@ -134,6 +20,7 @@ impl SurvregDistribution {
             transform,
             scale,
             parms,
+            query_parms: QueryParms::Values,
             callbacks: Some(RuntimeCallback(callbacks)),
             transform_callbacks: None,
         };

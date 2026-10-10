@@ -1,0 +1,1950 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_rsurvreg_count_reference.R",
+    "r_version": "4.5.3",
+    "survival_version": "3.8.12",
+    "seed": 123
+  },
+  "cases": [
+    {
+      "name": "integer0",
+      "expression": "0L",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "integer1",
+      "expression": "1L",
+      "runif": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424
+        ]
+      ]
+    },
+    {
+      "name": "integer3",
+      "expression": "3L",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "numeric3",
+      "expression": "3",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "fractional",
+      "expression": "2.5",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "fractional_small",
+      "expression": "0.75",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "negative_fraction_small",
+      "expression": "-0.75",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "negative_integer",
+      "expression": "-1L",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "negative_fraction",
+      "expression": "-1.5",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "length2",
+      "expression": "c(4, 7)",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "ignored_invalid",
+      "expression": "c(-1, NA, Inf)",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "empty",
+      "expression": "numeric(0)",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "null",
+      "expression": "NULL",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "na_integer",
+      "expression": "NA_integer_",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "na_real",
+      "expression": "NA_real_",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "nan",
+      "expression": "NaN",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "inf",
+      "expression": "Inf",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "negative_inf",
+      "expression": "-Inf",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "true",
+      "expression": "TRUE",
+      "runif": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424
+        ]
+      ]
+    },
+    {
+      "name": "false",
+      "expression": "FALSE",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "bool_vector",
+      "expression": "c(TRUE, FALSE, NA)",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "string3",
+      "expression": "\"3\"",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "stringfraction",
+      "expression": "\"2.5\"",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "stringhex",
+      "expression": "\"0x1.8p1\"",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "stringwhitespace",
+      "expression": "\" +2.5 \"",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "bad_string",
+      "expression": "\"bad\"",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "bad_string_separator",
+      "expression": "\"1_0\"",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [
+          "NAs introduced by coercion"
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "strings",
+      "expression": "c(\"bad\", \"also_bad\")",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "list1",
+      "expression": "list(3)",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "list2",
+      "expression": "list(-1, NA)",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "list0",
+      "expression": "list()",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "matrix",
+      "expression": "structure(1:4, dim = c(2L, 2L))",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987,
+          0.88301740400493145
+        ],
+        "error": null,
+        "length": 4,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.9404672842938453
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963,
+          2.1457301074279846
+        ],
+        "error": null,
+        "length": 4,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.9404672842938453
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987,
+          0.88301740400493145
+        ],
+        "error": null,
+        "length": 4,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.9404672842938453
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987,
+          0.88301740400493145
+        ]
+      ]
+    },
+    {
+      "name": "matrix1",
+      "expression": "structure(2.5, dim = c(1L, 1L))",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "matrix0",
+      "expression": "structure(numeric(0), dim = c(0L, 3L))",
+      "runif": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "factor",
+      "expression": "structure(1L, levels = c(\"3\", \"5\"), class = \"factor\")",
+      "runif": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424
+        ],
+        "error": null,
+        "length": 1,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.78830513544380665
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424
+        ]
+      ]
+    },
+    {
+      "name": "factor_missing",
+      "expression": "structure(NA_integer_, levels = c(\"3\", \"5\"), class = \"factor\")",
+      "runif": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "rsurvreg": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": null,
+        "error": "invalid arguments",
+        "length": null,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": []
+    },
+    {
+      "name": "factor_vector",
+      "expression": "structure(c(2L, 1L, NA), levels = c(\"3\", \"5\"), class = \"factor\")",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "complex",
+      "expression": "3+2i",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "imaginary parts discarded in coercion"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "imaginary parts discarded in coercion"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "imaginary parts discarded in coercion"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "complex_fraction",
+      "expression": "2.5+0i",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "complex_vector",
+      "expression": "c(1+1i, 2+1i)",
+      "runif": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          1.5526093592546182
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          0.78830513544380665
+        ],
+        "error": null,
+        "length": 2,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    }
+  ],
+  "recycling": [
+    {
+      "name": "zero_mean3",
+      "n": 0,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "zero_scale3",
+      "n": 0,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "zero_both_vectors",
+      "n": 0,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        0.5,
+        2
+      ],
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "zero_meanempty",
+      "n": 0,
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      },
+      "quantile_calls": [
+        []
+      ]
+    },
+    {
+      "name": "two_mean3",
+      "n": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "rsurvreg": {
+        "values": [
+          0.92172634560291744,
+          11.472317655257147,
+          6.8106876755222974
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "custom": {
+        "values": [
+          1.2875775201246142,
+          2.7883051354438066,
+          3.2875775201246142
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665
+        ]
+      ]
+    },
+    {
+      "name": "three_mean2",
+      "n": 3,
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1
+      ],
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          4.2204298079572702,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          1.7883051354438066,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "three_scale2",
+      "n": 3,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2
+      ],
+      "rsurvreg": {
+        "values": [
+          0.33908417293339699,
+          2.4105958224450359,
+          0.52590021295045963
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [
+          0.28757752012461424,
+          1.5766102708876133,
+          0.40897692181169987
+        ],
+        "error": null,
+        "length": 3,
+        "dim": null,
+        "warnings": [
+          "longer object length is not a multiple of shorter object length"
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    },
+    {
+      "name": "three_meanempty",
+      "n": 3,
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "rsurvreg": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "custom": {
+        "values": [],
+        "error": null,
+        "length": 0,
+        "dim": null,
+        "warnings": [],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      },
+      "quantile_calls": [
+        [
+          0.28757752012461424,
+          0.78830513544380665,
+          0.40897692181169987
+        ]
+      ]
+    }
+  ]
+}

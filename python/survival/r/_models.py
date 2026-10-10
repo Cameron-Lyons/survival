@@ -1359,7 +1359,11 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     for name, values in optional.items():
         if values is not None:
             frame[name] = []
-    strata = [name for name, count in (result.strata or {}).items() for _ in range(count)]
+    strata = [
+        name
+        for name, count in zip(result.strata_names, (result.strata or {}).values(), strict=True)
+        for _ in range(count)
+    ]
     for curve in range(ncurve):
         frame["curve"].extend([curve + 1] * ntime)
         frame["time"].extend(result.time)

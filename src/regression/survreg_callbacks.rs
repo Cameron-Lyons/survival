@@ -12,6 +12,9 @@ use std::fmt;
 use std::sync::Arc;
 
 mod distribution;
+mod dpqr;
+pub use dpqr::DpqrWarning;
+pub(crate) use dpqr::QueryParms;
 #[cfg(feature = "python")]
 pub(crate) mod python;
 #[cfg(test)]
@@ -19,7 +22,8 @@ mod tests;
 
 /// The `init`, `density`, `quantile`, `deviance` and optional `variance`
 /// functions of an R `survreg.distributions` entry. `parms` are the fitted
-/// distribution's parameters. Returned vectors must match their input length.
+/// distribution's parameters. Fitting requires returned vectors to match the
+/// input length; distribution queries apply R's arithmetic recycling rules.
 pub trait SurvregCallbacks: Any + Send + Sync {
     /// Initial location and variance (not standard deviation).
     fn init(&self, y: &[f64], weights: &[f64], parms: &[f64]) -> SurvivalResult<[f64; 2]>;

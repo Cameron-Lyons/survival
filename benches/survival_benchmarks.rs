@@ -249,7 +249,9 @@ mod matrix_curves {
 
 mod aggregate_curves {
     use super::*;
-    use survival::surv_analysis::{AggregateFun, GroupingFactor, aggregate_survfit};
+    use survival::surv_analysis::{
+        AggregateFun, GroupingFactor, aggregate_survfit, aggregate_survfit_with,
+    };
 
     fn run(bencher: divan::Bencher, columns: usize, groups: usize, states: usize) {
         let times = 20;
@@ -299,6 +301,40 @@ mod aggregate_curves {
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn grouped_pstate_median(bencher: divan::Bencher, columns: usize) {
         run(bencher, columns, 20, 3);
+    }
+
+    fn sum_run(bencher: divan::Bencher, columns: usize, callback: bool) {
+        let surv = Array2::from_shape_fn((20, columns), |(t, j)| {
+            ((j * 7919 + t * 101) % 100003) as f64 / 100003.0
+        });
+        let by = vec![
+            GroupingFactor::try_new(
+                (0..columns).map(|j| j % 20).collect(),
+                (0..20).map(|j| j.to_string()).collect(),
+                None,
+            )
+            .expect("benchmark grouping is valid"),
+        ];
+        bencher.bench_local(|| {
+            let result = if callback {
+                aggregate_survfit_with(Some(&surv), None, &by, |values| {
+                    Ok(values.iter().sum::<f64>())
+                })
+            } else {
+                aggregate_survfit(Some(&surv), None, &by, AggregateFun::Sum)
+            };
+            black_box(result.expect("benchmark aggregation succeeds"))
+        });
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn grouped_sum(bencher: divan::Bencher, columns: usize) {
+        sum_run(bencher, columns, false);
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn grouped_callback(bencher: divan::Bencher, columns: usize) {
+        sum_run(bencher, columns, true);
     }
 }
 
@@ -503,17 +539,31 @@ mod logrank {
 
         bencher.bench_local(|| {
             survival::validation::logrank_test(&time, &status_i32, &group, None, None, 0.0, true)
+                .expect("benchmark log-rank data should be valid")
         });
     }
 
-    #[divan::bench(args = [100, 1000, 10000])]
+    #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn g_rho(bencher: divan::Bencher, n: usize) {
         let (time, _, status_i32) = generate_survival_data(n);
         let group = generate_group_data(n);
 
         bencher.bench_local(|| {
             survival::validation::logrank_test(&time, &status_i32, &group, None, None, 1.0, true)
+                .expect("benchmark weighted log-rank data should be valid")
         });
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn g_rho_counting_strata(bencher: divan::Bencher, n: usize) {
+        let (time, _, status) = generate_survival_data(n);
+        let start = generate_entry_times(&time);
+        let group = generate_group_data(n);
+        let strata = generate_strata(n, 49);
+        let data =
+            surv_analysis::SurvdiffData::try_new(Some(start), time, status, group, Some(strata))
+                .expect("benchmark log-rank data should be valid");
+        bencher.bench_local(|| surv_analysis::survdiff(&data, 1.0, true).unwrap());
     }
 
     /// `survdiff(Surv(time, status) ~ group + strata(s))` with 49 strata.
@@ -526,7 +576,10 @@ mod logrank {
             surv_analysis::SurvdiffData::try_new(None, time, status_i32, group, Some(strata))
                 .expect("benchmark survival data should be valid");
 
-        bencher.bench_local(|| surv_analysis::survdiff(&data, 0.0, true));
+        bencher.bench_local(|| {
+            surv_analysis::survdiff(&data, 0.0, true)
+                .expect("benchmark stratified log-rank data should be valid")
+        });
     }
 }
 

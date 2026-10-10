@@ -1,0 +1,884 @@
+{
+  "cases": [
+    {
+      "name": "gaussian/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "gaussian/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "gaussian/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "gaussian/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "gaussian/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "gaussian/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(1 - p)"
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(-log(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "weibull/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(1 - p)"
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(-log(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(p/(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "logistic/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(p/(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qt(p, df)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "t/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qt(p, df)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(1 - p)"
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(-log(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "extreme/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(1 - p)"
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(-log(1 - p))"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(y)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "lognormal/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/mean",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/scale",
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.5,
+              1.1000000000000001,
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    }
+  ]
+}

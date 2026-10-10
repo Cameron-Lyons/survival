@@ -1,7 +1,25 @@
 //! Entry reporting grids, counts and estimates match stock R survival 3.8-12.
 
 use serde_json::Value;
-use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
+use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, survfitaj};
+
+fn assert_point_estimates_equal(actual: &SurvfitAJResult, reference: &SurvfitAJResult) {
+    let actual = serde_json::to_value(actual).unwrap();
+    let mut expected = serde_json::to_value(reference).unwrap();
+    for field in [
+        "std_err",
+        "std_chaz",
+        "std_auc",
+        "se0",
+        "lower",
+        "upper",
+        "influence_pstate",
+    ] {
+        assert_eq!(actual[field], Value::Null, "{field}");
+        expected[field] = Value::Null;
+    }
+    assert_eq!(actual, expected);
+}
 
 fn values(values: &[Vec<f64>]) -> Value {
     serde_json::to_value(values).unwrap()
@@ -90,17 +108,25 @@ fn entry_grids_match_current_stock_r_for_subject_continuations() {
             None,
         )
         .unwrap();
-        let fit = survfitaj(
+        let options = SurvfitAJOptions {
+            entry: case["entry"].as_bool().unwrap(),
+            time0: case["time0"].as_bool().unwrap(),
+            start_time: case["start_time"].as_f64(),
+            influence: true,
+            ..Default::default()
+        };
+        let fit = survfitaj(&data, &options).unwrap();
+        let point_estimates = survfitaj(
             &data,
             &SurvfitAJOptions {
-                entry: case["entry"].as_bool().unwrap(),
-                time0: case["time0"].as_bool().unwrap(),
-                start_time: case["start_time"].as_f64(),
-                influence: true,
-                ..Default::default()
+                se_fit: false,
+                ..options
             },
         )
         .unwrap();
+        // Every result field other than uncertainty matches the complete
+        // general-IJ fit checked against stock R below.
+        assert_point_estimates_equal(&point_estimates, &fit);
         let expected = &case["expected"];
         let name = case["name"].as_str().unwrap();
         assert_eq!(

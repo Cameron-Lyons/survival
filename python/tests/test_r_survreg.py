@@ -699,7 +699,8 @@ def test_survreg_distribution_functions_match_r():
     assert r.rsurvreg(0, mean=0.5) == []
     with pytest.raises(ValueError, match="n must be non-negative"):
         r.rsurvreg(-1, mean=0.5)
-    with pytest.raises(ValueError, match="length"):
-        r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0])
+    with pytest.warns(RuntimeWarning, match="longer object length"):
+        recycled = r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0])
+    assert recycled == pytest.approx(r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0, 0.0]))
     with pytest.raises(ValueError, match="Distribution not found"):
         r.dsurvreg([1.0], mean=0.0, distribution="nope")
