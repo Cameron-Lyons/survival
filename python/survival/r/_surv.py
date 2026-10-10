@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
@@ -35,6 +35,7 @@ from ._coerce import (
     _missing_row_indices,
     _normalize_na_action,
     _numeric_ndarray,
+    _r_factor,
     _r_format_numbers,
     _subset_sequence,
     _warn_outside_package,
@@ -156,12 +157,27 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
     return status
 
 
-def _mstate_status(values: Any) -> tuple[list[int | None], tuple[str, ...], str | None]:
+def _event_input(values: Any, rows: int, message: str) -> tuple[Any, list[Any] | None]:
+    """Inspect event length once, retaining its numeric dtype and declared levels."""
+
+    levels = _categories(values)
+    if levels is not None:
+        levels = [level for level in levels if not _is_missing_value(level)]
+    array = _numeric_ndarray(values) if levels is None or isinstance(values, np.ndarray) else None
+    prepared = array if array is not None else _materialize_1d(values, "event")
+    if len(prepared) != rows:
+        raise ValueError(message)
+    return prepared, levels
+
+
+def _mstate_status(
+    values: Any, *, levels: Sequence[Any] | None = None
+) -> tuple[list[int | None], tuple[str, ...], str | None]:
     """``as.numeric(as.factor(event)) - 1`` and the states (every level but the first)."""
 
-    codes, labels = _factor(values, "event")
+    codes, labels = _factor(values, "event", levels=levels)
     states = tuple(labels[1:])
-    if any(state == "" or state == "NA" for state in states):
+    if any(state == "" for state in states):
         raise ValueError("each state must have a non-blank name")
     return codes, states, labels[0] if labels else None
 
@@ -258,11 +274,9 @@ class Surv(_SurvivalOperations):
             status: list[int | None] = [1] * nn
             surv_type = "right"
         elif surv_type in {"right", "left"}:
-            event = args[1]
-            if len(_materialize_1d(event, "event")) != nn:
-                raise ValueError("Time and status are different lengths")
-            if mstate or _is_factor_like(event):
-                status, states, clabel = _mstate_status(event)
+            event, levels = _event_input(args[1], nn, "Time and status are different lengths")
+            if mstate or levels is not None:
+                status, states, clabel = _mstate_status(event, levels=levels)
                 surv_type = "mright"
             else:
                 status = _binary_status(event, "event")
@@ -271,8 +285,7 @@ class Surv(_SurvivalOperations):
             time = _time_column(args[1], "time2", "Stop time is not numeric")
             if len(time) != nn:
                 raise ValueError("Start and stop are different lengths")
-            if len(_materialize_1d(args[2], "event")) != nn:
-                raise ValueError("Start and event are different lengths")
+            event, levels = _event_input(args[2], nn, "Start and event are different lengths")
             backwards = [
                 not (math.isnan(a) or math.isnan(b)) and a >= b
                 for a, b in zip(start, time, strict=True)
@@ -282,11 +295,11 @@ class Surv(_SurvivalOperations):
                     math.nan if bad else value for value, bad in zip(start, backwards, strict=True)
                 ]
                 _warn_outside_package("Stop time must be > start time, NA created")
-            if mstate or _is_factor_like(args[2]):
-                status, states, clabel = _mstate_status(args[2])
+            if mstate or levels is not None:
+                status, states, clabel = _mstate_status(event, levels=levels)
                 surv_type = "mcounting"
             else:
-                status = _binary_status(args[2], "event")
+                status = _binary_status(event, "event")
         elif surv_type == "interval2":
             time, time2, status = _interval2_columns(time, args[1])
             surv_type = "interval"
@@ -625,6 +638,16 @@ def _survreg_response_arrays(
 # ---------------------------------------------------------------------------
 
 
+def _strata_iterator(values: Any) -> Any:
+    """Materialize a one-shot column once, retaining its declared factor levels."""
+
+    if not isinstance(values, Iterator):
+        return values
+    levels = _categories(values)
+    materialized = list(values)
+    return materialized if levels is None else _r_factor(materialized, levels)
+
+
 def _strata_arguments(variables: tuple[Any, ...]) -> tuple[list[Any], list[str] | None]:
     """R's ``allf`` and its names: the ``...`` arguments, or the one list argument.
 
@@ -635,6 +658,8 @@ def _strata_arguments(variables: tuple[Any, ...]) -> tuple[list[Any], list[str] 
         raise ValueError("all arguments must be vectors")
     if len(variables) == 1:
         (single,) = variables
+        single = _strata_iterator(single)
+        variables = (single,)
         if isinstance(single, dict):
             return list(single.values()), [str(key) for key in single]
         columns = getattr(single, "columns", None)
@@ -718,6 +743,7 @@ def _strata(
     a factor.
     """
 
+    columns = [(name, _strata_iterator(values)) for name, values in columns]
     names = [name for name, _values in columns]
     coded = [_factor(values, "strata") for _name, values in columns]
     if len({len(codes) for codes, _levels in coded}) > 1:
@@ -785,12 +811,13 @@ class Surv2(_SurvivalOperations):
             repeated_value = bool(repeated)
         else:
             raise ValueError("invalid value for repeated option")
-        if len(_materialize_1d(event, "event")) != len(time_values):
-            raise ValueError("Time and event are different lengths")
+        event, levels = _event_input(
+            event, len(time_values), "Time and event are different lengths"
+        )
         states: tuple[str, ...] = ()
         clabel: str | None = None
-        if _is_factor_like(event):
-            status, states, clabel = _mstate_status(event)
+        if levels is not None:
+            status, states, clabel = _mstate_status(event, levels=levels)
         else:
             status = _binary_status(event, "event")
         object.__setattr__(self, "time", tuple(time_values))

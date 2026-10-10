@@ -67,6 +67,7 @@ from ._formula import (
     _EvaluatedModelFrame,
     _formula_columns,
     _formula_model_term_degree,
+    _prepare_formula_inputs,
     _strata_keep,
     _strata_specs,
 )
@@ -528,6 +529,7 @@ def _model_matrix_cox(
                 row.insert(columns[0], value)
     else:
         action = _normalize_na_action(na_action)
+        data, _ = _prepare_formula_inputs(data)
         design = _model_matrix_newdata_design(design, data)
         new = _newdata_frame(
             design,
@@ -901,18 +903,13 @@ def _survfit_frame(result: SurvfitResult) -> dict[str, list[Any]]:
     std_err = result.std_err
     if std_err is not None and result.logse:
         std_err = [float(se) * float(surv) for se, surv in zip(std_err, result.surv, strict=True)]
-    # once a curve reaches 0 its standard error and limits are undefined
-    terminal = [value <= 0.0 for value in frame["surv"]]
     for name, values in (
         ("std.err", std_err),
         ("lower", result.lower),
         ("upper", result.upper),
     ):
         if values is not None:
-            column = [
-                math.nan if done else float(value)
-                for value, done in zip(values, terminal, strict=True)
-            ]
+            column = [float(value) for value in values]
             _add_optional_survfit_column(frame, name, column, row_count)
     if result.std_chaz is not None:
         _add_optional_survfit_column(frame, "std.chaz", result.std_chaz, row_count)

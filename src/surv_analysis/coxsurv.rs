@@ -2,7 +2,7 @@
 
 use super::agsurv::{
     AgsurvCurve, CoxSurvCurve, CoxSurvType, IndividualInterval, agsurv_rows, check_baseline,
-    expand_curve, individual_curve, prepare_baseline,
+    expand_curve_validated, individual_curve_validated, prepare_baseline,
 };
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
@@ -258,12 +258,14 @@ pub fn coxsurv_fit(
             });
         }
         for intervals in groups {
-            result.push(individual_curve(&curves, survtype, &intervals, varmat)?);
+            result.push(individual_curve_validated(
+                &curves, survtype, &intervals, varmat,
+            )?);
         }
         Ok(result.finish(1, None))
     } else {
         for curve in &curves {
-            result.push(expand_curve(
+            result.push(expand_curve_validated(
                 curve,
                 survtype,
                 newdata.x,

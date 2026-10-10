@@ -11,7 +11,9 @@
 use crate::core::strata_order::{first_of_run, order_within_strata, validate_intervals};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
-use crate::internal::validation::{validate_binary_i32, validate_length};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_length, validate_non_empty,
+};
 use pyo3::prelude::*;
 
 /// The expanded risk sets: `time[k]` and `nrisk[k]` describe the `k`-th
@@ -38,6 +40,7 @@ pub fn coxcount1(
     let n = survival.len();
     let time = &survival.time;
     let status = &survival.status;
+    SurvivalData::validate_parts(time, status)?;
     validate_binary_i32(status, "status")?;
     let zero = vec![0; n];
     let strata = strata.map_or(Ok(&zero[..]), |s| {
@@ -97,6 +100,11 @@ pub fn coxcount2(
     let time1 = &counting.start;
     let time2 = &counting.stop;
     let status = &counting.event;
+    validate_non_empty(time1, "start")?;
+    validate_length(n, time2.len(), "stop")?;
+    validate_length(n, status.len(), "event")?;
+    validate_finite(time1, "start")?;
+    validate_finite(time2, "stop")?;
     validate_binary_i32(status, "event")?;
     validate_intervals(time1, time2)?;
     let zero = vec![0; n];

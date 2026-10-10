@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import operator
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -277,7 +277,16 @@ def _cluster_codes(cluster: Any) -> list[int | None]:
     """Factor order when declared, otherwise numeric or lexical label order."""
     if isinstance(cluster, _ClusterCodes):
         return cluster
-    levels = None if _numeric_ndarray(cluster) is not None else _r_factor_levels(cluster)
+    declared = _categories(cluster)
+    if declared is None and _numeric_ndarray(cluster) is not None:
+        return _factor(cluster, "cluster")[0]
+    if isinstance(cluster, Iterator):
+        cluster = _materialize_labels(cluster, "cluster")
+    if declared is None:
+        levels = _r_factor_levels(cluster)
+    else:
+        present = {value for value in set(cluster) if not _is_missing_value(value)}
+        levels = [level for level in declared if level in present]
     return _factor(cluster, "cluster", levels=levels)[0]
 
 

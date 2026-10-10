@@ -57,6 +57,7 @@ from ._formula import (
     _covariate_factors,
     _formula_model_term_degree,
     _formula_tokens,
+    _prepare_formula_inputs,
     _scan,
     _split_terms,
     _strata_specs,
@@ -1077,6 +1078,7 @@ def predict_coxphms(
     linear predictor rather than failing as non-conformable.
     """
 
+    newdata, _ = _prepare_formula_inputs(newdata)
     predict_type = _match_string_arg(
         type,
         "type",

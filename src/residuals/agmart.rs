@@ -7,17 +7,31 @@
 //! the remaining ones are walked from the largest stop time down.  An exact
 //! fit gets the Breslow form, as `agexact.fit` does with `agmart(method = 0)`.
 
-use crate::core::strata_order::{stratum_groups, validate_intervals};
+use crate::core::strata_order::stratum_groups;
 use crate::error::SurvivalResult;
-use crate::internal::typed_inputs::AndersenGillInput;
-use crate::internal::validation::validate_binary_i32;
+use crate::internal::typed_inputs::{AndersenGillInput, CountingProcessData, Weights};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::TieMethod;
 
 /// Martingale residuals `status - score * (H(stop) - H(start))` for
 /// (start, stop] data, in the order of `input`.
 pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
+    let n = input.counting.len();
+    CountingProcessData::validate_parts(
+        &input.counting.start,
+        &input.counting.stop,
+        &input.counting.event,
+    )?;
     validate_binary_i32(&input.counting.event, "event")?;
-    validate_intervals(&input.counting.start, &input.counting.stop)?;
+    validate_length(n, input.score.len(), "score")?;
+    validate_finite(&input.score, "score")?;
+    if let Some(weights) = &input.weights {
+        validate_length(n, weights.values.len(), "weights")?;
+        Weights::validate_values(&weights.values)?;
+    }
+    if let Some(strata) = &input.strata {
+        validate_length(n, strata.len(), "strata")?;
+    }
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
     Ok(agmart_rows(

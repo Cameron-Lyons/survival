@@ -9,8 +9,8 @@
 
 use crate::core::strata_order::{last_of_run, order_within_strata};
 use crate::error::SurvivalResult;
-use crate::internal::typed_inputs::CoxMartInput;
-use crate::internal::validation::validate_binary_i32;
+use crate::internal::typed_inputs::{CoxMartInput, SurvivalData, Weights};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::TieMethod;
 
 /// Martingale residuals `status - expected` for a right-censored Cox model.
@@ -19,7 +19,18 @@ use crate::regression::TieMethod;
 /// when given, are integer labels (any order); the residuals come back in
 /// the order of `input`.
 pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
+    let n = input.survival.len();
+    SurvivalData::validate_parts(&input.survival.time, &input.survival.status)?;
     validate_binary_i32(&input.survival.status, "status")?;
+    validate_length(n, input.score.len(), "score")?;
+    validate_finite(&input.score, "score")?;
+    if let Some(weights) = &input.weights {
+        validate_length(n, weights.values.len(), "weights")?;
+        Weights::validate_values(&weights.values)?;
+    }
+    if let Some(strata) = &input.strata {
+        validate_length(n, strata.len(), "strata")?;
+    }
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
     let time = &input.survival.time;

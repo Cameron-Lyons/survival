@@ -34,7 +34,7 @@ use crate::regression::coxph_diagnostics::{
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use crate::surv_analysis::agsurv::{
     AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, IntegratedCurve, agsurv_rows,
-    cum_xbar_at, cumhaz_at, expand_curve, individual_curve, integrate_curve,
+    cum_xbar_at, cumhaz_at, expand_curve_validated, individual_curve_validated, integrate_curve,
 };
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use pyo3::prelude::*;
@@ -987,6 +987,48 @@ impl CoxPHFit {
             .collect()
     }
 
+    /// Fitted fields are publicly mutable in Rust. Validate dimensions before
+    /// consuming them, including when privately cached baselines already exist.
+    /// These checks take constant time in the number of training observations;
+    /// fitted numeric values retain their method-specific missing-value behavior.
+    fn check_prediction_dimensions(&self) -> SurvivalResult<()> {
+        for (name, length) in [
+            ("fit time", self.time.len()),
+            ("fit status", self.status.len()),
+            ("fit design rows", self.x.nrows()),
+            ("fit weights", self.weights.len()),
+            ("fit offset", self.offset.len()),
+            ("fit linear predictors", self.linear_predictors.len()),
+            ("fit residuals", self.residuals.len()),
+            ("fit sorted rows", self.sorted.order.len()),
+            ("fit stratum rows", self.sorted.stratum_index.len()),
+        ] {
+            validate_length(self.n, length, name)?;
+        }
+        if let Some(entry) = &self.entry {
+            validate_length(self.n, entry.len(), "fit entry")?;
+        }
+        if let Some(strata) = &self.strata {
+            validate_length(self.n, strata.len(), "fit strata")?;
+        } else if self.sorted.nstrata() > 1 {
+            return Err(SurvivalError::invalid_input(
+                "a stratified fit requires its stored strata",
+            ));
+        }
+        let p = self.nvar();
+        validate_length(p, self.x.ncols(), "fit design columns")?;
+        validate_length(p, self.means.len(), "fit means")?;
+        if self.var.dim() != (p, p) {
+            return Err(SurvivalError::invalid_input(format!(
+                "fit variance must have shape ({p}, {p})"
+            )));
+        }
+        if let Some(curve) = self.curves.get().and_then(|curves| curves.first()) {
+            validate_length(p, curve.xbar.ncols(), "fit baseline columns")?;
+        }
+        Ok(())
+    }
+
     /// Survival-curve types matching the tie method (`survfit.coxph`:
     /// `ctype` 2 for Efron, 1 otherwise).
     fn default_survtype(&self) -> CoxSurvType {
@@ -1066,6 +1108,7 @@ impl CoxPHFit {
 
     /// The cached baseline curves for the fit's own hazard type.
     pub(crate) fn baseline_curves(&self) -> SurvivalResult<&[AgsurvCurve]> {
+        self.check_prediction_dimensions()?;
         if let Some(curves) = self.curves.get() {
             return Ok(curves);
         }
@@ -1080,6 +1123,7 @@ impl CoxPHFit {
         survtype: CoxSurvType,
         start_time: Option<f64>,
     ) -> SurvivalResult<Cow<'_, [AgsurvCurve]>> {
+        self.check_prediction_dimensions()?;
         if survtype == self.default_survtype() && start_time.is_none() {
             Ok(Cow::Borrowed(self.baseline_curves()?))
         } else {
@@ -1222,7 +1266,7 @@ impl CoxPHFit {
                     .sorted
                     .position_of(code)
                     .expect("strata were checked against the fit");
-                let expanded = expand_curve(
+                let expanded = expand_curve_validated(
                     &curves[position],
                     survtype,
                     x2c.row(i).insert_axis(ndarray::Axis(0)),
@@ -1233,7 +1277,7 @@ impl CoxPHFit {
             }
         } else {
             for (position, curve) in curves.iter().enumerate() {
-                let expanded = expand_curve(curve, survtype, x2c.view(), &risk2, varmat)?;
+                let expanded = expand_curve_validated(curve, survtype, x2c.view(), &risk2, varmat)?;
                 result.push(finish_curve(
                     self.sorted.codes[position],
                     expanded,
@@ -1258,6 +1302,7 @@ impl CoxPHFit {
         times: &[f64],
         newdata: Option<&CoxNewData>,
     ) -> SurvivalResult<Array2<f64>> {
+        self.check_prediction_dimensions()?;
         validate_finite(times, "times")?;
         let (x, strata, offset) = match newdata {
             Some(newdata) => {
@@ -1287,11 +1332,15 @@ impl CoxPHFit {
         let curves = self.baseline_curves()?;
         let mut rows_by_stratum = vec![Vec::new(); curves.len()];
         for row in 0..x.nrows() {
-            let position = strata.map_or(0, |codes| {
-                self.sorted
-                    .position_of(codes[row])
-                    .expect("strata were checked against the fit")
-            });
+            let position = match strata {
+                Some(codes) => self.sorted.position_of(codes[row]).ok_or_else(|| {
+                    SurvivalError::invalid_input(format!(
+                        "fit stratum {} is not a fitted stratum",
+                        codes[row]
+                    ))
+                })?,
+                None => 0,
+            };
             rows_by_stratum[position].push(row);
         }
         for (curve, rows) in curves.iter().zip(rows_by_stratum) {
@@ -1327,6 +1376,7 @@ impl CoxPHFit {
         method: &str,
     ) -> SurvivalResult<crate::population::SurvExpResult> {
         use crate::population::{CoxExpectedBaseline, survexp_cox_prepared};
+        self.check_prediction_dimensions()?;
         self.check_newdata(newdata, false)?;
         if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
             return Err(SurvivalError::invalid_input(
@@ -1417,7 +1467,7 @@ impl CoxPHFit {
                     risk2: risk2[i],
                 })
                 .collect();
-            let curve = individual_curve(&curves, survtype, &intervals, varmat)?;
+            let curve = individual_curve_validated(&curves, survtype, &intervals, varmat)?;
             let stratum = intervals
                 .first()
                 .map_or(0, |interval| self.sorted.codes[interval.stratum]);
@@ -1524,6 +1574,7 @@ impl CoxPHFit {
         se_fit: bool,
         reference: PredictReference,
     ) -> SurvivalResult<CoxPrediction> {
+        self.check_prediction_dimensions()?;
         let training_x = self.uses_training_x(se_fit, reference);
         if newdata.is_none() && !training_x {
             return Ok(CoxPrediction {
@@ -1593,6 +1644,7 @@ impl CoxPHFit {
         assign: &[Vec<usize>],
         group: Option<&[i32]>,
     ) -> SurvivalResult<CoxTermsPrediction> {
+        self.check_prediction_dimensions()?;
         validate_assign(assign, self.nvar())?;
         let nrows = newdata.map_or(self.n, CoxNewData::nrows);
         if group.is_some_and(|group| group.len() != nrows) {
@@ -1663,6 +1715,7 @@ impl CoxPHFit {
         newdata: Option<&CoxNewData>,
         se_fit: bool,
     ) -> SurvivalResult<CoxPrediction> {
+        self.check_prediction_dimensions()?;
         let counting = self.entry.is_some();
         let Some(newdata) = newdata else {
             let fit: Vec<f64> = self

@@ -34,6 +34,7 @@ from ._coerce import (
     _finite_float,
     _float_or_nan,
     _float_vector,
+    _floats_or_nan,
     _integer_scalar,
     _materialize_labels,
     _matrix_input_column_names,
@@ -47,6 +48,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _quantile_vector,
     _rowsum_groups,
+    _scalar_or_vector,
 )
 from ._fit import (
     _empty_prediction,
@@ -82,6 +84,7 @@ from ._formula import (
     _na_action_record,
     _offset_vector,
     _parse_formula,
+    _prepare_formula_inputs,
     _strata_keep,
     _strata_specs,
     _subset_formula_inputs,
@@ -558,6 +561,8 @@ def _formula_frame(
     keep_model: bool,
 ) -> _SurvregFrame:
     spec = _formula_response_spec(formula)
+    data, supplied = _prepare_formula_inputs(data, weights=weights, offset=offset, cluster=cluster)
+    weights, offset, cluster = (supplied[name] for name in ("weights", "offset", "cluster"))
     full_data = data
     weights = _column_or_values(data, weights, "weights")
     offset = _column_or_values(data, offset, "offset")
@@ -1050,6 +1055,8 @@ def predict_survreg(
     ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
     (``naresid``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
     (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).
+    ``p`` is used only for quantile predictions. Missing probabilities retain
+    their output columns, with valid probabilities evaluated normally.
     """
 
     predict_type = _match_arg(
@@ -1070,7 +1077,11 @@ def predict_survreg(
         )
     )
     term_names = _prediction_term_labels(fit)
-    quantiles = _quantile_vector(p, "p")
+    quantiles = (
+        _floats_or_nan(_scalar_or_vector(p, "p"))
+        if predict_type in {"quantile", "uquantile"}
+        else []
+    )
     selection = (
         _matrix_term_selection(terms, term_names, warning_repeats=2 if include_se else 1)
         if predict_type == "terms"
@@ -1447,7 +1458,7 @@ def dsurvreg(
     """Density of the ``survreg`` location-scale distributions (R's ``dsurvreg``)."""
 
     return _dpqr_distribution(distribution, parms).pdf_values(
-        _quantile_vector(x, "x"),
+        _floats_or_nan(_scalar_or_vector(x, "x")),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
     )
@@ -1459,7 +1470,7 @@ def psurvreg(
     """Distribution function of the ``survreg`` distributions (R's ``psurvreg``)."""
 
     return _dpqr_distribution(distribution, parms).cdf_values(
-        _quantile_vector(q, "q"),
+        _floats_or_nan(_scalar_or_vector(q, "q")),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
     )
@@ -1471,7 +1482,7 @@ def qsurvreg(
     """Quantiles of the ``survreg`` distributions (R's ``qsurvreg``)."""
 
     return _dpqr_distribution(distribution, parms).quantile_values(
-        _quantile_vector(p, "p"),
+        _floats_or_nan(_scalar_or_vector(p, "p")),
         _quantile_vector(mean, "mean"),
         _quantile_vector(scale, "scale"),
     )

@@ -226,6 +226,17 @@ pub fn concordancefit(
             "influence must be 0, 1, 2 or 3",
         ));
     }
+    // Response fields are public in the Rust API. Recheck them here before
+    // interval validation, time fixing or the ordered sweep indexes any row.
+    validate_length(n, response.stop().len(), "y")?;
+    validate_length(n, response.status().len(), "status")?;
+    validate_finite(response.stop(), "time")?;
+    validate_binary_i32(response.status(), "status")?;
+    if let Some(start) = response.start() {
+        validate_length(n, start.len(), "start")?;
+        validate_finite(start, "start")?;
+        validate_intervals(start, response.stop())?;
+    }
     let mut times = match response {
         SurvResponse::Right(data) => SurvTimes {
             start: None,
@@ -233,7 +244,6 @@ pub fn concordancefit(
             status: data.status.clone(),
         },
         SurvResponse::Counting(data) => {
-            validate_intervals(&data.start, &data.stop)?;
             if matches!(options.timewt, TimeWeight::SOverG | TimeWeight::NOverG2) {
                 return Err(SurvivalError::invalid_input(
                     "S/G and n/G2 timewt options are not supported for (time1, time2) data",
@@ -246,8 +256,6 @@ pub fn concordancefit(
             }
         }
     };
-    validate_length(n, times.stop.len(), "y")?;
-    validate_binary_i32(&times.status, "status")?;
     let unit = vec![1.0; n];
     let weights = match weights {
         Some(weights) => {

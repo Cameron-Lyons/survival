@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import math
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+import warnings
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from itertools import combinations, compress, product
@@ -16,10 +17,12 @@ import numpy as np
 from .. import _survival as _core
 from ._coerce import (
     _DEFAULT_NA_ACTION,
+    _MASKED_FLOAT_WARNING,
     _NA_REAL,
     _as_character,
     _coerce_array_like,
     _finite_float,
+    _float_or_nan,
     _floats_or_nan,
     _hashable_group_value,
     _is_bool_like,
@@ -771,6 +774,110 @@ class _EvaluatedModelFrame(_FormulaRows):
         self.column_metadata = dict(column_metadata or {})
 
 
+class _FormulaIteratorColumn(Sequence[Any]):
+    """One call's lazy, reusable values and metadata from an iterator column."""
+
+    __slots__ = ("source", "name", "prepared", "metadata")
+
+    def __init__(
+        self, source: Iterator[Any] | None, name: str, metadata: dict[str, Any] | None = None
+    ) -> None:
+        self.source = source
+        self.name = name
+        self.prepared: Any = _MISSING
+        self.metadata = (
+            {
+                key: value
+                for key in ("dtype", "kind")
+                if (value := getattr(source, key, _MISSING)) is not _MISSING
+            }
+            if metadata is None
+            else metadata
+        )
+
+    def _values(self) -> Any:
+        if self.prepared is _MISSING:
+            if self.source is None:
+                raise ValueError(
+                    f"unused iterator column {self.name!r} is unavailable after serialization"
+                )
+            self.prepared = _rows_of(self.source, _coerce_array_like(self.source, self.name))
+        return self.prepared
+
+    def __iter__(self):
+        return iter(self._values())
+
+    def __len__(self) -> int:
+        return len(self._values())
+
+    def __getitem__(self, index: int | slice) -> Any:
+        return self._values()[index]
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        if name in self.metadata:
+            return self.metadata[name]
+        return getattr(self._values(), name)
+
+    def __reduce__(self):
+        constructor = type(self), (None, self.name, self.metadata)
+        if self.prepared is _MISSING:
+            return constructor
+        return (*constructor, self.prepared)
+
+    def __setstate__(self, prepared: Any) -> None:
+        self.prepared = prepared
+
+
+def _prepare_formula_inputs(data: Any, **row_aligned: Any) -> tuple[Any, dict[str, Any]]:
+    """Own one-shot columns/arguments together, without reading unused columns.
+
+    Lazy columns survive cache/subset preparation's shallow mapping copies.
+    Memoization by iterator identity also preserves aliased columns and arguments.
+    Reusable inputs keep their storage, row rules and metadata.
+    """
+
+    sources = data if isinstance(data, Mapping) else {}
+    memo = {
+        id(value.source): value
+        for value in [*sources.values(), *row_aligned.values()]
+        if isinstance(value, _FormulaIteratorColumn)
+    }
+
+    def owned(value: Any, name: str) -> Any:
+        if not isinstance(value, Iterator):
+            return value
+        key = id(value)
+        if key not in memo:
+            memo[key] = _FormulaIteratorColumn(value, name)
+        return memo[key]
+
+    replacements = {
+        name: owned(value, str(name))
+        for name, value in sources.items()
+        if isinstance(value, Iterator)
+    }
+    if replacements:
+        columns = dict(sources)
+        columns.update(replacements)
+        prepared: Any
+        if isinstance(data, _EvaluatedModelFrame):
+            prepared = _EvaluatedModelFrame(
+                columns, data.nrow, data.row_names, data.column_metadata
+            )
+        elif isinstance(data, _FormulaRows):
+            prepared = _FormulaRows(columns, data.nrow, data.row_names)
+        else:
+            prepared = columns
+        if isinstance(prepared, _FormulaRows):
+            prepared.response_cache = getattr(data, "response_cache", None)
+            prepared.strata_cache = dict(getattr(data, "strata_cache", {}))
+            prepared.variable_cache = dict(getattr(data, "variable_cache", {}))
+        data = prepared
+    return data, {name: owned(value, name) for name, value in row_aligned.items()}
+
+
 def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
     """Explicit R row names or a valid data-frame index; None means automatic names."""
     labels = getattr(data, "row_names", None)
@@ -788,22 +895,43 @@ def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
 
 
 def _data_row_count(data: Any, formula: str | None = None) -> int:
-    """The number of rows of *data*: the first response column, else the first column."""
+    """Rows from the response/formula variables, or the data's explicit rows."""
 
     if isinstance(data, _FormulaRows):
         return data.nrow
     spec = None if formula is None else _response_spec(formula)
-    names = spec.columns if spec is not None and spec.columns else _data_column_names(data)
+    names = (
+        spec.columns
+        if spec is not None and spec.columns
+        else _formula_columns(formula, data)
+        if formula is not None
+        else _data_column_names(data)
+    )
     if names:
         name = str(names[0])
         source = _column_source(data, name)
         if isinstance(source, np.ndarray) and source.ndim >= 1:
             return len(source)
         return len(_coerce_array_like(source, name))
+    if formula is not None and isinstance(data, Mapping):
+        return 0
     try:
         return len(data)
     except TypeError as exc:
         raise ValueError("data must have at least one column") from exc
+
+
+def _formula_input_row_count(data: Any, formula: str, row_aligned: Mapping[str, Any]) -> int:
+    """Evaluated variables/extras supply rows before a variable-free frame's count."""
+
+    spec = _response_spec(formula)
+    if (spec is not None and spec.columns) or _formula_columns(formula, data):
+        return _data_row_count(data, formula)
+    for name, values in row_aligned.items():
+        if values is not None:
+            source = _column_source(data, values) if isinstance(values, str) else values
+            return len(_coerce_array_like(source, name))
+    return _data_row_count(data, formula)
 
 
 def _covariate_factors(term: _CovariateSpec) -> tuple[_CovariateTerm, ...]:
@@ -1287,7 +1415,12 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
     if isinstance(source, _core.TcutResult) or (values and isinstance(values[0], list | tuple)):
         return _rows_of(source, [None if row < 0 else values[row] for row in rows])
     vector = _expression_source(source, name)
-    if vector.kind in {"logical", "factor"} or isinstance(source, _ExpressionVector):
+    if (
+        vector.kind in {"logical", "factor"}
+        or isinstance(source, _ExpressionVector)
+        or isinstance(source, _FormulaIteratorColumn)
+        and source.metadata
+    ):
         return vector.take(rows)
     return _rows_of(source, [None if row < 0 else values[row] for row in rows])
 
@@ -1315,8 +1448,10 @@ def _subset_formula_inputs(
     subset: Any,
     **row_aligned: Any,
 ) -> tuple[_FormulaRows, dict[str, Any]]:
-    n = _data_row_count(data, formula)
+    data, row_aligned = _prepare_formula_inputs(data, subset=subset, **row_aligned)
+    subset = row_aligned.pop("subset")
     terms = _formula_rhs_terms(formula, data)
+    n = _formula_input_row_count(data, formula, row_aligned)
     data = _with_response_cache(data, _response_spec(formula), n)
     data = _with_strata_cache(data, _strata_specs(terms), n)
     data = _with_evaluated_variables(data, _frame_variables(terms), n)
@@ -1429,14 +1564,19 @@ def _apply_formula_na_action(
     determine missingness, including invalid statuses and unused interval endpoints.
     """
 
+    data, row_aligned = _prepare_formula_inputs(data, **row_aligned)
     action = _normalize_na_action(na_action)
     terms = _formula_rhs_terms(formula, data)
-    n = _data_row_count(data, formula)
+    n = _formula_input_row_count(data, formula, row_aligned)
     response_spec = _response_spec(formula)
     data = _with_response_cache(data, response_spec, n)
     data = _with_strata_cache(data, _strata_specs(terms), n)
     data = _with_evaluated_variables(data, _frame_variables(terms), n)
     if action == "pass":
+        for name in _formula_columns(formula, data):
+            source = _column_source(data, name)
+            if isinstance(source, _FormulaIteratorColumn) and len(source) != n:
+                raise ValueError(f"variable lengths differ (found for '{name}')")
         return data, row_aligned, []
 
     normalized = response_spec is not None and response_spec.surv and not response_spec.timeline
@@ -2834,6 +2974,7 @@ def _timeline_counting(
     coxph.R turns that term into its ``cluster`` argument before the model frame.
     """
 
+    data, arguments = _prepare_formula_inputs(data, **arguments)
     arguments = {
         name: None if value is None else _column_or_values(data, value, name)
         for name, value in arguments.items()
@@ -2964,8 +3105,30 @@ def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]
         if matrix is not None:
             return matrix.astype(np.float64, copy=True)
         values = _coerce_array_like(values, spec.name)
-        if values and isinstance(values[0], list | tuple):
-            matrix = np.asarray([_floats_or_nan(row) for row in values], dtype=float)
+        if values and (
+            isinstance(values[0], list | tuple)
+            or isinstance(values[0], np.ndarray)
+            and values[0].ndim == 1
+        ):
+            # Guard the whole response once: ordinary matrix rows retain the
+            # fast float map, while mixed masked scalars become R NA silently.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "error",
+                    message=r"^Warning: converting a masked element to nan\.$",
+                    category=UserWarning,
+                )
+                try:
+                    matrix = np.asarray(
+                        [_floats_or_nan(row, _masked_warning_guard=False) for row in values],
+                        dtype=float,
+                    )
+                except UserWarning as warning:
+                    if str(warning) != _MASKED_FLOAT_WARNING:
+                        raise
+                    matrix = np.asarray(
+                        [list(map(_float_or_nan, row)) for row in values], dtype=float
+                    )
             if matrix.ndim != 2:
                 raise ValueError("response must be a vector or matrix")
             return matrix
@@ -3009,16 +3172,26 @@ def model_frame(
     _lhs, sep, rhs = formula.partition("~")
     if not sep:
         raise ValueError("formula must contain '~'")
-    action = _normalize_na_action(na_action)
-    arguments: dict[str, Any] = {
-        name: None if value is None else _column_or_values(data, value, name)
-        for name, value in zip(
-            _MODEL_FRAME_ARGUMENTS, (weights, offset, id, cluster, istate), strict=True
-        )
-    }
     extra_names = [] if extra is None else [str(name) for name in extra]
     if set(extra_names) & set(_MODEL_FRAME_ARGUMENTS):
         raise ValueError("extra columns must not be named like a model.frame argument")
+    data, supplied = _prepare_formula_inputs(
+        data,
+        weights=weights,
+        offset=offset,
+        id=id,
+        cluster=cluster,
+        istate=istate,
+        **dict(extra or {}),
+    )
+    if extra is not None:
+        extra = {str(name): supplied[str(name)] for name in extra}
+    action = _normalize_na_action(na_action)
+    arguments: dict[str, Any] = {
+        name: None if value is None else _column_or_values(data, value, name)
+        for name, value in supplied.items()
+        if name in _MODEL_FRAME_ARGUMENTS
+    }
     if extra is not None:
         for name in extra_names:
             value = extra[name]
@@ -3029,7 +3202,7 @@ def model_frame(
     data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
 
     spec = _response_spec(formula)
-    n = _data_row_count(data, formula)
+    n = _formula_input_row_count(data, formula, arguments)
     response: Surv | Surv2 | None = None
     y: list[float] | np.ndarray | None = None
     if spec is not None and spec.timeline and timeline:

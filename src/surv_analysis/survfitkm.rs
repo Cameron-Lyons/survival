@@ -17,7 +17,7 @@ use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
-    validate_binary_i32, validate_finite, validate_length, validate_non_empty,
+    validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_empty,
     validate_non_negative,
 };
 use ndarray::{Array2, ShapeBuilder};
@@ -199,12 +199,12 @@ impl SurvfitKMData {
     /// have been modified. [`survfitkm`] performs this check before fitting.
     pub fn validate(&self) -> SurvivalResult<()> {
         validate_non_empty(&self.time, "time")?;
-        validate_finite(&self.time, "time")?;
+        validate_no_nan(&self.time, "time")?;
         validate_length(self.time.len(), self.status.len(), "status")?;
         validate_binary_i32(&self.status, "status")?;
         if let Some(start) = &self.start {
             validate_length(self.time.len(), start.len(), "start")?;
-            validate_finite(start, "start")?;
+            validate_no_nan(start, "start")?;
             validate_intervals(start, &self.time)?;
         }
         if let Some(weights) = &self.weights {
@@ -494,9 +494,9 @@ impl SurvfitKMResult {
                 "lower and upper limits must be given together",
             ));
         }
-        validate_finite(&curves.time, "time")?;
-        if !curves.t0.is_finite() {
-            return Err(SurvivalError::invalid_input("start time must be finite"));
+        validate_no_nan(&curves.time, "time")?;
+        if curves.t0.is_nan() {
+            return Err(SurvivalError::invalid_input("start time must not be NaN"));
         }
         validate_conf_int(curves.conf_int)?;
         let conf_type = ConfType::parse(&curves.conf_type)?;
@@ -1273,7 +1273,7 @@ pub fn survfitkm(
     // start.time: drop observations that end before it
     let t0 = match options.start_time {
         Some(start_time) => {
-            if !start_time.is_finite() {
+            if start_time.is_nan() {
                 return Err(SurvivalError::invalid_input(
                     "start.time must be a single numeric value",
                 ));

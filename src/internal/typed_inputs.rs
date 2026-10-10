@@ -1,9 +1,9 @@
 //! Typed input containers shared by the Rust API and the PyO3 bindings.
 //!
-//! Each container validates once at construction so downstream code can rely
-//! on lengths, finiteness and sign without re-checking. Validation goes
-//! through `crate::internal::validation`, so error wording is uniform across
-//! the crate.
+//! Containers validate component lengths and values at construction. Their
+//! public Rust fields can be modified afterwards, so public numeric entry
+//! points must revalidate before indexing. Validation goes through
+//! `crate::internal::validation`, so error wording is uniform across the crate.
 //!
 //! The `#[new]` constructors copy their component arguments because Python
 //! keeps ownership of the objects it passes in; Rust callers should use the
@@ -220,20 +220,24 @@ impl CountingProcessData {
 
 impl CountingProcessData {
     pub fn try_new(start: Vec<f64>, stop: Vec<f64>, event: Vec<i32>) -> SurvivalResult<Self> {
-        validate_non_empty(&start, "start")?;
+        Self::validate_parts(&start, &stop, &event)?;
+        Ok(Self { start, stop, event })
+    }
+
+    pub(crate) fn validate_parts(start: &[f64], stop: &[f64], event: &[i32]) -> SurvivalResult<()> {
+        validate_non_empty(start, "start")?;
         validate_equal_len(&[
             ("start", start.len()),
             ("stop", stop.len()),
             ("event", event.len()),
         ])?;
-        validate_finite(&start, "start")?;
-        validate_finite(&stop, "stop")?;
-        validate_status_values(&event, "event")?;
+        validate_finite(start, "start")?;
+        validate_finite(stop, "stop")?;
+        validate_status_values(event, "event")?;
         // R's Surv(start, stop) makes an interval with stop <= start NA with
         // a warning; this container has no NA, so it rejects the row instead.
-        validate_intervals(&start, &stop)?;
-
-        Ok(Self { start, stop, event })
+        validate_intervals(start, stop)?;
+        Ok(())
     }
 
     pub(crate) fn len(&self) -> usize {

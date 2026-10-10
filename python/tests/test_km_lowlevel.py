@@ -135,7 +135,7 @@ def test_dotted_keywords_and_ignored_time0():
         ({"weights": [-1] * 4}, "non-negative"),
         ({"weights": [np.nan] * 4}, "finite"),
         ({"entry": 1}, "TRUE/FALSE"),
-        ({"start_time": np.inf}, "single numeric"),
+        ({"start_time": np.inf}, "all observations removed by start.time"),
         ({"timefix": True}, "unexpected keyword"),
     ],
 )

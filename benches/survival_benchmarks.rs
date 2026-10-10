@@ -145,6 +145,60 @@ mod kaplan_meier {
     }
 }
 
+mod curve_summary {
+    use super::*;
+
+    fn run(bencher: divan::Bencher, n: usize, dense: bool, dosum: Option<bool>) {
+        let (time, _, status) = generate_survival_data(n);
+        let end = time.iter().copied().fold(0.0, f64::max) + 1.0;
+        let data = SurvfitKMData::right_censored(time, status).unwrap();
+        let fit = surv_analysis::survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+        let queries = if dense { n } else { 10 };
+        let times: Vec<f64> = (0..queries)
+            .map(|i| end * i as f64 / (queries - 1) as f64)
+            .collect();
+        bencher.bench_local(|| {
+            surv_analysis::summary_survfit_times_with_counts(&fit, &times, true, dosum).unwrap()
+        });
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn requested_sparse(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, false, None);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn requested_dense(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, true, None);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn requested_lookup(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, true, Some(false));
+    }
+}
+
+mod curve_table {
+    use super::*;
+
+    fn run(bencher: divan::Bencher, n: usize, rmean: RmeanOption) {
+        let (time, _, status) = generate_survival_data(n);
+        let data = SurvfitKMData::right_censored(time, status).unwrap();
+        let fit = surv_analysis::survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+        bencher.bench_local(|| survmean(&fit, 1.0, rmean).unwrap());
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn restricted_mean(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, RmeanOption::Common);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn median_only(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, RmeanOption::None);
+    }
+}
+
 mod matrix_curves {
     use super::*;
     use survival::surv_analysis::{SurvfitMatrixMethod, SurvfitMatrixTransition, survfit_matrix};

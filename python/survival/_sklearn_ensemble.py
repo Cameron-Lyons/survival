@@ -51,6 +51,8 @@ class GradientBoostSurvivalEstimator(
         Number of features seen during fit.
     """
 
+    model_: _surv.GradientBoostSurvival
+
     def __init__(
         self,
         n_estimators: int = 100,
@@ -144,6 +146,8 @@ class SurvivalForestEstimator(
     n_features_in_ : int
         Number of features seen during fit.
     """
+
+    model_: _surv.SurvivalForest
 
     def __init__(
         self,

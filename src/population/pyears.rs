@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use super::match_ratetable::align_us_year_axis;
+use super::match_ratetable::align_us_year_axis_validated;
 use super::pystep::{PystepTable, pystep};
 use super::ratetable::RateTable;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -409,7 +409,7 @@ pub fn pyears(
             }
             rt.table.validate_positions(&rt.positions)?;
             let mut positions = rt.positions.clone();
-            align_us_year_axis(rt.table, &mut positions)?;
+            align_us_year_axis_validated(rt.table, &mut positions)?;
             Some(positions)
         }
         None => None,

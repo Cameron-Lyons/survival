@@ -23,7 +23,8 @@ if TYPE_CHECKING:
     class _FlatModel(Protocol):
         """The Rust ML models take a flattened row-major design plus its row count."""
 
-        unique_times: list[float]
+        @property
+        def unique_times(self) -> list[float]: ...
 
         def predict_risk(self, x: list[float], n_obs: int) -> list[float]: ...
         def predict_survival(self, x: list[float], n_obs: int) -> list[list[float]]: ...

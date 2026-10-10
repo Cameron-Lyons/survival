@@ -117,7 +117,8 @@ test_that("Fine-Gray validates formula arguments and uses no reference fallback"
   expect_identical(attr(result, "event"), "b")
   own <- finegray
   local_mocked_bindings(finegray = function(...) stop("reference called"), .package = "survival")
-  local_mocked_bindings(.call_r_api = function(...) stop("Python formula called"))
+  local_mocked_bindings(.call_r_api = function(...) stop("Python formula called"),
+    .package = "survivalr")
   expect_s3_class(own(Surv(time, event) ~ log(x)+group, data), "data.frame")
 })
 

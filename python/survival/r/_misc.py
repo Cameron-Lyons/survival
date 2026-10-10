@@ -49,6 +49,7 @@ from ._formula import (
     _covariate_term_columns,
     _covariate_term_name,
     _parse_formula,
+    _prepare_formula_inputs,
     _strata_keep,
     _strata_specs,
     _subset_formula_inputs,
@@ -533,6 +534,8 @@ def _model_frame(
     """Shared formula/response preparation with survcheck's original-row mapping."""
 
     if isinstance(formula, Surv):
+        data, extras = _prepare_formula_inputs(data, subset=subset, **extras)
+        subset = extras.pop("subset")
         response = formula
         aligned = {name: _column_or_values(data, value, name) for name, value in extras.items()}
         for name, values in aligned.items():

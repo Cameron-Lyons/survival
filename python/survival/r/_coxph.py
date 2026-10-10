@@ -89,6 +89,7 @@ from ._formula import (
     _design_term_name,
     _formula_data_rows,
     _formula_design_row_count,
+    _prepare_formula_inputs,
     _response_arg_columns,
     _strata_covariate,
     _strata_specs,
@@ -1216,6 +1217,8 @@ def coxph(
         "id": id,
         "istate": istate,
     }
+    data, arguments = _prepare_formula_inputs(data, subset=subset, **arguments)
+    subset = arguments.pop("subset")
     fit_formula = formula
     timeline = _timeline_response(formula)
     if timeline:
@@ -1922,6 +1925,8 @@ def predict_coxph(
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
     if kwargs:
         raise TypeError(f"predict got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    newdata, supplied = _prepare_formula_inputs(newdata, collapse=collapse)
+    collapse = supplied["collapse"]
     if isinstance(fit, CoxphmsModel):
         return predict_coxphms(
             fit,
@@ -2498,7 +2503,7 @@ def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
     ``as.character``), else the 1-based row numbers (R's automatic row names, which is
     also what ``rbind`` gives two data frames that have them)."""
 
-    labels = _data_row_labels(data, _data_row_count(data))
+    labels = _data_row_labels(data, 0 if isinstance(data, Mapping) else len(data))
     if labels is not None:
         return [labels[row] for row in rows]
     return [str(row + 1) for row in rows]
@@ -2511,11 +2516,13 @@ def _survfit_newdata(
     the newdata pieces at the rows without a missing value in a variable the curves read
     (the ``id`` included), those rows (0-based, for the curve names) and their ``id``."""
 
+    newdata, supplied = _prepare_formula_inputs(newdata, id=id)
+    id_values = supplied["id"]
     n = _formula_design_row_count(newdata, fit.design)
     rows = list(range(n))
     ids = None
-    if id is not None:
-        ids = _materialize_labels(_column_or_values(newdata, id, "id"), "id")
+    if id_values is not None:
+        ids = _materialize_labels(_column_or_values(newdata, id_values, "id"), "id")
         if len(ids) != n:
             raise ValueError("id must have one value per newdata row")
         rows = [row for row in rows if not _is_missing_value(ids[row])]
@@ -2551,6 +2558,7 @@ def _survfit_curves(
     R's ``colnames(fit$surv)``).  ``na_action = "na.fail"`` refuses the newdata rows
     ``na.omit`` would leave out."""
 
+    newdata, supplied = _prepare_formula_inputs(newdata, id=id)
     _check_interaction_margins(fit)
     if newdata is None and any(
         isinstance(term, _InteractionDesignTerm)
@@ -2578,7 +2586,7 @@ def _survfit_curves(
         names = [fit.strata_levels[c.stratum] for c in curves] if _has_strata(fit) else []
         return curves, names, None
     new, rows, ids = _survfit_newdata(
-        fit, newdata, individual=individual, id=id, na_action=na_action
+        fit, newdata, individual=individual, id=supplied["id"], na_action=na_action
     )
     if individual:
         if new.y is None:

@@ -1,0 +1,6337 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_surv_repetition_reference.R",
+    "r_version": "4.5.3",
+    "survival_version": "3.8.12"
+  },
+  "cases": [
+    {
+      "name": "right",
+      "response": {
+        "type": "right",
+        "states": null,
+        "clabel": null,
+        "matrix": [
+          [1, 0],
+          [3, 1],
+          [5, 0]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [3, 1],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing_right",
+      "response": {
+        "type": "right",
+        "states": null,
+        "clabel": null,
+        "matrix": [
+          [1, null],
+          [null, 1],
+          [null, 0]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0],
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [null, 1],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null],
+              [null, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0],
+              [1, null],
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0],
+              [null, 0],
+              [1, null],
+              [1, null]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0],
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [1, null],
+              [null, 1],
+              [null, 1],
+              [null, 0],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null],
+              [null, 1],
+              [null, 0]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, null]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "right",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "left",
+      "response": {
+        "type": "left",
+        "states": null,
+        "clabel": null,
+        "matrix": [
+          [1, 0],
+          [3, 1],
+          [5, 0]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [3, 1],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0],
+              [5, 0],
+              [1, 0],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0],
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 0],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 0]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "left",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "counting",
+      "response": {
+        "type": "counting",
+        "states": null,
+        "clabel": null,
+        "matrix": [
+          [0, 1, 0],
+          [1, 3, 1],
+          [3, 5, 0]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0],
+              [3, 5, 0],
+              [0, 1, 0],
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 0],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 0]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "counting",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "interval",
+      "response": {
+        "type": "interval",
+        "states": null,
+        "clabel": null,
+        "matrix": [
+          [1, 1, 0],
+          [2, 1, 2],
+          [3, 4, 3]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3],
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0],
+              [2, 1, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3],
+              [1, 1, 0],
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3],
+              [3, 4, 3],
+              [1, 1, 0],
+              [1, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3],
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [1, 1, 0],
+              [2, 1, 2],
+              [2, 1, 2],
+              [3, 4, 3],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0],
+              [2, 1, 2],
+              [3, 4, 3]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": [
+              [1, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "interval",
+            "states": null,
+            "clabel": null,
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "mright",
+      "response": {
+        "type": "mright",
+        "states": ["b", "a", "unused"],
+        "clabel": "censor",
+        "matrix": [
+          [1, 0],
+          [3, 1],
+          [5, 2]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [3, 1],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2],
+              [1, 0],
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2],
+              [5, 2],
+              [1, 0],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2],
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [1, 0],
+              [3, 1],
+              [3, 1],
+              [5, 2],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0],
+              [3, 1],
+              [5, 2]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mright",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcounting",
+      "response": {
+        "type": "mcounting",
+        "states": ["b", "a", "unused"],
+        "clabel": "censor",
+        "matrix": [
+          [0, 1, 0],
+          [1, 3, 1],
+          [3, 5, 2]
+        ]
+      },
+      "results": [
+        {
+          "name": "default",
+          "args": [],
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "twice",
+          "args": {
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each",
+          "args": {
+            "each": 3
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_times",
+          "args": {
+            "each": 3,
+            "times": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2],
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "counts",
+          "args": {
+            "times": [0, 2, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_counts",
+          "args": {
+            "each": 2,
+            "times": [0, 1, 2, 0, 3, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_prefix",
+          "args": {
+            "length.out": 2
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_cycle",
+          "args": {
+            "length.out": 8
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_prefix",
+          "args": {
+            "each": 3,
+            "length.out": 5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_length_cycle",
+          "args": {
+            "each": 3,
+            "length.out": 20
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2],
+              [0, 1, 0],
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2],
+              [3, 5, 2],
+              [0, 1, 0],
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "length_precedence",
+          "args": {
+            "times": "bad",
+            "length.out": 4
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "fractional",
+          "args": {
+            "times": 2.7999999999999998,
+            "each": 1.8,
+            "length.out": 6.7999999999999998
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "negative_fraction_times",
+          "args": {
+            "times": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_each",
+          "args": {
+            "each": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_length",
+          "args": {
+            "length.out": -0.5
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_fraction_counts",
+          "args": {
+            "times": [-0.5, 1, 1]
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_na",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_nan",
+          "args": {
+            "each": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_inf",
+          "args": {
+            "each": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_negative_inf",
+          "args": {
+            "each": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_na",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_nan",
+          "args": {
+            "length.out": null
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_inf",
+          "args": {
+            "length.out": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_negative_inf",
+          "args": {
+            "length.out": {
+              "number": "-Inf"
+            }
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_vector",
+          "args": {
+            "each": [2, 1]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_empty",
+          "args": {
+            "each": []
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_missing_vector",
+          "args": {
+            "each": [null, 2]
+          },
+          "warnings": ["first element used of 'each' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_vector",
+          "args": {
+            "length.out": [2, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "length_empty",
+          "args": {
+            "length.out": []
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_missing_vector",
+          "args": {
+            "length.out": [null, 9]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "both_vectors",
+          "args": {
+            "each": [2, 1],
+            "length.out": [5, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "times_character",
+          "args": {
+            "times": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2],
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "each_character",
+          "args": {
+            "each": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [0, 1, 0],
+              [1, 3, 1],
+              [1, 3, 1],
+              [3, 5, 2],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_character",
+          "args": {
+            "length.out": "2"
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1]
+            ]
+          }
+        },
+        {
+          "name": "each_invalid_character",
+          "args": {
+            "each": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "length_invalid_character",
+          "args": {
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "both_invalid_character",
+          "args": {
+            "each": "bad",
+            "length.out": "bad"
+          },
+          "warnings": ["NAs introduced by coercion", "NAs introduced by coercion"],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0],
+              [1, 3, 1],
+              [3, 5, 2]
+            ]
+          }
+        },
+        {
+          "name": "zero_times",
+          "args": {
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each",
+          "args": {
+            "each": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_zero",
+          "args": {
+            "each": 0,
+            "length.out": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "zero_each_length_one",
+          "args": {
+            "each": 0,
+            "length.out": 1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_counts",
+          "args": {
+            "each": 0,
+            "times": []
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        },
+        {
+          "name": "negative_times",
+          "args": {
+            "times": -1
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_each",
+          "args": {
+            "each": -1
+          },
+          "warnings": [],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "negative_length",
+          "args": {
+            "length.out": -1
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "missing_times",
+          "args": {
+            "times": null
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "infinite_times",
+          "args": {
+            "times": {
+              "number": "Inf"
+            }
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "empty_times",
+          "args": {
+            "times": []
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "invalid_character_times",
+          "args": {
+            "times": "bad"
+          },
+          "warnings": ["NAs introduced by coercion"],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_character_times",
+          "args": {
+            "times": "-2"
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "short_counts",
+          "args": {
+            "times": [1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'times' argument"
+        },
+        {
+          "name": "negative_length_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [-1, 2]
+          },
+          "warnings": [],
+          "error": "invalid 'length.out' argument"
+        },
+        {
+          "name": "negative_each_vector",
+          "args": {
+            "each": [-2, 1],
+            "length.out": [0, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "zero_each_vector",
+          "args": {
+            "each": [0, 1],
+            "length.out": [1, 2]
+          },
+          "warnings": ["first element used of 'length.out' argument", "first element used of 'each' argument"],
+          "error": "invalid 'each' argument"
+        },
+        {
+          "name": "ignored_long_each",
+          "args": {
+            "each": 1000000000000,
+            "length.out": 1
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": [
+              [0, 1, 0]
+            ]
+          }
+        },
+        {
+          "name": "ignored_long_each_zero",
+          "args": {
+            "each": 1000000000000,
+            "times": 0
+          },
+          "warnings": [],
+          "response": {
+            "type": "mcounting",
+            "states": ["b", "a", "unused"],
+            "clabel": "censor",
+            "matrix": []
+          }
+        }
+      ]
+    }
+  ]
+}

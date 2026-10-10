@@ -26,7 +26,7 @@ def test_survfitkm_accepts_negative_times_like_r():
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"time": [1.0, float("inf")], "status": [1, 0]}, "time contains non-finite"),
+        ({"time": [1.0, float("nan")], "status": [1, 0]}, "time contains NaN"),
         ({"time": [1.0, 2.0], "status": [1, 2]}, "status"),
         (
             {"time": [1.0, 2.0], "status": [1, 0], "weights": [1.0, float("nan")]},
@@ -38,11 +38,11 @@ def test_survfitkm_accepts_negative_times_like_r():
         ),
         (
             {"time": [1.0, 2.0], "status": [1, 0], "start": [0.0, float("inf")]},
-            "start contains non-finite",
+            "Stop time must be > start time",
         ),
     ],
 )
-def test_survfitkm_rejects_non_finite_inputs(kwargs, message):
+def test_survfitkm_rejects_missing_and_invalid_inputs(kwargs, message):
     with pytest.raises(ValueError, match=message):
         survival.surv_analysis.survfitkm(**kwargs)
 

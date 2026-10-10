@@ -8,8 +8,9 @@
 use super::survfitaj::{SurvfitAJCounts, SurvfitAJResult};
 use super::survfitkm::{SurvfitCounts, SurvfitInfluence, SurvfitKMResult};
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::numpy_utils::FloatVec;
 use crate::internal::step::find_interval;
-use crate::internal::validation::validate_finite;
+use crate::internal::validation::validate_no_nan;
 use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -297,20 +298,17 @@ pub struct SurvmeanTable {
 
 /// `minmin` of `survmean`: the x at which the decreasing y first drops
 /// below .5, with the midpoint rule for a flat exactly at .5.
-fn minmin(y: &[f64], x: &[f64]) -> f64 {
+fn minmin(y: &[f64], x: &[f64], scale: f64) -> f64 {
     let tolerance = r_tolerance();
-    let keep: Vec<usize> = (0..y.len())
-        .filter(|&i| !y[i].is_nan() && y[i] < 0.5 + tolerance)
-        .collect();
-    let Some(&first) = keep.first() else {
+    let Some(first) = y.iter().position(|&value| value < 0.5 + tolerance) else {
         return f64::NAN;
     };
     if (y[first] - 0.5).abs() < tolerance
-        && let Some(&below) = keep.iter().find(|&&i| y[i] < y[first])
+        && let Some(below) = y[first..].iter().position(|&value| value < y[first])
     {
-        return (x[first] + x[below]) / 2.0;
+        return (x[first] / scale + x[first + below] / scale) / 2.0;
     }
-    x[first]
+    x[first] / scale
 }
 
 /// One row of `survmean`'s output (its inner `pfun`).
@@ -322,6 +320,7 @@ fn survmean_row(
     n_risk: &[f64],
     n_event: &[f64],
     limits: Option<(&[f64], &[f64])>,
+    scale: f64,
     start_time: f64,
     end_time: f64,
     nid: Option<f64>,
@@ -336,43 +335,35 @@ fn survmean_row(
                 n_event[i] / (n_risk[i] * (n_risk[i] - n_event[i]))
             }
         };
-        let keep = time.iter().filter(|&&t| t <= end_time).count();
-        let (temptime, tempsurv, hh): (Vec<f64>, Vec<f64>, Vec<f64>) = if keep == 0 {
-            // the cutoff is before the first event
-            (vec![end_time], vec![1.0], vec![0.0])
-        } else {
-            let mut temptime = time[..keep].to_vec();
-            temptime.push(end_time);
-            let mut tempsurv = surv[..keep].to_vec();
-            tempsurv.push(surv[keep - 1]);
-            let mut hh: Vec<f64> = (0..keep).map(hh).collect();
-            hh.push(0.0);
-            (temptime, tempsurv, hh)
+        let keep = time.partition_point(|&t| t / scale <= end_time);
+        // Read each rectangle directly from the curve. The last one extends
+        // to the cutoff; no observed rows are copied or scaled into scratch
+        // vectors. Preserve the forward mean and reverse variance sums.
+        let rectangle = |i: usize| {
+            let current = if i == keep { end_time } else { time[i] / scale };
+            let previous = if i == 0 {
+                start_time
+            } else {
+                time[i - 1] / scale
+            };
+            let height = if i == 0 { 1.0 } else { surv[i - 1] };
+            (current - previous) * height
         };
-        let n = temptime.len();
-        // width of rectangles, then their area
-        let rectangles: Vec<f64> = (0..n)
-            .map(|i| {
-                let previous = if i == 0 { start_time } else { temptime[i - 1] };
-                let height = if i == 0 { 1.0 } else { tempsurv[i - 1] };
-                (temptime[i] - previous) * height
-            })
-            .collect();
-        let mean: f64 = rectangles.iter().sum();
+        let mean: f64 = (0..=keep).map(rectangle).sum();
         // varmean = sum(cumsum(rev(rectangles[-1]))^2 * rev(hh)[-1]), see
         // Miller, Survival Analysis (1981) pp. 195-196
         let mut varmean = 0.0;
         let mut tail = 0.0;
-        for i in (1..n).rev() {
-            tail += rectangles[i];
-            varmean += tail * tail * hh[i - 1];
+        for i in (1..=keep).rev() {
+            tail += rectangle(i);
+            varmean += tail * tail * hh(i - 1);
         }
         (mean, varmean)
     };
     let maxn = nid.unwrap_or_else(|| n_risk.iter().copied().fold(f64::NAN, f64::max));
-    let med = minmin(surv, time);
+    let med = minmin(surv, time, scale);
     let (lower, upper) = match limits {
-        Some((lower, upper)) => (minmin(lower, time), minmin(upper, time)),
+        Some((lower, upper)) => (minmin(lower, time, scale), minmin(upper, time, scale)),
         None => (0.0, 0.0),
     };
     [
@@ -420,11 +411,14 @@ pub fn survmean(
         }
     }
     let start_time = fit.t0;
-    let stime: Vec<f64> = fit.time.iter().map(|t| t / scale).collect();
     let ranges = fit.curve_ranges();
     let last_time: Vec<f64> = ranges
         .iter()
-        .map(|range| stime[..range.end].last().copied().unwrap_or(f64::NAN))
+        .map(|range| {
+            fit.time[..range.end]
+                .last()
+                .map_or(f64::NAN, |time| time / scale)
+        })
         .collect();
     let end_time: Vec<f64> = match rmean {
         RmeanOption::None => vec![f64::NAN; ranges.len()],
@@ -455,11 +449,12 @@ pub fn survmean(
         };
         let row = survmean_row(
             fit.n[curve] as f64,
-            &stime[range.clone()],
+            &fit.time[range.clone()],
             &fit.surv[range.clone()],
             &fit.n_risk[range.clone()],
             &fit.n_event[range.clone()],
             limits,
+            scale,
             start_time,
             end_time[curve],
             fit.n_id.as_ref().map(|n_id| n_id[curve] as f64),
@@ -553,11 +548,31 @@ pub fn summary_survfit_times(
     times: &[f64],
     extend: bool,
 ) -> SurvivalResult<SurvfitKMResult> {
+    summary_survfit_times_with_counts(fit, times, extend, None)
+}
+
+/// [`summary_survfit_times`] with R's explicit `dosum` count selection.
+/// `None` accumulates counts only for strictly increasing requested times;
+/// `Some(false)` looks up counts at the preceding curve row. `Some(true)`
+/// requires strictly increasing times and accumulates counts between them.
+pub fn summary_survfit_times_with_counts(
+    fit: &SurvfitKMResult,
+    times: &[f64],
+    extend: bool,
+    dosum: Option<bool>,
+) -> SurvivalResult<SurvfitKMResult> {
     if times.is_empty() {
         return Err(SurvivalError::invalid_input("no values in times vector"));
     }
-    validate_finite(times, "times")?;
-    let dosum = times.windows(2).all(|pair| pair[1] > pair[0]);
+    validate_no_nan(times, "times")?;
+    let increasing = times.windows(2).all(|pair| pair[1] > pair[0]);
+    let dosum = dosum.unwrap_or(increasing);
+    if dosum && !increasing {
+        return Err(SurvivalError::invalid_input(
+            "dosum=TRUE requires the times to be increasing",
+        ));
+    }
+    let ordered = increasing || times.windows(2).all(|pair| pair[1] >= pair[0]);
     let fit0 = survfit0_with(fit, false);
     let ranges = fit0.curve_ranges();
     let mut out = SurvfitKMResult {
@@ -588,6 +603,16 @@ pub fn summary_survfit_times(
     };
     for range in &ranges {
         let curve_time = &fit0.time[range.clone()];
+        // Fitting and from_stacked order each curve. survfit0 can prepend an
+        // origin after its first reported entry time; check that new boundary
+        // before either interval search or the dense-query sweep reads it.
+        if let [first, second, ..] = curve_time
+            && second < first
+        {
+            return Err(SurvivalError::invalid_input(
+                "'vec' must be sorted non-decreasingly and not contain NAs",
+            ));
+        }
         let times: Vec<f64> = if extend {
             times.to_vec()
         } else {
@@ -599,14 +624,7 @@ pub fn summary_survfit_times(
                 "no points selected for one or more curves, data error (?) or consider using the extend argument",
             ));
         }
-        let index1: Vec<usize> = times
-            .iter()
-            .map(|&t| find_interval(curve_time, t, false))
-            .collect();
-        let index2: Vec<usize> = times
-            .iter()
-            .map(|&t| 1 + find_interval(curve_time, t, true))
-            .collect();
+        let (index1, index2) = summary_time_indices(curve_time, &times, ordered);
         // x[pmax(1, index1)]
         let ssub = |values: &[f64]| -> Vec<f64> {
             index1
@@ -616,17 +634,21 @@ pub fn summary_survfit_times(
         };
         // diff(c(0, c(0, cumsum(x))[index1 + 1]))
         let delta = |values: &[f64]| -> Vec<f64> {
-            let mut cumulative = vec![0.0; range.len() + 1];
-            for (k, i) in range.clone().enumerate() {
-                cumulative[k + 1] = cumulative[k] + values[i];
-            }
+            let mut cumulative = 0.0;
             let mut previous = 0.0;
+            let mut cursor = 0;
             index1
                 .iter()
                 .map(|&i| {
-                    let value = cumulative[i];
-                    let out = value - previous;
-                    previous = value;
+                    // dosum requires increasing times, hence nondecreasing
+                    // indices. Preserve R's prefix-sum order without retaining
+                    // a full extra vector for every count field.
+                    while cursor < i {
+                        cumulative += values[range.start + cursor];
+                        cursor += 1;
+                    }
+                    let out = cumulative - previous;
+                    previous = cumulative;
                     out
                 })
                 .collect()
@@ -673,6 +695,44 @@ pub fn summary_survfit_times(
         }
     }
     Ok(out)
+}
+
+/// Build both step-function indices together. Dense ordered queries sweep the
+/// observed times once; sparse or unordered queries keep binary search so a
+/// handful of requested times does not scan a long curve.
+fn summary_time_indices(
+    observed: &[f64],
+    times: &[f64],
+    ordered: bool,
+) -> (Vec<usize>, Vec<usize>) {
+    let mut closed = Vec::with_capacity(times.len());
+    let mut open = Vec::with_capacity(times.len());
+    let depth = observed.len().max(2).ilog2() as usize;
+    if ordered && times.len() > observed.len() / depth {
+        let mut right = 0;
+        let mut left = 0;
+        let mut previous = None;
+        for &time in times {
+            if previous != Some(time) {
+                while right < observed.len() && observed[right] < time {
+                    right += 1;
+                }
+                left = right;
+                while right < observed.len() && observed[right] == time {
+                    right += 1;
+                }
+                previous = Some(time);
+            }
+            closed.push(right);
+            open.push(left + 1);
+        }
+    } else {
+        for &time in times {
+            closed.push(find_interval(observed, time, false));
+            open.push(1 + find_interval(observed, time, true));
+        }
+    }
+    (closed, open)
 }
 
 /// Quantiles of one or more survival curves with the quantiles of the
@@ -798,7 +858,8 @@ fn findq(x: &[f64], y: &[f64], probs: &[f64], tol: f64) -> Vec<f64> {
 }
 
 /// Port of `quantile.survfit`.  `conf_int` adds the quantiles of the
-/// confidence bands when the fit has them; `scale` divides the result and
+/// confidence bands when the fit has them; `scale` divides the result using
+/// IEEE arithmetic, including zero, negative and nonfinite values, and
 /// `tolerance` (default `sqrt(.Machine$double.eps)`) decides what counts
 /// as a flat exactly at a probability.
 ///
@@ -835,17 +896,12 @@ pub fn quantile_survfit_from(
     if probs.iter().any(|p| !(0.0..=1.0).contains(p)) {
         return Err(SurvivalError::invalid_input("Invalid probability"));
     }
-    if !(scale.is_finite() && scale > 0.0) {
-        return Err(SurvivalError::invalid_input(
-            "scale must be a positive number",
-        ));
-    }
     if !origin.is_finite() {
         return Err(SurvivalError::invalid_input("start time must be finite"));
     }
     let tol = tolerance.unwrap_or_else(r_tolerance);
-    if !tol.is_finite() {
-        return Err(SurvivalError::invalid_input("tolerance must be finite"));
+    if tol.is_nan() {
+        return Err(SurvivalError::invalid_input("tolerance must not be NaN"));
     }
     let conf_int = conf_int && fit.lower.is_some() && fit.upper.is_some();
     let xmin = origin;
@@ -896,22 +952,30 @@ pub fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult 
 /// `"individual"` or a number.
 #[pyfunction(name = "survmean")]
 #[pyo3(signature = (fit, scale=1.0, rmean="common"))]
-pub fn survmean_py(fit: &SurvfitKMResult, scale: f64, rmean: &str) -> PyResult<SurvmeanTable> {
-    Ok(survmean(fit, scale, RmeanOption::parse(rmean)?)?)
+pub fn survmean_py(
+    py: Python<'_>,
+    fit: &SurvfitKMResult,
+    scale: f64,
+    rmean: &str,
+) -> PyResult<SurvmeanTable> {
+    let rmean = RmeanOption::parse(rmean)?;
+    Ok(py.detach(|| survmean(fit, scale, rmean))?)
 }
 
 /// Python binding of [`summary_survfit`] and [`summary_survfit_times`].
 #[pyfunction(name = "summary_survfit")]
-#[pyo3(signature = (fit, times=None, censored=false, extend=false))]
+#[pyo3(signature = (fit, times=None, censored=false, extend=false, dosum=None))]
 pub fn summary_survfit_py(
     py: Python<'_>,
     fit: &SurvfitKMResult,
-    times: Option<Vec<f64>>,
+    times: Option<FloatVec>,
     censored: bool,
     extend: bool,
+    dosum: Option<bool>,
 ) -> PyResult<SurvfitKMResult> {
+    let times = times.map(FloatVec::into_inner);
     Ok(py.detach(|| match times {
-        Some(times) => summary_survfit_times(fit, &times, extend),
+        Some(times) => summary_survfit_times_with_counts(fit, &times, extend, dosum),
         None => Ok(summary_survfit(fit, censored)),
     })?)
 }
@@ -923,13 +987,13 @@ pub fn summary_survfit_py(
 pub fn quantile_survfit_py(
     py: Python<'_>,
     fit: &SurvfitKMResult,
-    probs: Option<Vec<f64>>,
+    probs: Option<FloatVec>,
     conf_int: bool,
     scale: f64,
     tolerance: Option<f64>,
     start_time: f64,
 ) -> PyResult<SurvfitQuantiles> {
-    let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
+    let probs = probs.map_or_else(|| vec![0.25, 0.5, 0.75], FloatVec::into_inner);
     Ok(py.detach(|| quantile_survfit_from(fit, &probs, conf_int, start_time, scale, tolerance))?)
 }
 
@@ -1151,6 +1215,58 @@ mod tests {
     }
 
     #[test]
+    fn summary_explicit_count_selection_matches_r() {
+        let fit = aml_maintained();
+        let times = [13.0, 34.0, 60.0];
+        let summed = summary_survfit_times_with_counts(&fit, &times, false, Some(true)).unwrap();
+        let lookup = summary_survfit_times_with_counts(&fit, &times, false, Some(false)).unwrap();
+        assert_eq!(summed.n_event, [2.0, 4.0, 1.0]);
+        assert_eq!(summed.n_censor, [1.0, 1.0, 1.0]);
+        assert_eq!(lookup.n_event, [1.0, 1.0, 1.0]);
+        assert_eq!(lookup.n_censor, [1.0, 0.0, 0.0]);
+        assert_eq!(lookup.surv, summed.surv);
+        assert_eq!(lookup.n_risk, summed.n_risk);
+        for times in [[34.0, 13.0], [13.0, 13.0]] {
+            assert!(summary_survfit_times_with_counts(&fit, &times, false, Some(true)).is_err());
+            assert_eq!(
+                summary_survfit_times(&fit, &times, false).unwrap().n_event,
+                summary_survfit_times_with_counts(&fit, &times, false, Some(false))
+                    .unwrap()
+                    .n_event,
+            );
+        }
+    }
+
+    #[test]
+    fn summary_sweep_matches_interval_search_for_ties_and_query_order() {
+        for observed in [
+            vec![],
+            vec![0.0],
+            vec![-2.0, -2.0, 0.0, 1.0, 1.0, 1.0, 4.0],
+            (0..1000).map(|i| (i / 3) as f64).collect(),
+        ] {
+            let times: Vec<f64> = (-10..2020).map(|i| i as f64 / 6.0).collect();
+            let mut repeated = times.clone();
+            repeated.extend(&times);
+            repeated.sort_by(f64::total_cmp);
+            let mut reversed = times.clone();
+            reversed.reverse();
+            for (times, ordered) in [
+                (&times, true),
+                (&repeated, true),
+                (&reversed, false),
+                (&vec![-4.0, 0.0, 10000.0], true),
+            ] {
+                let (closed, open) = summary_time_indices(&observed, times, ordered);
+                for ((&time, &closed), &open) in times.iter().zip(&closed).zip(&open) {
+                    assert_eq!(closed, find_interval(&observed, time, false));
+                    assert_eq!(open, 1 + find_interval(&observed, time, true));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn quantiles_match_r() {
         // quantile(survfit(Surv(time, status) ~ x, aml))
         let q = quantile_survfit(&aml_by_x(), &[0.25, 0.5, 0.75], true, 1.0, None).unwrap();
@@ -1223,11 +1339,91 @@ mod tests {
     }
 
     #[test]
-    fn native_quantiles_reject_nonfinite_tolerance() {
-        for tolerance in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    fn native_quantiles_reject_nan_tolerance() {
+        assert!(quantile_survfit(&aml_maintained(), &[0.5], false, 1.0, Some(f64::NAN)).is_err());
+    }
+
+    #[test]
+    fn native_quantile_scalar_scales_match_stock_r() {
+        // quantile(survfit(Surv(time, status) ~ x, aml), c(0, .25, .5, .75),
+        //          scale = scale): scaling follows curve inversion, including
+        // undefined upper quantiles and the zero-probability origin.
+        let fit = aml_by_x();
+        let probs = [0.0, 0.25, 0.5, 0.75];
+        let negative = quantile_survfit(&fit, &probs, true, -2.0, None).unwrap();
+        assert_eq!(
+            negative.quantile,
+            vec![
+                vec![-0.0, -9.0, -15.5, -24.0],
+                vec![-0.0, -4.0, -11.5, -16.5]
+            ]
+        );
+        assert_eq!(
+            negative.lower.as_ref().unwrap()[0],
+            [-0.0, -6.5, -9.0, -17.0]
+        );
+        assert!(
+            negative.upper.as_ref().unwrap()[0][1..]
+                .iter()
+                .all(|q| q.is_nan())
+        );
+        for scale in [0.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let result = quantile_survfit(&fit, &probs, true, scale, None).unwrap();
+            if scale == 0.0 {
+                assert!(result.quantile[0][0].is_nan());
+                for &q in &result.quantile[0][1..] {
+                    assert!(q.is_infinite());
+                    assert_eq!(q.is_sign_negative(), scale.is_sign_negative());
+                }
+            } else if scale.is_nan() {
+                assert!(result.quantile.iter().flatten().all(|q| q.is_nan()));
+            } else {
+                for &q in result.quantile.iter().flatten() {
+                    assert_eq!(q, 0.0);
+                    assert_eq!(q.is_sign_negative(), scale.is_sign_negative());
+                }
+            }
             assert!(
-                quantile_survfit(&aml_maintained(), &[0.5], false, 1.0, Some(tolerance)).is_err()
+                result.upper.as_ref().unwrap()[0][1..]
+                    .iter()
+                    .all(|q| q.is_nan())
             );
+            assert!(
+                quantile_survfit(&fit, &[], true, scale, None)
+                    .unwrap()
+                    .quantile
+                    .iter()
+                    .all(Vec::is_empty)
+            );
+        }
+        // Summary tables retain their separate positive-scale requirement.
+        assert!(survmean(&fit, 0.0, RmeanOption::None).is_err());
+    }
+
+    #[test]
+    fn native_quantiles_with_infinite_tolerance_match_stock_r() {
+        for tolerance in [f64::INFINITY, f64::NEG_INFINITY] {
+            let result = quantile_survfit(
+                &aml_maintained(),
+                &[0.0, 0.5, 1.0],
+                true,
+                1.0,
+                Some(tolerance),
+            )
+            .unwrap();
+            for values in [Some(result.quantile), result.lower, result.upper]
+                .into_iter()
+                .flatten()
+            {
+                for row in values {
+                    if tolerance.is_sign_negative() {
+                        assert_eq!(row[0], 0.0);
+                    } else {
+                        assert!(row[0].is_nan());
+                    }
+                    assert!(row[1..].iter().all(|value| value.is_nan()));
+                }
+            }
         }
     }
 }

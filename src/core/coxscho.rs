@@ -13,8 +13,9 @@
 //! `exp(eta) * weight`.
 
 use crate::core::risk_sweep::StratumSweep;
-use crate::core::strata_order::{SurvResponse, order_within_strata, validate_intervals};
+use crate::core::strata_order::{SurvResponse, order_within_strata};
 use crate::error::SurvivalResult;
+use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::validate_binary_i32;
 use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
@@ -51,13 +52,16 @@ pub fn schoenfeld_residuals(
     strata: Option<&[i32]>,
     method: TieMethod,
 ) -> SurvivalResult<CoxschoResiduals> {
+    match response {
+        SurvResponse::Right(data) => SurvivalData::validate_parts(&data.time, &data.status)?,
+        SurvResponse::Counting(data) => {
+            CountingProcessData::validate_parts(&data.start, &data.stop, &data.event)?;
+        }
+    }
     let start = response.start();
     let stop = response.stop();
     let event = response.status();
     let n = stop.len();
-    if let Some(start) = start {
-        validate_intervals(start, stop)?;
-    }
     validate_binary_i32(event, "event")?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
     method.reject_exact("schoenfeld")?;

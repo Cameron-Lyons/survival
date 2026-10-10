@@ -8,7 +8,7 @@ import os
 import struct
 import sys
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from itertools import compress
 from operator import index
 from typing import Any, cast
@@ -23,6 +23,7 @@ _PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + 
 # R recognizes NA by the low-word payload 1954, including after arithmetic
 # quiets the NaN. Keep that marker distinct from genuine numerical NaNs.
 _NA_REAL = struct.unpack("=d", struct.pack("=Q", 0x7FF80000000007A2))[0]
+_MASKED_FLOAT_WARNING = "Warning: converting a masked element to nan."
 
 
 def _numeric_design_matrix(
@@ -157,8 +158,8 @@ def _finite_float(value: Any, name: str) -> float:
     return result
 
 
-def _start_time_value(start_time: Any | None) -> float | None:
-    """The ``start.time`` argument of the survfit methods: ``None`` or one finite number."""
+def _start_time_value(start_time: Any | None, *, allow_infinite: bool = False) -> float | None:
+    """The ``start.time`` argument: one number, finite unless a method opts in."""
 
     if start_time is None:
         return None
@@ -168,7 +169,7 @@ def _start_time_value(start_time: Any | None) -> float | None:
         value = float(start_time)
     except (TypeError, ValueError) as exc:
         raise ValueError("start.time must be a single numeric value") from exc
-    if not math.isfinite(value):
+    if math.isnan(value) or (not allow_infinite and not math.isfinite(value)):
         raise ValueError("start.time must be a single numeric value")
     return value
 
@@ -260,6 +261,8 @@ def _normalize_na_action(na_action: str | None) -> str:
 def _is_missing_value(value: Any) -> bool:
     if value is None or type(value).__name__ in {"NAType", "NaTType"}:
         return True
+    if isinstance(value, np.ma.MaskedArray) and value.size == 1 and np.ma.is_masked(value):
+        return True
     try:
         return bool(value != value)
     except Exception:
@@ -269,6 +272,8 @@ def _is_missing_value(value: Any) -> bool:
 def _float_or_nan(value: Any) -> float:
     """``float(value)``, with NaN for a missing value (R's ``NA``)."""
 
+    if isinstance(value, np.ma.MaskedArray) and value.size == 1 and np.ma.is_masked(value):
+        return _NA_REAL
     if _is_missing_value(value):
         try:
             return float(value)
@@ -277,13 +282,30 @@ def _float_or_nan(value: Any) -> float:
     return float(value)
 
 
-def _floats_or_nan(values: Sequence[Any]) -> list[float]:
+def _floats_or_nan(values: Sequence[Any], *, _masked_warning_guard: bool = True) -> list[float]:
     """:func:`_float_or_nan` of each value, as fast as ``float`` when none is missing."""
 
-    try:
-        return list(map(float, values))
-    except TypeError:
-        return list(map(_float_or_nan, values))
+    if isinstance(values, np.ma.MaskedArray):
+        values = values.tolist()
+    if not _masked_warning_guard:
+        try:
+            return list(map(float, values))
+        except TypeError:
+            return list(map(_float_or_nan, values))
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error",
+            message=r"^Warning: converting a masked element to nan\.$",
+            category=UserWarning,
+        )
+        try:
+            return list(map(float, values))
+        except TypeError:
+            return list(map(_float_or_nan, values))
+        except UserWarning as warning:
+            if str(warning) != _MASKED_FLOAT_WARNING:
+                raise
+            return list(map(_float_or_nan, values))
 
 
 def _row_has_missing(value: Any) -> bool:
@@ -294,7 +316,7 @@ def _row_has_missing(value: Any) -> bool:
         return math.isnan(value)
     if value_type is int or value_type is bool or value_type is str:
         return False
-    if isinstance(value, list | tuple):
+    if isinstance(value, list | tuple) or isinstance(value, np.ndarray) and value.ndim > 0:
         return any(_row_has_missing(item) for item in value)
     return _is_missing_value(value)
 
@@ -343,11 +365,25 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
         materialized = _coerce_array_like(values, name)
         if len(materialized) != n:
             raise ValueError(f"{name} must have length {n}")
-        try:
-            # a numeric column is missing only where it is NaN
-            missing.update(compress(range(n), map(math.isnan, materialized)))
-        except (TypeError, OverflowError):
-            missing.update(idx for idx, value in enumerate(materialized) if _row_has_missing(value))
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "error",
+                message=r"^Warning: converting a masked element to nan\.$",
+                category=UserWarning,
+            )
+            try:
+                # a numeric column is missing only where it is NaN
+                missing.update(compress(range(n), map(math.isnan, materialized)))
+            except (TypeError, OverflowError):
+                missing.update(
+                    idx for idx, value in enumerate(materialized) if _row_has_missing(value)
+                )
+            except UserWarning as warning:
+                if str(warning) != _MASKED_FLOAT_WARNING:
+                    raise
+                missing.update(
+                    idx for idx, value in enumerate(materialized) if _row_has_missing(value)
+                )
     return missing
 
 
@@ -797,8 +833,8 @@ def _as_character(value: Any) -> str:
         return "TRUE" if bool(value) else "FALSE"
     if isinstance(value, int):
         return str(value)
-    if isinstance(value, float):
-        return _r_format_number(value, 15)
+    if isinstance(value, float | np.floating):
+        return _r_format_number(float(value), 15)
     if _is_missing_value(value):
         return "NA"
     return str(value)
@@ -833,8 +869,14 @@ def _factor_levels(values: Any, name: str = "values") -> list[Any]:
     array = _numeric_ndarray(values)
     if array is not None:
         return _numeric_factor(array)[1].tolist()
+    return _observed_factor_levels(_materialize_labels(values, name), name)
+
+
+def _observed_factor_levels(values: Iterable[Any], name: str) -> list[Any]:
+    """Infer levels from prepared labels without consuming the source a second time."""
+
     try:
-        unique = dict.fromkeys(_materialize_labels(values, name))
+        unique = dict.fromkeys(values)
     except TypeError as exc:
         raise TypeError(f"{name} contains unhashable labels") from exc
     return sorted((value for value in unique if not _is_missing_value(value)), key=_r_sort_key)
@@ -860,18 +902,27 @@ def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
 
 
 def _factor(
-    values: Any, name: str = "values", *, levels: Sequence[Any] | None = None
+    values: Any, name: str = "values", *, levels: Iterable[Any] | None = None
 ) -> tuple[list[int | None], list[str]]:
     """R's ``factor(x)`` as zero-based codes (``None`` for ``NA``) and level labels."""
 
-    array = _numeric_ndarray(values)
-    if array is not None and levels is None:
-        numeric_codes, numeric_levels = _numeric_factor(array)
-        return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]
+    materialized: list[Any] | None = None
     if levels is None:
-        levels = _factor_levels(values, name)
+        declared = _categories(values)
+        if declared is not None:
+            levels = [level for level in declared if not _is_missing_value(level)]
+        else:
+            array = _numeric_ndarray(values)
+            if array is not None:
+                numeric_codes, numeric_levels = _numeric_factor(array)
+                return numeric_codes, [_as_character(level) for level in numeric_levels.tolist()]
+            materialized = _materialize_labels(values, name)
+            levels = _observed_factor_levels(materialized, name)
+    else:
+        levels = tuple(levels)
     index = {level: code for code, level in enumerate(levels)}
-    materialized = _materialize_labels(values, name)
+    if materialized is None:
+        materialized = _materialize_labels(values, name)
     codes: list[int | None] = list(map(index.get, materialized))
     if None in codes:
         for value, code in zip(materialized, codes, strict=True):

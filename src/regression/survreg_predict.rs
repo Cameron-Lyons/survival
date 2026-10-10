@@ -3,7 +3,7 @@
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
-use crate::internal::validation::{ProbabilityBounds, validate_length, validate_probability};
+use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use ndarray::{ArrayView1, ArrayView2};
 use pyo3::prelude::*;
@@ -240,8 +240,10 @@ pub fn predict_survreg(
             })
         }
         SurvregPredictType::Quantile | SurvregPredictType::Uquantile => {
-            validate_probability(p, "p", ProbabilityBounds::Closed)?;
             let rows = prediction_rows(fit, newdata)?;
+            // R passes the complete probability vector to the distribution's
+            // quantile function. Missing and out-of-range values produce NaN
+            // columns for built-ins; runtime families retain their own behavior.
             let qq = fit.distribution.quantiles(p)?;
             let nstrata = fit.nstrata();
             let mut pred: Vec<Vec<f64>> = rows
@@ -404,6 +406,117 @@ pub fn predict_survreg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::regression::parametric_survival::{SurvregControl, SurvregData, survreg_fit};
+    use crate::regression::survreg_distributions::SurvregDistribution;
+
+    fn probability_fit(family: &str, scale: f64) -> SurvregFit {
+        let data = SurvregData::try_new(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0, 10.0],
+            vec![1, 1, 0, 1, 0, 1, 1, 1],
+            ndarray::array![
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [1.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [1.0, 0.0]
+            ],
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        survreg_fit(
+            &data,
+            &SurvregDistribution::from_name(family, None).unwrap(),
+            None,
+            scale,
+            &SurvregControl::default(),
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn missing_probability_columns_preserve_other_quantiles() {
+        for family in [
+            "weibull",
+            "lognormal",
+            "loglogistic",
+            "gaussian",
+            "logistic",
+            "t",
+        ] {
+            let fit = probability_fit(family, 0.0);
+            for kind in [SurvregPredictType::Quantile, SurvregPredictType::Uquantile] {
+                for errors in [false, true] {
+                    let baseline =
+                        predict_survreg(&fit, None, kind, errors, &[0.2, 0.8], None, None).unwrap();
+                    let actual = predict_survreg(
+                        &fit,
+                        None,
+                        kind,
+                        errors,
+                        &[
+                            0.2,
+                            f64::NAN,
+                            -0.1,
+                            1.1,
+                            f64::INFINITY,
+                            f64::NEG_INFINITY,
+                            0.8,
+                        ],
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                    assert_eq!(actual.n_columns, 7);
+                    for (row, expected) in actual.fit.iter().zip(&baseline.fit) {
+                        assert_eq!(row[0], expected[0]);
+                        assert_eq!(row[6], expected[1]);
+                        assert!(row[1..6].iter().all(|value| value.is_nan()));
+                    }
+                    if let Some(errors) = actual.se_fit {
+                        for (row, expected) in errors.iter().zip(baseline.se_fit.unwrap()) {
+                            assert_eq!(row[0], expected[0]);
+                            assert_eq!(row[6], expected[1]);
+                            assert!(row[1..6].iter().all(|value| value.is_nan()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_scale_probability_errors_keep_location_standard_errors() {
+        for family in ["weibull", "gaussian"] {
+            let fit = probability_fit(family, 0.7);
+            let lp =
+                predict_survreg(&fit, None, SurvregPredictType::Lp, true, &[], None, None).unwrap();
+            for kind in [SurvregPredictType::Quantile, SurvregPredictType::Uquantile] {
+                let actual =
+                    predict_survreg(&fit, None, kind, true, &[f64::NAN], None, None).unwrap();
+                assert!(actual.fit.iter().all(|row| row[0].is_nan()));
+                for (row, expected) in actual
+                    .se_fit
+                    .unwrap()
+                    .iter()
+                    .zip(lp.se_fit.as_ref().unwrap())
+                {
+                    if family == "weibull" && kind == SurvregPredictType::Quantile {
+                        assert!(row[0].is_nan());
+                    } else {
+                        assert_eq!(row[0], expected[0]);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn prediction_types_parse_like_match_arg() {

@@ -8,7 +8,7 @@
 //! the start-time order `sort1 = order(strata, start)` on the sorted rows,
 //! run the kernel and restore input order.
 
-use crate::core::strata_order::{order_within_strata, validate_intervals};
+use crate::core::strata_order::order_within_strata;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::CountingProcessData;
 use crate::internal::validation::validate_binary_i32;
@@ -27,8 +27,8 @@ pub fn agscore3(
     method: TieMethod,
 ) -> SurvivalResult<Array2<f64>> {
     let n = counting.len();
+    CountingProcessData::validate_parts(&counting.start, &counting.stop, &counting.event)?;
     validate_binary_i32(&counting.event, "event")?;
-    validate_intervals(&counting.start, &counting.stop)?;
     validate_score_inputs(n, covariates, score, weights, strata)?;
     method.reject_exact("score")?;
     let unit = vec![1.0; n];

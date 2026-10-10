@@ -141,6 +141,7 @@ pub fn match_levels(
     dimension: usize,
     labels: &[String],
 ) -> SurvivalResult<Vec<usize>> {
+    table.validate()?;
     if dimension >= table.ndim() {
         return Err(SurvivalError::invalid_input(
             "rate-table dimension out of range",
@@ -168,6 +169,7 @@ pub fn match_ratetable(
     names: &[String],
     columns: &[RatetableColumn],
 ) -> SurvivalResult<Array2<f64>> {
+    table.validate()?;
     if names.len() != columns.len() {
         return Err(SurvivalError::invalid_input(
             "rmap names and columns must have the same length",
@@ -231,7 +233,7 @@ pub fn match_ratetable(
         }
     }
     // Numeric factor codes must be level subscripts, and nothing missing.
-    table.validate_positions(&r)?;
+    table.validate_positions_validated(&r)?;
     Ok(r)
 }
 
@@ -242,6 +244,15 @@ pub fn match_ratetable(
 /// offset between their birthday and the start of that year.  `r` is the
 /// matrix from [`match_ratetable`] and is adjusted in place.
 pub fn align_us_year_axis(table: &RateTable, r: &mut Array2<f64>) -> SurvivalResult<()> {
+    table.validate()?;
+    align_us_year_axis_validated(table, r)
+}
+
+/// Alignment for a table already checked by the enclosing public boundary.
+pub(crate) fn align_us_year_axis_validated(
+    table: &RateTable,
+    r: &mut Array2<f64>,
+) -> SurvivalResult<()> {
     if table.us_year_dimension().is_none() {
         return Ok(());
     }
@@ -254,6 +265,11 @@ pub fn align_us_year_axis(table: &RateTable, r: &mut Array2<f64>) -> SurvivalRes
             "ratetable does not have expected shape",
         ));
     };
+    if age >= r.ncols() || year >= r.ncols() {
+        return Err(SurvivalError::invalid_input(
+            "ratetable positions do not contain the age and year columns",
+        ));
+    }
     for mut row in r.rows_mut() {
         let birth_date = row[year] - row[age];
         let offset = birth_date - start_of_year(birth_date)?;

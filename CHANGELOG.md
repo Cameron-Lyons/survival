@@ -2,6 +2,105 @@
 
 ## Unreleased
 
+- Prepare iterator columns before fresh Cox frailty model-matrix processing,
+  preserving group coding, omission labels and complete matrix metadata.
+  See [model-matrix iterator inputs](docs/model-matrix-iterator-inputs.md).
+- Recognize masked scalar cells in numeric response rows, so row iterators and
+  mixed masked inputs follow omission and failure rules without conversion
+  warnings. Preserve valid single-element conversions and reject malformed
+  retained cells. See [masked matrix inputs](docs/masked-matrix-inputs.md).
+- Check person-years summary dimensions before multiplication and margin
+  allocation. Preserve valid empty tables and accumulate margins with direct
+  column-major offsets, avoiding per-cell index-vector allocation. See
+  [population summary inputs](docs/population-summary-inputs.md).
+- Retain used formula and population iterator columns once across row selection,
+  missingness, fitting and prediction. Preserve aliases, factor metadata, numeric
+  expression types and matrix response rows; keep unrelated columns unread during
+  fitting, copying and serialization. Follow stock model-frame row counts. See
+  [formula inputs](docs/formula-iterator-inputs.md) and
+  [population inputs](docs/population-iterable-inputs.md).
+- Avoid redundant formula-term parsing when response columns establish the row
+  count, preserving formula validation before reading response iterators.
+- Revalidate mutable Rust rate tables before population calculations, returning
+  errors for malformed attributes, invalid rates and overflowing group dimensions.
+  Make damaged-table formatting and rate lookup safe. See
+  [rate-table validation](docs/ratetable-inputs.md).
+- Correct fitted ML model annotations and describe native unique times as a
+  read-only property so the complete Python source tree passes type checking.
+- Accept infinite KM endpoints, start times and summary queries; retain
+  nonfinite endpoints and response rows when normalizing finite near ties.
+  Preserve infinite-origin summary arithmetic and reject unsorted grids created
+  by conditional origins before searching them. See
+  [infinite KM validation](docs/km-infinite-times.md).
+- Prepare inferred grouping and cluster iterators once for curve aggregation
+  and concordance, preserving categorical order and complete output rows.
+  See [factor and cluster inputs](docs/factor-iterable-inputs.md).
+- Check mutable fitted Cox row, covariate and covariance dimensions before
+  predictions, including cached baselines; return input errors for missing
+  stored strata or unknown training stratum codes.
+- Follow R's conditional coercion for curve-quantile confidence arguments,
+  including numeric truth values and invalid-condition errors; absent bands
+  retain R's argument-evaluation bypass.
+- Preserve valid terminal zero standard errors and confidence bounds from
+  robust curves in data frames and R quantiles, while retaining undefined
+  native estimates.
+- Preserve event rows from one-shot inputs to `Surv` and `Surv2`, retaining
+  factor levels and numeric array dtypes while avoiding discarded list
+  conversions. See [response input validation](docs/surv-iterable-inputs.md).
+- Preserve conditional Cox origins and vector, matrix and stratum-by-curve
+  layouts for R bridge quantiles and medians, including missing confidence
+  bands and empty probability requests.
+- Check mutable Rust Cox baselines before public expansion and trajectory
+  calls, returning input errors before indexing rows. Fitted predictions reuse
+  the shared numerical loops without repeated baseline scans.
+- Preserve strata iterator rows and categorical metadata when reusing factors
+  in responses, models and predictions; accept a literal `"NA"` event-state
+  label separately from missing values. See [strata factor inputs](docs/strata-factor-inputs.md).
+- Accept scalar and nullable confidence-band inputs through the Python facade;
+  convert plain numeric arrays in bulk and release the interpreter lock during
+  native transforms. Refuse invalid confidence types for empty inputs too.
+  See [confidence-band validation](docs/confidence-bands.md).
+- Revalidate mutable Rust inputs before Cox score, Schoenfeld and counting
+  martingale residual kernels, preventing indexing panics and a NaN-time sweep
+  that could fail to advance.
+- Follow R's curve-quantile probability type checks and infinite-tolerance
+  behavior; preserve zero, negative and nonfinite scalar scales. Convert
+  stacked curve arrays in bulk and release the interpreter
+  lock during inversion. See [curve quantile validation and timings](docs/curve-quantiles.md).
+- Stream compact survival-summary tables without observation-sized temporary
+  vectors; retain the forward mean and backward variance addition order and
+  release the Python interpreter lock. See
+  [summary-table validation and timings](docs/survival-summary-tables.md).
+- Preserve missing and invalid numeric AFT quantile columns as R does, and
+  skip probability coercion for nonquantile Python predictions. Preserve
+  explicitly empty probability requests through the R bridge and accept
+  nullable numeric queries in AFT distribution functions.
+- Check observation alignment before selecting RMST comparison groups; gather
+  each group's rows once and accept owned NumPy inputs while releasing the
+  Python interpreter lock for comparisons and stacked summary tables.
+- Revalidate mutable Rust inputs before Cox risk-set counting and martingale
+  residual calculations, returning input errors before indexing rows.
+- Follow R's repetition defaults, first-element warnings and argument
+  precedence for survival responses. Repeat immutable columns without
+  output-sized row indices; see [validation and timings](docs/surv-repetition.md).
+- Support explicit cumulative or per-time count selection in ordinary and
+  multistate survival summaries through R's `dosum` option, including Cox
+  predictions. Sweep dense ordered summary times and stream count prefixes;
+  native summary time inputs use checked NumPy bulk conversion. See
+  [summary count validation and benchmarks](docs/summary-counts.md).
+- Revalidate public Rust concordance response fields before indexing rows,
+  returning input errors for modified lengths, times, statuses and intervals.
+- Follow R 3.8-12's multistate entry reporting grid, omitting censored
+  continuation boundaries while retaining actual entries, transitions and
+  final exits. Verify fitted counts, uncertainty and influence tensors against
+  64 current-stock cases through Rust and both Python interfaces.
+- Preserve sortable character and calendar dates in `neardate`, retain exact
+  timestamps and reject factor dates. Correct R's POSIXt conversion defect in
+  the bridge and speed numeric input preparation; see
+  [date matching validation and timings](docs/neardate-sortable.md).
+- Preserve ordinary data-frame dispatch when subsetting R `tmerge` objects,
+  including single-index selection and omitted row or column arguments.
+
 - Validate mutable public Rust inputs at Kaplan-Meier, Aalen-Johansen, and
   log-rank fitting boundaries, returning input errors before accessing rows.
   Release the Python GIL during convenience and one-sample log-rank tests.

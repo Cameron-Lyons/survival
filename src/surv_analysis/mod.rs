@@ -55,7 +55,9 @@ pub use semi_markov::{
     SojournTimeParams, fit_semi_markov, predict_semi_markov,
 };
 pub use statefig::{StateFigArrow, StateFigLayout, StateFigResult, statefig, statefig_py};
-pub use survfit_aj_summary::{AJMeanTable, summary_survfit_aj, survmean_aj};
+pub use survfit_aj_summary::{
+    AJMeanTable, summary_survfit_aj, summary_survfit_aj_with_counts, survmean_aj,
+};
 pub use survfit_confint::{
     ConfLower, ConfType, ConfidenceBands, survfit_confint, survfit_confint_py,
 };
@@ -66,8 +68,9 @@ pub use survfit_matrix::{
 };
 pub use survfit_summary::{
     RmeanOption, SurvfitQuantiles, SurvmeanTable, quantile_survfit, quantile_survfit_from,
-    quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times, survfit0,
-    survfit0_aj, survfit0_aj_py, survfit0_py, survmean, survmean_py,
+    quantile_survfit_py, summary_survfit, summary_survfit_py, summary_survfit_times,
+    summary_survfit_times_with_counts, survfit0, survfit0_aj, survfit0_aj_py, survfit0_py,
+    survmean, survmean_py,
 };
 pub use survfitaj::{
     SurvfitAJCounts, SurvfitAJData, SurvfitAJInfluence, SurvfitAJOptions, SurvfitAJResult,

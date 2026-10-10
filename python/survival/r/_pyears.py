@@ -59,6 +59,7 @@ from ._formula import (
     _expression_columns,
     _expression_values,
     _formula_columns,
+    _formula_input_row_count,
     _formula_name,
     _formula_rhs_terms,
     _literal_vector,
@@ -66,6 +67,7 @@ from ._formula import (
     _model_variables,
     _numeric_scalar,
     _numeric_vector,
+    _prepare_formula_inputs,
     _r_literal,
     _response_spec,
     _seq_length,
@@ -283,15 +285,15 @@ def survexp_mn() -> RateTable:
 
 
 def _rmap_columns(
-    rmap: Mapping[str, Any] | None, ratetable: RateTable, data: Any
+    rmap: Mapping[str, Any] | None, ratetable: RateTable, data: Any, n: int | None = None
 ) -> dict[str, Any]:
     """R's ``rcall`` expansion: every rate-table dimension from ``rmap`` or a same-named column."""
 
-    return _mapped_columns(rmap, ratetable.dimid, data)
+    return _mapped_columns(rmap, ratetable.dimid, data, n)
 
 
 def _mapped_columns(
-    rmap: Mapping[str, Any] | None, names: Sequence[str], data: Any
+    rmap: Mapping[str, Any] | None, names: Sequence[str], data: Any, n: int | None = None
 ) -> dict[str, Any]:
     """``rmap``'s entries, then a same-named column for each other variable in *names*.
 
@@ -304,7 +306,8 @@ def _mapped_columns(
     """
 
     columns: dict[str, Any] = {}
-    n = _data_row_count(data)
+    if n is None:
+        n = _data_row_count(data)
     available = set(_data_column_names(data) or ())
     for name, value in ({} if rmap is None else rmap).items():
         if str(name) not in names:
@@ -1002,6 +1005,57 @@ def _population_match_summary(table: RateTable, positions: list[list[float]]) ->
     return text
 
 
+def _prepare_population_inputs(
+    data: Any, rmap: Mapping[str, Any] | None, **row_aligned: Any
+) -> tuple[Any, Mapping[str, Any] | None, dict[str, Any]]:
+    """Share lazy ownership across data, direct arguments and rate mappings."""
+
+    entries = list(rmap.items()) if isinstance(rmap, Mapping) else []
+    mapped = {
+        f"_population_rmap_{index}": value
+        for index, (_, value) in enumerate(entries)
+        if not isinstance(value, str)
+    }
+    data, prepared = _prepare_formula_inputs(data, **row_aligned, **mapped)
+    if mapped:
+        rmap = {
+            name: prepared.pop(f"_population_rmap_{index}") if not isinstance(value, str) else value
+            for index, (name, value) in enumerate(entries)
+        }
+    return data, rmap, prepared
+
+
+def _population_row_count(
+    formula: str,
+    data: Any,
+    rmap: Mapping[str, Any] | None,
+    rate_names: Sequence[str],
+    *,
+    weights: Any = None,
+) -> int:
+    """Size rate constants from used formula/rate inputs, without reading unused data."""
+
+    if _formula_columns(formula, data):
+        return _data_row_count(data, formula)
+    if weights is not None:
+        return _formula_input_row_count(data, formula, {"weights": weights})
+    sources = {
+        name: _column_source(data, name) for name in _rmap_source_names(rmap, rate_names, data)
+    }
+    if sources:
+        return _formula_input_row_count(data, formula, sources)
+    # Direct rate vectors correspond to external vectors referenced by R's rmap.
+    # Length-one entries can expand to an explicit frame or another rate vector.
+    one = 0
+    for name, value in ({} if rmap is None else rmap).items():
+        if not isinstance(value, str) and hasattr(value, "__iter__"):
+            size = len(_materialize_1d(value, str(name)))
+            if size != 1:
+                return size
+            one = 1
+    return _data_row_count(data, formula) or one
+
+
 def _pyears_direct_formula(
     response: Any,
     data: Any,
@@ -1063,7 +1117,14 @@ def _pyears_direct_formula(
         matrix = (
             followup.ndim == 2
             if isinstance(followup, np.ndarray)
-            else bool(followup and isinstance(followup[0], list | tuple))
+            else bool(
+                followup
+                and (
+                    isinstance(followup[0], list | tuple)
+                    or isinstance(followup[0], np.ndarray)
+                    and followup[0].ndim == 1
+                )
+            )
         )
         if matrix:
             if start is not None or event is not None:
@@ -1161,6 +1222,21 @@ def pyears(
     if rmap is not None and ratetable is None:
         raise ValueError("No rate table specified")
     table = None if ratetable is None else _ratetable_argument(ratetable)
+    data, rmap, prepared = _prepare_population_inputs(
+        data,
+        rmap,
+        formula=formula,
+        weights=weights,
+        subset=subset,
+        time=time,
+        start=start,
+        stop=stop,
+        event=event,
+        group=group,
+    )
+    formula, weights, subset = prepared["formula"], prepared["weights"], prepared["subset"]
+    time, start, stop = prepared["time"], prepared["start"], prepared["stop"]
+    event, group = prepared["event"], prepared["group"]
     if not isinstance(formula, str):
         formula, data = _pyears_direct_formula(
             formula, data, time, start, stop, event, group, table is not None
@@ -1170,9 +1246,20 @@ def pyears(
     calls = _pyears_calls(formula, data)
     # the rate variables and the tcut()/cut() values go through subset and na.action
     # with the formula's variables, so a cut() value outside the breaks drops its row
-    extra = {} if table is None else _rmap_columns(rmap, table, data)
+    extra = (
+        {}
+        if table is None
+        else _rmap_columns(
+            rmap,
+            table,
+            data,
+            _population_row_count(formula, data, rmap, table.dimid, weights=weights),
+        )
+    )
     extra.update((call, term.values) for call, term in calls.items())
-    row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
+    row_key = _population_retention_rows(
+        extra, _formula_input_row_count(data, formula, {"weights": weights, **extra}), retention[0]
+    )
     mf = model_frame(
         formula, data, subset=subset, na_action=na_action or "omit", weights=weights, extra=extra
     )
@@ -1648,6 +1735,24 @@ def survexp(
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, None)
     if kwargs:
         raise TypeError(f"survexp got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
+    data, rmap, prepared = _prepare_population_inputs(
+        data,
+        rmap,
+        weights=weights,
+        subset=subset,
+        times=times,
+        time=time,
+        age=age,
+        year=year,
+        sex=sex,
+    )
+    weights, subset, times = prepared["weights"], prepared["subset"], prepared["times"]
+    time, age, year, sex = (
+        prepared["time"],
+        prepared["age"],
+        prepared["year"],
+        prepared["sex"],
+    )
     if time is not None or age is not None or year is not None:
         data, rmap = _survexp_vectors(time, age, year, sex)
         formula = "time ~ 1"
@@ -1666,13 +1771,19 @@ def survexp(
         raise ValueError("Invalid rate table")
     if isinstance(ratetable, CoxphModel):
         names = _formula_columns("~" + ratetable.formula.split("~", 1)[1], data)
-        extra = _mapped_columns(rmap, names, data)
+        extra = _mapped_columns(
+            rmap, names, data, _population_row_count(formula, data, rmap, names, weights=weights)
+        )
         if method_value.startswith("individual"):
             # predict(type = "expected") also reads the Cox model's response: R's
             # survexp adds the data's remaining columns to the rate variables
             for name in _formula_columns(ratetable.formula, data):
                 extra.setdefault(name, name)
-        row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
+        row_key = _population_retention_rows(
+            extra,
+            _formula_input_row_count(data, formula, {"weights": weights, **extra}),
+            retention[0],
+        )
         mf = model_frame(
             formula,
             data,
@@ -1685,7 +1796,7 @@ def survexp(
             raise ValueError("Data set has 0 rows")
         response = _survexp_response(mf)
         mapped: dict[str, Any] = {
-            name: _column(mf.data, name) for name in _data_column_names(mf.data) or []
+            name: _column_source(mf.data, name) for name in _data_column_names(mf.data) or []
         }
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
@@ -1727,8 +1838,12 @@ def survexp(
             output, mf, data, rmap, names, row_key, retention, groups, levels, response
         )
     table = _ratetable_argument(ratetable)
-    extra = _rmap_columns(rmap, table, data)
-    row_key = _population_retention_rows(extra, _data_row_count(data, formula), retention[0])
+    extra = _rmap_columns(
+        rmap, table, data, _population_row_count(formula, data, rmap, table.dimid, weights=weights)
+    )
+    row_key = _population_retention_rows(
+        extra, _formula_input_row_count(data, formula, {"weights": weights, **extra}), retention[0]
+    )
     mf = model_frame(
         formula,
         data,

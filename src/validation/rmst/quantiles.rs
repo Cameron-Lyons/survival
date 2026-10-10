@@ -1,6 +1,7 @@
 //! `quantile.survfit` (`R/quantile.survfit.R`) from stacked curve vectors.
 //! The port itself is `surv_analysis::quantile_survfit`.
 
+use crate::data_types::FloatVec;
 use crate::surv_analysis::{
     StackedCurves, SurvfitKMResult, SurvfitQuantiles, quantile_survfit_from,
 };
@@ -37,27 +38,35 @@ impl From<SurvfitQuantiles> for SurvfitCurveQuantiles {
 #[pyo3(signature = (time, surv, lower=None, upper=None, strata=None, probs=None, conf_int=true, start_time=0.0, scale=1.0, tolerance=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn quantile_survfit_curves_py(
-    time: Vec<f64>,
-    surv: Vec<f64>,
-    lower: Option<Vec<f64>>,
-    upper: Option<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    surv: FloatVec,
+    lower: Option<FloatVec>,
+    upper: Option<FloatVec>,
     strata: Option<Vec<usize>>,
-    probs: Option<Vec<f64>>,
+    probs: Option<FloatVec>,
     conf_int: bool,
     start_time: f64,
     scale: f64,
     tolerance: Option<f64>,
 ) -> PyResult<SurvfitCurveQuantiles> {
-    let probs = probs.unwrap_or_else(|| vec![0.25, 0.5, 0.75]);
-    let zeros = vec![0.0; time.len()];
-    let n_curves = strata.as_ref().map_or(1, Vec::len);
-    let fit = SurvfitKMResult::from_stacked(StackedCurves {
-        lower,
-        upper,
-        t0: start_time,
-        ..StackedCurves::new(time, zeros.clone(), zeros, surv, strata, vec![0; n_curves])
-    })?;
-    Ok(quantile_survfit_from(&fit, &probs, conf_int, start_time, scale, tolerance)?.into())
+    let time = time.into_inner();
+    let surv = surv.into_inner();
+    let lower = lower.map(FloatVec::into_inner);
+    let upper = upper.map(FloatVec::into_inner);
+    let probs = probs.map_or_else(|| vec![0.25, 0.5, 0.75], FloatVec::into_inner);
+    Ok(py.detach(|| {
+        let zeros = vec![0.0; time.len()];
+        let n_curves = strata.as_ref().map_or(1, Vec::len);
+        let fit = SurvfitKMResult::from_stacked(StackedCurves {
+            lower,
+            upper,
+            t0: start_time,
+            ..StackedCurves::new(time, zeros.clone(), zeros, surv, strata, vec![0; n_curves])
+        })?;
+        quantile_survfit_from(&fit, &probs, conf_int, start_time, scale, tolerance)
+            .map(SurvfitCurveQuantiles::from)
+    })?)
 }
 
 #[cfg(test)]
