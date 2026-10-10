@@ -275,6 +275,8 @@
 \alias{fitted.survival_py_model}
 \alias{summary.survival_py_model}
 \alias{summary.survival_py_survfit}
+\alias{$.summary.survival_py_survfit}
+\alias{[[.summary.survival_py_survfit}
 \alias{summary.survival_py_basehaz}
 \alias{summary.survival_py_survdiff}
 \alias{summary.survival_py_concordance}
@@ -1168,7 +1170,10 @@ dimensions across requested times.}
 \item{data.frame}{Logical flag controlling whether \code{pseudo} returns a
 long data frame instead of a matrix.}
 \item{q, p, n}{Quantiles, probabilities, or draw count for the
-\code{survreg} distribution helpers; \code{p} is the confidence level for
+\code{survreg} distribution helpers. A singleton \code{n} supplies a finite
+nonnegative count truncated toward zero; other vectors supply their length.
+Location and scale recycling can change the returned length after the draws.
+\code{p} is the confidence level for
 \code{cipoisson} and the survival probabilities for
 \code{survfit_confint}. AFT prediction quantiles also accept probabilities
 0 and 1, returning the distribution's limits. Prediction standard errors at
@@ -1187,12 +1192,14 @@ quantiles and Cox summaries.}
 \code{survfit_confint} bounds.}
 \item{ulimit}{Logical flag controlling upper-bound clipping in
 \code{survfit_confint}.}
-\item{mean}{Location parameter for the \code{survreg} distribution helpers.}
+\item{mean}{Location parameter for the \code{survreg} distribution helpers;
+numeric vectors recycle at each arithmetic stage, including empty vectors.}
 \item{distribution}{Distribution name for \code{frailty} or the
 \code{survreg} distribution helpers.}
-\item{parms}{Optional distribution parameters. Used for the Student-t
-\code{survreg} helper distribution; ignored by the other built-in helper
-distributions to match R.}
+\item{parms}{Distribution parameters. Required for named Student-t
+\code{survreg} queries, where numeric vectors recycle inside the distribution
+functions. Other built-in helper distributions leave this argument unused.
+Fitting retains stricter parameter validation.}
 \item{eps, toler.chol, iter.max, toler.inf, outer.max, timefix}{Control
 options passed through \code{coxph.control}. \code{timefix} also controls
 near-tie correction in \code{survdiff}. \code{eps} is also the

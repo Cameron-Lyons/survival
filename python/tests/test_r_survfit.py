@@ -597,8 +597,9 @@ def test_aggregate_survfit_averages_the_data_margin():
         r.aggregate_survfit(curves, by=[1, 2])
     with pytest.raises(ValueError, match="does not have a 'data' margin"):
         r.aggregate_survfit(r.survfit("Surv(time, status) ~ 1", _toy_data()))
-    with pytest.raises(ValueError, match="FUN must be one of"):
-        r.aggregate_survfit(curves, FUN="sum")
+    summed = r.aggregate_survfit(curves, FUN="sum")
+    _close(summed.surv[0], [2.1])
+    _close(summed.surv[1], [1.8])
 
 
 def test_survfit_confint_matches_r():

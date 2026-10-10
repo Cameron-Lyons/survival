@@ -31,6 +31,33 @@ fit = r.coxph("Surv(time, status) ~ age + tt(group)", data, tt=group_penalty)
 one per basis column. Boolean penalty bases use numeric zero/one values;
 nonnumeric bases fail before penalty callbacks run. A sparse penalty requires
 one numeric group column.
+
+The facade also provides standalone `r.ridge()` and `r.frailty()` constructors,
+with `frailty_gamma`, `frailty_gaussian` and `frailty_t` aliases. Their results
+extend `CoxPenaltyBasis`, so a time-transform can return them directly:
+
+```python
+def group_penalty(x, time, riskset, weights):
+    return r.frailty(x, theta=.4, sparse=True)
+
+def ridge_penalty(x, time, riskset, weights):
+    return r.ridge(x, theta=2, column_names=["ridge(x)"])
+```
+
+`RidgeResult.scale_values` contains each column's sample variance, calculated
+from the supplied values before later row selection. Numeric vectors and
+matrices can be combined as separate arguments, following R's `cbind` rules.
+Explicit `column_names` supplies complete coefficient labels; Python cannot
+recover R's unevaluated argument expressions.
+`FrailtyResult.levels` retains used factor levels in their declared order,
+and `codes` retains one-based group positions, including missing values.
+Sparse constructors prepare one group column with a single lookup per row;
+dense constructors prepare an indicator column for every group. Constructor
+results and their native penalties support pickle and fitted-model retention.
+Penalty configuration and controller APIs represent R's `pfun`, `cfun` and
+formatting closure attributes. Python result labels use the documented explicit
+names because argument expressions are unavailable.
+
 The callback can also return `r.pspline()` directly:
 
 ```python
@@ -68,6 +95,14 @@ an unpenalized basis. Python checks fit values, expanded matrices/responses,
 residuals, degrees of freedom, frailties, summaries and formatted history.
 Live R tests exercise both frailty constructors, custom numeric penalty
 vectors, sparse formatter signatures and saved models.
+
+The standalone-constructor reference adds seventy constructor objects and
+thirteen complete Cox fits. It checks basis values, variance scaling, factor
+order, sparse/dense layouts, native configuration, coefficient labels and
+fitted outputs. Ordinary formula fits separately check AIC initialization,
+gamma EM's ignored vector initialization and Gaussian REML's retained vector.
+Large finite and subnormal ridge inputs check the shared variance helper;
+NumPy arithmetic warnings are suppressed to follow stock `var()` behavior.
 
 The full Python suite passes 15,239 tests (48 skipped and 37 documented
 expected differences). The R source archive passes 8,629 checks with zero

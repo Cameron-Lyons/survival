@@ -738,7 +738,8 @@ struct AJKernelData<'a> {
     grp: &'a [usize],
     ngrp: usize,
     p0: &'a [f64],
-    /// Initial influence, `ngrp x nstate` (zero when `p0` was given).
+    /// Initial influence, `ngrp x nstate` (zero when `p0` was given),
+    /// or an empty matrix when standard errors are disabled.
     i0: &'a Array2<f64>,
     /// 0 = no standard errors, 1 = standard errors, 3 = both.
     sefit: u8,
@@ -765,6 +766,45 @@ struct AJCurveFit {
     std_auc: Option<Array2<f64>>,
     /// `[cluster, time, state]`.
     influence: Option<Array3<f64>>,
+}
+
+/// Robust-variance workspaces, allocated only when standard errors are needed.
+struct AJInfluence {
+    u: Array2<f64>,
+    ua: Array2<f64>,
+    c: Array2<f64>,
+    wg: Array2<f64>,
+    uold: Array2<f64>,
+    h: Array2<f64>,
+    se1: Vec<f64>,
+    se2: Vec<f64>,
+    se3: Vec<f64>,
+}
+
+impl AJInfluence {
+    fn new(d: &AJKernelData<'_>) -> Self {
+        let nstate = d.p0.len();
+        let nhaz = d.trmat.len();
+        let mut u = Array2::<f64>::zeros((nstate, d.ngrp));
+        let mut se1 = vec![0.0; nstate];
+        for j in 0..nstate {
+            for g in 0..d.ngrp {
+                u[[j, g]] = d.i0[[g, j]];
+            }
+            se1[j] = u.row(j).iter().map(|v| v * v).sum::<f64>().sqrt();
+        }
+        Self {
+            u,
+            ua: Array2::zeros((nstate, d.ngrp)),
+            c: Array2::zeros((nhaz, d.ngrp)),
+            wg: Array2::zeros((nstate, d.ngrp)),
+            uold: Array2::zeros((nstate, d.ngrp)),
+            h: Array2::zeros((nstate, nstate)),
+            se1,
+            se2: vec![0.0; nhaz],
+            se3: vec![0.0; nstate],
+        }
+    }
 }
 
 /// Port of `survfitaj` (`src/survfitaj.c`) for one curve.  Count matrices
@@ -849,6 +889,7 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     let mut pstate = Array2::<f64>::zeros((ntime, nstate));
     let mut cumhaz = Array2::<f64>::zeros((ntime, nhaz));
     let mut phat: Vec<f64> = d.p0.to_vec();
+    let mut before = vec![0.0; nstate];
     let mut chaz = vec![0.0; nhaz];
     let se = d.sefit > 0;
     let mut stdp = se.then(|| Array2::<f64>::zeros((ntime, nstate)));
@@ -857,25 +898,9 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     // column-major like R's influence.pstate: one contiguous run of ngrp
     // values per time and state
     let mut usave = (d.sefit > 1).then(|| Array3::<f64>::zeros((ngrp, ntime, nstate).f()));
-    // influence of pstate (U), of the AUC (UA) and of cumhaz (C); wg is
-    // the weighted number at risk by cluster and state
-    let mut u = Array2::<f64>::zeros((nstate, ngrp));
-    let mut ua = Array2::<f64>::zeros((nstate, ngrp));
-    let mut c = Array2::<f64>::zeros((nhaz, ngrp));
-    let mut wg = Array2::<f64>::zeros((nstate, ngrp));
-    let mut se1 = vec![0.0; nstate];
-    let mut se2 = vec![0.0; nhaz];
-    let mut se3 = vec![0.0; nstate];
-    if se {
-        for j in 0..nstate {
-            for g in 0..ngrp {
-                u[[j, g]] = d.i0[[g, j]];
-            }
-            se1[j] = u.row(j).iter().map(|v| v * v).sum::<f64>().sqrt();
-        }
-    }
-    let mut h = Array2::<f64>::zeros((nstate, nstate));
-    let mut uold = Array2::<f64>::zeros((nstate, ngrp));
+    // Influence of pstate (U), AUC (UA), cumhaz (C), and risk-set weights
+    // by cluster and state are unused for point estimates alone.
+    let mut influence = se.then(|| AJInfluence::new(d));
 
     // Walk forward in time and compute the AJ; see the methods document,
     // Andersen-Gill: influence.
@@ -884,7 +909,18 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     for i in 0..ntime {
         let ctime = d.utime[i];
         let mut skip_update = false;
-        if se {
+        if let Some(AJInfluence {
+            u,
+            ua,
+            c,
+            wg,
+            uold,
+            h,
+            se1,
+            se2,
+            se3,
+        }) = &mut influence
+        {
             let delta = if i > 0 {
                 ctime - d.utime[i - 1]
             } else {
@@ -940,7 +976,7 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
                 skip_update = true; // no events: C and U do not change
             } else {
                 // U = U + U H, using the pre-update rows as multipliers
-                uold.assign(&u);
+                uold.assign(u);
                 for j in 0..nstate {
                     if h[[j, j]] == 0.0 {
                         continue;
@@ -1004,7 +1040,7 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
         }
         if !skip_update {
             // update phat; p(t-) was needed for the IJ above
-            let before = phat.clone();
+            before.copy_from_slice(&phat);
             for jk in 0..nhaz {
                 if ntrans[[i, jk]] > 0.0 {
                     let (j, k) = d.trmat[jk];
@@ -1018,20 +1054,20 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
         // save out the results
         for j in 0..nstate {
             pstate[[i, j]] = phat[j];
-            if let (Some(stdp), Some(stda)) = (&mut stdp, &mut stda) {
-                stdp[[i, j]] = se1[j];
-                stda[[i, j]] = se3[j];
+            if let (Some(stdp), Some(stda), Some(influence)) = (&mut stdp, &mut stda, &influence) {
+                stdp[[i, j]] = influence.se1[j];
+                stda[[i, j]] = influence.se3[j];
             }
         }
         for jk in 0..nhaz {
             cumhaz[[i, jk]] = chaz[jk];
-            if let Some(stdc) = &mut stdc {
-                stdc[[i, jk]] = se2[jk];
+            if let (Some(stdc), Some(influence)) = (&mut stdc, &influence) {
+                stdc[[i, jk]] = influence.se2[jk];
             }
         }
-        if let Some(usave) = &mut usave {
+        if let (Some(usave), Some(influence)) = (&mut usave, &influence) {
             for j in 0..nstate {
-                usave.slice_mut(s![.., i, j]).assign(&u.row(j));
+                usave.slice_mut(s![.., i, j]).assign(&influence.u.row(j));
             }
         }
     }
@@ -1374,7 +1410,7 @@ pub fn survfitaj(
         };
         // p0 per curve, from the distribution of states at t0, with its
         // (clustered, weighted) influence U0
-        let mut u0 = Array2::<f64>::zeros((nclust, nstate).f());
+        let mut u0 = Array2::<f64>::zeros((if sefit > 0 { nclust } else { 0 }, nstate).f());
         let mut sd0 = None;
         let mut has_i0 = false;
         let p00: Vec<f64> = match &p0_common {
@@ -1820,6 +1856,57 @@ mod tests {
                         .sum::<f64>()
                         .sqrt();
                     assert!(close(norm, expected, 1e-10), "{norm} != {expected}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn point_estimates_preserve_initial_states_clusters_and_options() {
+        for mut data in [ties_data(), istate_data()] {
+            let n = data.time.len();
+            data.weights = Some((0..n).map(|row| (row % 5 + 1) as f64 / 3.0).collect());
+            data.cluster = Some((0..n).map(|row| (row % 3) as i64).collect());
+            data.strata = Some(match &data.id {
+                Some(id) => id.iter().map(|id| (id % 2) as i32).collect(),
+                None => (0..n).map(|row| (row % 2) as i32).collect(),
+            });
+            for start_time in [None, Some(4.0)] {
+                for time0 in [false, true] {
+                    for p0 in [None, Some(vec![0.5, 0.25, 0.25])] {
+                        let options = SurvfitAJOptions {
+                            start_time,
+                            time0,
+                            p0,
+                            entry: true,
+                            influence: true,
+                            ..Default::default()
+                        };
+                        let reference = survfitaj(&data, &options).unwrap();
+                        let point_estimates = survfitaj(
+                            &data,
+                            &SurvfitAJOptions {
+                                se_fit: false,
+                                ..options
+                            },
+                        )
+                        .unwrap();
+                        let mut expected = serde_json::to_value(reference).unwrap();
+                        let actual = serde_json::to_value(point_estimates).unwrap();
+                        for field in [
+                            "std_err",
+                            "std_chaz",
+                            "std_auc",
+                            "se0",
+                            "lower",
+                            "upper",
+                            "influence_pstate",
+                        ] {
+                            assert!(actual[field].is_null(), "{field}");
+                            expected[field] = serde_json::Value::Null;
+                        }
+                        assert_eq!(actual, expected);
+                    }
                 }
             }
         }

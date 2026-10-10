@@ -97,19 +97,53 @@ resolved distribution objects, and registered names. Names use case-folded
 exact lookup for these functions; fitting also accepts unique prefixes.
 `rsurvreg(seed=...)` retains R's uniform stream for custom families.
 
+`rsurvreg(n, ...)` follows R's `runif` count rules. A singleton supplies a
+finite nonnegative count truncated toward zero; every other vector length
+supplies the number of draws, without converting its values. NumPy arrays use
+their total element count and return a flat list. One-shot iterators are read
+once. Random generation draws exactly that many uniforms before evaluating
+the quantile and recycling the location and scale vectors. The result can
+therefore contain more values than the draw count; an empty vector can also
+make the result empty. A custom quantile receives empty probabilities when
+the draw count is zero.
+The independent `rsurvreg_count_reference.json` records forty stock-R count
+cases, callback batches, coercion warnings and subsequent recycling.
+
 For direct bindings, use `SurvregDistribution.from_callbacks(...)`, then
 `with_transform(...)`, `with_parms(...)`, or `derived(...)` as needed.
 `family` and `transform` report `Custom` for runtime implementations.
-`pdf_values`, `cdf_values`, `quantile_values`, and `sample` take length-one
-or per-row arrays for means and scales. The R-style functions also accept
-scalar arguments.
+`pdf_values`, `cdf_values`, `quantile_values`, and `sample` recycle numeric
+means and scales at each arithmetic operation, as the R-style functions do.
+The R-style functions also accept scalar arguments. For example,
+`r.qsurvreg([0.25, 0.75], mean=[0, 1, 2], scale=1, distribution="gaussian")`
+returns three values and warns about fractional recycling. Empty, missing,
+nonfinite and nonpositive values follow the query arithmetic; fitting retains
+its stricter distribution and scale checks.
+
+Named Student-t queries require explicit `parms`, including for empty queries.
+Numeric parameters recycle inside `pt`, `dt` and `qt`; other named built-ins
+ignore `parms`. `SurvregDistribution("t")` retains its default four degrees of
+freedom for fitting and direct object queries. Use `for_query("t", parms)` to
+construct a permissive query object; fitting revalidates it before use.
+
+Query callbacks receive the complete batches produced at each stage, including
+missing values and empty batches. Density queries evaluate the transform
+derivative before the transform. Quantile queries evaluate the quantile before
+scale multiplication, location addition and the inverse transform. Python
+arithmetic warnings use `RuntimeWarning`; callback warnings retain their
+category. The R bridge forwards `RuntimeWarning` and `UserWarning` when they
+occur, so warning-as-error settings stop evaluation before later callbacks.
+Exceptions raised by Python query callbacks retain their original type and
+object.
 
 `survregDtest` checks density output at 0.1 through 1 and checks transform
 inversion and positive finite derivatives at 1 through 10. Fitting checks
 results again on actual observations. Callback exceptions include the
 callback name and original exception text; Python exceptions raised during
-native computation surface as `RuntimeError`. Invalid shapes and numerical
-values detected by Rust surface as `ValueError`.
+native fitting computation surface as `RuntimeError`. Invalid fitting shapes
+and numerical values detected by Rust surface as `ValueError`. Standalone
+queries allow different callback result lengths and unused density columns,
+matching their R evaluation contract.
 
 Python pickle, shallow copy, and deep copy retain custom distributions in
 ordinary and penalized fitted models. Their callables must themselves support
@@ -138,6 +172,13 @@ runtime transforms through their distribution's batch methods. Built-in
 scalar operations do not allocate callback buffers. `validate` checks
 metadata and ownership without invoking callbacks; `dtest` additionally
 performs the functional probes described above.
+
+Rust's `pdf_values`, `cdf_values`, `quantile_values` and `sample` return the
+query values while ignoring arithmetic warnings. Their `_with_warnings`
+variants accept a fallible callback receiving `regression::DpqrWarning` at
+each warning stage. Returning an error stops evaluation at that stage. The
+built-in fast path composes recycling indices and allocates the result once;
+callback queries reuse owned arithmetic buffers where their lengths permit it.
 
 Generic serde serialization explicitly rejects runtime callbacks. Built-in
 objects still serialize; native applications using custom families must
@@ -175,6 +216,14 @@ accumulation formulas. Callback workspace is linear in the number of rows and
 interval endpoints.
 
 ## Reference checks
+
+`scripts/generate_survreg_dpqr_reference.R` writes four independent stock-R
+query fixtures covering 5,712 built-in cases and callback batches, failures,
+empty inputs and warning order. `scripts/generate_survreg_dpqr_parms_reference.R`
+adds 6,584 parameter cases and 144 complete Student-t density matrices. Query
+checks distinguish R's `NA` and `NaN`, compare warning sequences and preserve
+the seeded uniform stream. CI regenerates these fixtures with survival 3.8-12
+and compares them exactly.
 
 `scripts/generate_survreg_density_reference.R` writes a deterministic reference
 for an asymmetric two-normal mixture, outside the built-in families. It uses
@@ -224,3 +273,35 @@ All fitted coefficients and likelihoods were identical at 1,000, 10,000 and
 100,000 rows. An earlier comparison in the reverse build order also found
 unchanged results and similar timings. These measurements show no material
 built-in fitting regression; they do not establish a speedup.
+
+## Query benchmark
+
+`PYTHONPATH=python .venv/bin/python scripts/benchmark_survreg_dpqr.py
+--baseline-extension /path/to/predecessor/_survival.so` compares complete native
+query calls, including NumPy argument conversion, callbacks and returned Python
+lists. Inputs and distributions are prepared before timing. An optional
+`--candidate-extension` selects a separate candidate library. Every case checks
+all returned values before timing; the script pins one CPU and records eleven
+alternating before/after pairs by default.
+
+On 2026-10-09, matching `extension-module,ml` release builds with Rust 1.94,
+Python 3.14.7, NumPy 2.4.6 and an Intel Core Ultra 5 325 produced these medians
+for 100,000 values with scalar mean and scale. The predecessor hash is
+`5bde3f26`; the revised query build is `50295ad6`. Each cell gives before →
+after milliseconds.
+
+| Family | Density | CDF | Quantile |
+| --- | ---: | ---: | ---: |
+| Gaussian | 1.459 → 1.314 | 1.621 → 1.439 | 1.085 → 1.049 |
+| Weibull | 2.109 → 2.086 | 1.947 → 1.875 | 1.752 → 1.584 |
+| Logistic | 1.329 → 1.215 | 1.213 → 1.044 | 0.920 → 0.884 |
+| Logistic callbacks | 5.351 → 4.429 | 4.401 → 3.953 | 0.743 → 0.766 |
+
+These are local measurements. The revised scalar built-ins were 1–14% faster;
+the callback scalar quantile was about 3% slower. With per-row mean and scale,
+Weibull density was about 5% slower and CDF about 3% slower; the other measured
+built-ins were similar or faster. Callback density/CDF calls were 10–19% faster
+across both layouts. The
+[raw results](benchmarks/survreg-dpqr-2026-10-09.json) retain all 48 cases at
+1,000 and 100,000 values, extension hashes and individual samples. These timings
+measure ordinary matching lengths, rather than the expanded recycling cases.

@@ -12,6 +12,9 @@ Newer regression tests and generated fixtures use values from R survival
 
 This page records every known difference from R:
 
+- [API coverage](#api-coverage): exported entry points and tested contracts;
+- [AFT distribution queries](#aft-distribution-queries): recycling and callbacks;
+- [Curve aggregation callbacks](#curve-aggregation-callbacks): function contracts;
 - [Reference differences retained deliberately](#reference-differences-retained-deliberately):
   the fixture checks that are expected to fail;
 - [Deliberate fixes of R defects](#deliberate-fixes-of-r-defects):
@@ -89,6 +92,16 @@ stock `aeqSurv` truncation and row-recycling defects. Infinite-origin summary
 tables retain R's undefined arithmetic. Independent complete fits, summaries,
 quantiles and raw stock discrepancies are described in
 [infinite KM times](km-infinite-times.md).
+
+Near-tie normalization also keeps distinct large finite times when their
+magnitude sum overflows. Its relative scale remains finite, preserving both
+real ties and delayed-entry intervals. See [large finite times](aeq-large-times.md)
+for independent stock normalization and complete-curve checks.
+
+Time-dependent `tmerge` updates prepare shared iterator sources once across
+both frames and all operations, including the first event's implicit range.
+Categorical censor metadata survives preparation, and unrelated update columns
+remain unread. See [time-dependent inputs](tmerge-iterable-inputs.md).
 
 Python `strata()` consumes one-shot iterator columns once and preserves
 declared factor levels. Its returned `StrataFactor` retains categorical level
@@ -287,6 +300,68 @@ predictions can use optional case weights; nonlinear means remain unweighted
 and model offsets are omitted, following R. See [Yates setup](yates-setup.md)
 for the callback contract, reference coverage and ownership rules.
 
+## API coverage
+
+The exported API inventory covers all 80 exports in stock survival 3.8-12.
+That inventory checks entry points; the independent references and deliberate
+differences below describe the tested argument and numerical behavior.
+
+## AFT distribution queries
+
+`dsurvreg`, `psurvreg`, `qsurvreg` and `rsurvreg` recycle location and scale
+vectors separately at each arithmetic stage. Empty vectors, missing values,
+nonfinite values and nonpositive scales follow stock query arithmetic. For
+example, `rsurvreg(2, mean=1:3)` draws two uniforms and returns three values,
+with a fractional recycling warning. Density and quantile callbacks receive
+the complete intermediate batches, including empty and missing entries.
+
+Named Student-t queries require explicit numeric `parms`; the parameters
+recycle inside the distribution functions. Other named built-ins ignore
+`parms`. Constructed Student-t distribution objects retain their df = 4
+default. Query behavior does not relax fitting validation.
+
+Python arithmetic warnings use `RuntimeWarning`. The R bridge forwards
+`RuntimeWarning` and `UserWarning` as they occur, including when warnings stop
+evaluation. Other callback warning categories retain Python's warning hook.
+Python query callback exceptions retain their original identity. Independent
+stock references cover recycling, callback order, missing-value kinds,
+parameter vectors, warnings and random-stream consumption; see
+[AFT distributions](survreg-density.md).
+
+## Ordinary Cox curve selection
+
+Ordinary Cox curves from `r.survfit` expose
+`curves.subset(strata=..., data=..., drop=...)`. Python positions are zero-based;
+stratum labels and prediction-row names can also select their margins.
+The R bridge accepts the usual `curves[strata, data, drop=FALSE]` form.
+Reordering, repeated selections and empty margins retain counts, curve arrays,
+confidence components and prediction metadata. Repeated stratum display names
+remain available in summaries, quantiles and subsequent selections.
+
+`drop=True` removes singleton margins using stock R's rules, including keeping
+a matrix when the selected stratum contains one time row. A single R subscript
+on an object with both margins selects curve cells in column-major order and
+concatenates the selected curves. The independent
+`cox_survfit_subset_reference.json` checks complete selected objects and their
+initial values, summaries and quantiles against stock R.
+
+Single curves without an explicit margin also follow R's raw subscript rules,
+including repeated ones, empty subscripts and metadata removal. No-op selectors
+retain `start.time`; actual selections remove it. The independent
+`cox_survfit_single_reference.json` records these cases and the stale
+`std.chaz` aggregation defect described below.
+
+## Curve aggregation callbacks
+
+`aggregate_survfit` accepts `mean`, `median`, `min`, `max`, `sum` and numeric
+scalar callbacks. Rust exposes `aggregate_survfit_with`; Python accepts a
+callable in `FUN` or the native `fun` argument; the R bridge accepts R summary
+functions. Callback checks use each group's one-based prediction-row indices
+before evaluating survival rows, followed by state probabilities in state/time
+order. Extra function arguments are ignored as in stock R. See
+[curve aggregation](aggregate-survival-curves.md) for complete contracts,
+exceptional arithmetic, independent references and measurements.
+
 ## Reference differences retained deliberately
 
 The Python fixture suite (`python/tests/test_r_fixtures.py`) has **37 expected
@@ -328,6 +403,13 @@ summaries index count matrices as vectors and lose state/transition columns.
 The port accumulates each column within its stratum. The new reference retains
 R's raw output and computes intended counts from R's original fitted matrices;
 see [summary counts](summary-counts.md).
+
+Stock `aggregate.survfit` retains the original `std.chaz` columns after combining
+prediction rows. In a four-prediction example, aggregating to two groups changes
+`surv` from 12 by 4 to 12 by 2, while `std.chaz` remains 12 by 4. Selecting an
+aggregate group can then return another group's original cumulative-hazard
+error. The port clears this stale uncertainty component together with the other
+unavailable aggregate errors; see [curve aggregation](aggregate-survival-curves.md).
 
 Stock `neardate` fails when converting POSIXct/POSIXlt dates because it passes
 the two-element class vector to `methods::as`. The bridge converts to the
@@ -963,11 +1045,6 @@ this does not show.
   (R's `do.call(coxph.control, control)` also matches partial names).
   `survreg_control(outer_max < 1)` raises "invalid value for outer.max", also
   for unpenalized fits, where R never checks it.
-- `dsurvreg`/`psurvreg`/`qsurvreg`/`rsurvreg` keep `survreg()`'s `parms` rules:
-  the t family defaults to df = 4 (R stops on the missing parms), requires
-  a finite df ≥ 3 (R evaluates `dt`/`pt`/`qt` with it, e.g.
-  `dsurvreg(1, 0, 1, "t", parms = 1)` = 0.1591549431), and `parms` given to
-  another family are an error (R ignores them).
 - `survreg(offset=)` (a column name or vector) and `survSplit(id=)` with a
   character id are Python extensions; R uses `offset()` in the formula and
   errors when survSplit must add an id to a subset.
@@ -2156,27 +2233,28 @@ The normal fixture run includes the documented expected differences. Add
 `--runxfail` to display their full discrepancies. R itself is needed to regenerate
 the reference data; see [the fixture workflow](../test/r/README.md).
 
-Local validation on October 9, 2026 passed 67,593 Python tests, with 48 skips
+Local validation on October 9, 2026 passed 105,866 Python tests, with 48 skips
 and 37 documented expected failures. All 48 skips are cases where stock R
-could not compute a reference. Rust passed 1,472
-library tests without Python, 1,732 with all features, and 40 public API
-integration tests in each configuration.
-Formatting, Clippy, Python lint and typing across all 88 source files,
-generated interfaces were clean. A release wheel
-also passed 52,128 focused tests in 73
-files from an isolated environment with `/tmp` as the working directory,
-including every CI numerical file. All 88 loaded
-package modules remained under the wheel environment, and the 17 changed
-Python adapters matched the frozen source bytes.
-Live R 4.5.3 with survival 3.8-12 passed 478,094 expectations across all 50
-current-source bridge test files. That source run had one persistence skip
-requiring an installed package and 24 existing factor-contrast warnings.
-A fresh run of the eight files affected by iterator and subset preparation
-passed another 31,450 expectations without warnings or skips.
-All 64 persistence expectations also passed against the installed source
-archive, including the fresh-process check. The earlier installed-package AFT
-run passed 31,689 expectations. The final R source archive check
-reported `Status: OK`, with its tests run separately. Regenerated current-stock
+could not compute a reference. Rust passed 1,495 library tests without Python,
+1,755 with all features, and 41 public API integration tests without Python.
+Formatting, strict Clippy, Python lint, typing across all 88 source files and
+generated interfaces were clean. The fixture and benchmark script suite also
+passed all 23 tests.
+
+A fresh R 4.5.3 source archive check with survival 3.8-12 reported
+`Status: OK` under `R CMD check --no-manual`. Its installed-package test suite
+passed 496,884 expectations, with no failures or skips and 24 existing
+factor-contrast warnings. This includes model persistence in a fresh process.
+The Python and R sources and installed native extension remained frozen
+throughout both complete suites.
+
+An earlier release-wheel isolation check passed 52,128 focused tests in 73
+files with `/tmp` as the working directory, including every CI numerical
+file. All 88 loaded package modules remained under the wheel environment.
+
+The independent large-time, iterator, weighted log-rank, aggregation callback,
+random-count, Cox curve selection, penalty constructor and AFT distribution
+query fixtures regenerate exactly with survival 3.8-12. Regenerated current-stock
 formula, missing-row, exact-risk, summary-count, entry-grid, compact-table,
 AFT probability, response-repetition, confidence-band, reusable-strata,
 response input, curve-quantile, factor/cluster, formula/population iterator,

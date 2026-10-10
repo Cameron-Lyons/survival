@@ -3,6 +3,7 @@
 //! summaries built on them, the G-rho tests (`survdiff`) and the Cox
 //! baseline curves.
 
+mod aggregate_arithmetic;
 pub(crate) mod aggregate_survfit;
 pub(crate) mod agsurv;
 mod coxsurv;
@@ -26,7 +27,7 @@ pub(crate) mod survfitkm;
 
 pub use aggregate_survfit::{
     AggregateFun, AggregateGroups, AggregateSurvfitResult, GroupingFactor, aggregate_survfit,
-    aggregate_survfit_py,
+    aggregate_survfit_py, aggregate_survfit_with,
 };
 pub use agsurv::{
     AgsurvCurve, AgsurvData, CoxSurvCurve, CoxSurvType, IndividualInterval, agsurv,

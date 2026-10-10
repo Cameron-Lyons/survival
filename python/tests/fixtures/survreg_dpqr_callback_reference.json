@@ -1,0 +1,4523 @@
+{
+  "metadata": {
+    "r": "4.5.3",
+    "survival": "3.8.12"
+  },
+  "cases": [
+    {
+      "name": "audit_base/dsurvreg/ordinary",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.39104269397545588,
+          0.35206532676429952,
+          0.28969155276148273
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/query0",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/mean0",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/scale0",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/meanlong",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.28969155276148273,
+          0.12951759566589174,
+          0.0079154515829799686
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.80000000000000004,
+              -1.5,
+              -2.7999999999999998
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/scalelong",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.39104269397545588,
+          0.19333405840142462,
+          0.13268557543798407
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              0.20000000000000001,
+              0.25,
+              0.066666666666666666
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/three_lengths",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.28969155276148273,
+          0.15056871607740221,
+          0.086025941967745892,
+          0.09776067349386397,
+          0.07627756309210483
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.80000000000000004,
+              -0.75,
+              -0.93333333333333324,
+              -0.20000000000000001,
+              -0.29999999999999999
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/mixed_query",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          0,
+          0.3989422804014327,
+          0.24197072451914337
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/mean_nonfinite",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          0,
+          0.35206532676429952
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "-Inf",
+              "Inf",
+              0.5
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/scale_nonfinite",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          -0,
+          "NaN",
+          -0.28969155276148273
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              0,
+              -0,
+              "Inf",
+              -0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/invalid_probability",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          0.39695254747701181,
+          0.18413507015166167,
+          0.12433533560244285,
+          0.099704407604095449
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.10000000000000001,
+              -0.40000000000000002,
+              0.3666666666666667,
+              -0.025000000000000001
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/dsurvreg/negative_transform",
+      "distribution": "audit_base",
+      "method": "dsurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.053990966513188063,
+          0.15056871607740221,
+          0.054670024891997876,
+          0.088016331691074881,
+          0.07627756309210483
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2,
+              -0.75,
+              -1.3333333333333333,
+              -0.5,
+              -0.29999999999999999
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/ordinary",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.57925970943910299,
+          0.69146246127401301,
+          0.78814460141660336
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/query0",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/mean0",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/scale0",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/meanlong",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.21185539858339666,
+          0.066807201268858071,
+          0.0025551303304279338
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.80000000000000004,
+              -1.5,
+              -2.7999999999999998
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/scalelong",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.57925970943910299,
+          0.5987063256829237,
+          0.52657646430036509
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              0.20000000000000001,
+              0.25,
+              0.066666666666666666
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/three_lengths",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.21185539858339666,
+          0.22662735237686824,
+          0.17532394485222949,
+          0.42074029056089696,
+          0.38208857781104733
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.80000000000000004,
+              -0.75,
+              -0.93333333333333324,
+              -0.20000000000000001,
+              -0.29999999999999999
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/mixed_query",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          1,
+          0,
+          0.5,
+          0.15865525393145705
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/mean_nonfinite",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          1,
+          0.69146246127401301
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "-Inf",
+              "Inf",
+              0.5
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/scale_nonfinite",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0.5,
+          0.5,
+          1,
+          0.21185539858339666
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              0,
+              -0,
+              "Inf",
+              -0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/invalid_probability",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          0.46017216272297101,
+          0.34457825838967582,
+          0.64306616326250143,
+          0.49002748180476197
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -0.10000000000000001,
+              -0.40000000000000002,
+              0.3666666666666667,
+              -0.025000000000000001
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/psurvreg/negative_transform",
+      "distribution": "audit_base",
+      "method": "psurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.022750131948179212,
+          0.22662735237686824,
+          0.091211219725867848,
+          0.30853753872598694,
+          0.38208857781104733
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2,
+              -0.75,
+              -1.3333333333333333,
+              -0.5,
+              -0.29999999999999999
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/ordinary",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          -0.84162123357291418,
+          0,
+          0.84162123357291441
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/query0",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/mean0",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/scale0",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/meanlong",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.15837876642708582,
+          2,
+          2.1583787664270857
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/scalelong",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          -0.84162123357291418,
+          0,
+          -2.5248637007187424
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/three_lengths",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.15837876642708582,
+          2,
+          0.47513629928125756,
+          1,
+          -2.208106167864571
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/mixed_query",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "NaN",
+          "NaN",
+          "-Inf",
+          "NaN"
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/mean_nonfinite",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          "-Inf",
+          0
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/scale_nonfinite",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          "Inf",
+          0,
+          -0.84162123357291441
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/invalid_probability",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          -0.68324246714582837,
+          "NaN",
+          "NaN"
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.20000000000000001,
+              1.1000000000000001
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/qsurvreg/negative_transform",
+      "distribution": "audit_base",
+      "method": "qsurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          2,
+          "NaN",
+          1,
+          "NaN"
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -1,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/ordinary",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          -0.56047565558379719,
+          0.80055427791632328,
+          -0.23017750162277245
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/query0",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 0,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/mean0",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/scale0",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/meanlong",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.43952434441620281,
+          2.8005542779163233,
+          2.4395243444162027
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/scalelong",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          -0.56047565558379719,
+          1.6011085558326466,
+          -1.6814269667513915
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/three_lengths",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.43952434441620281,
+          3.6011085558326466,
+          1.3185730332486085,
+          4.2022171116652931,
+          -0.80237827791898608
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/mixed_query",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 6,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          -0.56047565558379719,
+          0.80055427791632328,
+          -0.23017750162277245,
+          1.1902066197678405,
+          1.5587083211150192,
+          -1.6895556394621198
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987,
+              0.88301740400493145,
+              0.9404672842938453,
+              0.04555649938993156
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.52810548804700375
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/mean_nonfinite",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          "-Inf",
+          0.80055427791632328
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/scale_nonfinite",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "-Inf",
+          "Inf",
+          0,
+          0.23017750162277245
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/invalid_probability",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          -0.56047565558379719,
+          2.6011085558326466,
+          -0.6905325048683173,
+          -1.2419026223351888
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_base/rsurvreg/negative_transform",
+      "distribution": "audit_base",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.43952434441620281,
+          3.6011085558326466,
+          1.3185730332486085,
+          4.2022171116652931,
+          -0.80237827791898608
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/ordinary",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.54626787075818006,
+          0.62749607711592437,
+          0.48641578111155348
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": [
+              -1.6094379124341003,
+              -0.69314718055994529,
+              -0.22314355131420971
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/query0",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": []
+          },
+          {
+            "kind": "transform",
+            "values": []
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/mean0",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/scale0",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/meanlong",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.066265642406154859,
+          0.021230589831586745,
+          4.8547903081644928e-05
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2.6094379124341005,
+              -2.6931471805599454,
+              -4.6094379124341005
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/scalelong",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.54626787075818006,
+          0.37568841601677122,
+          0.57578673917789791
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -1.6094379124341003,
+              -0.34657359027997264,
+              -0.53647930414470013
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/three_lengths",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.066265642406154859,
+          0.16112597762863992,
+          0.20423229428816367,
+          0.16123825581662085,
+          0.34507297315433699
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2.6094379124341005,
+              -1.3465735902799727,
+              -1.5364793041447002,
+              -0.65235947810852513,
+              -0.5386294361119891
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/mixed_query",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          "NaN",
+          "NaN",
+          "NaN"
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "NaN",
+              "-Inf",
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/mean_nonfinite",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          0,
+          0.62749607711592437
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "-Inf",
+              "Inf",
+              -0.69314718055994529
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/scale_nonfinite",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          -0,
+          "NaN",
+          -0.48641578111155348
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              -0,
+              0,
+              "-Inf",
+              0.22314355131420971
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/invalid_probability",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          0.42579657140245175,
+          0.12083060534914508,
+          "NaN"
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              -0.10000000000000001,
+              0.20000000000000001,
+              1.1000000000000001
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.20000000000000001,
+              1.1000000000000001
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NaN",
+              -1.3047189562170503,
+              0.031770059934774976,
+              "NaN"
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/dsurvreg/negative_transform",
+      "distribution": "audit_derived",
+      "method": "dsurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          0.16112597762863992,
+          "NaN",
+          "NaN",
+          -0.069014594630867399
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "derivative",
+            "values": [
+              -1,
+              0.5
+            ]
+          },
+          {
+            "kind": "transform",
+            "values": [
+              -1,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(x - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NaN",
+              -1.3465735902799727,
+              "NaN",
+              "NaN",
+              -0.5386294361119891
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "y * dx"
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/ordinary",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.053760310451663143,
+          0.24410859578558272,
+          0.41171189185745494
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": [
+              -1.6094379124341003,
+              -0.69314718055994529,
+              -0.22314355131420971
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/query0",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": []
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/mean0",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/scale0",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/meanlong",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.0045345550908214077,
+          0.0035390507760864106,
+          2.0187954250453356e-06
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2.6094379124341005,
+              -2.6931471805599454,
+              -4.6094379124341005
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/scalelong",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.053760310451663143,
+          0.36445584473653575,
+          0.29581366775734841
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -1.6094379124341003,
+              -0.34657359027997264,
+              -0.53647930414470013
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/three_lengths",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          0.0045345550908214077,
+          0.089058802300472514,
+          0.062210434911986662,
+          0.25708464936139375,
+          0.29507128609640004
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              -2.6094379124341005,
+              -1.3465735902799727,
+              -1.5364793041447002,
+              -0.65235947810852513,
+              -0.5386294361119891
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/mixed_query",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          1,
+          "NaN",
+          0,
+          "NaN"
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "NaN",
+              "-Inf",
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/mean_nonfinite",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          1,
+          0.24410859578558272
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              "-Inf",
+              "Inf",
+              -0.69314718055994529
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/scale_nonfinite",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0.5,
+          0.5,
+          0,
+          0.58828810814254506
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NA",
+              "NaN",
+              -0,
+              0,
+              "-Inf",
+              0.22314355131420971
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/invalid_probability",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          0.095994282110098222,
+          0.51267228835538181,
+          "NaN"
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              -0.10000000000000001,
+              0.20000000000000001,
+              1.1000000000000001
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NaN",
+              -1.3047189562170503,
+              0.031770059934774976,
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/psurvreg/negative_transform",
+      "distribution": "audit_derived",
+      "method": "psurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          0.089058802300472514,
+          "NaN",
+          "NaN",
+          0.29507128609640004
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "transform",
+            "values": [
+              -1,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "log(x)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "q - mean"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "(q - mean)/scale"
+          },
+          {
+            "kind": "density",
+            "values": [
+              "NaN",
+              -1.3465735902799727,
+              "NaN",
+              "NaN",
+              -0.5386294361119891
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/ordinary",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.43101118688183859,
+          1,
+          2.3201253945043181
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.84162123357291418,
+              0,
+              0.84162123357291441
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/query0",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": []
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/mean0",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/scale0",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/meanlong",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          1.1716098771634675,
+          7.3890560989306504,
+          8.6570911084221081
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              0.15837876642708582,
+              2,
+              2.1583787664270857
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/scalelong",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.43101118688183859,
+          1,
+          0.080069225420887263
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.84162123357291418,
+              0,
+              -2.5248637007187424
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/three_lengths",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          1.1716098771634675,
+          7.3890560989306504,
+          1.6082333836022678,
+          2.7182818284590451,
+          0.10990859997937669
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              0.15837876642708582,
+              2,
+              0.47513629928125756,
+              1,
+              -2.208106167864571
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/mixed_query",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "NaN",
+          "NaN",
+          0,
+          "NaN"
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0,
+              -1
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NA",
+              "NaN",
+              "NaN",
+              "NaN",
+              "-Inf",
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/mean_nonfinite",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          0,
+          1
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/scale_nonfinite",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        0.20000000000000001,
+        0.5,
+        0.80000000000000004
+      ],
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          "Inf",
+          1,
+          0.43101118688183848
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.20000000000000001,
+              0.5,
+              0.80000000000000004
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "Inf",
+              0,
+              -0.84162123357291441
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/invalid_probability",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        -0.10000000000000001,
+        0.20000000000000001,
+        1.1000000000000001
+      ],
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          0.50497696371871126,
+          "NaN",
+          "NaN"
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -0.10000000000000001,
+              0.20000000000000001,
+              1.1000000000000001
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NaN",
+              -0.68324246714582837,
+              "NaN",
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/qsurvreg/negative_transform",
+      "distribution": "audit_derived",
+      "method": "qsurvreg",
+      "query": [
+        -1,
+        0.5
+      ],
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          "NaN",
+          7.3890560989306504,
+          "NaN",
+          2.7182818284590451,
+          "NaN"
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              -1,
+              0.5
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "NaNs produced",
+            "call": "qnorm(p)"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NaN",
+              2,
+              "NaN",
+              1,
+              "NaN"
+            ]
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/ordinary",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.57093742967535666,
+          2.2267748386139794,
+          0.7943925840154179
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.56047565558379719,
+              0.80055427791632328,
+              -0.23017750162277245
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/query0",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 0,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": []
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": false,
+        "next_uniform": 0.28757752012461424
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/mean0",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/scale0",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [],
+      "expected": {
+        "values": [],
+        "length": 0,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": []
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/meanlong",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          1.5519688402736362,
+          16.453764202205939,
+          11.467584824574239
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              0.43952434441620281,
+              2.8005542779163233,
+              2.4395243444162027
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/scalelong",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "values": [
+          0.57093742967535666,
+          4.9585261818843147,
+          0.18610821623257698
+        ],
+        "length": 3,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.56047565558379719,
+              1.6011085558326466,
+              -1.6814269667513915
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/three_lengths",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          1.5519688402736362,
+          36.638828125959606,
+          3.7380834488480192,
+          66.83434610572327,
+          0.44826160470526161
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              0.43952434441620281,
+              3.6011085558326466,
+              1.3185730332486085,
+              4.2022171116652931,
+              -0.80237827791898608
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/mixed_query",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 6,
+      "mean": [
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          0.57093742967535666,
+          2.2267748386139794,
+          0.7943925840154179,
+          3.2877604535094824,
+          4.7526783443997846,
+          0.18460153540788893
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987,
+              0.88301740400493145,
+              0.9404672842938453,
+              0.04555649938993156
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.56047565558379719,
+              0.80055427791632328,
+              -0.23017750162277245,
+              1.1902066197678405,
+              1.5587083211150192,
+              -1.6895556394621198
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.52810548804700375
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/mean_nonfinite",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0
+      ],
+      "scale": [
+        1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          "Inf",
+          0,
+          2.2267748386139794
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NA",
+              "NaN",
+              "Inf",
+              "-Inf",
+              0.80055427791632328
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/scale_nonfinite",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0
+      ],
+      "scale": [
+        "NA",
+        "NaN",
+        "Inf",
+        "-Inf",
+        0,
+        -1
+      ],
+      "expected": {
+        "values": [
+          "NA",
+          "NaN",
+          0,
+          "Inf",
+          1,
+          1.2588234333020807
+        ],
+        "length": 6,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              "NA",
+              "NaN",
+              "-Inf",
+              "Inf",
+              0,
+              0.23017750162277245
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/invalid_probability",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 3,
+      "mean": [
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "expected": {
+        "values": [
+          0.57093742967535666,
+          13.478671616154543,
+          0.50130904846864022,
+          0.28883415251186756
+        ],
+        "length": 4,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665,
+              0.40897692181169987
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              -0.56047565558379719,
+              2.6011085558326466,
+              -0.6905325048683173,
+              -1.2419026223351888
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.88301740400493145
+      }
+    },
+    {
+      "name": "audit_derived/rsurvreg/negative_transform",
+      "distribution": "audit_derived",
+      "method": "rsurvreg",
+      "query": 2,
+      "mean": [
+        1,
+        2,
+        3
+      ],
+      "scale": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "expected": {
+        "values": [
+          1.5519688402736362,
+          36.638828125959606,
+          3.7380834488480192,
+          66.83434610572327,
+          0.44826160470526161
+        ],
+        "length": 5,
+        "error": null,
+        "events": [
+          {
+            "kind": "quantile",
+            "values": [
+              0.28757752012461424,
+              0.78830513544380665
+            ]
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale"
+          },
+          {
+            "kind": "warning",
+            "message": "longer object length is not a multiple of shorter object length",
+            "call": "x * scale + mean"
+          },
+          {
+            "kind": "inverse",
+            "values": [
+              0.43952434441620281,
+              3.6011085558326466,
+              1.3185730332486085,
+              4.2022171116652931,
+              -0.80237827791898608
+            ]
+          }
+        ],
+        "rng_changed": true,
+        "next_uniform": 0.40897692181169987
+      }
+    }
+  ]
+}

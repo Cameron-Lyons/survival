@@ -6,6 +6,52 @@ use crate::regression::survreg_distributions::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
+use std::cell::RefCell;
+
+thread_local! {
+    // Fitting keeps its existing SurvivalError contract. Query calls retain
+    // the original Python exception, including nested query callbacks.
+    static DPQR_CALLBACK_ERRORS: RefCell<Vec<Option<(String, PyErr)>>> = const { RefCell::new(Vec::new()) };
+}
+
+struct DpqrPythonCall;
+
+impl Drop for DpqrPythonCall {
+    fn drop(&mut self) {
+        DPQR_CALLBACK_ERRORS.with(|errors| {
+            errors.borrow_mut().pop();
+        });
+    }
+}
+
+fn dpqr_python_call<T>(operation: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
+    DPQR_CALLBACK_ERRORS.with(|errors| errors.borrow_mut().push(None));
+    let call = DpqrPythonCall;
+    let result = operation();
+    let callback_error =
+        DPQR_CALLBACK_ERRORS.with(|errors| errors.borrow_mut().last_mut().and_then(Option::take));
+    drop(call);
+    match (result, callback_error) {
+        // A callback can catch an error from a nested fitting operation and
+        // then return normally. Restore only the surrogate that escaped from
+        // the query callback, never an unrelated later arithmetic warning.
+        (Err(mapped), Some((signature, original))) if mapped.to_string() == signature => {
+            Err(original)
+        }
+        (result, _) => result,
+    }
+}
+
+pub(crate) fn dpqr_python_warning(warning: DpqrWarning) -> PyResult<()> {
+    Python::attach(|py| {
+        py.import("warnings")?.getattr("warn")?.call1((
+            warning.message(),
+            py.get_type::<pyo3::exceptions::PyRuntimeWarning>(),
+            2,
+        ))?;
+        Ok(())
+    })
+}
 
 struct PythonCallbacks {
     init: Py<PyAny>,
@@ -24,7 +70,13 @@ struct PythonTransform {
 }
 
 fn failure(name: &str, err: PyErr) -> SurvivalError {
-    SurvivalError::computation(format!("{name} callback failed: {err}"))
+    let message = format!("{name} callback failed: {err}");
+    DPQR_CALLBACK_ERRORS.with(|errors| {
+        if let Some(current) = errors.borrow_mut().last_mut() {
+            *current = Some((format!("RuntimeError: {message}"), err));
+        }
+    });
+    SurvivalError::computation(message)
 }
 
 fn array<'py>(py: Python<'py>, values: &[f64]) -> Bound<'py, PyAny> {
@@ -223,7 +275,7 @@ fn callable(py: Python<'_>, value: &Py<PyAny>, name: &str) -> PyResult<()> {
 
 #[pymethods]
 impl SurvregDistribution {
-    /// Original-scale density, with scalar or per-observation means/scales.
+    /// Original-scale density with vector recycling at each arithmetic stage.
     #[pyo3(name = "pdf_values")]
     fn pdf_values_py(
         &self,
@@ -232,7 +284,9 @@ impl SurvregDistribution {
         mean: FloatVec,
         scale: FloatVec,
     ) -> PyResult<Vec<f64>> {
-        Ok(py.detach(|| self.pdf_values(&x, &mean, &scale))?)
+        dpqr_python_call(|| {
+            py.detach(|| self.pdf_values_with_warnings(&x, &mean, &scale, &mut dpqr_python_warning))
+        })
     }
 
     /// Original-scale CDF evaluated with one density callback batch.
@@ -244,7 +298,9 @@ impl SurvregDistribution {
         mean: FloatVec,
         scale: FloatVec,
     ) -> PyResult<Vec<f64>> {
-        Ok(py.detach(|| self.cdf_values(&q, &mean, &scale))?)
+        dpqr_python_call(|| {
+            py.detach(|| self.cdf_values_with_warnings(&q, &mean, &scale, &mut dpqr_python_warning))
+        })
     }
 
     /// Original-scale quantiles evaluated with one quantile callback batch.
@@ -256,7 +312,11 @@ impl SurvregDistribution {
         mean: FloatVec,
         scale: FloatVec,
     ) -> PyResult<Vec<f64>> {
-        Ok(py.detach(|| self.quantile_values(&p, &mean, &scale))?)
+        dpqr_python_call(|| {
+            py.detach(|| {
+                self.quantile_values_with_warnings(&p, &mean, &scale, &mut dpqr_python_warning)
+            })
+        })
     }
 
     /// Draw random observations; a supplied seed uses R's uniform stream.
@@ -269,7 +329,11 @@ impl SurvregDistribution {
         scale: FloatVec,
         seed: Option<i32>,
     ) -> PyResult<Vec<f64>> {
-        Ok(py.detach(|| self.sample(n, &mean, &scale, seed))?)
+        dpqr_python_call(|| {
+            py.detach(|| {
+                self.sample_with_warnings(n, &mean, &scale, seed, &mut dpqr_python_warning)
+            })
+        })
     }
 
     /// Pickle and copy support (see `internal::pickle`).
@@ -284,6 +348,30 @@ impl SurvregDistribution {
     #[pyo3(signature = (name, parms=None))]
     fn new(name: &str, parms: Option<Vec<f64>>) -> PyResult<Self> {
         Ok(Self::from_name(name, parms.as_deref())?)
+    }
+
+    /// Exact named DPQR lookup, with deferred query-only parameter handling.
+    #[staticmethod]
+    #[pyo3(name = "for_query", signature = (name, parms=None, *, _parms_null=false))]
+    fn for_query_py(name: &str, parms: Option<FloatVec>, _parms_null: bool) -> PyResult<Self> {
+        let parms = parms.map(FloatVec::into_inner);
+        let mut result = Self::for_query(name, parms.as_deref())?;
+        if result.family == SurvregFamily::T && _parms_null {
+            result.query_parms = QueryParms::Null;
+        }
+        Ok(result)
+    }
+
+    #[pyo3(name = "with_query_parms", signature = (parms, *, _parms_null=false))]
+    fn with_query_parms_py(&self, parms: FloatVec, _parms_null: bool) -> Self {
+        let mut result = self.clone();
+        result.parms = parms.into_inner();
+        result.query_parms = if result.family == SurvregFamily::T && _parms_null {
+            QueryParms::Null
+        } else {
+            QueryParms::Values
+        };
+        result
     }
 
     /// A user-defined distribution built from a base family, a response
@@ -433,11 +521,13 @@ impl SurvregDistribution {
 
     /// Restore metadata and separately pickled callables.
     #[staticmethod]
+    #[pyo3(signature = (state, callbacks, transform, query_parms=None))]
     fn _from_callback_state(
         py: Python<'_>,
         state: &[u8],
         callbacks: Option<&Bound<'_, PyDict>>,
         transform: Option<&Bound<'_, PyDict>>,
+        query_parms: Option<&str>,
     ) -> PyResult<Self> {
         let mut result: Self = crate::internal::pickle::decode(py, state)?;
         if let Some(c) = callbacks {
@@ -484,7 +574,25 @@ impl SurvregDistribution {
             };
             result = result.with_transform_py(py, get("trans")?, get("dtrans")?, get("itrans")?)?;
         }
-        result.validate()?;
+        if let Some(marker) = query_parms {
+            if result.family != SurvregFamily::T {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "query parameter marker requires a Student-t distribution",
+                ));
+            }
+            result.query_parms = match marker {
+                "values" => QueryParms::Values,
+                "missing" => QueryParms::Missing,
+                "null" => QueryParms::Null,
+                _ => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "invalid query parameter marker",
+                    ));
+                }
+            };
+        } else {
+            result.validate()?;
+        }
         Ok(result)
     }
 }
@@ -497,7 +605,19 @@ impl SurvregDistribution {
     }
 
     pub(crate) fn reduce_callbacks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        if self.callbacks.is_none() && self.transform_callbacks.is_none() {
+        let query_marker = match self.query_parms {
+            QueryParms::Missing => Some("missing"),
+            QueryParms::Null => Some("null"),
+            QueryParms::Values
+                if self.family == SurvregFamily::T
+                    && !matches!(self.parms.as_slice(), [df] if df.is_finite() && *df > 2.0) =>
+            {
+                Some("values")
+            }
+            _ => None,
+        };
+        if self.callbacks.is_none() && self.transform_callbacks.is_none() && query_marker.is_none()
+        {
             return crate::internal::pickle::reduce(py, self)?.into_pyobject(py);
         }
         let callbacks = if self.callbacks.is_some() {
@@ -543,10 +663,14 @@ impl SurvregDistribution {
         let state =
             bincode::serde::encode_to_vec(self.detached_callbacks(), bincode::config::standard())
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        (
-            py.get_type::<Self>().getattr("_from_callback_state")?,
-            (PyBytes::new(py, &state), callbacks, transform),
-        )
-            .into_pyobject(py)
+        let restore = py.get_type::<Self>().getattr("_from_callback_state")?;
+        match query_marker {
+            None => (restore, (PyBytes::new(py, &state), callbacks, transform)).into_pyobject(py),
+            Some(marker) => (
+                restore,
+                (PyBytes::new(py, &state), callbacks, transform, marker),
+            )
+                .into_pyobject(py),
+        }
     }
 }

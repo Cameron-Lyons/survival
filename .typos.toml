@@ -39,6 +39,7 @@ yhat = "yhat"                # survfit residual kernels
 arange = "arange"            # numpy.arange, in the binding tests
 writeable = "writeable"      # numpy's ndarray.flags.writeable
 gam = "gam"                  # frailty(method = "gam") abbreviation matching
+gaus = "gaus"                # frailty(distribution = "gaus") abbreviation matching
 objet = "objet"              # [.survfitms: "... for a survfit objet with both data and state dimesions"
 dimesions = "dimesions"      # the same R message
 stauts = "stauts"            # tmerge test reproducing R's "object 'stauts' not found"

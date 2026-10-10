@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Follow stock AFT distribution query recycling, missing-value arithmetic,
+  Student-t parameter vectors and warning order across Rust, Python and R.
+  Preserve callback exceptions and existing fitted-model serialization.
+  See [AFT distributions](docs/survreg-density.md).
+- Support ordinary Cox curve selection over strata and prediction rows,
+  standalone Python ridge/frailty bases, and R-compatible random-draw count
+  coercion. Retain factor labels, original ridge scaling and saved-model
+  behavior; check the adapters against independent stock-R references.
+- Accept scalar aggregation callbacks and `sum` through Rust, Python and the
+  R bridge. Preserve stock callback validation and ordering, ignored extra
+  arguments and group metadata; correct exceptional mean and sum arithmetic.
+  See [curve aggregation](docs/aggregate-survival-curves.md).
+- Avoid false near ties when sums of large finite time magnitudes overflow;
+  retain genuinely near times and nonfinite endpoints. Check normalization and
+  complete curves against stock R; see [large times](docs/aeq-large-times.md).
+- Prepare time-dependent `tmerge` inputs once across shared frames and update
+  vectors, preserving categorical metadata and leaving unrelated update columns
+  unread. See [iterator inputs](docs/tmerge-iterable-inputs.md).
+- Build weighted log-rank KM left limits from the existing test order, removing
+  the extra full curve fit and per-time searches. Preserve delayed-entry risk
+  sets and complete stock-R test outputs; see
+  [weighted log-rank performance](docs/weighted-logrank-performance.md).
+- Allocate multistate influence workspaces only when standard errors are needed
+  and reuse probability-update buffers. Preserve complete point estimates and
+  standard-error results; see [AJ performance](docs/aalen-johansen-performance.md).
 - Prepare iterator columns before fresh Cox frailty model-matrix processing,
   preserving group coding, omission labels and complete matrix metadata.
   See [model-matrix iterator inputs](docs/model-matrix-iterator-inputs.md).

@@ -28,6 +28,7 @@ from ._coerce import (
     _NA_REAL,
     _as_matrix_rows,
     _as_rows,
+    _categories,
     _coefficient_selection,
     _control_mapping,
     _encode_labels,
@@ -120,6 +121,8 @@ _BUILTIN_DISTRIBUTIONS = (
 survreg_distributions: dict[str, Any] = {
     name: _core.SurvregDistribution(name) for name in _BUILTIN_DISTRIBUTIONS
 }
+
+_DPQR_BUILTIN_OBJECTS = dict(survreg_distributions)
 
 _TRANSFORMS = {"log": _core.SurvregTransform.Log, "identity": _core.SurvregTransform.Identity}
 
@@ -1433,59 +1436,171 @@ def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
 # --- dsurvreg / psurvreg / qsurvreg / rsurvreg -----------------------------------------------
 
 
-def _dpqr_distribution(distribution: Any, parms: Any | None) -> Any:
-    """Density functions use a case-folded exact registry lookup, without prefixes."""
+def _dpqr_parms(parms: Any) -> tuple[list[float], bool]:
+    """Transport numeric query parameters without applying fitting restrictions."""
+
+    values = list(parms.values()) if isinstance(parms, Mapping) else parms
+    if isinstance(values, str | bytes | bytearray):
+        return [], True
+    materialized = _scalar_or_vector(values, "parms")
+    if any(
+        isinstance(value, str | bytes | list | tuple | Mapping | complex | np.complexfloating)
+        for value in materialized
+    ):
+        return [], True
+    try:
+        return _floats_or_nan(materialized), False
+    except (TypeError, ValueError):
+        return [], True
+
+
+def _dpqr_distribution(distribution: Any, parms: Any | None, *, _parms_null: bool = False) -> Any:
+    """Exact named query lookup, preserving its separate parameter contract."""
 
     if isinstance(distribution, str):
         key = distribution.lower()
         if key not in survreg_distributions:
             raise ValueError("Distribution not found")
         distribution = survreg_distributions[key]
-        # As R does, families with no parameters ignore the supplied parms.
-        if (
-            key in _BUILTIN_DISTRIBUTIONS
-            and key != "t"
-            and isinstance(distribution, SurvregDistribution)
-            and not distribution.parms
-        ):
-            parms = None
-    return _resolve_distribution(distribution, parms, probe=False)
+        if key in _DPQR_BUILTIN_OBJECTS and distribution is _DPQR_BUILTIN_OBJECTS[key]:
+            if key != "t":
+                return _core.SurvregDistribution.for_query(key)
+            values, nonnumeric = (None, False) if parms is None else _dpqr_parms(parms)
+            return _core.SurvregDistribution.for_query(
+                key, values, _parms_null=_parms_null or nonnumeric
+            )
+    resolved = _resolve_distribution(distribution, None, probe=False)
+    if parms is None and not _parms_null:
+        return resolved
+    if isinstance(parms, Mapping) and resolved.parm_names:
+        names = resolved.parm_names
+        if any(name not in names for name in parms):
+            raise ValueError("Invalid parameter names")
+        parameters = dict(zip(names, resolved.parms, strict=True))
+        parameters.update(parms)
+        parms = [parameters[name] for name in names]
+    values, nonnumeric = ([], False) if parms is None else _dpqr_parms(parms)
+    return resolved.with_query_parms(values, _parms_null=_parms_null or nonnumeric)
+
+
+def _dpqr_vector(values: Any, name: str) -> list[float]:
+    """Preserve scalar inputs and missing entries for distribution arithmetic."""
+
+    try:
+        return [float(values)]
+    except (TypeError, ValueError):
+        return _floats_or_nan(_scalar_or_vector(values, name))
 
 
 def dsurvreg(
-    x: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
+    x: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: Any = "weibull",
+    parms: Any | None = None,
+    *,
+    _parms_null: bool = False,
 ) -> list[float]:
     """Density of the ``survreg`` location-scale distributions (R's ``dsurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms).pdf_values(
+    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).pdf_values(
         _floats_or_nan(_scalar_or_vector(x, "x")),
-        _quantile_vector(mean, "mean"),
-        _quantile_vector(scale, "scale"),
+        _dpqr_vector(mean, "mean"),
+        _dpqr_vector(scale, "scale"),
     )
 
 
 def psurvreg(
-    q: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
+    q: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: Any = "weibull",
+    parms: Any | None = None,
+    *,
+    _parms_null: bool = False,
 ) -> list[float]:
     """Distribution function of the ``survreg`` distributions (R's ``psurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms).cdf_values(
+    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).cdf_values(
         _floats_or_nan(_scalar_or_vector(q, "q")),
-        _quantile_vector(mean, "mean"),
-        _quantile_vector(scale, "scale"),
+        _dpqr_vector(mean, "mean"),
+        _dpqr_vector(scale, "scale"),
     )
 
 
 def qsurvreg(
-    p: Any, mean: Any, scale: Any = 1, distribution: Any = "weibull", parms: Any | None = None
+    p: Any,
+    mean: Any,
+    scale: Any = 1,
+    distribution: Any = "weibull",
+    parms: Any | None = None,
+    *,
+    _parms_null: bool = False,
 ) -> list[float]:
     """Quantiles of the ``survreg`` distributions (R's ``qsurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms).quantile_values(
+    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).quantile_values(
         _floats_or_nan(_scalar_or_vector(p, "p")),
-        _quantile_vector(mean, "mean"),
-        _quantile_vector(scale, "scale"),
+        _dpqr_vector(mean, "mean"),
+        _dpqr_vector(scale, "scale"),
     )
+
+
+def _random_sample_count(n: Any) -> int:
+    """R's ``runif`` count: truncate one value, otherwise use vector length."""
+
+    if isinstance(n, np.ndarray):
+        if n.size != 1:
+            return n.size
+        value = n.item()
+    elif isinstance(n, str | bytes | bytearray):
+        value = n
+    else:
+        try:
+            length = len(n)
+        except TypeError:
+            try:
+                values = list(n)
+            except TypeError:
+                value = n
+            else:
+                if len(values) != 1:
+                    return len(values)
+                value = values[0]
+        else:
+            if length != 1:
+                return length
+            value = next(iter(n.values() if isinstance(n, Mapping) else n))
+        if (categories := _categories(n)) is not None:
+            try:
+                value = categories.index(value) + 1
+            except (TypeError, ValueError):
+                value = math.nan
+
+    if isinstance(value, complex | np.complexfloating):
+        if value.imag != 0:
+            warnings.warn("imaginary parts discarded in coercion", RuntimeWarning, stacklevel=3)
+        value = value.real
+    try:
+        if isinstance(value, str):
+            text = value.strip()
+            # R parses decimal and hexadecimal numbers, but no digit separators.
+            if "_" in text:
+                raise ValueError
+            numeric = (
+                float.fromhex(text) if text.lower().lstrip("+-").startswith("0x") else float(text)
+            )
+        else:
+            numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        if isinstance(value, str):
+            warnings.warn("NAs introduced by coercion", RuntimeWarning, stacklevel=3)
+        raise ValueError("invalid arguments") from exc
+    if not math.isfinite(numeric):
+        raise ValueError("invalid arguments")
+    if numeric < 0:
+        raise ValueError("n must be non-negative")
+    return int(numeric)
 
 
 def rsurvreg(
@@ -1495,6 +1610,8 @@ def rsurvreg(
     distribution: Any = "weibull",
     parms: Any | None = None,
     seed: int | None = None,
+    *,
+    _parms_null: bool = False,
 ) -> list[float]:
     """Random draws from the ``survreg`` distributions (R's ``rsurvreg``,
     ``qsurvreg(runif(n), ...)``).
@@ -1502,15 +1619,20 @@ def rsurvreg(
     ``seed=s`` draws R's uniforms, so the result equals R's ``set.seed(s);
     rsurvreg(n, ...)``; without a seed the uniforms come from a clock-seeded generator
     whose stream is not R's.
+
+    A scalar ``n`` truncates to a non-negative count; a vector with any other
+    length supplies that length, including zero. NumPy arrays use their total
+    number of elements, and the returned draws form a plain list.
     """
 
-    count = _integer_scalar(n, "n")
-    if count < 0:
-        raise ValueError("n must be non-negative")
-    return _dpqr_distribution(distribution, parms).sample(
+    count = _random_sample_count(n)
+    resolved = _dpqr_distribution(distribution, parms, _parms_null=_parms_null)
+    means = _dpqr_vector(mean, "mean")
+    scales = _dpqr_vector(scale, "scale")
+    return resolved.sample(
         count,
-        _quantile_vector(mean, "mean"),
-        _quantile_vector(scale, "scale"),
+        means,
+        scales,
         None if seed is None else _integer_scalar(seed, "seed"),
     )
 

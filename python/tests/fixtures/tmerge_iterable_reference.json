@@ -1,0 +1,3323 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_tmerge_iterable_reference.R",
+    "r_version": "4.5.3",
+    "survival_version": "3.8.12"
+  },
+  "initial": {
+    "columns": {
+      "id": {
+        "values": [3, 1, 2],
+        "levels": null,
+        "kind": "integer"
+      },
+      "time": {
+        "values": [12, 10, 8],
+        "levels": null,
+        "kind": "double"
+      },
+      "status": {
+        "values": [1, 0, 1],
+        "levels": null,
+        "kind": "integer"
+      },
+      "x": {
+        "values": ["c", "a", "b"],
+        "levels": null,
+        "kind": "character"
+      },
+      "tstart": {
+        "values": [0, 0, 0],
+        "levels": null,
+        "kind": "double"
+      },
+      "tstop": {
+        "values": [12, 10, 8],
+        "levels": null,
+        "kind": "double"
+      },
+      "death": {
+        "values": [1, 0, 1],
+        "levels": null,
+        "kind": "integer"
+      }
+    },
+    "tname": {
+      "idname": "id",
+      "tstartname": "tstart",
+      "tstopname": "tstop"
+    },
+    "tevent": {
+      "death": 0
+    },
+    "tdcvar": [],
+    "tcount": {
+      "death": {
+        "early": 0,
+        "late": 0,
+        "gap": 0,
+        "within": 0,
+        "boundary": 0,
+        "leading": 0,
+        "trailing": 3,
+        "tied": 0,
+        "missid": 0
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "implicit_range",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "operations": {
+        "death": {
+          "kind": "event",
+          "time": "time",
+          "value": "status"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": false,
+      "same": true,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "explicit_range",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "operations": {
+        "death": {
+          "kind": "event",
+          "time": "time",
+          "value": "status"
+        }
+      },
+      "id": "id",
+      "tstart": 1,
+      "tstop": "time",
+      "options": [],
+      "update": false,
+      "same": true,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [1, 1, 1],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "renamed_intervals",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "operations": {
+        "death": {
+          "kind": "event",
+          "time": "time",
+          "value": "status"
+        }
+      },
+      "id": "id",
+      "tstart": 2,
+      "tstop": "time",
+      "options": {
+        "tstartname": "enter",
+        "tstopname": "exit",
+        "idname": "subject"
+      },
+      "update": false,
+      "same": true,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "subject": {
+            "values": [3, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "enter": {
+            "values": [2, 2, 2],
+            "levels": null,
+            "kind": "double"
+          },
+          "exit": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "subject",
+          "tstartname": "enter",
+          "tstopname": "exit"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "factor_censor",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": ["a", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": ["a", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "operations": {
+        "death": {
+          "kind": "event",
+          "time": "time",
+          "value": "status"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": false,
+      "same": true,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": ["a", "wait", "b"],
+            "levels": ["wait", "unused", "b", "a"],
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": ["a", "wait", "b"],
+            "levels": ["wait", "unused", "b", "a"],
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": "wait"
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "repeated_initial_ranges",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 1, 2, 2, 3, 3],
+          "levels": null,
+          "kind": "integer"
+        },
+        "start": {
+          "values": [0, 4, 1, 5, 2, 7],
+          "levels": null,
+          "kind": "double"
+        },
+        "time": {
+          "values": [4, 10, 5, 8, 7, 12],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [0, 0, 0, 1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "death": {
+          "kind": "event",
+          "time": "time",
+          "value": "status"
+        }
+      },
+      "id": "id",
+      "tstart": "start",
+      "tstop": "time",
+      "options": [],
+      "update": false,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [1, 1, 2, 2, 3, 3],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [10, 10, 8, 8, 12, 12],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [0, 0, 1, 1, 1, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["a", "a", "b", "b", "c", "c"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 4, 1, 5, 2, 7],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [4, 10, 5, 8, 7, 12],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [0, 0, 0, 1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 3,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/FALSE/0/FALSE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": false,
+        "delay": 0
+      },
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/FALSE/0/TRUE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": false,
+        "delay": 0
+      },
+      "update": true,
+      "same": false,
+      "direct": true,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/FALSE/1/FALSE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": false,
+        "delay": 1
+      },
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 5, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 5, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/FALSE/1/TRUE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": false,
+        "delay": 1
+      },
+      "update": true,
+      "same": false,
+      "direct": true,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 5, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 5, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/TRUE/0/FALSE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": true,
+        "delay": 0
+      },
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/TRUE/0/TRUE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": true,
+        "delay": 0
+      },
+      "update": true,
+      "same": false,
+      "direct": true,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/TRUE/1/FALSE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": true,
+        "delay": 1
+      },
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 5, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 5, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 0,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "all_updates/TRUE/1/TRUE",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "lab": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab"
+        },
+        "visits": {
+          "kind": "cumtdc",
+          "time": "time"
+        },
+        "infection": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        },
+        "count": {
+          "kind": "cumevent",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": {
+        "na.rm": true,
+        "delay": 1
+      },
+      "update": true,
+      "same": false,
+      "direct": true,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 5, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 5, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "lab": {
+            "values": [3, 2, 2, 5, null],
+            "levels": null,
+            "kind": "double"
+          },
+          "visits": {
+            "values": [1, 1, 1, 3, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "infection": {
+            "values": [1, 0, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "count": {
+            "values": [2, 1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "infection": 0,
+          "count": 0
+        },
+        "tdcvar": ["lab", "visits"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "lab": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 0,
+            "missid": 1
+          },
+          "visits": {
+            "early": 1,
+            "late": 3,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 0,
+            "tied": 1,
+            "missid": 1
+          },
+          "infection": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          },
+          "count": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 2,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "shared_update_values",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "a": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab",
+          "init": 0
+        },
+        "b": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "lab",
+          "init": -1
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": true,
+      "same": false,
+      "direct": true,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "a": {
+            "values": [3, 2, 5, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "b": {
+            "values": [3, 2, 5, -1],
+            "levels": null,
+            "kind": "double"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": ["a", "b"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "a": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          },
+          "b": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 0,
+            "boundary": 1,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "factor_event",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "state": {
+          "kind": "event",
+          "time": "time",
+          "value": "state"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "state": {
+            "values": ["a", "b", "wait", "b"],
+            "levels": ["wait", "unused", "b", "a"],
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "state": "wait"
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "state": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "factor_tdc",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "state": {
+          "kind": "tdc",
+          "time": "time",
+          "value": "state"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "state": {
+            "values": ["a", "wait", "b", null],
+            "levels": ["wait", "unused", "b", "a"],
+            "kind": "integer"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": ["state"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "state": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "cumulative_values",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [0, 1, 1, 1, 1, 1, 1, 0],
+          "levels": null,
+          "kind": "integer"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "total": {
+          "kind": "cumtdc",
+          "time": "time",
+          "value": "lab",
+          "init": 2
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "total": {
+            "values": [5, 4, 9, 2],
+            "levels": null,
+            "kind": "double"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0
+        },
+        "tdcvar": ["total"],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "total": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 1,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 0,
+            "missid": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "explicit_censor",
+      "data1": {
+        "id": {
+          "values": [3, 1, 2],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "status": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "x": {
+          "values": ["c", "a", "b"],
+          "levels": null,
+          "kind": "character"
+        },
+        "tstart": {
+          "values": [0, 0, 0],
+          "levels": null,
+          "kind": "double"
+        },
+        "tstop": {
+          "values": [12, 10, 8],
+          "levels": null,
+          "kind": "double"
+        },
+        "death": {
+          "values": [1, 0, 1],
+          "levels": null,
+          "kind": "integer"
+        }
+      },
+      "data2": {
+        "id": {
+          "values": [1, 3, 1, 2, 3, 2, 9, 1],
+          "levels": null,
+          "kind": "integer"
+        },
+        "time": {
+          "values": [-1, 0, 4, 8, 12, 10, 1, 4],
+          "levels": null,
+          "kind": "double"
+        },
+        "lab": {
+          "values": [2, 3, null, 1, 2, 3, 4, 5],
+          "levels": null,
+          "kind": "double"
+        },
+        "event": {
+          "values": [false, true, true, true, true, true, true, false],
+          "levels": null,
+          "kind": "logical"
+        },
+        "state": {
+          "values": ["wait", "a", null, "b", "a", "b", "wait", "b"],
+          "levels": ["wait", "unused", "b", "a"],
+          "kind": "integer"
+        }
+      },
+      "operations": {
+        "event2": {
+          "kind": "event",
+          "time": "time",
+          "value": "event"
+        }
+      },
+      "id": "id",
+      "tstart": null,
+      "tstop": null,
+      "options": [],
+      "update": true,
+      "same": false,
+      "direct": false,
+      "warnings": [],
+      "result": {
+        "columns": {
+          "id": {
+            "values": [3, 1, 1, 2],
+            "levels": null,
+            "kind": "integer"
+          },
+          "time": {
+            "values": [12, 10, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "status": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "x": {
+            "values": ["c", "a", "a", "b"],
+            "levels": null,
+            "kind": "character"
+          },
+          "tstart": {
+            "values": [0, 0, 4, 0],
+            "levels": null,
+            "kind": "double"
+          },
+          "tstop": {
+            "values": [12, 4, 10, 8],
+            "levels": null,
+            "kind": "double"
+          },
+          "death": {
+            "values": [1, 0, 0, 1],
+            "levels": null,
+            "kind": "integer"
+          },
+          "event2": {
+            "values": [true, false, false, true],
+            "levels": null,
+            "kind": "logical"
+          }
+        },
+        "tname": {
+          "idname": "id",
+          "tstartname": "tstart",
+          "tstopname": "tstop"
+        },
+        "tevent": {
+          "death": 0,
+          "event2": false
+        },
+        "tdcvar": [],
+        "tcount": {
+          "death": {
+            "early": 0,
+            "late": 0,
+            "gap": 0,
+            "within": 0,
+            "boundary": 0,
+            "leading": 0,
+            "trailing": 3,
+            "tied": 0,
+            "missid": 0
+          },
+          "event2": {
+            "early": 1,
+            "late": 1,
+            "gap": 0,
+            "within": 2,
+            "boundary": 0,
+            "leading": 1,
+            "trailing": 2,
+            "tied": 1,
+            "missid": 1
+          }
+        }
+      }
+    }
+  ]
+}

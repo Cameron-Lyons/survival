@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, overload
 
@@ -26,6 +26,7 @@ from ._coerce import (
     _float_or_nan,
     _float_vector,
     _floats_or_nan,
+    _integer_scalar,
     _is_bool_like,
     _is_missing_value,
     _label_levels,
@@ -60,6 +61,7 @@ from ._formula import (
     _timeline_counting,
     _timeline_response,
 )
+from ._names import _make_unique
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv, is_na_surv
 from ._types import (
     CoxSurvfitMultiStateResult,
@@ -1035,6 +1037,157 @@ def _cox_columns(values: Any) -> list[list[float]]:
     return [list(values)]
 
 
+def _cox_subset_positions(
+    selection: Any, count: int, labels: Sequence[str], name: str
+) -> list[int]:
+    if selection is None:
+        return list(range(count))
+    positions = []
+    for value in _scalar_or_vector(selection, name):
+        if isinstance(value, str):
+            if value not in labels:
+                raise ValueError(f"{name} {value!r} not matched")
+            positions.append(labels.index(value))
+        else:
+            index = _integer_scalar(value, name)
+            if not 0 <= index < count:
+                raise IndexError("subscript out of bounds")
+            positions.append(index)
+    return positions
+
+
+def _subset_cox_survfit(
+    x: CoxSurvfitResult,
+    strata: Any | None = None,
+    data: Any | None = None,
+    drop: bool = True,
+    curves: Any | None = None,
+    _implicit: bool = False,
+) -> CoxSurvfitResult:
+    """Ordinary Cox curve selection; positions are zero-based and R normalizes its subscripts.
+
+    ``curves`` is the R method's column-major single-index selection of stratum/data
+    combinations. Repeated stratum labels are retained separately from unique block keys.
+    """
+    if not isinstance(x, CoxSurvfitResult):
+        raise TypeError("ordinary Cox curve subsetting requires a CoxSurvfitResult")
+    drop = _logical(drop, "drop must be TRUE/FALSE")
+    if strata is None and data is None and curves is None and not _implicit:
+        return x
+    sizes = list(x.strata.values()) if x.strata is not None else [len(x.time)]
+    starts = np.cumsum([0, *sizes]).tolist()
+    names = x.strata_names
+    ndata = x.ncurve
+    matrix = x.has_data_margin
+    if curves is not None:
+        if strata is not None or data is not None:
+            raise ValueError("curve indices cannot be combined with strata or data indices")
+        selected = _cox_subset_positions(curves, len(sizes) * ndata, (), "curves")
+        if selected == list(range(len(sizes) * ndata)):
+            return x
+        if not selected:
+            raise ValueError("select at least one curve")
+        kept_strata = [index % len(sizes) for index in selected]
+        kept_data = [index // len(sizes) for index in selected]
+        rows = [row for group in kept_strata for row in range(starts[group], starts[group + 1])]
+        columns = [
+            column
+            for group, column in zip(kept_strata, kept_data, strict=True)
+            for _ in range(sizes[group])
+        ]
+
+        def linear_values(name: str) -> Any:
+            original = getattr(x, name)
+            if original is None or len(original) == 0:
+                return original
+            array = np.asarray(original)
+            return [
+                float(array[row, column] if array.ndim == 2 else array[row])
+                for row, column in zip(rows, columns, strict=True)
+            ]
+
+        return dataclasses.replace(
+            x,
+            n=[x.n[group] for group in kept_strata],
+            time=[x.time[row] for row in rows],
+            n_risk=[x.n_risk[row] for row in rows],
+            n_event=[x.n_event[row] for row in rows],
+            n_censor=[x.n_censor[row] for row in rows],
+            strata={str(index + 1): sizes[group] for index, group in enumerate(kept_strata)},
+            strata_labels=None,
+            start_time=None,
+            newdata=None,
+            colnames=None,
+            **{
+                name: linear_values(name)
+                for name in ("surv", "cumhaz", "std_err", "std_chaz", "lower", "upper")
+            },
+        )
+    if strata is not None and x.strata is None:
+        raise ValueError("the curves have no strata to select")
+    if data is not None and not matrix:
+        raise ValueError("survfit object does not have a 'data' margin")
+    kept_strata = _cox_subset_positions(strata, len(sizes), names, "strata")
+    kept_data = _cox_subset_positions(data, ndata, x.colnames or (), "data")
+    rows = [row for group in kept_strata for row in range(starts[group], starts[group + 1])]
+    keep_matrix = matrix and not (drop and len(rows) != 1 and len(kept_data) == 1)
+
+    def margin_values(name: str) -> Any:
+        original = getattr(x, name)
+        if original is None or len(original) == 0:
+            return original
+        array = np.asarray(original)
+        if array.ndim == 1:
+            return array[rows].tolist()
+        selected = array[np.ix_(rows, kept_data)]
+        return selected.tolist() if keep_matrix else selected[:, 0].tolist()
+
+    labels = [names[group] for group in kept_strata] if x.strata is not None else []
+    kept_mapping = (
+        None
+        if x.strata is None or (drop and len(kept_strata) == 1)
+        else dict(zip(_make_unique(labels), [sizes[group] for group in kept_strata], strict=True))
+    )
+    newdata = None
+    if matrix and x.newdata is not None:
+        if hasattr(x.newdata, "iloc"):
+            newdata = x.newdata.iloc[kept_data].copy()
+            if not newdata.index.is_unique:
+                newdata.index = _make_unique([str(label) for label in newdata.index])
+            if newdata.ndim == 2 and newdata.shape[1] == 1:
+                newdata = newdata.iloc[:, 0]
+        elif isinstance(x.newdata, Mapping):
+            newdata = {
+                name: _subset_optional_sequence(column, kept_data, name)
+                for name, column in x.newdata.items()
+            }
+            if len(newdata) == 1:
+                newdata = next(iter(newdata.values()))
+        else:
+            newdata = [x.newdata[index] for index in kept_data]
+    return dataclasses.replace(
+        x,
+        n=[x.n[group] for group in kept_strata],
+        time=[x.time[row] for row in rows],
+        n_risk=[x.n_risk[row] for row in rows],
+        n_event=[x.n_event[row] for row in rows],
+        n_censor=[x.n_censor[row] for row in rows],
+        strata=kept_mapping,
+        start_time=None,
+        strata_labels=labels
+        if kept_mapping is not None and len(set(labels)) != len(labels)
+        else None,
+        newdata=newdata,
+        colnames=None
+        if not keep_matrix or x.colnames is None
+        else [x.colnames[index] for index in kept_data],
+        **{
+            name: margin_values(name)
+            for name in ("surv", "cumhaz", "std_err", "std_chaz", "lower", "upper")
+        },
+    )
+
+
 def _survfit_matrix(
     matrix: Any,
     p0: Any,
@@ -1180,7 +1333,7 @@ def _cox_curve_labels(x: CoxSurvfitResult) -> list[str]:
     """``survmean``'s row names: the strata, the columns, or ``"stratum, column"`` with the
     strata varying fastest (``[]`` for one unnamed curve)."""
 
-    strata = list(x.strata) if x.strata else []
+    strata = x.strata_names
     if not _is_matrix(x.surv):
         return strata
     if x.colnames is None:
@@ -1574,7 +1727,7 @@ def summary_survfit(
         )
     if isinstance(object, CoxSurvfitResult):
         engines = _cox_engines(object)
-        strata_names = list(object.strata) if object.strata else []
+        strata_names = object.strata_names
         labels = _cox_curve_labels(object)
     else:
         engines = [_engine_of(object)]
@@ -1608,7 +1761,13 @@ def summary_survfit(
         strata = [
             name for name, size in zip(strata_names, rows.strata, strict=True) for _ in range(size)
         ]
-    matrix = isinstance(object, CoxSurvfitResult) and _is_matrix(object.surv)
+    matrix = (
+        isinstance(object, CoxSurvfitResult)
+        and _is_matrix(object.surv)
+        # R summarizes each stratum via fit[i, ], whose default drop removes
+        # a singleton prediction column before the summaries are joined.
+        and (times is None or object.ncurve != 1 or len(object.strata or ()) <= 1)
+    )
 
     def curves(name: str) -> Any:
         return _joined_columns([getattr(summary, name) for summary in summaries], matrix)
@@ -1854,7 +2013,14 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
         return []
     if isinstance(by, dict):
         items: list[tuple[str | None, Any]] = [(str(name), values) for name, values in by.items()]
-    elif isinstance(by, list | tuple) and by and isinstance(by[0], list | tuple):
+    elif (
+        isinstance(by, list | tuple)
+        and by
+        and (
+            (isinstance(by[0], Sequence) and not isinstance(by[0], str | bytes))
+            or (isinstance(by[0], np.ndarray) and by[0].ndim == 1)
+        )
+    ):
         items = [(None, values) for values in by]
     else:
         items = [(None, by)]
@@ -1877,36 +2043,59 @@ _Survfit = TypeVar("_Survfit", bound="DataclassInstance")
 
 
 @overload
-def aggregate_survfit(x: _Survfit, by: Any | None = None, FUN: str = "mean") -> _Survfit: ...
+def aggregate_survfit(
+    x: _Survfit,
+    by: Any | None = None,
+    FUN: str | Callable[[Any], Any] | None = None,
+    **kwargs: Any,
+) -> _Survfit: ...
 
 
 @overload
 def aggregate_survfit(
-    x: Any, by: Any | None = None, FUN: str = "mean"
+    x: Any,
+    by: Any | None = None,
+    FUN: str | Callable[[Any], Any] | None = None,
+    **kwargs: Any,
 ) -> _core.AggregateSurvfitResult: ...
 
 
-def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
+def aggregate_survfit(
+    x: Any,
+    by: Any | None = None,
+    FUN: str | Callable[[Any], Any] | None = None,
+    **kwargs: Any,
+) -> Any:
     """R's ``aggregate.survfit``: population-averaged curves of ``survfit(coxfit, newdata)``.
 
     ``x`` has a ``surv`` matrix (times x newdata rows) or a ``pstate`` array (times x rows x
     states); the rows are summarised within the groups of ``by`` (a vector, a list of vectors
-    or a name -> vector mapping) with ``FUN``, one of ``"mean"`` (the default), ``"median"``,
-    ``"min"`` or ``"max"``.  The components that do not collapse (``std_err``, ``lower``,
-    ``upper``, ``cumhaz``, ...) are dropped as in R and ``newdata`` becomes the group labels.
+    or a name -> vector mapping) with ``FUN``: ``"mean"``, ``"median"``,
+    ``"min"``, ``"max"``, ``"sum"``, or a callable returning one numeric value.
+    The default (``None``) follows R's omitted ``FUN``, using row means for ungrouped
+    survival curves. Callables receive a fresh one-dimensional NumPy array for each group,
+    first with its one-based row indices to validate the summary and then with curve values.
+    Extra keyword arguments are ignored, as are R's ``...``. Components that do not
+    collapse (``std_err``, ``lower``,
+    ``upper``, ``cumhaz``, ...) are dropped and ``newdata`` becomes the group labels.
     """
 
     if isinstance(x, CoxSurvfitMultiStateResult):
         return _aggregate_coxms(x, by, FUN)
     surv = getattr(x, "surv", None)
     pstate = getattr(x, "pstate", None)
-    surv = surv if surv and isinstance(surv[0], list | tuple) else None
-    pstate = pstate if pstate and pstate[0] and isinstance(pstate[0][0], list | tuple) else None
-    if surv is None and pstate is None:
+    if isinstance(surv, np.ndarray):
+        surv = surv if surv.ndim == 2 else None
+    else:
+        surv = surv if surv and isinstance(surv[0], list | tuple) else None
+    if isinstance(pstate, np.ndarray):
+        pstate = pstate if pstate.ndim == 3 else None
+    else:
+        pstate = pstate if pstate and pstate[0] and isinstance(pstate[0][0], list | tuple) else None
+    margin = surv if surv is not None else pstate
+    if margin is None:
         raise ValueError("survfit object does not have a 'data' margin")
-    n_data = len(surv[0]) if surv is not None else len(pstate[0])  # type: ignore[index]
-    if not isinstance(FUN, str):
-        raise TypeError("FUN must be the name of a summary: mean, median, min or max")
+    n_data = margin.shape[1] if isinstance(margin, np.ndarray) else len(margin[0])
     result = _core.aggregate_survfit(
         surv=surv, pstate=pstate, by=_grouping_factors(by, n_data), fun=FUN
     )
@@ -1926,8 +2115,8 @@ def aggregate_survfit(x: Any, by: Any | None = None, FUN: str = "mean") -> Any:
         # tapply names the group columns 1, 2, ...; one group is a plain vector in R
         updates["colnames"] = (
             None
-            if by is None or result.surv is None
-            else [str(k + 1) for k in range(len(result.surv[0]))]
+            if result.newdata is None or result.surv is None
+            else [str(k + 1) for k in range(len(result.newdata.labels))]
         )
     if result.pstate is not None:
         updates["pstate"] = result.pstate
@@ -1953,8 +2142,6 @@ def _aggregate_coxms(
     """``aggregate.survfit`` of multi-state Cox curves: ``pstate`` summarised over the
     newdata rows of each group; the cumulative hazard does not collapse."""
 
-    if not isinstance(FUN, str):
-        raise TypeError("FUN must be the name of a summary: mean, median, min or max")
     result = _core.aggregate_survfit(
         surv=None,
         pstate=x.pstate,
@@ -1963,7 +2150,11 @@ def _aggregate_coxms(
     )
     return dataclasses.replace(
         x,
-        pstate=np.asarray(result.pstate, dtype=np.float64),
+        pstate=np.asarray(result.pstate, dtype=np.float64).reshape(
+            x.pstate.shape[0],
+            1 if result.newdata is None else len(result.newdata.labels),
+            x.pstate.shape[2],
+        ),
         cumhaz=None,
         newdata=_group_labels(result.newdata),
     )
