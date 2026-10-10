@@ -421,7 +421,7 @@ class _CoxData:
     """The rows handed to the engine (after the tt() expansion, when there is one)."""
 
     y: Surv
-    x: list[list[float]]
+    x: list[list[float]] | np.ndarray
     strata: list[int] | None
     weights: list[float] | None
     offset: list[float] | None
@@ -653,11 +653,16 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     )
 
 
-def _check_init(init: Any, x: list[list[float]], offset: list[float] | None) -> list[float]:
+def _check_init(
+    init: Any, x: list[list[float]] | np.ndarray, offset: list[float] | None
+) -> list[float]:
     """coxph.R's check of ``init``: ``exp(X %*% init - sum(colMeans(X) * init) + offset)``
     at the centred offset must neither overflow nor underflow everywhere."""
 
     values = _float_vector(init, "init")
+    # Keep the scalar accumulation and overflow behavior of the original check.
+    if isinstance(x, np.ndarray):
+        x = x.tolist()
     nvar = len(x[0]) if x else 0
     if len(values) != nvar:
         raise ValueError("wrong length for init argument")
@@ -874,8 +879,14 @@ def _coxph_fit_frame(
     # before fitting anything, penalized terms included
     events = data.y._event_codes()
     no_events = not any(events)
-    if not no_events and any(not math.isfinite(value) for row in data.x for value in row):
-        raise ValueError("data contains an infinite predictor")
+    if not no_events:
+        finite_predictors = (
+            bool(np.isfinite(data.x).all())
+            if isinstance(data.x, np.ndarray)
+            else all(math.isfinite(value) for row in data.x for value in row)
+        )
+        if not finite_predictors:
+            raise ValueError("data contains an infinite predictor")
     init_values = None if init is None or no_events else _check_init(init, data.x, data.offset)
     penalized_terms = (
         []
@@ -1248,6 +1259,7 @@ def coxph(
         istate=arguments["istate"],
         deferred_na=formulas is not None,
         defer_tt=True,
+        as_array=formulas is None,
     )
     if weights_column is not None or id_column is not None:
         frame = replace(

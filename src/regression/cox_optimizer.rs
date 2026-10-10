@@ -26,11 +26,14 @@ use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERAN
 use crate::core::risk_sweep::{RecenteredRiskSet, RiskSetSums, spans_a_death};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2, CowArray, Ix1, Ix2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::exact_ties::{ExactRiskAccumulator, ExactRiskTree, exact_tied_moments};
+
+mod workspace;
+use workspace::EvaluationWorkspace;
 
 /// Tie handling of the partial likelihood (R's `coxph(ties = )`), shared by
 /// the fitters and by every residual kernel of the package.  The C kernels
@@ -120,15 +123,16 @@ pub(crate) struct CoxFitResults {
 
 /// Inputs of a Cox fit.  Rows may be in any order; `strata` are stratum
 /// codes (any integers), `entry_times` switches to the counting-process
-/// likelihood.
-pub(crate) struct CoxFitBuilder {
-    time: Array1<f64>,
-    status: Array1<i32>,
-    covar: Array2<f64>,
-    entry_times: Option<Array1<f64>>,
-    strata: Option<Array1<i32>>,
-    offset: Option<Array1<f64>>,
-    weights: Option<Array1<f64>>,
+/// likelihood. Inputs can be owned arrays or borrowed views, including
+/// strided views; `build` gathers them into sorted owned buffers once.
+pub(crate) struct CoxFitBuilder<'a> {
+    time: CowArray<'a, f64, Ix1>,
+    status: CowArray<'a, i32, Ix1>,
+    covar: CowArray<'a, f64, Ix2>,
+    entry_times: Option<CowArray<'a, f64, Ix1>>,
+    strata: Option<CowArray<'a, i32, Ix1>>,
+    offset: Option<CowArray<'a, f64, Ix1>>,
+    weights: Option<CowArray<'a, f64, Ix1>>,
     method: TieMethod,
     max_iter: usize,
     iterate_empty: bool,
@@ -138,12 +142,16 @@ pub(crate) struct CoxFitBuilder {
     initial_beta: Option<Vec<f64>>,
 }
 
-impl CoxFitBuilder {
-    pub(crate) fn new(time: Array1<f64>, status: Array1<i32>, covar: Array2<f64>) -> Self {
+impl<'a> CoxFitBuilder<'a> {
+    pub(crate) fn new(
+        time: impl Into<CowArray<'a, f64, Ix1>>,
+        status: impl Into<CowArray<'a, i32, Ix1>>,
+        covar: impl Into<CowArray<'a, f64, Ix2>>,
+    ) -> Self {
         Self {
-            time,
-            status,
-            covar,
+            time: time.into(),
+            status: status.into(),
+            covar: covar.into(),
             entry_times: None,
             strata: None,
             offset: None,
@@ -158,23 +166,23 @@ impl CoxFitBuilder {
         }
     }
 
-    pub(crate) fn entry_times(mut self, entry_times: Array1<f64>) -> Self {
-        self.entry_times = Some(entry_times);
+    pub(crate) fn entry_times(mut self, entry_times: impl Into<CowArray<'a, f64, Ix1>>) -> Self {
+        self.entry_times = Some(entry_times.into());
         self
     }
 
-    pub(crate) fn strata(mut self, strata: Array1<i32>) -> Self {
-        self.strata = Some(strata);
+    pub(crate) fn strata(mut self, strata: impl Into<CowArray<'a, i32, Ix1>>) -> Self {
+        self.strata = Some(strata.into());
         self
     }
 
-    pub(crate) fn offset(mut self, offset: Array1<f64>) -> Self {
-        self.offset = Some(offset);
+    pub(crate) fn offset(mut self, offset: impl Into<CowArray<'a, f64, Ix1>>) -> Self {
+        self.offset = Some(offset.into());
         self
     }
 
-    pub(crate) fn weights(mut self, weights: Array1<f64>) -> Self {
-        self.weights = Some(weights);
+    pub(crate) fn weights(mut self, weights: impl Into<CowArray<'a, f64, Ix1>>) -> Self {
+        self.weights = Some(weights.into());
         self
     }
 
@@ -287,7 +295,8 @@ impl CoxFitBuilder {
                 stratum_end[position] = 1;
             }
         }
-        let gather = |values: &Array1<f64>| Array1::from_iter(order.iter().map(|&i| values[i]));
+        let gather =
+            |values: &CowArray<'_, f64, Ix1>| Array1::from_iter(order.iter().map(|&i| values[i]));
         let time = gather(&self.time);
         let status = Array1::from_iter(order.iter().map(|&i| self.status[i]));
         let offset = self
@@ -312,7 +321,9 @@ impl CoxFitBuilder {
                     &stratum_end,
                 ),
             },
-            (_, None) => Fitter::Coxfit6,
+            (_, None) => Fitter::Coxfit6 {
+                workspace: EvaluationWorkspace::new(n, nvar, false),
+            },
             (_, Some(entry)) => Fitter::Agfit4 {
                 walk: AgWalk::new(
                     entry.as_slice().expect("contiguous"),
@@ -321,6 +332,7 @@ impl CoxFitBuilder {
                     &stratum_end,
                 ),
                 risk_set: RecenteredRiskSet::new(nvar),
+                workspace: Box::new(EvaluationWorkspace::new(n, nvar, true)),
             },
         };
 
@@ -439,11 +451,14 @@ struct Joining {
 
 /// The C fitter the data and tie method select.
 enum Fitter {
-    Coxfit6,
+    Coxfit6 {
+        workspace: EvaluationWorkspace,
+    },
     /// With its walk over the rows and its running risk set.
     Agfit4 {
         walk: AgWalk,
         risk_set: RecenteredRiskSet,
+        workspace: Box<EvaluationWorkspace>,
     },
     Coxexact,
     /// With the prepared entry/stop walk and `agexact` iteration policy.
@@ -514,8 +529,8 @@ trait AgRiskSet {
 
 /// The risk set while its centre stays at zero: `w exp(eta)` per row.
 struct CentredAtZero<'a> {
-    sums: RiskSetSums,
-    risk: Vec<f64>,
+    sums: &'a mut RiskSetSums,
+    risk: &'a [f64],
     weights: &'a Array1<f64>,
 }
 
@@ -542,7 +557,7 @@ impl AgRiskSet for CentredAtZero<'_> {
     }
 
     fn sums(&self) -> &RiskSetSums {
-        &self.sums
+        self.sums
     }
 }
 
@@ -721,6 +736,17 @@ impl CoxData {
             .collect()
     }
 
+    fn fill_linear_predictors(&self, beta: &[f64], eta: &mut [f64]) {
+        let row = self.rows();
+        for (person, value) in eta.iter_mut().enumerate() {
+            *value = self.offset[person]
+                + beta
+                    .iter()
+                    .zip(row(person))
+                    .fold(0.0, |sum, (&b, &x)| sum + b * x);
+        }
+    }
+
     /// Linear predictors and their log weighted risk `eta + log(w)`.
     fn exact_predictors(&self, beta: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let eta = self.linear_predictors(beta);
@@ -735,11 +761,23 @@ impl CoxData {
     /// `coxfit6_iter`: the log likelihood, score and information for
     /// right-censored data with Breslow or Efron ties.  The risk set grows
     /// from the largest time downwards.
-    fn coxfit6(&self, beta: &[f64], u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
+    fn coxfit6(
+        &self,
+        beta: &[f64],
+        workspace: &mut EvaluationWorkspace,
+        u: &mut [f64],
+        imat: &mut Array2<f64>,
+    ) -> f64 {
         let row = self.rows();
-        let eta = self.linear_predictors(beta);
-        let mut risk_set = RiskSetSums::zeros(self.covar.ncols(), true);
-        let mut tied = risk_set.clone();
+        let EvaluationWorkspace {
+            eta,
+            risk_set,
+            tied,
+            ..
+        } = workspace;
+        self.fill_linear_predictors(beta, eta);
+        risk_set.clear();
+        tied.clear();
         let mut loglik = 0.0;
         let mut person = self.time.len();
         while person > 0 {
@@ -764,7 +802,7 @@ impl CoxData {
                 }
             }
             if tied.count > 0 {
-                loglik += death_time_update(self.efron, &risk_set, &tied, u, imat);
+                loglik += death_time_update(self.efron, risk_set, tied, u, imat);
                 tied.clear();
             }
         }
@@ -784,29 +822,35 @@ impl CoxData {
         beta: &[f64],
         walk: &AgWalk,
         risk_set: &mut RecenteredRiskSet,
+        workspace: &mut EvaluationWorkspace,
         u: &mut [f64],
         imat: &mut Array2<f64>,
     ) -> SurvivalResult<f64> {
-        let eta = self.linear_predictors(beta);
+        let EvaluationWorkspace {
+            eta, risk, tied, ..
+        } = workspace;
+        self.fill_linear_predictors(beta, eta);
+        tied.clear();
         if eta.iter().all(|eta| eta.abs() < 199.0) {
+            risk.resize(eta.len(), 0.0);
+            risk_set.sums.clear();
+            for ((value, eta), weight) in risk.iter_mut().zip(eta.iter()).zip(self.weights.iter()) {
+                *value = eta.exp() * weight;
+            }
             let centred = CentredAtZero {
-                sums: RiskSetSums::zeros(self.covar.ncols(), true),
-                risk: eta
-                    .iter()
-                    .zip(self.weights.iter())
-                    .map(|(eta, weight)| eta.exp() * weight)
-                    .collect(),
+                sums: &mut risk_set.sums,
+                risk,
                 weights: &self.weights,
             };
-            self.agfit4_walk(walk, &eta, centred, u, imat)
+            self.agfit4_walk(walk, eta, centred, tied, u, imat)
         } else {
             risk_set.restart();
             let recentred = Recentred {
                 set: risk_set,
-                eta: &eta,
+                eta,
                 weights: &self.weights,
             };
-            self.agfit4_walk(walk, &eta, recentred, u, imat)
+            self.agfit4_walk(walk, eta, recentred, tied, u, imat)
         }
     }
 
@@ -818,11 +862,11 @@ impl CoxData {
         walk: &AgWalk,
         eta: &[f64],
         mut risk_set: impl AgRiskSet,
+        tied: &mut RiskSetSums,
         u: &mut [f64],
         imat: &mut Array2<f64>,
     ) -> SurvivalResult<f64> {
         let row = self.rows();
-        let mut tied = RiskSetSums::zeros(self.covar.ncols(), true);
         let mut loglik = 0.0;
         for &(start, end) in &walk.bounds {
             risk_set.clear();
@@ -852,7 +896,7 @@ impl CoxData {
                     loglik += weight * (eta[person] - risk_set.recenter());
                     add_scaled(u, weight, x);
                 }
-                loglik += death_time_update(self.efron, risk_set.sums(), &tied, u, imat);
+                loglik += death_time_update(self.efron, risk_set.sums(), tied, u, imat);
             }
         }
         Ok(loglik)
@@ -1068,7 +1112,7 @@ impl CoxFit {
             }
             let plain_mean = covar.column(i).sum() / nused as f64;
             let (center, mean) = match fitter {
-                Fitter::Coxfit6 => {
+                Fitter::Coxfit6 { .. } => {
                     let weighted_mean = (0..nused)
                         .map(|person| weights[person] * covar[(person, i)])
                         .sum::<f64>()
@@ -1087,7 +1131,7 @@ impl CoxFit {
             self.means[i] = mean;
             let column = covar.column(i);
             let scale = match fitter {
-                Fitter::Coxfit6 => mean_abs_scale(weights, column, 0..nused),
+                Fitter::Coxfit6 { .. } => mean_abs_scale(weights, column, 0..nused),
                 Fitter::Agfit4 { walk, .. } => {
                     mean_abs_scale(weights, column, walk.by_stop.iter().map(|j| j.row))
                 }
@@ -1112,8 +1156,12 @@ impl CoxFit {
         self.imat.fill(0.0);
         let (data, u, imat) = (&self.data, &mut self.u, &mut self.imat);
         Ok(match &mut self.fitter {
-            Fitter::Coxfit6 => data.coxfit6(beta, u, imat),
-            Fitter::Agfit4 { walk, risk_set } => data.agfit4(beta, walk, risk_set, u, imat)?,
+            Fitter::Coxfit6 { workspace } => data.coxfit6(beta, workspace, u, imat),
+            Fitter::Agfit4 {
+                walk,
+                risk_set,
+                workspace,
+            } => data.agfit4(beta, walk, risk_set, workspace, u, imat)?,
             Fitter::Coxexact => data.coxexact(beta, u, imat),
             Fitter::Agexact { walk } => data.agexact(beta, walk, u, imat),
         })
@@ -1683,7 +1731,12 @@ mod tests {
 
     /// Counting-process data of the form `(entry, time]` with two
     /// covariates given row by row.
-    fn counting_builder(time: &[f64], entry: &[f64], status: &[i32], x: &[f64]) -> CoxFitBuilder {
+    fn counting_builder(
+        time: &[f64],
+        entry: &[f64],
+        status: &[i32],
+        x: &[f64],
+    ) -> CoxFitBuilder<'static> {
         CoxFitBuilder::new(
             Array1::from_vec(time.to_vec()),
             Array1::from_vec(status.to_vec()),
@@ -1721,7 +1774,7 @@ mod tests {
         -1.2770581196683075,
     ];
 
-    fn case_1520() -> CoxFitBuilder {
+    fn case_1520() -> CoxFitBuilder<'static> {
         counting_builder(
             &CASE_1520_TIME,
             &CASE_1520_ENTRY,
@@ -1936,7 +1989,7 @@ mod tests {
     /// to `1 + 53 i mod 97`, dies there unless `i` is a multiple of 3, and
     /// has the time-varying covariate `z = x_i (t - 1) / 5` with
     /// `x_i = (37 i mod 101) / 50`.
-    fn split_data() -> CoxFitBuilder {
+    fn split_data() -> CoxFitBuilder<'static> {
         let (mut time, mut entry, mut status, mut z) = (vec![], vec![], vec![], vec![]);
         for i in 0..120 {
             let x = ((i * 37) % 101) as f64 / 50.0;
@@ -1991,3 +2044,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod workspace_tests;

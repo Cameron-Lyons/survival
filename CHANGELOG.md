@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep ordinary numeric Cox fitting designs in owned arrays, borrow inputs
+  directly into the optimizer's sorted data and reuse Breslow/Efron evaluation
+  buffers. Separate Cox input types, fitting, prediction, curves and Python
+  bindings behind the existing exports, preserving public list results and
+  fitted-model serialization. See [repository layout](docs/repo-layout.md).
 - Follow stock AFT distribution query recycling, missing-value arithmetic,
   Student-t parameter vectors and warning order across Rust, Python and R.
   Preserve callback exceptions and existing fitted-model serialization.
