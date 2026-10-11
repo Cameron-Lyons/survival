@@ -109,7 +109,7 @@ class _ModelFrame:
     formula: str
     data: Any
     y: Surv
-    x: list[list[float]]
+    x: list[list[float]] | np.ndarray
     design: _FormulaDesign
     terms: _FormulaTerms
     names: list[str]
@@ -139,6 +139,11 @@ class _ModelFrame:
     @property
     def nvar(self) -> int:
         return len(self.names)
+
+    def matrix_rows(self) -> list[list[float]]:
+        """Keep row lists at model-result boundaries, reusing existing list storage."""
+
+        return self.x.tolist() if isinstance(self.x, np.ndarray) else self.x
 
     def model_frame(self) -> dict[str, Any]:
         """R's ``fit$model``: the response and every variable the formula uses."""
@@ -174,7 +179,9 @@ class _ModelFrame:
             self,
             data=_formula_data_rows(self.formula, self.data, list(rows), self.n),
             y=self.y.subset(rows),
-            x=pick(self.x) if self.x else self.x,
+            x=self.x[list(rows)]
+            if isinstance(self.x, np.ndarray)
+            else (pick(self.x) if self.x else self.x),
             strata=pick(self.strata),
             offset=pick(self.offset),
             weights=pick(self.weights),
@@ -674,6 +681,7 @@ def _model_frame(
     extra: Mapping[str, Any] | None = None,
     deferred_na: bool = False,
     defer_tt: bool = False,
+    as_array: bool = False,
 ) -> _ModelFrame:
     """Evaluate a survival formula on ``data`` the way ``model.frame`` does.
 
@@ -683,6 +691,8 @@ def _model_frame(
     ``deferred_na`` (with ``na_action="pass"``) leaves the missing values for the caller
     to drop, as coxph.R does for a formula list: a missing stratum has code -1 and a
     missing weight stays NaN.
+    ``as_array`` keeps ordinary numeric right/counting model matrices in owned
+    arrays. Factors, matrix terms, penalties and time transforms retain row lists.
     """
 
     if not isinstance(formula, str):
@@ -791,11 +801,21 @@ def _model_frame(
         ),
     )
     names, assign = _design_names_and_assign(design)
+    array_design = (
+        as_array
+        and y.type in {"right", "counting"}
+        and all(
+            isinstance(factor, _NumericDesignTerm) and factor.term.transform != "tt"
+            for term in design.covariates
+            for factor in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
+        )
+    )
+    make_design = _design_array_from_spec if array_design else _design_rows_from_spec
     return _ModelFrame(
         formula=formula,
         data=data,
         y=y,
-        x=_design_rows_from_spec(
+        x=make_design(
             data,
             design,
             n,

@@ -132,7 +132,7 @@ def aareg(
         if cluster_values is None
         else list(_label_levels(cluster_values, "cluster")),
         model=frame.model_frame() if _normalize_bool_option(model, "model") else None,
-        x=frame.x if _normalize_bool_option(x, "x") else None,
+        x=frame.matrix_rows() if _normalize_bool_option(x, "x") else None,
         y=response if _normalize_bool_option(y, "y") else None,
         term_labels=tuple(frame.assign),
         na_action=frame.na_action,

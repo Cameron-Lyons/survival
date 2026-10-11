@@ -69,9 +69,9 @@ fn binary_len<E>(
     Ok(a.max(b))
 }
 
-// R's addition loops preserve the right missing operand for a nonscalar
-// RHS. Multiplication additionally preserves the left operand for equal
-// lengths. Retain NA versus NaN without depending on this compiler's
+// R's addition and multiplication loops preserve the left missing operand
+// for equal lengths or a scalar RHS, and the right for other nonscalar
+// RHS lengths. Retain NA versus NaN without depending on this compiler's
 // floating-point instruction operand order.
 #[derive(Clone, Copy)]
 enum Arithmetic {
@@ -109,6 +109,16 @@ fn multiply(a: f64, b: f64, lhs_len: usize, rhs_len: usize) -> f64 {
     )
 }
 
+#[inline]
+fn add(a: f64, b: f64, lhs_len: usize, rhs_len: usize) -> f64 {
+    arithmetic(
+        a,
+        b,
+        Arithmetic::Add,
+        if lhs_len == rhs_len { 1 } else { rhs_len },
+    )
+}
+
 fn binary_owned<E>(
     mut a: Vec<f64>,
     b: &[f64],
@@ -116,7 +126,8 @@ fn binary_owned<E>(
     warn: &mut impl FnMut(DpqrWarning) -> Result<(), E>,
 ) -> Result<Vec<f64>, E> {
     let n = binary_len(a.len(), b.len(), warn)?;
-    let rhs_priority = if matches!(op, Arithmetic::Multiply) && a.len() == b.len() {
+    let rhs_priority = if matches!(op, Arithmetic::Add | Arithmetic::Multiply) && a.len() == b.len()
+    {
         1
     } else {
         b.len()
@@ -262,10 +273,10 @@ impl SurvregDistribution {
                     .map(|(i, &p)| {
                         let scale_value = scale[if scale.len() == 1 { 0 } else { i }];
                         let mean_value = mean[if mean.len() == 1 { 0 } else { i }];
-                        self.query_inverse_one(arithmetic(
+                        self.query_inverse_one(add(
                             multiply(self.query_quantile_one(p), scale_value, p_len, scale.len()),
                             mean_value,
-                            Arithmetic::Add,
+                            p_len,
                             mean.len(),
                         ))
                         .map_err(E::from)
@@ -277,7 +288,7 @@ impl SurvregDistribution {
             return (0..n)
                 .map(|i| {
                     let j = i % multiplied;
-                    self.query_inverse_one(arithmetic(
+                    self.query_inverse_one(add(
                         multiply(
                             self.query_quantile_one(p[j % p.len()]),
                             scale[j % scale.len()],
@@ -285,7 +296,7 @@ impl SurvregDistribution {
                             scale.len(),
                         ),
                         mean[i % mean.len()],
-                        Arithmetic::Add,
+                        multiplied,
                         mean.len(),
                     ))
                     .map_err(E::from)
@@ -308,7 +319,7 @@ impl SurvregDistribution {
             // operations retain length, so their per-element arithmetic fuses.
             let quantile_len = quantiles.len();
             for (i, value) in quantiles.iter_mut().enumerate() {
-                *value = arithmetic(
+                *value = add(
                     multiply(
                         *value,
                         scale[if scale.len() == 1 { 0 } else { i }],
@@ -316,7 +327,7 @@ impl SurvregDistribution {
                         scale.len(),
                     ),
                     mean[if mean.len() == 1 { 0 } else { i }],
-                    Arithmetic::Add,
+                    quantile_len,
                     mean.len(),
                 );
             }
@@ -1024,6 +1035,125 @@ mod tests {
             assert!(unequal[0].is_nan() && !is_r_na(unequal[0]), "{name}");
             assert!(is_r_na(unequal[1]), "{name}");
             assert!(unequal[2].is_nan() && !is_r_na(unequal[2]), "{name}");
+        }
+    }
+
+    #[test]
+    fn quantile_missing_kind_matches_stock_addition_at_each_vector_length() {
+        struct Case<'a> {
+            label: &'a str,
+            query: &'a [f64],
+            mean: &'a [f64],
+            scale: &'a [f64],
+            expected: &'a [bool],
+            warning_count: usize,
+        }
+
+        let na = f64::from_bits(0x7ff8_0000_0000_07a2);
+        // Stock survival::qsurvreg preserves the scaled quantile's missing
+        // kind when addition has equal lengths or a scalar mean. A longer
+        // or recycled nonscalar mean contributes its own missing kind.
+        let cases = [
+            Case {
+                label: "equal",
+                query: &[na, f64::NAN],
+                mean: &[f64::NAN, na],
+                scale: &[1.0],
+                expected: &[true, false],
+                warning_count: 0,
+            },
+            Case {
+                label: "equal with missing scales",
+                query: &[na, f64::NAN],
+                mean: &[f64::NAN, na],
+                scale: &[na, f64::NAN],
+                expected: &[true, false],
+                warning_count: 0,
+            },
+            Case {
+                label: "equal after scale recycling",
+                query: &[na, f64::NAN],
+                mean: &[f64::NAN, na, f64::NAN],
+                scale: &[1.0, 1.0, 1.0],
+                expected: &[true, false, true],
+                warning_count: 1,
+            },
+            Case {
+                label: "scalar mean",
+                query: &[na, f64::NAN],
+                mean: &[f64::NAN],
+                scale: &[1.0],
+                expected: &[true, false],
+                warning_count: 0,
+            },
+            Case {
+                label: "scalar query",
+                query: &[na],
+                mean: &[f64::NAN, na],
+                scale: &[1.0],
+                expected: &[false, true],
+                warning_count: 0,
+            },
+            Case {
+                label: "unequal",
+                query: &[na, f64::NAN, na],
+                mean: &[f64::NAN, na],
+                scale: &[1.0],
+                expected: &[false, true, false],
+                warning_count: 1,
+            },
+        ];
+        let mut distributions: Vec<_> = [
+            "gaussian",
+            "lognormal",
+            "weibull",
+            "exponential",
+            "rayleigh",
+            "loglogistic",
+            "extreme",
+            "logistic",
+            "t",
+        ]
+        .into_iter()
+        .map(|name| SurvregDistribution::for_query(name, Some(&[4.0])).unwrap())
+        .collect();
+        // Recycled Student-t parameters take the generic batch path, including
+        // its fused and allocating arithmetic branches.
+        let recycled_t = SurvregDistribution::for_query("t", Some(&[4.0, 5.0])).unwrap();
+        assert!(!recycled_t.simple_builtin_query());
+        distributions.push(recycled_t);
+        for distribution in distributions {
+            for case in &cases {
+                let label = case.label;
+                // Stock qt(NA, c(4, 5)) expands the quantiles before the
+                // location arithmetic, making addition's lengths equal.
+                let expected = if label == "scalar query" && distribution.parms.len() == 2 {
+                    &[true, true][..]
+                } else {
+                    case.expected
+                };
+                let mut warnings = Vec::new();
+                let result = distribution
+                    .quantile_values_with_warnings(
+                        case.query,
+                        case.mean,
+                        case.scale,
+                        &mut |warning| {
+                            warnings.push(warning);
+                            Ok::<_, SurvivalError>(())
+                        },
+                    )
+                    .unwrap();
+                assert!(result.iter().all(|value| value.is_nan()), "{label}");
+                assert_eq!(
+                    result.into_iter().map(is_r_na).collect::<Vec<_>>(),
+                    expected,
+                    "{} {:?}: {label}",
+                    distribution.name,
+                    distribution.parms,
+                );
+                assert_eq!(warnings, vec![DpqrWarning::Recycling; case.warning_count]);
+            }
         }
     }
 
