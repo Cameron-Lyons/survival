@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 struct StoredWeights {
     shared_weights: Vec<Vec<f32>>,
@@ -25,7 +24,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    model: &DeepHitNetwork<AutodiffBackend>,
+    model: &DeepHitNetwork,
     config: &DeepHitConfig,
     n_features: usize,
 ) -> StoredWeights {
@@ -36,14 +35,20 @@ fn extract_weights(
     let mut input_size = n_features;
     for (i, layer) in model.shared.layers.iter().enumerate() {
         let output_size = config.shared_layers[i];
-        let w: Vec<f32> = tensor_to_vec_f32(layer.weight.val().inner());
+        let w: Vec<f32> = tensor_to_vec_f32(layer.weight.val().without_autodiff());
         shared_weights.push(w);
         shared_dims.push((input_size, output_size));
 
         let b: Vec<f32> = layer
             .bias
             .as_ref()
-            .map(|bias| bias.val().inner().into_data().to_vec().unwrap_or_default())
+            .map(|bias| {
+                bias.val()
+                    .without_autodiff()
+                    .into_data()
+                    .try_to_vec()
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
         shared_biases.push(b);
         input_size = output_size;
@@ -66,14 +71,20 @@ fn extract_weights(
         let mut in_size = shared_output_size;
         for (i, layer) in cs_net.layers.iter().enumerate() {
             let out_size = config.cause_specific_layers[i];
-            let w: Vec<f32> = tensor_to_vec_f32(layer.weight.val().inner());
+            let w: Vec<f32> = tensor_to_vec_f32(layer.weight.val().without_autodiff());
             cs_w.push(w);
             cs_d.push((in_size, out_size));
 
             let b: Vec<f32> = layer
                 .bias
                 .as_ref()
-                .map(|bias| bias.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|bias| {
+                    bias.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default();
             cs_b.push(b);
             in_size = out_size;
@@ -89,7 +100,7 @@ fn extract_weights(
             .copied()
             .unwrap_or(shared_output_size);
 
-        let out_w: Vec<f32> = tensor_to_vec_f32(cs_net.output.weight.val().inner());
+        let out_w: Vec<f32> = tensor_to_vec_f32(cs_net.output.weight.val().without_autodiff());
         output_weights.push(out_w);
         output_dims.push((final_in_size, config.num_durations));
 
@@ -97,7 +108,13 @@ fn extract_weights(
             .output
             .bias
             .as_ref()
-            .map(|bias| bias.val().inner().into_data().to_vec().unwrap_or_default())
+            .map(|bias| {
+                bias.val()
+                    .without_autodiff()
+                    .into_data()
+                    .try_to_vec()
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
         output_biases.push(out_b);
     }
@@ -178,4 +195,3 @@ fn predict_with_weights(x: &[f64], n: usize, weights: &StoredWeights) -> Vec<f64
 
     all_logits
 }
-

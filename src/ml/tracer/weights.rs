@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 struct StoredWeights {
     feature_projections: Vec<(Vec<f32>, Vec<f32>)>,
@@ -66,14 +65,20 @@ impl std::fmt::Debug for StoredWeights {
     }
 }
 
-fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig) -> StoredWeights {
+fn extract_weights(model: &TracerNetwork, config: &TracerConfig) -> StoredWeights {
     let mut feature_projections = Vec::new();
     for proj in &model.time_aware_embedding.feature_projections {
-        let w: Vec<f32> = tensor_to_vec_f32(proj.weight.val().inner());
+        let w: Vec<f32> = tensor_to_vec_f32(proj.weight.val().without_autodiff());
         let b: Vec<f32> = proj
             .bias
             .as_ref()
-            .map(|bias| bias.val().inner().into_data().to_vec().unwrap_or_default())
+            .map(|bias| {
+                bias.val()
+                    .without_autodiff()
+                    .into_data()
+                    .try_to_vec()
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
         feature_projections.push((w, b));
     }
@@ -82,17 +87,21 @@ fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig
         .time_aware_embedding
         .decay_rates
         .val()
-        .inner()
+        .without_autodiff()
         .into_data()
-        .to_vec()
+        .try_to_vec()
         .unwrap_or_default();
 
     let missing_embeddings: Vec<f32> = {
-        let tensor = model.time_aware_embedding.missing_embeddings.val().inner();
+        let tensor = model
+            .time_aware_embedding
+            .missing_embeddings
+            .val()
+            .without_autodiff();
         let [n_feat, emb_dim] = tensor.dims();
         tensor
             .into_data()
-            .to_vec()
+            .try_to_vec()
             .unwrap_or_else(|_| vec![0.0; n_feat * emb_dim])
     };
 
@@ -100,136 +109,235 @@ fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig
     for layer in &model.factorized_layers {
         let flw = FactorizedLayerWeights {
             temporal_query_w: tensor_to_vec_f32(
-                layer.temporal_attention.query.weight.val().inner(),
+                layer
+                    .temporal_attention
+                    .query
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             temporal_query_b: layer
                 .temporal_attention
                 .query
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            temporal_key_w: tensor_to_vec_f32(layer.temporal_attention.key.weight.val().inner()),
+            temporal_key_w: tensor_to_vec_f32(
+                layer.temporal_attention.key.weight.val().without_autodiff(),
+            ),
             temporal_key_b: layer
                 .temporal_attention
                 .key
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             temporal_value_w: tensor_to_vec_f32(
-                layer.temporal_attention.value.weight.val().inner(),
+                layer
+                    .temporal_attention
+                    .value
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             temporal_value_b: layer
                 .temporal_attention
                 .value
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             temporal_output_w: tensor_to_vec_f32(
-                layer.temporal_attention.output.weight.val().inner(),
+                layer
+                    .temporal_attention
+                    .output
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             temporal_output_b: layer
                 .temporal_attention
                 .output
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             covariate_query_w: tensor_to_vec_f32(
-                layer.covariate_attention.query.weight.val().inner(),
+                layer
+                    .covariate_attention
+                    .query
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             covariate_query_b: layer
                 .covariate_attention
                 .query
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            covariate_key_w: tensor_to_vec_f32(layer.covariate_attention.key.weight.val().inner()),
+            covariate_key_w: tensor_to_vec_f32(
+                layer
+                    .covariate_attention
+                    .key
+                    .weight
+                    .val()
+                    .without_autodiff(),
+            ),
             covariate_key_b: layer
                 .covariate_attention
                 .key
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             covariate_value_w: tensor_to_vec_f32(
-                layer.covariate_attention.value.weight.val().inner(),
+                layer
+                    .covariate_attention
+                    .value
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             covariate_value_b: layer
                 .covariate_attention
                 .value
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             covariate_output_w: tensor_to_vec_f32(
-                layer.covariate_attention.output.weight.val().inner(),
+                layer
+                    .covariate_attention
+                    .output
+                    .weight
+                    .val()
+                    .without_autodiff(),
             ),
             covariate_output_b: layer
                 .covariate_attention
                 .output
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             ln_time_gamma: layer
                 .layer_norm_time_gamma
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln_time_beta: layer
                 .layer_norm_time_beta
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln_cov_gamma: layer
                 .layer_norm_cov_gamma
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln_cov_beta: layer
                 .layer_norm_cov_beta
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
-            ffn_w1: tensor_to_vec_f32(layer.ffn_linear1.weight.val().inner()),
+            ffn_w1: tensor_to_vec_f32(layer.ffn_linear1.weight.val().without_autodiff()),
             ffn_b1: layer
                 .ffn_linear1
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            ffn_w2: tensor_to_vec_f32(layer.ffn_linear2.weight.val().inner()),
+            ffn_w2: tensor_to_vec_f32(layer.ffn_linear2.weight.val().without_autodiff()),
             ffn_b2: layer
                 .ffn_linear2
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             ln_ffn_gamma: layer
                 .layer_norm_ffn_gamma
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln_ffn_beta: layer
                 .layer_norm_ffn_beta
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             num_heads: config.num_attention_heads,
             embedding_dim: config.embedding_dim,
@@ -240,26 +348,44 @@ fn extract_weights(model: &TracerNetwork<AutodiffBackend>, config: &TracerConfig
     let mut cause_specific_heads = Vec::new();
     for head in &model.cause_specific_heads {
         let chw = CauseSpecificHeadWeights {
-            mlp1_w: tensor_to_vec_f32(head.mlp_layer1.weight.val().inner()),
+            mlp1_w: tensor_to_vec_f32(head.mlp_layer1.weight.val().without_autodiff()),
             mlp1_b: head
                 .mlp_layer1
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            mlp2_w: tensor_to_vec_f32(head.mlp_layer2.weight.val().inner()),
+            mlp2_w: tensor_to_vec_f32(head.mlp_layer2.weight.val().without_autodiff()),
             mlp2_b: head
                 .mlp_layer2
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            output_w: tensor_to_vec_f32(head.output.weight.val().inner()),
+            output_w: tensor_to_vec_f32(head.output.weight.val().without_autodiff()),
             output_b: head
                 .output
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             input_dim: config.embedding_dim,
             hidden_dim: config.mlp_hidden_size,

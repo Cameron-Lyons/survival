@@ -1,10 +1,9 @@
 use burn::{
-    backend::{Autodiff, NdArray},
     module::Module,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{AdamConfig, GradientsParams},
     prelude::*,
-    tensor::activation::relu,
+    tensor::{Device, activation::relu},
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -15,11 +14,8 @@ use super::config_validation::{
 };
 use super::utils::{
     EarlyStopping, compute_duration_bins, linear_forward, relu_vec, shuffled_epoch_indices,
-    tensor_to_vec_f32, train_validation_split_indices,
+    tensor_to_vec_f32, train_validation_split_indices, training_device,
 };
-
-type Backend = NdArray;
-type AutodiffBackend = Autodiff<Backend>;
 
 include!("config.rs");
 include!("network.rs");

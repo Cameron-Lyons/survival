@@ -56,6 +56,72 @@ mod tests {
     }
 
     #[test]
+    fn test_optimizer_updates_output_head_and_exports_weights() {
+        let config = TracerConfig::new(
+            4,
+            1,
+            2,
+            3,
+            1,
+            4,
+            0.0,
+            0.01,
+            0.0,
+            2,
+            1,
+            None,
+            0.0,
+            1e-6,
+            Some(42),
+        )
+        .unwrap();
+        let device = super::super::utils::training_device();
+        let mut network = TracerNetwork::new(&device, 2, &config);
+        let bias = network.cause_specific_heads[0]
+            .output
+            .bias
+            .as_ref()
+            .unwrap()
+            .val();
+        assert!(bias.is_autodiff());
+        assert!(bias.is_require_grad());
+        let before: Vec<f32> = bias.clone().into_data().try_to_vec().unwrap();
+        let input: Tensor<3> = Tensor::from_data([[[1.0f32, 0.5]], [[0.0, 1.0]]], &device);
+        let mask: Tensor<3> = Tensor::ones([2, 1, 2], &device);
+        let time_delta: Tensor<3> = Tensor::zeros([2, 1, 2], &device);
+        let loss = network
+            .forward(input, mask, time_delta, &[1, 1], true)
+            .remove(0)
+            .sum();
+        let gradients = loss.backward();
+        assert!(bias.grad(&gradients).is_some());
+        let gradients = GradientsParams::from_grads(gradients, &network);
+        network = AdamConfig::new()
+            .init()
+            .step(config.learning_rate, network, gradients);
+
+        let after: Vec<f32> = network.cause_specific_heads[0]
+            .output
+            .bias
+            .as_ref()
+            .unwrap()
+            .val()
+            .into_data()
+            .try_to_vec()
+            .unwrap();
+        assert!(
+            before
+                .iter()
+                .zip(&after)
+                .all(|(before, after)| after < before)
+        );
+        let weights = extract_weights(&network, &config);
+        assert_eq!(weights.cause_specific_heads[0].output_b, after);
+        assert_eq!(weights.cause_specific_heads[0].output_w.len(), 4 * 3);
+        assert_eq!(weights.missing_embeddings.len(), 2 * 4);
+    }
+
+    #[test]
     fn test_multinomial_hazard_normalization() {
         let logits = vec![1.0f32, 2.0, 3.0, 0.5, 1.5, 2.5];
         let hazards = multinomial_hazard_normalization(&logits, 2, 3, 1);

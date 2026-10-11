@@ -43,11 +43,11 @@ fn fit_deep_surv_inner(
     status: &[i32],
     config: &DeepSurvConfig,
 ) -> DeepSurv {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = super::utils::training_device();
 
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
-    let mut model: DeepSurvNetwork<AutodiffBackend> = DeepSurvNetwork::new(&device, n_vars, config);
+    let mut model: DeepSurvNetwork = DeepSurvNetwork::new(&device, n_vars, config);
 
     let mut optimizer = AdamConfig::new()
         .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
@@ -85,15 +85,15 @@ fn fit_deep_surv_inner(
                 .collect();
 
             let x_data = burn::tensor::TensorData::new(x_batch, [batch_size, n_vars]);
-            let x_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<2> = Tensor::from_data(x_data, &device);
 
             let risk_scores = model.forward(x_tensor, activation);
-            let risk_vec: Vec<f32> = tensor_to_vec_f32(risk_scores.clone().inner());
+            let risk_vec: Vec<f32> = tensor_to_vec_f32(risk_scores.clone().without_autodiff());
 
             let gradients = compute_cox_gradient_cpu(&risk_vec, time, status, &batch_indices);
 
             let grad_data = burn::tensor::TensorData::new(gradients, [batch_size, 1]);
-            let grad_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(grad_data, &device);
+            let grad_tensor: Tensor<2> = Tensor::from_data(grad_data, &device);
 
             let pseudo_loss = (risk_scores * grad_tensor).mean();
 
@@ -120,10 +120,10 @@ fn fit_deep_surv_inner(
                 .collect();
 
             let x_val_data = burn::tensor::TensorData::new(x_val, [n_val, n_vars]);
-            let x_val_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_val_data, &device);
+            let x_val_tensor: Tensor<2> = Tensor::from_data(x_val_data, &device);
 
             let val_risk = model.forward_inference(x_val_tensor, activation);
-            let val_risk_vec: Vec<f32> = tensor_to_vec_f32(val_risk.inner());
+            let val_risk_vec: Vec<f32> = tensor_to_vec_f32(val_risk.without_autodiff());
 
             let val_loss = compute_cox_loss_cpu(&val_risk_vec, time, status, &val_indices);
             val_loss_history.push(val_loss);

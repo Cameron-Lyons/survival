@@ -1,4 +1,3 @@
-
 #[allow(clippy::too_many_arguments)]
 fn fit_survtrace_inner(
     x_cat: Option<&[i64]>,
@@ -11,12 +10,12 @@ fn fit_survtrace_inner(
     event: &[i32],
     config: &SurvTraceConfig,
 ) -> SurvTrace {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = super::utils::training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 
-    let mut model: SurvTraceNetwork<AutodiffBackend> = SurvTraceNetwork::new(
+    let mut model: SurvTraceNetwork = SurvTraceNetwork::new(
         &device,
         num_cat_features,
         num_num_features,
@@ -63,9 +62,9 @@ fn fit_survtrace_inner(
                 x_num_batch.clone(),
                 [batch_size, num_num_features.max(1)],
             );
-            let x_num_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_num_data, &device);
+            let x_num_tensor: Tensor<2> = Tensor::from_data(x_num_data, &device);
 
-            let x_cat_tensor: Option<Tensor<AutodiffBackend, 2, Int>> = if num_cat_features > 0 {
+            let x_cat_tensor: Option<Tensor<2, Int>> = if num_cat_features > 0 {
                 if let Some(cats) = x_cat {
                     let x_cat_batch: Vec<i64> = batch_indices
                         .iter()
@@ -89,7 +88,8 @@ fn fit_survtrace_inner(
             let mut all_grads: Vec<Vec<f32>> = Vec::new();
 
             for logits_tensor in outputs.iter() {
-                let logits_vec: Vec<f32> = tensor_to_vec_f32(logits_tensor.clone().inner());
+                let logits_vec: Vec<f32> =
+                    tensor_to_vec_f32(logits_tensor.clone().without_autodiff());
 
                 let loss = compute_nll_logistic_hazard_loss(
                     &logits_vec,
@@ -118,7 +118,7 @@ fn fit_survtrace_inner(
                     all_grads[0].clone(),
                     [batch_size, config.num_durations],
                 );
-                let grad_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(grad_data, &device);
+                let grad_tensor: Tensor<2> = Tensor::from_data(grad_data, &device);
 
                 let pseudo_loss = (outputs[0].clone() * grad_tensor).mean();
                 let grads = pseudo_loss.backward();
@@ -144,11 +144,9 @@ fn fit_survtrace_inner(
 
             let x_num_val_data =
                 burn::tensor::TensorData::new(x_num_val, [n_val, num_num_features.max(1)]);
-            let x_num_val_tensor: Tensor<AutodiffBackend, 2> =
-                Tensor::from_data(x_num_val_data, &device);
+            let x_num_val_tensor: Tensor<2> = Tensor::from_data(x_num_val_data, &device);
 
-            let x_cat_val_tensor: Option<Tensor<AutodiffBackend, 2, Int>> = if num_cat_features > 0
-            {
+            let x_cat_val_tensor: Option<Tensor<2, Int>> = if num_cat_features > 0 {
                 if let Some(cats) = x_cat {
                     let x_cat_val: Vec<i64> = val_indices
                         .iter()
@@ -170,7 +168,8 @@ fn fit_survtrace_inner(
 
             let mut val_loss = 0.0;
             for logits_tensor in &val_outputs {
-                let logits_vec: Vec<f32> = tensor_to_vec_f32(logits_tensor.clone().inner());
+                let logits_vec: Vec<f32> =
+                    tensor_to_vec_f32(logits_tensor.clone().without_autodiff());
                 val_loss += compute_nll_logistic_hazard_loss(
                     &logits_vec,
                     &duration_bins,

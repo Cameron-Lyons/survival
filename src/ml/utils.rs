@@ -1,6 +1,11 @@
 use crate::internal::rng::Rng;
-use burn::prelude::Backend;
-use burn::tensor::Tensor;
+use burn::tensor::{Device, Tensor};
+
+// Keep the existing CPU backend while migrating to Burn's runtime device API.
+#[allow(deprecated)]
+pub(crate) fn training_device() -> Device {
+    Device::ndarray().autodiff()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TrainValidationSplit {
@@ -111,10 +116,11 @@ pub(crate) fn layer_norm_cpu(x: &[f64], gamma: &[f32], beta: &[f32], eps: f32) -
         .collect()
 }
 
-pub(crate) fn tensor_to_vec_f32<B: Backend>(t: Tensor<B, 2>) -> Vec<f32> {
+pub(crate) fn tensor_to_vec_f32(t: Tensor<2>) -> Vec<f32> {
     let [rows, cols] = t.dims();
     let data = t.into_data();
-    data.to_vec().unwrap_or_else(|_| vec![0.0; rows * cols])
+    data.try_into_vec()
+        .unwrap_or_else(|_| vec![0.0; rows * cols])
 }
 
 #[inline]

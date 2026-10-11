@@ -483,7 +483,7 @@ mod tests {
         assert!(!result.likelihood_ratio_tests.is_empty());
         let (_, _, lr_stat, df, p_value) = &result.likelihood_ratio_tests[0];
         assert!(*lr_stat > 0.0);
-        assert!(*df == 2.0);
+        assert_eq!(*df, 2.0);
         assert!(*p_value >= 0.0 && *p_value <= 1.0);
     }
 

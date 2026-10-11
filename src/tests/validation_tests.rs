@@ -192,7 +192,7 @@ mod tests {
     fn test_sample_size_schoenfeld() {
         let result = sample_size_logrank(0.5, 0.8, 0.05, 1.0, 2);
         assert!(result.n_events >= 50 && result.n_events <= 80);
-        assert!(result.n_per_group.len() == 2);
+        assert_eq!(result.n_per_group.len(), 2);
     }
     #[test]
     fn test_sample_size_smaller_effect() {

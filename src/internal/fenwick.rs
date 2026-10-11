@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn test_fenwick_tree_empty() {
         let tree = FenwickTree::new(5);
-        assert!((tree.total()).abs() < 1e-10);
+        assert!(tree.total().abs() < 1e-10);
     }
 
     #[test]
@@ -78,8 +78,8 @@ mod tests {
     #[test]
     fn test_fenwick_tree_zero_sized_total_is_zero() {
         let tree = FenwickTree::new(0);
-        assert!((tree.total()).abs() < 1e-10);
-        assert!((tree.prefix_sum(0)).abs() < 1e-10);
+        assert!(tree.total().abs() < 1e-10);
+        assert!(tree.prefix_sum(0).abs() < 1e-10);
     }
 
     #[test]
@@ -87,8 +87,8 @@ mod tests {
         let mut tree = FenwickTree::new(2);
         tree.update(3, 10.0);
 
-        assert!((tree.total()).abs() < 1e-10);
-        assert!((tree.prefix_sum(1)).abs() < 1e-10);
+        assert!(tree.total().abs() < 1e-10);
+        assert!(tree.prefix_sum(1).abs() < 1e-10);
     }
 
     #[test]

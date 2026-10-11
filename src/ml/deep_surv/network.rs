@@ -1,15 +1,11 @@
-
 #[derive(Module, Debug)]
-struct DeepSurvNetwork<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
+struct DeepSurvNetwork {
+    layers: Vec<Linear>,
     dropouts: Vec<Dropout>,
-    output: Linear<B>,
+    output: Linear,
 }
 
-fn apply_activation<B: burn::prelude::Backend>(
-    x: Tensor<B, 2>,
-    activation: Activation,
-) -> Tensor<B, 2> {
+fn apply_activation(x: Tensor<2>, activation: Activation) -> Tensor<2> {
     match activation {
         Activation::ReLU => relu(x),
         Activation::SELU => selu_activation(x),
@@ -17,8 +13,8 @@ fn apply_activation<B: burn::prelude::Backend>(
     }
 }
 
-impl<B: burn::prelude::Backend> DeepSurvNetwork<B> {
-    fn new(device: &B::Device, n_features: usize, config: &DeepSurvConfig) -> Self {
+impl DeepSurvNetwork {
+    fn new(device: &Device, n_features: usize, config: &DeepSurvConfig) -> Self {
         let mut layers = Vec::new();
         let mut dropouts = Vec::new();
 
@@ -44,7 +40,7 @@ impl<B: burn::prelude::Backend> DeepSurvNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, activation: Activation) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, activation: Activation) -> Tensor<2> {
         let mut current = x;
 
         for (layer, dropout) in self.layers.iter().zip(self.dropouts.iter()) {
@@ -56,7 +52,7 @@ impl<B: burn::prelude::Backend> DeepSurvNetwork<B> {
         self.output.forward(current)
     }
 
-    fn forward_inference(&self, x: Tensor<B, 2>, activation: Activation) -> Tensor<B, 2> {
+    fn forward_inference(&self, x: Tensor<2>, activation: Activation) -> Tensor<2> {
         let mut current = x;
 
         for layer in self.layers.iter() {
@@ -197,7 +193,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights_from_autodiff(
-    model: &DeepSurvNetwork<AutodiffBackend>,
+    model: &DeepSurvNetwork,
     hidden_layers: &[usize],
     n_features: usize,
 ) -> StoredWeights {
@@ -209,15 +205,19 @@ fn extract_weights_from_autodiff(
     let mut input_size = n_features;
     for (i, layer) in model.layers.iter().enumerate() {
         let output_size = hidden_layers[i];
-        let w_tensor: Tensor<AutodiffBackend, 2> = layer.weight.val();
-        let w: Vec<f32> = tensor_to_vec_f32(w_tensor.inner());
+        let w_tensor: Tensor<2> = layer.weight.val();
+        let w: Vec<f32> = tensor_to_vec_f32(w_tensor.without_autodiff());
         layer_weights.push(w);
         layer_input_sizes.push(input_size);
         layer_output_sizes.push(output_size);
 
         if let Some(ref bias) = layer.bias {
-            let b_tensor: Tensor<AutodiffBackend, 1> = bias.val();
-            let b: Vec<f32> = b_tensor.inner().into_data().to_vec().unwrap_or_default();
+            let b_tensor: Tensor<1> = bias.val();
+            let b: Vec<f32> = b_tensor
+                .without_autodiff()
+                .into_data()
+                .try_into_vec()
+                .unwrap_or_default();
             layer_biases.push(b);
         } else {
             layer_biases.push(Vec::new());
@@ -225,8 +225,8 @@ fn extract_weights_from_autodiff(
         input_size = output_size;
     }
 
-    let out_tensor: Tensor<AutodiffBackend, 2> = model.output.weight.val();
-    let output_weights: Vec<f32> = tensor_to_vec_f32(out_tensor.inner());
+    let out_tensor: Tensor<2> = model.output.weight.val();
+    let output_weights: Vec<f32> = tensor_to_vec_f32(out_tensor.without_autodiff());
 
     StoredWeights {
         layer_weights,

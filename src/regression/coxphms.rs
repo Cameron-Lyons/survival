@@ -517,7 +517,7 @@ pub(crate) fn to_index(values: IntVec, name: &str) -> SurvivalResult<Vec<usize>>
 }
 
 fn column_major(values: IntVec, nrow: usize, name: &str) -> SurvivalResult<Array2<i32>> {
-    let ncol = if nrow == 0 { 0 } else { values.len() / nrow };
+    let ncol = values.len().checked_div(nrow).unwrap_or(0);
     if nrow * ncol != values.len() {
         return Err(SurvivalError::invalid_input(format!(
             "{name} does not have {nrow} rows"

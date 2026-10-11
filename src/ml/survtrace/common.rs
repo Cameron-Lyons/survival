@@ -1,23 +1,16 @@
-
-
-fn gelu<B: burn::prelude::Backend, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D> {
+fn gelu<const D: usize>(x: Tensor<D>) -> Tensor<D> {
     let sqrt_2 = (2.0_f32).sqrt();
     let cdf = (x.clone() / sqrt_2).erf().add_scalar(1.0) * 0.5;
     x * cdf
 }
 
-fn layer_norm<B: burn::prelude::Backend>(
-    x: Tensor<B, 2>,
-    gamma: Tensor<B, 1>,
-    beta: Tensor<B, 1>,
-    eps: f32,
-) -> Tensor<B, 2> {
+fn layer_norm(x: Tensor<2>, gamma: Tensor<1>, beta: Tensor<1>, eps: f32) -> Tensor<2> {
     let [_batch, hidden] = x.dims();
     let mean = x.clone().mean_dim(1);
     let var = x.clone().var(1);
     let x_norm = (x - mean) / (var + eps).sqrt();
-    let gamma_expanded: Tensor<B, 2> = gamma.reshape([1, hidden]);
-    let beta_expanded: Tensor<B, 2> = beta.reshape([1, hidden]);
+    let gamma_expanded: Tensor<2> = gamma.reshape([1, hidden]);
+    let beta_expanded: Tensor<2> = beta.reshape([1, hidden]);
     x_norm * gamma_expanded + beta_expanded
 }
 

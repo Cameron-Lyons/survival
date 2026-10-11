@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 struct StoredWeights {
     cat_embeddings: Vec<Vec<f32>>,
@@ -47,7 +46,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    model: &SurvTraceNetwork<AutodiffBackend>,
+    model: &SurvTraceNetwork,
     config: &SurvTraceConfig,
     cat_cardinalities: &[usize],
 ) -> StoredWeights {
@@ -58,9 +57,9 @@ fn extract_weights(
         let w: Vec<f32> = emb
             .weight
             .val()
-            .inner()
+            .without_autodiff()
             .into_data()
-            .to_vec()
+            .try_to_vec()
             .unwrap_or_default();
         cat_embeddings.push(w);
         cat_embedding_dims.push((
@@ -69,92 +68,134 @@ fn extract_weights(
         ));
     }
 
-    let num_proj_w: Tensor<AutodiffBackend, 2> = model.num_projection.weight.val();
-    let num_projection_weights: Vec<f32> = tensor_to_vec_f32(num_proj_w.inner());
+    let num_proj_w: Tensor<2> = model.num_projection.weight.val();
+    let num_projection_weights: Vec<f32> = tensor_to_vec_f32(num_proj_w.without_autodiff());
     let num_projection_bias: Vec<f32> = model
         .num_projection
         .bias
         .as_ref()
-        .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+        .map(|b| {
+            b.val()
+                .without_autodiff()
+                .into_data()
+                .try_to_vec()
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
     let num_projection_dims = (model.num_num_features.max(1), config.hidden_size);
 
     let mut transformer_layers = Vec::new();
     for layer in &model.transformer_layers {
         let tlw = TransformerLayerWeights {
-            query_w: tensor_to_vec_f32(layer.attention.query.weight.val().inner()),
+            query_w: tensor_to_vec_f32(layer.attention.query.weight.val().without_autodiff()),
             query_b: layer
                 .attention
                 .query
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            key_w: tensor_to_vec_f32(layer.attention.key.weight.val().inner()),
+            key_w: tensor_to_vec_f32(layer.attention.key.weight.val().without_autodiff()),
             key_b: layer
                 .attention
                 .key
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            value_w: tensor_to_vec_f32(layer.attention.value.weight.val().inner()),
+            value_w: tensor_to_vec_f32(layer.attention.value.weight.val().without_autodiff()),
             value_b: layer
                 .attention
                 .value
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            output_w: tensor_to_vec_f32(layer.attention.output.weight.val().inner()),
+            output_w: tensor_to_vec_f32(layer.attention.output.weight.val().without_autodiff()),
             output_b: layer
                 .attention
                 .output
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            intermediate_w: tensor_to_vec_f32(layer.intermediate.weight.val().inner()),
+            intermediate_w: tensor_to_vec_f32(layer.intermediate.weight.val().without_autodiff()),
             intermediate_b: layer
                 .intermediate
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
-            output_dense_w: tensor_to_vec_f32(layer.output_dense.weight.val().inner()),
+            output_dense_w: tensor_to_vec_f32(layer.output_dense.weight.val().without_autodiff()),
             output_dense_b: layer
                 .output_dense
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default(),
             ln1_gamma: layer
                 .layer_norm1_gamma
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln1_beta: layer
                 .layer_norm1_beta
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln2_gamma: layer
                 .layer_norm2_gamma
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             ln2_beta: layer
                 .layer_norm2_beta
                 .val()
-                .inner()
+                .without_autodiff()
                 .into_data()
-                .to_vec()
+                .try_to_vec()
                 .unwrap_or_default(),
             hidden_size: config.hidden_size,
             intermediate_size: config.intermediate_size,
@@ -165,11 +206,17 @@ fn extract_weights(
 
     let mut output_heads = Vec::new();
     for head in &model.output_heads {
-        let w: Vec<f32> = tensor_to_vec_f32(head.weight.val().inner());
+        let w: Vec<f32> = tensor_to_vec_f32(head.weight.val().without_autodiff());
         let b: Vec<f32> = head
             .bias
             .as_ref()
-            .map(|bias| bias.val().inner().into_data().to_vec().unwrap_or_default())
+            .map(|bias| {
+                bias.val()
+                    .without_autodiff()
+                    .into_data()
+                    .try_to_vec()
+                    .unwrap_or_default()
+            })
             .unwrap_or_default();
         output_heads.push((w, b, config.hidden_size, config.num_durations));
     }

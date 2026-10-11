@@ -1,20 +1,16 @@
 use burn::{
-    backend::{Autodiff, NdArray},
     module::Module,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{AdamConfig, GradientsParams},
     prelude::*,
-    tensor::activation::relu,
+    tensor::{Device, activation::relu},
 };
 use pyo3::prelude::*;
 
 use super::utils::{
     EarlyStopping, compute_duration_bins, shuffled_epoch_indices, tensor_to_vec_f32,
-    train_validation_split_indices,
+    train_validation_split_indices, training_device,
 };
-
-type Backend = NdArray;
-type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -169,17 +165,17 @@ impl GALEEConfig {
 }
 
 #[derive(Module, Debug)]
-struct HealthStateEncoder<B: burn::prelude::Backend> {
-    input_projection: Linear<B>,
-    layers: Vec<Linear<B>>,
-    output_projection: Linear<B>,
+struct HealthStateEncoder {
+    input_projection: Linear,
+    layers: Vec<Linear>,
+    output_projection: Linear,
     dropout: Dropout,
     health_dim: usize,
 }
 
-impl<B: burn::prelude::Backend> HealthStateEncoder<B> {
+impl HealthStateEncoder {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_sizes: &[usize],
         health_dim: usize,
@@ -209,10 +205,10 @@ impl<B: burn::prelude::Backend> HealthStateEncoder<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>, training: bool) -> Tensor<B, 3> {
+    fn forward(&self, x: Tensor<3>, training: bool) -> Tensor<3> {
         let [batch, seq_len, input_size] = x.dims();
 
-        let x_2d: Tensor<B, 2> = x.reshape([batch * seq_len, input_size]);
+        let x_2d: Tensor<2> = x.reshape([batch * seq_len, input_size]);
         let mut h = self.input_projection.forward(x_2d);
         h = relu(h);
 
@@ -234,18 +230,18 @@ impl<B: burn::prelude::Backend> HealthStateEncoder<B> {
 }
 
 #[derive(Module, Debug)]
-struct MonotonicConstraintLayer<B: burn::prelude::Backend> {
-    projection: Linear<B>,
+struct MonotonicConstraintLayer {
+    projection: Linear,
 }
 
-impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
-    fn new(device: &B::Device, health_dim: usize) -> Self {
+impl MonotonicConstraintLayer {
+    fn new(device: &Device, health_dim: usize) -> Self {
         Self {
             projection: LinearConfig::new(health_dim, health_dim).init(device),
         }
     }
 
-    fn forward(&self, health_states: Tensor<B, 3>) -> Tensor<B, 3> {
+    fn forward(&self, health_states: Tensor<3>) -> Tensor<3> {
         let [batch, seq_len, health_dim] = health_states.dims();
 
         if seq_len < 2 {
@@ -253,7 +249,7 @@ impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
         }
 
         let mut constrained = Vec::with_capacity(seq_len);
-        let first_state: Tensor<B, 2> = health_states
+        let first_state: Tensor<2> = health_states
             .clone()
             .slice([0..batch, 0..1, 0..health_dim])
             .reshape([batch, health_dim]);
@@ -261,7 +257,7 @@ impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
 
         let mut prev_state = first_state;
         for t in 1..seq_len {
-            let current: Tensor<B, 2> = health_states
+            let current: Tensor<2> = health_states
                 .clone()
                 .slice([0..batch, t..t + 1, 0..health_dim])
                 .reshape([batch, health_dim]);
@@ -278,16 +274,16 @@ impl<B: burn::prelude::Backend> MonotonicConstraintLayer<B> {
 }
 
 #[derive(Module, Debug)]
-struct GlobalAttention<B: burn::prelude::Backend> {
-    query: Linear<B>,
-    key: Linear<B>,
-    value: Linear<B>,
-    output: Linear<B>,
+struct GlobalAttention {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
     num_heads: usize,
 }
 
-impl<B: burn::prelude::Backend> GlobalAttention<B> {
-    fn new(device: &B::Device, hidden_size: usize, num_heads: usize) -> Self {
+impl GlobalAttention {
+    fn new(device: &Device, hidden_size: usize, num_heads: usize) -> Self {
         Self {
             query: LinearConfig::new(hidden_size, hidden_size).init(device),
             key: LinearConfig::new(hidden_size, hidden_size).init(device),
@@ -297,44 +293,44 @@ impl<B: burn::prelude::Backend> GlobalAttention<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>) -> (Tensor<B, 2>, Tensor<B, 2>) {
+    fn forward(&self, x: Tensor<3>) -> (Tensor<2>, Tensor<2>) {
         let [batch, seq_len, hidden] = x.dims();
 
-        let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
+        let x_2d: Tensor<2> = x.clone().reshape([batch * seq_len, hidden]);
 
         let q = self.query.forward(x_2d.clone());
         let k = self.key.forward(x_2d.clone());
         let v = self.value.forward(x_2d);
 
-        let q: Tensor<B, 3> = q.reshape([batch, seq_len, hidden]);
-        let k: Tensor<B, 3> = k.reshape([batch, seq_len, hidden]);
-        let v: Tensor<B, 3> = v.reshape([batch, seq_len, hidden]);
+        let q: Tensor<3> = q.reshape([batch, seq_len, hidden]);
+        let k: Tensor<3> = k.reshape([batch, seq_len, hidden]);
+        let v: Tensor<3> = v.reshape([batch, seq_len, hidden]);
 
         let scale = (hidden as f32).sqrt();
-        let scores: Tensor<B, 3> = q.matmul(k.swap_dims(1, 2)) / scale;
-        let attn_weights: Tensor<B, 3> = burn::tensor::activation::softmax(scores, 2);
+        let scores: Tensor<3> = q.matmul(k.swap_dims(1, 2)) / scale;
+        let attn_weights: Tensor<3> = burn::tensor::activation::softmax(scores, 2);
 
-        let context: Tensor<B, 3> = attn_weights.clone().matmul(v);
+        let context: Tensor<3> = attn_weights.clone().matmul(v);
 
-        let pooled: Tensor<B, 2> = context.mean_dim(1).reshape([batch, hidden]);
+        let pooled: Tensor<2> = context.mean_dim(1).reshape([batch, hidden]);
         let output = self.output.forward(pooled);
 
-        let attn_weights_pooled: Tensor<B, 2> = attn_weights.mean_dim(2).reshape([batch, seq_len]);
+        let attn_weights_pooled: Tensor<2> = attn_weights.mean_dim(2).reshape([batch, seq_len]);
 
         (output, attn_weights_pooled)
     }
 }
 
 #[derive(Module, Debug)]
-struct HazardHead<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
-    output: Linear<B>,
+struct HazardHead {
+    layers: Vec<Linear>,
+    output: Linear,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> HazardHead<B> {
+impl HazardHead {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_sizes: &[usize],
         num_durations: usize,
@@ -355,7 +351,7 @@ impl<B: burn::prelude::Backend> HazardHead<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut h = x;
         for layer in &self.layers {
             h = layer.forward(h);
@@ -369,18 +365,18 @@ impl<B: burn::prelude::Backend> HazardHead<B> {
 }
 
 #[derive(Module, Debug)]
-struct GALEENetwork<B: burn::prelude::Backend> {
-    health_encoder: HealthStateEncoder<B>,
-    monotonic_constraint: MonotonicConstraintLayer<B>,
-    global_attention: GlobalAttention<B>,
-    hazard_head: HazardHead<B>,
+struct GALEENetwork {
+    health_encoder: HealthStateEncoder,
+    monotonic_constraint: MonotonicConstraintLayer,
+    global_attention: GlobalAttention,
+    hazard_head: HazardHead,
     health_dim: usize,
     num_durations: usize,
     enforce_monotonic: bool,
 }
 
-impl<B: burn::prelude::Backend> GALEENetwork<B> {
-    fn new(device: &B::Device, n_features: usize, config: &GALEEConfig) -> Self {
+impl GALEENetwork {
+    fn new(device: &Device, n_features: usize, config: &GALEEConfig) -> Self {
         let health_encoder = HealthStateEncoder::new(
             device,
             n_features,
@@ -413,11 +409,7 @@ impl<B: burn::prelude::Backend> GALEENetwork<B> {
         }
     }
 
-    fn forward(
-        &self,
-        x: Tensor<B, 3>,
-        training: bool,
-    ) -> (Tensor<B, 3>, Tensor<B, 2>, Tensor<B, 2>) {
+    fn forward(&self, x: Tensor<3>, training: bool) -> (Tensor<3>, Tensor<2>, Tensor<2>) {
         let health_states = self.health_encoder.forward(x, training);
 
         let constrained_health = if self.enforce_monotonic {
@@ -568,7 +560,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    _model: &GALEENetwork<AutodiffBackend>,
+    _model: &GALEENetwork,
     config: &GALEEConfig,
     n_features: usize,
 ) -> StoredWeights {
@@ -641,12 +633,12 @@ fn fit_galee_inner(
     event: &[i32],
     config: &GALEEConfig,
 ) -> GALEE {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 
-    let mut model: GALEENetwork<AutodiffBackend> = GALEENetwork::new(&device, n_features, config);
+    let mut model: GALEENetwork = GALEENetwork::new(&device, n_features, config);
 
     let mut optimizer = AdamConfig::new().init();
 
@@ -683,14 +675,16 @@ fn fit_galee_inner(
 
             let x_data =
                 burn::tensor::TensorData::new(x_batch, [batch_size, max_seq_len, n_features]);
-            let x_tensor: Tensor<AutodiffBackend, 3> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<3> = Tensor::from_data(x_data, &device);
 
             let (health_states, hazard_logits, _attn_weights) = model.forward(x_tensor, true);
 
-            let hazard_vec = tensor_to_vec_f32(hazard_logits.clone().inner());
+            let hazard_vec = tensor_to_vec_f32(hazard_logits.clone().without_autodiff());
             let [bs, sl, hd] = health_states.dims();
-            let health_reshaped: Tensor<NdArray, 2> =
-                health_states.clone().inner().reshape([bs, sl * hd]);
+            let health_reshaped: Tensor<2> = health_states
+                .clone()
+                .without_autodiff()
+                .reshape([bs, sl * hd]);
             let health_vec = tensor_to_vec_f32(health_reshaped);
 
             let base_loss = compute_galee_loss(
@@ -831,6 +825,49 @@ pub fn galee(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_training_smoke() {
+        let config = GALEEConfig::new(
+            4,
+            vec![8, 4],
+            2,
+            3,
+            true,
+            1.0,
+            true,
+            UnimodalConstraint::SoftConstraint,
+            0.5,
+            0.1,
+            0.001,
+            2,
+            2,
+            None,
+            0.0,
+            Some(17),
+        )
+        .unwrap();
+        let x: Vec<f64> = (0..16).map(|value| value as f64 / 16.0).collect();
+        let model = fit_galee_inner(
+            &x,
+            &[2; 4],
+            4,
+            2,
+            2,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[1, 0, 1, 1],
+            &config,
+        );
+
+        assert_eq!(model.train_loss.len(), 2);
+        assert_eq!(model.val_loss.len(), 2);
+        assert!(model.train_loss.iter().all(|loss| loss.is_finite()));
+        assert!(model.val_loss.iter().all(|loss| loss.is_finite()));
+        assert_eq!(model.get_health_dim(), 4);
+        assert_eq!(model.get_num_durations(), 3);
+        assert_eq!(model.duration_cuts.len(), 4);
+        assert_eq!(model.max_seq_len, 2);
+    }
 
     #[test]
     fn test_config_default() {

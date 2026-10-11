@@ -1,13 +1,12 @@
-
 #[derive(Module, Debug)]
-struct SharedNetwork<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
+struct SharedNetwork {
+    layers: Vec<Linear>,
     dropouts: Vec<Dropout>,
 }
 
-impl<B: burn::prelude::Backend> SharedNetwork<B> {
+impl SharedNetwork {
     fn new(
-        device: &B::Device,
+        device: &Device,
         n_features: usize,
         hidden_layers: &[usize],
         dropout_rate: f64,
@@ -26,7 +25,7 @@ impl<B: burn::prelude::Backend> SharedNetwork<B> {
         Self { layers, dropouts }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut current = x;
 
         for i in 0..self.layers.len() {
@@ -46,15 +45,15 @@ impl<B: burn::prelude::Backend> SharedNetwork<B> {
 }
 
 #[derive(Module, Debug)]
-struct CauseSpecificNetwork<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
+struct CauseSpecificNetwork {
+    layers: Vec<Linear>,
     dropouts: Vec<Dropout>,
-    output: Linear<B>,
+    output: Linear,
 }
 
-impl<B: burn::prelude::Backend> CauseSpecificNetwork<B> {
+impl CauseSpecificNetwork {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_layers: &[usize],
         num_durations: usize,
@@ -79,7 +78,7 @@ impl<B: burn::prelude::Backend> CauseSpecificNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut current = x;
 
         for i in 0..self.layers.len() {
@@ -95,15 +94,15 @@ impl<B: burn::prelude::Backend> CauseSpecificNetwork<B> {
 }
 
 #[derive(Module, Debug)]
-struct DeepHitNetwork<B: burn::prelude::Backend> {
-    shared: SharedNetwork<B>,
-    cause_specific: Vec<CauseSpecificNetwork<B>>,
+struct DeepHitNetwork {
+    shared: SharedNetwork,
+    cause_specific: Vec<CauseSpecificNetwork>,
     num_risks: usize,
     num_durations: usize,
 }
 
-impl<B: burn::prelude::Backend> DeepHitNetwork<B> {
-    fn new(device: &B::Device, n_features: usize, config: &DeepHitConfig) -> Self {
+impl DeepHitNetwork {
+    fn new(device: &Device, n_features: usize, config: &DeepHitConfig) -> Self {
         let shared = SharedNetwork::new(
             device,
             n_features,
@@ -138,10 +137,7 @@ impl<B: burn::prelude::Backend> DeepHitNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
-        let [batch_size, _] = x.dims();
-        let device = x.device();
-
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let shared_out = if self.shared.layers.is_empty() {
             x
         } else {
@@ -154,30 +150,12 @@ impl<B: burn::prelude::Backend> DeepHitNetwork<B> {
             all_outputs.push(out);
         }
 
-        let total_outputs = self.num_risks * self.num_durations;
-        let mut combined_data = vec![0.0f32; batch_size * total_outputs];
-
-        for (risk_idx, out) in all_outputs.into_iter().enumerate() {
-            let out_data = out.into_data();
-            let out_vec: Vec<f32> = out_data.to_vec().unwrap_or_default();
-
-            for i in 0..batch_size {
-                for t in 0..self.num_durations {
-                    let src_idx = i * self.num_durations + t;
-                    let dst_idx = i * total_outputs + risk_idx * self.num_durations + t;
-                    if src_idx < out_vec.len() {
-                        combined_data[dst_idx] = out_vec[src_idx];
-                    }
-                }
-            }
-        }
-
-        let combined_tensor_data =
-            burn::tensor::TensorData::new(combined_data, [batch_size, total_outputs]);
-        Tensor::from_data(combined_tensor_data, &device)
+        let combined = Tensor::cat(all_outputs, 1);
+        debug_assert_eq!(combined.dims()[1], self.num_risks * self.num_durations);
+        combined
     }
 
-    fn forward_inference(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+    fn forward_inference(&self, x: Tensor<2>) -> Tensor<2> {
         self.forward(x, false)
     }
 }

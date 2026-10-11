@@ -1,5 +1,4 @@
 use burn::{
-    backend::{Autodiff, NdArray},
     module::Module,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
     prelude::*,
@@ -7,9 +6,6 @@ use burn::{
 };
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
-type Backend = NdArray;
-type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
@@ -75,20 +71,20 @@ impl CoxTimeConfig {
 }
 
 #[derive(Module, Debug)]
-struct TimeEmbedding<B: burn::prelude::Backend> {
-    linear1: Linear<B>,
-    linear2: Linear<B>,
+struct TimeEmbedding {
+    linear1: Linear,
+    linear2: Linear,
 }
 
-impl<B: burn::prelude::Backend> TimeEmbedding<B> {
-    fn new(device: &B::Device, embedding_dim: usize) -> Self {
+impl TimeEmbedding {
+    fn new(device: &Device, embedding_dim: usize) -> Self {
         Self {
             linear1: LinearConfig::new(1, embedding_dim).init(device),
             linear2: LinearConfig::new(embedding_dim, embedding_dim).init(device),
         }
     }
 
-    fn _forward(&self, t: Tensor<B, 2>) -> Tensor<B, 2> {
+    fn _forward(&self, t: Tensor<2>) -> Tensor<2> {
         let x = self.linear1.forward(t);
         let x = relu(x);
         self.linear2.forward(x)
@@ -96,17 +92,17 @@ impl<B: burn::prelude::Backend> TimeEmbedding<B> {
 }
 
 #[derive(Module, Debug)]
-struct CoxTimeNetwork<B: burn::prelude::Backend> {
-    time_embedding: TimeEmbedding<B>,
-    feature_layers: Vec<Linear<B>>,
-    combined_layers: Vec<Linear<B>>,
-    output_layer: Linear<B>,
+struct CoxTimeNetwork {
+    time_embedding: TimeEmbedding,
+    feature_layers: Vec<Linear>,
+    combined_layers: Vec<Linear>,
+    output_layer: Linear,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
+impl CoxTimeNetwork {
     fn new(
-        device: &B::Device,
+        device: &Device,
         n_features: usize,
         hidden_dims: &[usize],
         time_embedding_dim: usize,
@@ -145,7 +141,7 @@ impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
         }
     }
 
-    fn _forward(&self, x: Tensor<B, 2>, t: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn _forward(&self, x: Tensor<2>, t: Tensor<2>, training: bool) -> Tensor<2> {
         let mut features = x;
         for layer in &self.feature_layers {
             features = layer.forward(features);
@@ -172,14 +168,14 @@ impl<B: burn::prelude::Backend> CoxTimeNetwork<B> {
     }
 }
 
-fn _compute_cox_time_loss<B: burn::prelude::Backend>(
-    log_hazard: Tensor<B, 2>,
-    event: &[i32],
-    time_order: &[usize],
-) -> Tensor<B, 1> {
+fn _compute_cox_time_loss(log_hazard: Tensor<2>, event: &[i32], time_order: &[usize]) -> Tensor<1> {
     let device = log_hazard.device();
 
-    let log_hazard_data: Vec<f32> = log_hazard.clone().into_data().to_vec().unwrap_or_default();
+    let log_hazard_data: Vec<f32> = log_hazard
+        .clone()
+        .into_data()
+        .try_into_vec()
+        .unwrap_or_default();
 
     let mut loss = 0.0f32;
     let mut n_events = 0;
@@ -291,10 +287,7 @@ impl CoxTimeModel {
     }
 }
 
-fn extract_weights<B: burn::prelude::Backend>(
-    _model: &CoxTimeNetwork<B>,
-    n_features: usize,
-) -> Vec<f32> {
+fn extract_weights(_model: &CoxTimeNetwork, n_features: usize) -> Vec<f32> {
     vec![0.1f32; n_features]
 }
 
@@ -324,9 +317,9 @@ pub fn fit_cox_time(
     }
 
     let n_features = covariates[0].len();
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = super::utils::training_device();
 
-    let model: CoxTimeNetwork<AutodiffBackend> = CoxTimeNetwork::new(
+    let model: CoxTimeNetwork = CoxTimeNetwork::new(
         &device,
         n_features,
         &config.hidden_dims,

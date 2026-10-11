@@ -285,7 +285,7 @@ fn compute_survival_contribution(
             .next()
             .unwrap_or(0.01);
 
-        (h0.max(1e-10)).ln() + linear_pred
+        h0.max(1e-10).ln() + linear_pred
     } else {
         0.0
     };

@@ -9,7 +9,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.94.0
+  RUSTUP_TOOLCHAIN: 1.95.0
   RUST_COVERAGE_MIN_PERCENT: '60'
   PYTHON_COVERAGE_MIN_PERCENT: '80'
 
@@ -27,7 +27,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
+        run: rustup toolchain install 1.95.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6
@@ -80,7 +80,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install Rust
-        run: rustup toolchain install 1.94.0 --profile minimal --no-self-update
+        run: rustup toolchain install 1.95.0 --profile minimal --no-self-update
 
       - name: Cache Rust dependencies
         uses: actions/cache@v6

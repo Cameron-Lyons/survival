@@ -6,13 +6,12 @@ fn fit_deephit_inner(
     event: &[i32],
     config: &DeepHitConfig,
 ) -> DeepHit {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 
-    let mut model: DeepHitNetwork<AutodiffBackend> =
-        DeepHitNetwork::new(&device, n_features, config);
+    let mut model: DeepHitNetwork = DeepHitNetwork::new(&device, n_features, config);
 
     let mut optimizer = AdamConfig::new()
         .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
@@ -48,10 +47,10 @@ fn fit_deephit_inner(
                 .collect();
 
             let x_data = burn::tensor::TensorData::new(x_batch, [batch_size, n_features]);
-            let x_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<2> = Tensor::from_data(x_data, &device);
 
             let logits = model.forward(x_tensor, true);
-            let logits_vec: Vec<f32> = tensor_to_vec_f32(logits.clone().inner());
+            let logits_vec: Vec<f32> = tensor_to_vec_f32(logits.clone().without_autodiff());
 
             let pmf = softmax_pmf(
                 &logits_vec,
@@ -97,7 +96,7 @@ fn fit_deephit_inner(
 
             let total_outputs = config.num_risks * config.num_durations;
             let grad_data = burn::tensor::TensorData::new(gradients, [batch_size, total_outputs]);
-            let grad_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(grad_data, &device);
+            let grad_tensor: Tensor<2> = Tensor::from_data(grad_data, &device);
 
             let pseudo_loss = (logits * grad_tensor).mean();
             let grads = pseudo_loss.backward();
@@ -119,10 +118,10 @@ fn fit_deephit_inner(
                 .collect();
 
             let x_val_data = burn::tensor::TensorData::new(x_val, [n_val, n_features]);
-            let x_val_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_val_data, &device);
+            let x_val_tensor: Tensor<2> = Tensor::from_data(x_val_data, &device);
 
             let val_logits = model.forward_inference(x_val_tensor);
-            let val_logits_vec: Vec<f32> = tensor_to_vec_f32(val_logits.inner());
+            let val_logits_vec: Vec<f32> = tensor_to_vec_f32(val_logits.without_autodiff());
 
             let val_pmf = softmax_pmf(
                 &val_logits_vec,

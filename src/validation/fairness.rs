@@ -488,7 +488,7 @@ mod tests {
         let protected = vec![0, 0, 0, 1, 1, 1];
 
         let result = compute_fairness_metrics(risk, time, event, protected, None).unwrap();
-        assert!(result.group_sizes.len() == 2);
+        assert_eq!(result.group_sizes.len(), 2);
     }
 
     #[test]

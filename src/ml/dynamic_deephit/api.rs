@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 struct StoredWeights {
     _temporal_weights: Vec<f32>,
@@ -22,7 +21,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    model: &DynamicDeepHitNetwork<AutodiffBackend>,
+    model: &DynamicDeepHitNetwork,
     config: &DynamicDeepHitConfig,
     n_features: usize,
 ) -> StoredWeights {
@@ -33,11 +32,17 @@ fn extract_weights(
         .layers
         .iter()
         .map(|layer| {
-            let w = tensor_to_vec_f32(layer.weight.val().inner());
+            let w = tensor_to_vec_f32(layer.weight.val().without_autodiff());
             let b = layer
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default();
             (w, b)
         })
@@ -49,20 +54,32 @@ fn extract_weights(
         .map(|head| {
             let mut weights = Vec::new();
             for layer in &head.layers {
-                let w = tensor_to_vec_f32(layer.weight.val().inner());
+                let w = tensor_to_vec_f32(layer.weight.val().without_autodiff());
                 let b = layer
                     .bias
                     .as_ref()
-                    .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                    .map(|b| {
+                        b.val()
+                            .without_autodiff()
+                            .into_data()
+                            .try_to_vec()
+                            .unwrap_or_default()
+                    })
                     .unwrap_or_default();
                 weights.push((w, b));
             }
-            let w = tensor_to_vec_f32(head.output.weight.val().inner());
+            let w = tensor_to_vec_f32(head.output.weight.val().without_autodiff());
             let b = head
                 .output
                 .bias
                 .as_ref()
-                .map(|b| b.val().inner().into_data().to_vec().unwrap_or_default())
+                .map(|b| {
+                    b.val()
+                        .without_autodiff()
+                        .into_data()
+                        .try_to_vec()
+                        .unwrap_or_default()
+                })
                 .unwrap_or_default();
             weights.push((w, b));
             weights
@@ -130,13 +147,12 @@ fn fit_dynamic_deephit_inner(
     event: &[i32],
     config: &DynamicDeepHitConfig,
 ) -> DynamicDeepHit {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 
-    let mut model: DynamicDeepHitNetwork<AutodiffBackend> =
-        DynamicDeepHitNetwork::new(&device, n_features, config);
+    let mut model: DynamicDeepHitNetwork = DynamicDeepHitNetwork::new(&device, n_features, config);
 
     let mut optimizer = AdamConfig::new().init();
 
@@ -179,13 +195,13 @@ fn fit_dynamic_deephit_inner(
 
             let x_data =
                 burn::tensor::TensorData::new(x_batch, [batch_size, max_seq_len, n_features]);
-            let x_tensor: Tensor<AutodiffBackend, 3> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<3> = Tensor::from_data(x_data, &device);
 
             let outputs = model.forward(x_tensor, &seq_lengths_batch, true);
 
             let mut all_logits = Vec::new();
             for logits_tensor in &outputs {
-                let logits_vec = tensor_to_vec_f32(logits_tensor.clone().inner());
+                let logits_vec = tensor_to_vec_f32(logits_tensor.clone().without_autodiff());
                 all_logits.push(logits_vec);
             }
 

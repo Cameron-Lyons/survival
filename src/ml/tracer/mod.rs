@@ -1,8 +1,7 @@
 use burn::{
-    backend::{Autodiff, NdArray},
     module::Module,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{AdamConfig, GradientsParams},
     prelude::*,
     tensor::activation::relu,
 };
@@ -14,9 +13,6 @@ use super::utils::{
     EarlyStopping, compute_duration_bins, gelu_cpu, layer_norm_cpu, linear_forward, relu_vec,
     shuffled_epoch_indices, tensor_to_vec_f32, train_validation_split_indices,
 };
-
-type Backend = NdArray;
-type AutodiffBackend = Autodiff<Backend>;
 
 include!("common.rs");
 include!("network.rs");

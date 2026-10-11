@@ -18,7 +18,7 @@ mod tests {
             network_survival_model(time, event, covariates, 1, adjacency, 6, &config).unwrap();
 
         assert_eq!(result.n_nodes, 6);
-        assert!(result.centrality_values.len() == 6);
+        assert_eq!(result.centrality_values.len(), 6);
     }
 
     #[test]
@@ -46,7 +46,7 @@ mod tests {
 
         assert!(result.diffusion_rate.is_finite());
         assert!(result.r0.is_finite());
-        assert!(result.infection_probabilities.len() == 6);
+        assert_eq!(result.infection_probabilities.len(), 6);
     }
 
     #[test]

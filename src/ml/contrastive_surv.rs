@@ -1,20 +1,16 @@
 use burn::{
-    backend::{Autodiff, NdArray},
     module::Module,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{AdamConfig, GradientsParams},
     prelude::*,
-    tensor::activation::relu,
+    tensor::{Device, activation::relu},
 };
 use pyo3::prelude::*;
 
 use super::utils::{
     EarlyStopping, compute_duration_bins, shuffled_epoch_indices, tensor_to_vec_f32,
-    train_validation_split_indices,
+    train_validation_split_indices, training_device,
 };
-
-type Backend = NdArray;
-type AutodiffBackend = Autodiff<Backend>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[pyclass(from_py_object)]
@@ -183,20 +179,20 @@ impl ContrastiveSurvConfig {
 }
 
 #[derive(Module, Debug)]
-struct TransformerEncoderLayer<B: burn::prelude::Backend> {
-    self_attention_query: Linear<B>,
-    self_attention_key: Linear<B>,
-    self_attention_value: Linear<B>,
-    self_attention_output: Linear<B>,
-    ffn_1: Linear<B>,
-    ffn_2: Linear<B>,
+struct TransformerEncoderLayer {
+    self_attention_query: Linear,
+    self_attention_key: Linear,
+    self_attention_value: Linear,
+    self_attention_output: Linear,
+    ffn_1: Linear,
+    ffn_2: Linear,
     dropout: Dropout,
     num_heads: usize,
     hidden_size: usize,
 }
 
-impl<B: burn::prelude::Backend> TransformerEncoderLayer<B> {
-    fn new(device: &B::Device, hidden_size: usize, num_heads: usize, dropout_rate: f64) -> Self {
+impl TransformerEncoderLayer {
+    fn new(device: &Device, hidden_size: usize, num_heads: usize, dropout_rate: f64) -> Self {
         Self {
             self_attention_query: LinearConfig::new(hidden_size, hidden_size).init(device),
             self_attention_key: LinearConfig::new(hidden_size, hidden_size).init(device),
@@ -210,7 +206,7 @@ impl<B: burn::prelude::Backend> TransformerEncoderLayer<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let [_batch, hidden] = x.dims();
 
         let q = self.self_attention_query.forward(x.clone());
@@ -249,15 +245,15 @@ impl<B: burn::prelude::Backend> TransformerEncoderLayer<B> {
 }
 
 #[derive(Module, Debug)]
-struct TransformerEncoder<B: burn::prelude::Backend> {
-    input_projection: Linear<B>,
-    layers: Vec<TransformerEncoderLayer<B>>,
+struct TransformerEncoder {
+    input_projection: Linear,
+    layers: Vec<TransformerEncoderLayer>,
     output_size: usize,
 }
 
-impl<B: burn::prelude::Backend> TransformerEncoder<B> {
+impl TransformerEncoder {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_size: usize,
         num_heads: usize,
@@ -283,7 +279,7 @@ impl<B: burn::prelude::Backend> TransformerEncoder<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut h = self.input_projection.forward(x);
 
         for layer in &self.layers {
@@ -295,14 +291,14 @@ impl<B: burn::prelude::Backend> TransformerEncoder<B> {
 }
 
 #[derive(Module, Debug)]
-struct ProjectionHead<B: burn::prelude::Backend> {
-    layer1: Linear<B>,
-    layer2: Linear<B>,
+struct ProjectionHead {
+    layer1: Linear,
+    layer2: Linear,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> ProjectionHead<B> {
-    fn new(device: &B::Device, input_size: usize, output_size: usize, dropout_rate: f64) -> Self {
+impl ProjectionHead {
+    fn new(device: &Device, input_size: usize, output_size: usize, dropout_rate: f64) -> Self {
         let hidden_size = (input_size + output_size) / 2;
         Self {
             layer1: LinearConfig::new(input_size, hidden_size).init(device),
@@ -311,7 +307,7 @@ impl<B: burn::prelude::Backend> ProjectionHead<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let h = self.layer1.forward(x);
         let h = relu(h);
         let h = if training { self.dropout.forward(h) } else { h };
@@ -320,15 +316,15 @@ impl<B: burn::prelude::Backend> ProjectionHead<B> {
 }
 
 #[derive(Module, Debug)]
-struct SurvivalHead<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
-    output: Linear<B>,
+struct SurvivalHead {
+    layers: Vec<Linear>,
+    output: Linear,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> SurvivalHead<B> {
+impl SurvivalHead {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_sizes: &[usize],
         output_size: usize,
@@ -349,7 +345,7 @@ impl<B: burn::prelude::Backend> SurvivalHead<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut h = x;
         for layer in &self.layers {
             h = layer.forward(h);
@@ -363,16 +359,16 @@ impl<B: burn::prelude::Backend> SurvivalHead<B> {
 }
 
 #[derive(Module, Debug)]
-struct ContrastiveSurvNetwork<B: burn::prelude::Backend> {
-    encoder: TransformerEncoder<B>,
-    projection_head: ProjectionHead<B>,
-    survival_head: SurvivalHead<B>,
+struct ContrastiveSurvNetwork {
+    encoder: TransformerEncoder,
+    projection_head: ProjectionHead,
+    survival_head: SurvivalHead,
     embedding_dim: usize,
     projection_dim: usize,
 }
 
-impl<B: burn::prelude::Backend> ContrastiveSurvNetwork<B> {
-    fn new(device: &B::Device, n_features: usize, config: &ContrastiveSurvConfig) -> Self {
+impl ContrastiveSurvNetwork {
+    fn new(device: &Device, n_features: usize, config: &ContrastiveSurvConfig) -> Self {
         let encoder = TransformerEncoder::new(
             device,
             n_features,
@@ -407,11 +403,7 @@ impl<B: burn::prelude::Backend> ContrastiveSurvNetwork<B> {
         }
     }
 
-    fn forward(
-        &self,
-        x: Tensor<B, 2>,
-        training: bool,
-    ) -> (Tensor<B, 2>, Tensor<B, 2>, Tensor<B, 2>) {
+    fn forward(&self, x: Tensor<2>, training: bool) -> (Tensor<2>, Tensor<2>, Tensor<2>) {
         let embeddings = self.encoder.forward(x, training);
         let projections = self.projection_head.forward(embeddings.clone(), training);
         let predictions = self.survival_head.forward(embeddings.clone(), training);
@@ -586,7 +578,7 @@ impl std::fmt::Debug for StoredWeights {
 }
 
 fn extract_weights(
-    _model: &ContrastiveSurvNetwork<AutodiffBackend>,
+    _model: &ContrastiveSurvNetwork,
     config: &ContrastiveSurvConfig,
     n_features: usize,
 ) -> StoredWeights {
@@ -658,7 +650,7 @@ fn fit_contrastive_surv_inner(
     event: &[i32],
     config: &ContrastiveSurvConfig,
 ) -> ContrastiveSurv {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let duration_cuts = config.num_durations.map(|nd| {
@@ -666,7 +658,7 @@ fn fit_contrastive_surv_inner(
         cuts
     });
 
-    let mut model: ContrastiveSurvNetwork<AutodiffBackend> =
+    let mut model: ContrastiveSurvNetwork =
         ContrastiveSurvNetwork::new(&device, n_features, config);
 
     let mut optimizer = AdamConfig::new().init();
@@ -697,12 +689,12 @@ fn fit_contrastive_surv_inner(
                 .collect();
 
             let x_data = burn::tensor::TensorData::new(x_batch, [batch_size, n_features]);
-            let x_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<2> = Tensor::from_data(x_data, &device);
 
             let (embeddings, projections, predictions) = model.forward(x_tensor, true);
 
-            let proj_vec = tensor_to_vec_f32(projections.clone().inner());
-            let pred_vec = tensor_to_vec_f32(predictions.clone().inner());
+            let proj_vec = tensor_to_vec_f32(projections.clone().without_autodiff());
+            let pred_vec = tensor_to_vec_f32(predictions.clone().without_autodiff());
 
             let contrastive_loss = compute_contrastive_loss(
                 &proj_vec,
@@ -816,6 +808,41 @@ pub fn contrastive_surv(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_training_smoke() {
+        let config = ContrastiveSurvConfig::new(
+            4,
+            2,
+            vec![4],
+            2,
+            1,
+            0.1,
+            1.0,
+            0.5,
+            SurvivalLossType::CoxPartialLikelihood,
+            None,
+            0.1,
+            0.001,
+            2,
+            2,
+            None,
+            0.0,
+            Some(17),
+        )
+        .unwrap();
+        let x: Vec<f64> = (0..8).map(|value| value as f64 / 8.0).collect();
+        let model =
+            fit_contrastive_surv_inner(&x, 4, 2, &[1.0, 2.0, 3.0, 4.0], &[1, 0, 1, 1], &config);
+
+        assert_eq!(model.train_loss.len(), 2);
+        assert_eq!(model.val_loss.len(), 2);
+        assert!(model.train_loss.iter().all(|loss| loss.is_finite()));
+        assert!(model.val_loss.iter().all(|loss| loss.is_finite()));
+        assert_eq!(model.get_embedding_dim(), 4);
+        assert_eq!(model.get_projection_dim(), 2);
+        assert!(model.duration_cuts.is_none());
+    }
 
     #[test]
     fn test_config_default() {

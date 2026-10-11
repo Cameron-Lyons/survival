@@ -116,7 +116,7 @@ impl FloatMatrix {
 
     /// Builds the matrix from a row-major flat buffer with `ncol` columns.
     pub fn from_flat(values: Vec<f64>, ncol: usize) -> SurvivalResult<Self> {
-        let nrow = if ncol == 0 { 0 } else { values.len() / ncol };
+        let nrow = values.len().checked_div(ncol).unwrap_or(0);
         validate_matrix_shape(&values, nrow, ncol, "x")?;
         Ok(Self(
             Array2::from_shape_vec((nrow, ncol), values).expect("shape validated against length"),

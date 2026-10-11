@@ -1725,7 +1725,7 @@ mod tests {
         fit.fit().unwrap();
         let results = fit.results();
         assert!(results.coefficients.is_empty());
-        assert!((results.loglik[0] - (-(3.0_f64.ln()) - 2.0_f64.ln())).abs() < 1e-12);
+        assert!((results.loglik[0] - (-3.0_f64.ln() - 2.0_f64.ln())).abs() < 1e-12);
         assert_eq!(results.iter, 0);
     }
 
