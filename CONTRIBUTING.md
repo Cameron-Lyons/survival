@@ -90,7 +90,10 @@ gh workflow run publish.yml --ref v2.0.0 -f target=all -f ref=v2.0.0
 
 Use the intended version tag in place of `v2.0.0`. The other manual targets are
 `testpypi`, `pypi` and `crates`; every dispatch requires an existing tag or full
-commit SHA. Re-running Release at the same commit also retries the publish
+commit SHA that identifies the same commit as the workflow branch or tag selected
+by `--ref`. Publish rejects mismatches and always checks out the workflow's exact
+commit, keeping executed package code aligned with the run's branch and cache
+scope. Re-running Release at the same commit also retries the publish
 dispatch. An existing version tag that points to a different commit is refused.
 
 ## Feature Golden Path

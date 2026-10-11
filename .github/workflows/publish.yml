@@ -17,7 +17,7 @@ on:
           - all
           - build
       ref:
-        description: 'Existing tag name or full 40-character commit SHA to publish'
+        description: 'Existing tag or full commit SHA matching the workflow revision selected by --ref'
         required: true
         type: string
 
@@ -32,15 +32,14 @@ jobs:
     name: Resolve Publish Ref
     runs-on: ubuntu-latest
     outputs:
-      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Resolve immutable ref
-        id: resolve
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
@@ -76,8 +75,13 @@ jobs:
             exit 1
           fi
 
-          git checkout --detach "$resolved_ref"
-          echo "checkout_ref=$resolved_ref" >> "$GITHUB_OUTPUT"
+          if [[ "$resolved_ref" != "$EVENT_SHA" ]]; then
+            echo "Package ref must identify the same commit as the workflow revision selected by --ref." >&2
+            echo "Dispatch Publish from the matching branch or tag, with that commit's tag or full SHA as ref." >&2
+            exit 1
+          fi
+
+          git checkout --detach "$EVENT_SHA"
 
       - name: Get version from Cargo.toml
         id: version
@@ -107,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-python@v7
         with:
@@ -160,7 +164,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -238,7 +242,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.resolve-publish-ref.outputs.checkout_ref }}
+          ref: ${{ github.sha }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
