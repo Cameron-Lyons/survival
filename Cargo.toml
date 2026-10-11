@@ -14,6 +14,36 @@ keywords = [
   "cox-regression",
 ]
 categories = ["science", "mathematics"]
+# Keep the Rust archive independent of the Python/R implementation and their
+# test suites. Retain fixtures embedded by Rust tests and the stock-R fixtures
+# that the Rust differential test harness reads from disk.
+include = [
+  "/src/**",
+  "/build.rs",
+  "/benches/*.rs",
+  "/tests/**",
+  "/examples/*.rs",
+  "/test/r/fixtures/*.json",
+  "/test/r/kernel_references/*.json",
+  "/python/tests/fixtures/aeq_large_time_reference.json",
+  "/python/tests/fixtures/aj_entry_reference.json",
+  "/python/tests/fixtures/egger_r_reference.json",
+  "/python/tests/fixtures/km_infinite_reference.json",
+  "/python/tests/fixtures/population_summary_reference.json",
+  "/python/tests/fixtures/surv_quantile_reference.json",
+  "/python/tests/fixtures/survfit_matrix_reference.json",
+  "/python/tests/fixtures/survreg_density_reference.json",
+  "/python/tests/fixtures/survreg_dpqr_parms_reference.json",
+  "/python/tests/fixtures/survreg_dpqr_reference.json",
+  "/python/tests/fixtures/weighted_logrank_reference.json",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/rust-toolchain.toml",
+  "/pyproject.toml",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+]
 
 [lib]
 name = "survival"

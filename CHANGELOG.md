@@ -1,279 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Keep ordinary numeric Cox fitting designs in owned arrays, borrow inputs
-  directly into the optimizer's sorted data and reuse Breslow/Efron evaluation
-  buffers. Separate Cox input types, fitting, prediction, curves and Python
-  bindings behind the existing exports, preserving public list results and
-  fitted-model serialization. See [repository layout](docs/repo-layout.md).
-- Follow stock AFT distribution query recycling, missing-value arithmetic,
-  Student-t parameter vectors and warning order across Rust, Python and R.
-  Preserve callback exceptions and existing fitted-model serialization.
-  See [AFT distributions](docs/survreg-density.md).
-- Support ordinary Cox curve selection over strata and prediction rows,
-  standalone Python ridge/frailty bases, and R-compatible random-draw count
-  coercion. Retain factor labels, original ridge scaling and saved-model
-  behavior; check the adapters against independent stock-R references.
-- Accept scalar aggregation callbacks and `sum` through Rust, Python and the
-  R bridge. Preserve stock callback validation and ordering, ignored extra
-  arguments and group metadata; correct exceptional mean and sum arithmetic.
-  See [curve aggregation](docs/aggregate-survival-curves.md).
-- Avoid false near ties when sums of large finite time magnitudes overflow;
-  retain genuinely near times and nonfinite endpoints. Check normalization and
-  complete curves against stock R; see [large times](docs/aeq-large-times.md).
-- Prepare time-dependent `tmerge` inputs once across shared frames and update
-  vectors, preserving categorical metadata and leaving unrelated update columns
-  unread. See [iterator inputs](docs/tmerge-iterable-inputs.md).
-- Build weighted log-rank KM left limits from the existing test order, removing
-  the extra full curve fit and per-time searches. Preserve delayed-entry risk
-  sets and complete stock-R test outputs; see
-  [weighted log-rank performance](docs/weighted-logrank-performance.md).
-- Allocate multistate influence workspaces only when standard errors are needed
-  and reuse probability-update buffers. Preserve complete point estimates and
-  standard-error results; see [AJ performance](docs/aalen-johansen-performance.md).
-- Prepare iterator columns before fresh Cox frailty model-matrix processing,
-  preserving group coding, omission labels and complete matrix metadata.
-  See [model-matrix iterator inputs](docs/model-matrix-iterator-inputs.md).
-- Recognize masked scalar cells in numeric response rows, so row iterators and
-  mixed masked inputs follow omission and failure rules without conversion
-  warnings. Preserve valid single-element conversions and reject malformed
-  retained cells. See [masked matrix inputs](docs/masked-matrix-inputs.md).
-- Check person-years summary dimensions before multiplication and margin
-  allocation. Preserve valid empty tables and accumulate margins with direct
-  column-major offsets, avoiding per-cell index-vector allocation. See
-  [population summary inputs](docs/population-summary-inputs.md).
-- Retain used formula and population iterator columns once across row selection,
-  missingness, fitting and prediction. Preserve aliases, factor metadata, numeric
-  expression types and matrix response rows; keep unrelated columns unread during
-  fitting, copying and serialization. Follow stock model-frame row counts. See
-  [formula inputs](docs/formula-iterator-inputs.md) and
-  [population inputs](docs/population-iterable-inputs.md).
-- Avoid redundant formula-term parsing when response columns establish the row
-  count, preserving formula validation before reading response iterators.
-- Revalidate mutable Rust rate tables before population calculations, returning
-  errors for malformed attributes, invalid rates and overflowing group dimensions.
-  Make damaged-table formatting and rate lookup safe. See
-  [rate-table validation](docs/ratetable-inputs.md).
-- Correct fitted ML model annotations and describe native unique times as a
-  read-only property so the complete Python source tree passes type checking.
-- Accept infinite KM endpoints, start times and summary queries; retain
-  nonfinite endpoints and response rows when normalizing finite near ties.
-  Preserve infinite-origin summary arithmetic and reject unsorted grids created
-  by conditional origins before searching them. See
-  [infinite KM validation](docs/km-infinite-times.md).
-- Prepare inferred grouping and cluster iterators once for curve aggregation
-  and concordance, preserving categorical order and complete output rows.
-  See [factor and cluster inputs](docs/factor-iterable-inputs.md).
-- Check mutable fitted Cox row, covariate and covariance dimensions before
-  predictions, including cached baselines; return input errors for missing
-  stored strata or unknown training stratum codes.
-- Follow R's conditional coercion for curve-quantile confidence arguments,
-  including numeric truth values and invalid-condition errors; absent bands
-  retain R's argument-evaluation bypass.
-- Preserve valid terminal zero standard errors and confidence bounds from
-  robust curves in data frames and R quantiles, while retaining undefined
-  native estimates.
-- Preserve event rows from one-shot inputs to `Surv` and `Surv2`, retaining
-  factor levels and numeric array dtypes while avoiding discarded list
-  conversions. See [response input validation](docs/surv-iterable-inputs.md).
-- Preserve conditional Cox origins and vector, matrix and stratum-by-curve
-  layouts for R bridge quantiles and medians, including missing confidence
-  bands and empty probability requests.
-- Check mutable Rust Cox baselines before public expansion and trajectory
-  calls, returning input errors before indexing rows. Fitted predictions reuse
-  the shared numerical loops without repeated baseline scans.
-- Preserve strata iterator rows and categorical metadata when reusing factors
-  in responses, models and predictions; accept a literal `"NA"` event-state
-  label separately from missing values. See [strata factor inputs](docs/strata-factor-inputs.md).
-- Accept scalar and nullable confidence-band inputs through the Python facade;
-  convert plain numeric arrays in bulk and release the interpreter lock during
-  native transforms. Refuse invalid confidence types for empty inputs too.
-  See [confidence-band validation](docs/confidence-bands.md).
-- Revalidate mutable Rust inputs before Cox score, Schoenfeld and counting
-  martingale residual kernels, preventing indexing panics and a NaN-time sweep
-  that could fail to advance.
-- Follow R's curve-quantile probability type checks and infinite-tolerance
-  behavior; preserve zero, negative and nonfinite scalar scales. Convert
-  stacked curve arrays in bulk and release the interpreter
-  lock during inversion. See [curve quantile validation and timings](docs/curve-quantiles.md).
-- Stream compact survival-summary tables without observation-sized temporary
-  vectors; retain the forward mean and backward variance addition order and
-  release the Python interpreter lock. See
-  [summary-table validation and timings](docs/survival-summary-tables.md).
-- Preserve missing and invalid numeric AFT quantile columns as R does, and
-  skip probability coercion for nonquantile Python predictions. Preserve
-  explicitly empty probability requests through the R bridge and accept
-  nullable numeric queries in AFT distribution functions.
-- Check observation alignment before selecting RMST comparison groups; gather
-  each group's rows once and accept owned NumPy inputs while releasing the
-  Python interpreter lock for comparisons and stacked summary tables.
-- Revalidate mutable Rust inputs before Cox risk-set counting and martingale
-  residual calculations, returning input errors before indexing rows.
-- Follow R's repetition defaults, first-element warnings and argument
-  precedence for survival responses. Repeat immutable columns without
-  output-sized row indices; see [validation and timings](docs/surv-repetition.md).
-- Support explicit cumulative or per-time count selection in ordinary and
-  multistate survival summaries through R's `dosum` option, including Cox
-  predictions. Sweep dense ordered summary times and stream count prefixes;
-  native summary time inputs use checked NumPy bulk conversion. See
-  [summary count validation and benchmarks](docs/summary-counts.md).
-- Revalidate public Rust concordance response fields before indexing rows,
-  returning input errors for modified lengths, times, statuses and intervals.
-- Follow R 3.8-12's multistate entry reporting grid, omitting censored
-  continuation boundaries while retaining actual entries, transitions and
-  final exits. Verify fitted counts, uncertainty and influence tensors against
-  64 current-stock cases through Rust and both Python interfaces.
-- Preserve sortable character and calendar dates in `neardate`, retain exact
-  timestamps and reject factor dates. Correct R's POSIXt conversion defect in
-  the bridge and speed numeric input preparation; see
-  [date matching validation and timings](docs/neardate-sortable.md).
-- Preserve ordinary data-frame dispatch when subsetting R `tmerge` objects,
-  including single-index selection and omitted row or column arguments.
-
-- Validate mutable public Rust inputs at Kaplan-Meier, Aalen-Johansen, and
-  log-rank fitting boundaries, returning input errors before accessing rows.
-  Release the Python GIL during convenience and one-sample log-rank tests.
-- Follow R's factor comparison methods in formulas, including declared ordered
-  levels, incompatible-level errors, and unordered-factor warnings. Preserve
-  ordered metadata in pandas inputs, row subsets, and the R bridge.
-  Fit ordered covariates with polynomial contrasts, retain explicit bases and
-  fitted prediction coding, and apply standard named contrasts to prepared
-  model frames. Preserve contrast attributes through R data preparation and
-  factor-valued time-transform callbacks.
-- Reuse native subject/time ordering for carry-forward initialization, fixing
-  missing-time ordering and retaining missing initial factor values. Remove the
-  second Python sort; see [carry-forward validation and timings](docs/carry-forward.md).
-- Compute grouped curve medians by selecting the middle values, with a reusable
-  contiguous group buffer. Check mutable grouping codes and preserve observed
-  group ordering when the product of declared factor levels overflows.
-  See [aggregate curve validation and timings](docs/aggregate-survival-curves.md).
-- Accept three-dimensional NumPy state probabilities directly for curve
-  aggregation, including strided views, with an owned copy before releasing
-  the GIL. Avoid intermediate nested lists in multistate curve aggregation.
-  Align NumPy storage before constructing Rust views at typed input boundaries.
-  Normalize NumPy boolean bytes without borrowing them as Rust `bool` values.
-- Keep constant AFT covariate columns unscaled so the existing rank-aware
-  solver can identify aliases and return finite fitted values. Validate
-  identifiable results against stock R fits; see
-  [rank-deficient AFT designs](docs/aft-rank-deficient-designs.md).
-- Use R's rank-limited polynomial contrast construction when high powers
-  lose numerical rank, with frozen base-R references through 24 levels and
-  documented high-degree platform sensitivity.
-- Match stock Cox terms prediction attributes across centering references,
-  missing-row restoration, grouped predictions, and sparse frailty paths.
-
-- Evaluate restricted formula expressions with R precedence and three-valued
-  logical operators. Preserve nested logical and factor identities, logical
-  offsets, fitted contrasts, and empty or missing prediction types. Check
-  expressions and full Cox/AFT fits against independent stock-R references;
-  preserve recovered nullable logical sources through the R bridge.
-  Preserve integer arithmetic and overflow missingness, and decode supported
-  R string escapes with canonical term labels.
-- Compute exact Cox tie moments from the smaller of the death subset and its
-  complement, reducing work and memory for nearly complete risk-set ties.
-  Preserve tiny covariance contributions when log risks differ sharply, with
-  exhaustive subset checks and an independent R fitting reference. Revalidate
-  mutable Rust inputs at the counting-process exact fitter boundary.
-  Sweep untied counting-process risk sets with growing accumulators or stable
-  blocked moment trees, removing repeated full-stratum scans. Preserve moderate
-  means across extreme covariate contrasts and dominant risk removal.
-- Retain survival-curve missing-row metadata and restore excluded observation
-  rows in residual and pseudo-value arrays. Preserve original observation labels
-  after omission, with 96 stock-R differential cases across KM and multistate fits.
-- Make benchmark execution and malformed coverage reports fail CI, compare
-  measured Divan cases between PR and base revisions, and test CI helpers without
-  building the extension. Run external Rust API integration tests in CI and
-  remove a stale Cox-dispatch test skip. Test numerical results from installed
-  wheels on macOS and Windows and regenerate current-stock references in CI.
-  Reject logical-to-numeric reference changes and check the built R source
-  archive with no package warnings or notes.
-
-- Prepare grouped survival residuals and pseudo-values with one pass over input
-  rows, and check curve endpoints with cumulative offsets. Preserve weighted,
-  clustered and counting-process results while removing repeated scans per stratum.
-
-- Compute independent competing-risk Aalen–Johansen uncertainty from small
-  influence moment factors, avoiding subject scans at every reporting time.
-  Reuse the earliest entry time across grouped initial-state estimates.
-  Grouped multistate tables assemble state columns by position, preserving
-  repeated state selections and avoiding repeated label scans.
-
-- Select requested population-survival times with one forward scan, preserving
-  duplicates, groups and follow-up breakpoints without quadratic searches.
-  Expected cumulative hazards preserve undefined survival probabilities as NaN.
-
-- Reuse stratum data, event-time weights and time ordering across concordance
-  predictors, retaining independent rank trees and joint covariance. Prevent
-  zero-weight events with an empty weighted risk set from producing a `NaN`
-  Cox variance numerator.
-- Classify plain numeric formula arrays from their dtype, avoiding repeated
-  Python scalar scans while preserving logical and categorical contrasts.
-- Size interval-splitting outputs with binary searches over sorted cutpoints,
-  removing a scan of every cutpoint for every input interval.
-- Add a runnable Rust Kaplan-Meier and Cox example alongside the Python examples.
-
-- Preserve sparse and dense frailty penalties returned by Cox time transforms,
-  including controller histories, summaries and saved models. Python callbacks
-  accept `CoxPenaltyBasis` and direct `pspline()` results; stored model matrices
-  retain sparse group columns without expanding the native fitting matrix.
-
-- Add person-years, survival-data consistency and marginal-means reports.
-  Retain built-in rate-table origins and matched-population summaries, and
-  preserve categorical status metadata in `factor()`/`as.factor()` survival
-  responses. Person-years totals traverse grouped cells without flattening them.
-
-- Add case-cohort, conditional-logistic, proportional-hazards diagnostic,
-  concordance and survival-difference reports with full-precision tables.
-  Retain formula omission records and case-cohort stratum labels, and avoid
-  repeated covariance copies in case-cohort summaries.
-
-- Add AFT and Aalen model/summary reports, including scales, coefficient
-  correlations, missing-row notices and full-precision tables. Preserve robust
-  Aalen covariance when changing summary cutoffs or test weights, with bounded
-  influence conversion memory. Add width and data-frame support to penalized
-  AFT reports.
-
-- Add Cox model and summary reports for ordinary, robust, null, penalized and
-  multistate fits, with full-precision tables and statistics, R-style coefficient
-  formatting, confidence intervals, term tests and transition grouping.
-
-- Add detailed survival-summary and expected-survival reports with grouped
-  tables, confidence columns, state probabilities and full-precision data-frame
-  conversion. Preserve conditional cutoff units when formatting scaled summaries.
-- Add compact survival reports for Kaplan–Meier, Turnbull, Cox and multistate
-  curves, including counts, medians, restricted means and R-style text formatting.
-  Reports use the Rust summary kernels without expanding event-time arrays and
-  expose full-precision columns through `as_data_frame`.
-- Add raw-response plots, expected-survival overlays, and model-specific
-  `plot`, `lines`, and `points` dispatch in `survival.plotting`. Expected curves
-  preserve group names and R's straight-line overlay default without inferring
-  confidence bands or censor counts.
-- Add Aalen cumulative-coefficient plots and overlays, with tied-event handling,
-  ordinary or influence-based confidence bands, and bounded temporary memory
-  when reducing stored influences. Numerical plot data works without Matplotlib.
-- Add Cox proportional-hazards diagnostic plots with natural-spline curves,
-  two-standard-error bands, scaled residuals, and hazard-ratio views. The Rust
-  smoother shares factorizations across terms and releases the Python GIL.
-- Add optional Matplotlib survival graphics for Kaplan–Meier, Turnbull, Cox,
-  and multistate curves, including confidence bands, censor marks, transformations,
-  and overlays. Numerical plot data is available without a renderer, and constant
-  runs are compressed before drawing. See [survival graphics](docs/survival-plotting.md).
-- Add R-style `survfit.matrix` through `survfit` on a square matrix of KM or
-  Cox curves, with discrete and matrix-exponential updates, stratified curves,
-  prediction columns, starting distributions and conditional start times.
-  The Rust kernel scans the transition curves once and releases the Python
-  GIL; its results support the existing multistate summaries and curve methods.
-- Preserve tiny transition probabilities in the matrix exponential's closed
-  forms using `expm1`, including the shared multistate Cox prediction path.
-- Add `CoxPHFit::predict_survival_at` and its Python method to evaluate only
-  requested times, returning a time-by-observation matrix. Cox estimator
-  survival predictions and R-style Brier scores use this path to avoid full
-  curve expansion and Python list conversions.
-- Cache censoring-survival lookups in Brier scoring, removing binary searches
-  from the subject-by-time loop. Its Python binding accepts NumPy arrays and
-  matrices through the shared checked input types.
-
 ## 2.0.0
 
 2.0 turns `survival.r` into a faithful port of R's survival 3.8: the formula
@@ -595,3 +321,288 @@ are listed in [R compatibility](docs/r-compatibility.md).
   `getOption("na.action")`; `survConcordance` returns a survConcordance list;
   survreg `residuals()` defaults to `type = "response"` and Cox `fitted()`
   ignores `type` and `se.fit`; `rsurvreg` uses R's random number stream.
+
+### Further fixes and improvements
+
+- Keep ordinary numeric Cox fitting designs in owned arrays, borrow inputs
+  directly into the optimizer's sorted data and reuse Breslow/Efron evaluation
+  buffers. Separate Cox input types, fitting, prediction, curves and Python
+  bindings behind the existing exports, preserving public list results and
+  fitted-model serialization. See [repository layout](docs/repo-layout.md).
+- Follow stock AFT distribution query recycling, missing-value arithmetic,
+  Student-t parameter vectors and warning order across Rust, Python and R.
+  Preserve callback exceptions and existing fitted-model serialization.
+  See [AFT distributions](docs/survreg-density.md).
+- Support ordinary Cox curve selection over strata and prediction rows,
+  standalone Python ridge/frailty bases, and R-compatible random-draw count
+  coercion. Retain factor labels, original ridge scaling and saved-model
+  behavior; check the adapters against independent stock-R references.
+- Accept scalar aggregation callbacks and `sum` through Rust, Python and the
+  R bridge. Preserve stock callback validation and ordering, ignored extra
+  arguments and group metadata; correct exceptional mean and sum arithmetic.
+  See [curve aggregation](docs/aggregate-survival-curves.md).
+- Avoid false near ties when sums of large finite time magnitudes overflow;
+  retain genuinely near times and nonfinite endpoints. Check normalization and
+  complete curves against stock R; see [large times](docs/aeq-large-times.md).
+- Prepare time-dependent `tmerge` inputs once across shared frames and update
+  vectors, preserving categorical metadata and leaving unrelated update columns
+  unread. See [iterator inputs](docs/tmerge-iterable-inputs.md).
+- Build weighted log-rank KM left limits from the existing test order, removing
+  the extra full curve fit and per-time searches. Preserve delayed-entry risk
+  sets and complete stock-R test outputs; see
+  [weighted log-rank performance](docs/weighted-logrank-performance.md).
+- Allocate multistate influence workspaces only when standard errors are needed
+  and reuse probability-update buffers. Preserve complete point estimates and
+  standard-error results; see [AJ performance](docs/aalen-johansen-performance.md).
+- Prepare iterator columns before fresh Cox frailty model-matrix processing,
+  preserving group coding, omission labels and complete matrix metadata.
+  See [model-matrix iterator inputs](docs/model-matrix-iterator-inputs.md).
+- Recognize masked scalar cells in numeric response rows, so row iterators and
+  mixed masked inputs follow omission and failure rules without conversion
+  warnings. Preserve valid single-element conversions and reject malformed
+  retained cells. See [masked matrix inputs](docs/masked-matrix-inputs.md).
+- Check person-years summary dimensions before multiplication and margin
+  allocation. Preserve valid empty tables and accumulate margins with direct
+  column-major offsets, avoiding per-cell index-vector allocation. See
+  [population summary inputs](docs/population-summary-inputs.md).
+- Retain used formula and population iterator columns once across row selection,
+  missingness, fitting and prediction. Preserve aliases, factor metadata, numeric
+  expression types and matrix response rows; keep unrelated columns unread during
+  fitting, copying and serialization. Follow stock model-frame row counts. See
+  [formula inputs](docs/formula-iterator-inputs.md) and
+  [population inputs](docs/population-iterable-inputs.md).
+- Avoid redundant formula-term parsing when response columns establish the row
+  count, preserving formula validation before reading response iterators.
+- Revalidate mutable Rust rate tables before population calculations, returning
+  errors for malformed attributes, invalid rates and overflowing group dimensions.
+  Make damaged-table formatting and rate lookup safe. See
+  [rate-table validation](docs/ratetable-inputs.md).
+- Correct fitted ML model annotations and describe native unique times as a
+  read-only property so the complete Python source tree passes type checking.
+- Accept infinite KM endpoints, start times and summary queries; retain
+  nonfinite endpoints and response rows when normalizing finite near ties.
+  Preserve infinite-origin summary arithmetic and reject unsorted grids created
+  by conditional origins before searching them. See
+  [infinite KM validation](docs/km-infinite-times.md).
+- Prepare inferred grouping and cluster iterators once for curve aggregation
+  and concordance, preserving categorical order and complete output rows.
+  See [factor and cluster inputs](docs/factor-iterable-inputs.md).
+- Check mutable fitted Cox row, covariate and covariance dimensions before
+  predictions, including cached baselines; return input errors for missing
+  stored strata or unknown training stratum codes.
+- Follow R's conditional coercion for curve-quantile confidence arguments,
+  including numeric truth values and invalid-condition errors; absent bands
+  retain R's argument-evaluation bypass.
+- Preserve valid terminal zero standard errors and confidence bounds from
+  robust curves in data frames and R quantiles, while retaining undefined
+  native estimates.
+- Preserve event rows from one-shot inputs to `Surv` and `Surv2`, retaining
+  factor levels and numeric array dtypes while avoiding discarded list
+  conversions. See [response input validation](docs/surv-iterable-inputs.md).
+- Preserve conditional Cox origins and vector, matrix and stratum-by-curve
+  layouts for R bridge quantiles and medians, including missing confidence
+  bands and empty probability requests.
+- Check mutable Rust Cox baselines before public expansion and trajectory
+  calls, returning input errors before indexing rows. Fitted predictions reuse
+  the shared numerical loops without repeated baseline scans.
+- Preserve strata iterator rows and categorical metadata when reusing factors
+  in responses, models and predictions; accept a literal `"NA"` event-state
+  label separately from missing values. See [strata factor inputs](docs/strata-factor-inputs.md).
+- Accept scalar and nullable confidence-band inputs through the Python facade;
+  convert plain numeric arrays in bulk and release the interpreter lock during
+  native transforms. Refuse invalid confidence types for empty inputs too.
+  See [confidence-band validation](docs/confidence-bands.md).
+- Revalidate mutable Rust inputs before Cox score, Schoenfeld and counting
+  martingale residual kernels, preventing indexing panics and a NaN-time sweep
+  that could fail to advance.
+- Follow R's curve-quantile probability type checks and infinite-tolerance
+  behavior; preserve zero, negative and nonfinite scalar scales. Convert
+  stacked curve arrays in bulk and release the interpreter
+  lock during inversion. See [curve quantile validation and timings](docs/curve-quantiles.md).
+- Stream compact survival-summary tables without observation-sized temporary
+  vectors; retain the forward mean and backward variance addition order and
+  release the Python interpreter lock. See
+  [summary-table validation and timings](docs/survival-summary-tables.md).
+- Preserve missing and invalid numeric AFT quantile columns as R does, and
+  skip probability coercion for nonquantile Python predictions. Preserve
+  explicitly empty probability requests through the R bridge and accept
+  nullable numeric queries in AFT distribution functions.
+- Check observation alignment before selecting RMST comparison groups; gather
+  each group's rows once and accept owned NumPy inputs while releasing the
+  Python interpreter lock for comparisons and stacked summary tables.
+- Revalidate mutable Rust inputs before Cox risk-set counting and martingale
+  residual calculations, returning input errors before indexing rows.
+- Follow R's repetition defaults, first-element warnings and argument
+  precedence for survival responses. Repeat immutable columns without
+  output-sized row indices; see [validation and timings](docs/surv-repetition.md).
+- Support explicit cumulative or per-time count selection in ordinary and
+  multistate survival summaries through R's `dosum` option, including Cox
+  predictions. Sweep dense ordered summary times and stream count prefixes;
+  native summary time inputs use checked NumPy bulk conversion. See
+  [summary count validation and benchmarks](docs/summary-counts.md).
+- Revalidate public Rust concordance response fields before indexing rows,
+  returning input errors for modified lengths, times, statuses and intervals.
+- Follow R 3.8-12's multistate entry reporting grid, omitting censored
+  continuation boundaries while retaining actual entries, transitions and
+  final exits. Verify fitted counts, uncertainty and influence tensors against
+  64 current-stock cases through Rust and both Python interfaces.
+- Preserve sortable character and calendar dates in `neardate`, retain exact
+  timestamps and reject factor dates. Correct R's POSIXt conversion defect in
+  the bridge and speed numeric input preparation; see
+  [date matching validation and timings](docs/neardate-sortable.md).
+- Preserve ordinary data-frame dispatch when subsetting R `tmerge` objects,
+  including single-index selection and omitted row or column arguments.
+
+- Validate mutable public Rust inputs at Kaplan-Meier, Aalen-Johansen, and
+  log-rank fitting boundaries, returning input errors before accessing rows.
+  Release the Python GIL during convenience and one-sample log-rank tests.
+- Follow R's factor comparison methods in formulas, including declared ordered
+  levels, incompatible-level errors, and unordered-factor warnings. Preserve
+  ordered metadata in pandas inputs, row subsets, and the R bridge.
+  Fit ordered covariates with polynomial contrasts, retain explicit bases and
+  fitted prediction coding, and apply standard named contrasts to prepared
+  model frames. Preserve contrast attributes through R data preparation and
+  factor-valued time-transform callbacks.
+- Reuse native subject/time ordering for carry-forward initialization, fixing
+  missing-time ordering and retaining missing initial factor values. Remove the
+  second Python sort; see [carry-forward validation and timings](docs/carry-forward.md).
+- Compute grouped curve medians by selecting the middle values, with a reusable
+  contiguous group buffer. Check mutable grouping codes and preserve observed
+  group ordering when the product of declared factor levels overflows.
+  See [aggregate curve validation and timings](docs/aggregate-survival-curves.md).
+- Accept three-dimensional NumPy state probabilities directly for curve
+  aggregation, including strided views, with an owned copy before releasing
+  the GIL. Avoid intermediate nested lists in multistate curve aggregation.
+  Align NumPy storage before constructing Rust views at typed input boundaries.
+  Normalize NumPy boolean bytes without borrowing them as Rust `bool` values.
+- Keep constant AFT covariate columns unscaled so the existing rank-aware
+  solver can identify aliases and return finite fitted values. Validate
+  identifiable results against stock R fits; see
+  [rank-deficient AFT designs](docs/aft-rank-deficient-designs.md).
+- Use R's rank-limited polynomial contrast construction when high powers
+  lose numerical rank, with frozen base-R references through 24 levels and
+  documented high-degree platform sensitivity.
+- Match stock Cox terms prediction attributes across centering references,
+  missing-row restoration, grouped predictions, and sparse frailty paths.
+
+- Evaluate restricted formula expressions with R precedence and three-valued
+  logical operators. Preserve nested logical and factor identities, logical
+  offsets, fitted contrasts, and empty or missing prediction types. Check
+  expressions and full Cox/AFT fits against independent stock-R references;
+  preserve recovered nullable logical sources through the R bridge.
+  Preserve integer arithmetic and overflow missingness, and decode supported
+  R string escapes with canonical term labels.
+- Compute exact Cox tie moments from the smaller of the death subset and its
+  complement, reducing work and memory for nearly complete risk-set ties.
+  Preserve tiny covariance contributions when log risks differ sharply, with
+  exhaustive subset checks and an independent R fitting reference. Revalidate
+  mutable Rust inputs at the counting-process exact fitter boundary.
+  Sweep untied counting-process risk sets with growing accumulators or stable
+  blocked moment trees, removing repeated full-stratum scans. Preserve moderate
+  means across extreme covariate contrasts and dominant risk removal.
+- Retain survival-curve missing-row metadata and restore excluded observation
+  rows in residual and pseudo-value arrays. Preserve original observation labels
+  after omission, with 96 stock-R differential cases across KM and multistate fits.
+- Make benchmark execution and malformed coverage reports fail CI, compare
+  measured Divan cases between PR and base revisions, and test CI helpers without
+  building the extension. Run external Rust API integration tests in CI and
+  remove a stale Cox-dispatch test skip. Test numerical results from installed
+  wheels on macOS and Windows and regenerate current-stock references in CI.
+  Reject logical-to-numeric reference changes and check the built R source
+  archive with no package warnings or notes.
+
+- Prepare grouped survival residuals and pseudo-values with one pass over input
+  rows, and check curve endpoints with cumulative offsets. Preserve weighted,
+  clustered and counting-process results while removing repeated scans per stratum.
+
+- Compute independent competing-risk Aalen–Johansen uncertainty from small
+  influence moment factors, avoiding subject scans at every reporting time.
+  Reuse the earliest entry time across grouped initial-state estimates.
+  Grouped multistate tables assemble state columns by position, preserving
+  repeated state selections and avoiding repeated label scans.
+
+- Select requested population-survival times with one forward scan, preserving
+  duplicates, groups and follow-up breakpoints without quadratic searches.
+  Expected cumulative hazards preserve undefined survival probabilities as NaN.
+
+- Reuse stratum data, event-time weights and time ordering across concordance
+  predictors, retaining independent rank trees and joint covariance. Prevent
+  zero-weight events with an empty weighted risk set from producing a `NaN`
+  Cox variance numerator.
+- Classify plain numeric formula arrays from their dtype, avoiding repeated
+  Python scalar scans while preserving logical and categorical contrasts.
+- Size interval-splitting outputs with binary searches over sorted cutpoints,
+  removing a scan of every cutpoint for every input interval.
+- Add a runnable Rust Kaplan-Meier and Cox example alongside the Python examples.
+
+- Preserve sparse and dense frailty penalties returned by Cox time transforms,
+  including controller histories, summaries and saved models. Python callbacks
+  accept `CoxPenaltyBasis` and direct `pspline()` results; stored model matrices
+  retain sparse group columns without expanding the native fitting matrix.
+
+- Add person-years, survival-data consistency and marginal-means reports.
+  Retain built-in rate-table origins and matched-population summaries, and
+  preserve categorical status metadata in `factor()`/`as.factor()` survival
+  responses. Person-years totals traverse grouped cells without flattening them.
+
+- Add case-cohort, conditional-logistic, proportional-hazards diagnostic,
+  concordance and survival-difference reports with full-precision tables.
+  Retain formula omission records and case-cohort stratum labels, and avoid
+  repeated covariance copies in case-cohort summaries.
+
+- Add AFT and Aalen model/summary reports, including scales, coefficient
+  correlations, missing-row notices and full-precision tables. Preserve robust
+  Aalen covariance when changing summary cutoffs or test weights, with bounded
+  influence conversion memory. Add width and data-frame support to penalized
+  AFT reports.
+
+- Add Cox model and summary reports for ordinary, robust, null, penalized and
+  multistate fits, with full-precision tables and statistics, R-style coefficient
+  formatting, confidence intervals, term tests and transition grouping.
+
+- Add detailed survival-summary and expected-survival reports with grouped
+  tables, confidence columns, state probabilities and full-precision data-frame
+  conversion. Preserve conditional cutoff units when formatting scaled summaries.
+- Add compact survival reports for Kaplan–Meier, Turnbull, Cox and multistate
+  curves, including counts, medians, restricted means and R-style text formatting.
+  Reports use the Rust summary kernels without expanding event-time arrays and
+  expose full-precision columns through `as_data_frame`.
+- Add raw-response plots, expected-survival overlays, and model-specific
+  `plot`, `lines`, and `points` dispatch in `survival.plotting`. Expected curves
+  preserve group names and R's straight-line overlay default without inferring
+  confidence bands or censor counts.
+- Add Aalen cumulative-coefficient plots and overlays, with tied-event handling,
+  ordinary or influence-based confidence bands, and bounded temporary memory
+  when reducing stored influences. Numerical plot data works without Matplotlib.
+- Add Cox proportional-hazards diagnostic plots with natural-spline curves,
+  two-standard-error bands, scaled residuals, and hazard-ratio views. The Rust
+  smoother shares factorizations across terms and releases the Python GIL.
+- Add optional Matplotlib survival graphics for Kaplan–Meier, Turnbull, Cox,
+  and multistate curves, including confidence bands, censor marks, transformations,
+  and overlays. Numerical plot data is available without a renderer, and constant
+  runs are compressed before drawing. See [survival graphics](docs/survival-plotting.md).
+- Add R-style `survfit.matrix` through `survfit` on a square matrix of KM or
+  Cox curves, with discrete and matrix-exponential updates, stratified curves,
+  prediction columns, starting distributions and conditional start times.
+  The Rust kernel scans the transition curves once and releases the Python
+  GIL; its results support the existing multistate summaries and curve methods.
+- Preserve tiny transition probabilities in the matrix exponential's closed
+  forms using `expm1`, including the shared multistate Cox prediction path.
+- Add `CoxPHFit::predict_survival_at` and its Python method to evaluate only
+  requested times, returning a time-by-observation matrix. Cox estimator
+  survival predictions and R-style Brier scores use this path to avoid full
+  curve expansion and Python list conversions.
+- Cache censoring-survival lookups in Brier scoring, removing binary searches
+  from the subject-by-time loop. Its Python binding accepts NumPy arrays and
+  matrices through the shared checked input types.
+
+### Release packaging
+
+- Build CPython 3.11–3.14 wheels for Linux x86_64 and aarch64, macOS Intel
+  and Apple Silicon, and Windows x86_64.
+- Dispatch package publication explicitly after GitHub release creation,
+  pin releases and publish jobs to the same commit, and support retrying
+  publication.
+- Keep the Rust crate source archive within crates.io's size limit while
+  preserving Rust test fixtures. Retain Python package modules and the local
+  macro shim in the Python source distribution.

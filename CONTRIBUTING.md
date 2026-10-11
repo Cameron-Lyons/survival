@@ -34,8 +34,67 @@ uv run --with maturin maturin develop --features extension-module,ml
 For release-like wheel checks, use:
 
 ```sh
-uv run --with maturin maturin build --release --features extension-module,ml
+uv run --with maturin maturin build --sdist --locked --release --features extension-module,ml
 ```
+
+This builds the wheel from the source distribution, so missing packaged sources
+are caught before publishing. CI uses this path for Python 3.11 through 3.14.
+
+## Preparing A Release
+
+Keep the version in `Cargo.toml`, `pyproject.toml` and
+`python/survival/__init__.py` consistent, and put all pending changelog entries
+under that version. Check the Rust package locally with:
+
+```sh
+cargo package --allow-dirty --locked
+```
+
+The standard crates.io upload limit is 10 MB. The `Cargo.toml` package allowlist
+keeps unrelated Python and R files out of the Rust archive, while retaining the
+datasets and fixtures required by its tests. When adding a Rust test that embeds
+a fixture outside `src/` or `tests/`, add that fixture to the allowlist. CI checks
+the archive size and runs the library and integration tests from its extracted
+contents. Maturin includes the Python package and shim in the source distribution
+independently of that allowlist.
+
+Before creating a release, validate the complete hosted wheel matrix from the
+release branch and its exact commit without publishing to a registry:
+
+```sh
+gh workflow run publish.yml --ref "$(git branch --show-current)" -f target=build -f ref="$(git rev-parse HEAD)"
+```
+
+The `build` target builds, installs and smoke tests all 20 wheels and uploads them
+with the source distribution as workflow artifacts. It skips every publishing
+job; the existing default target remains `testpypi`.
+
+After merging the release changes and checking CI, start the Release workflow:
+
+```sh
+gh workflow run release.yml --ref main
+```
+
+Release pins its checked-out commit, creates the matching version tag and GitHub
+release, and explicitly dispatches Publish for both PyPI and crates.io. This
+dispatch is necessary because release events created with `GITHUB_TOKEN` do not
+start other workflows. Publish builds CPython 3.11–3.14 wheels for Linux x86-64
+and ARM64, macOS x86-64 and ARM64, and Windows x86-64, together with a source
+distribution.
+
+To retry publishing an existing release, dispatch Publish using its tag:
+
+```sh
+gh workflow run publish.yml --ref v2.0.0 -f target=all -f ref=v2.0.0
+```
+
+Use the intended version tag in place of `v2.0.0`. The other manual targets are
+`testpypi`, `pypi` and `crates`; every dispatch requires an existing tag or full
+commit SHA that identifies the same commit as the workflow branch or tag selected
+by `--ref`. Publish rejects mismatches and always checks out the workflow's exact
+commit, keeping executed package code aligned with the run's branch and cache
+scope. Re-running Release at the same commit also retries the publish
+dispatch. An existing version tag that points to a different commit is refused.
 
 ## Feature Golden Path
 
@@ -89,13 +148,13 @@ changes are advisory because shared runners can be noisy; use repeated local
 measurements to confirm a suspected regression. Raw stdout must be captured
 separately from stderr so Divan's timer diagnostics do not split a timing row.
 
-Changes to CI coverage or benchmark helpers have an independent gate that does
-not require the native extension:
+Changes to CI coverage, benchmark or release helpers have an independent gate
+that does not require the native extension:
 
 ```sh
 python -m unittest discover -s scripts/tests -v
-ruff format --check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
-ruff check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
+ruff format --check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/create_release.py scripts/tests/
+ruff check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/create_release.py scripts/tests/
 ```
 
 Before a PR or broad refactor:
