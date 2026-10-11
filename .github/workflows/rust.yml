@@ -60,6 +60,34 @@ jobs:
       - name: Run public Rust API integration tests
         run: cargo test --test '*' --no-default-features
 
+      - name: Verify the crates.io archive
+        run: |
+          cargo package --locked
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import tarfile
+          import tomllib
+
+          package = tomllib.loads(Path("Cargo.toml").read_text())["package"]
+          stem = f"{package['name']}-{package['version']}"
+          archive = Path("target/package") / f"{stem}.crate"
+          size = archive.stat().st_size
+          print(f"{archive}: {size:,} bytes")
+          if size > 10_000_000:
+              raise SystemExit("Crate archive exceeds the standard crates.io 10 MB limit")
+          destination = Path("target/package-tests")
+          with tarfile.open(archive) as source:
+              source.extractall(destination, filter="data")
+          with open(os.environ["GITHUB_ENV"], "a") as environment:
+              environment.write(f"PACKAGED_CRATE_DIR={destination.resolve() / stem}\n")
+          PY
+
+      - name: Run the packaged Rust tests
+        run: >-
+          CARGO_TARGET_DIR="$PWD/target" cargo test --locked --lib --tests
+          --no-default-features --manifest-path "$PACKAGED_CRATE_DIR/Cargo.toml"
+
   build-smoke:
     name: Wheel Numerical Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -207,9 +235,9 @@ jobs:
       - name: Clean old wheels
         run: rm -rf target/wheels || true
 
-      - name: Build and install
+      - name: Build from the source distribution and install
         run: |
-          maturin build --release --interpreter python --features extension-module,ml
+          maturin build --sdist --locked --release --interpreter python --features extension-module,ml
           pip install target/wheels/survival-*.whl
 
       - name: Run Python tests

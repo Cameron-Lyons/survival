@@ -153,13 +153,13 @@ jobs:
 
       - name: Check helper formatting
         run: >-
-          ruff format --check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
+          ruff format --check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/create_release.py scripts/tests/
 
       - name: Lint CI helpers
         run: >-
-          ruff check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/tests/
+          ruff check scripts/check_coverage.py scripts/compare_benchmarks.py scripts/create_release.py scripts/tests/
 
-      - name: Test coverage and benchmark gates without the extension
+      - name: Test CI helpers without the extension
         run: python -m unittest discover -s scripts/tests -v
 
   veto:
