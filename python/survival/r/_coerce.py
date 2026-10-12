@@ -370,9 +370,11 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
             try:
                 missing.update(compress(range(n), map(math.isnan, materialized)))
             except (TypeError, OverflowError):
-                missing.update(
-                    idx for idx, value in enumerate(materialized) if _row_has_missing(value)
-                )
+                types = set(map(type, materialized))
+                if not types <= {str, int, bool}:
+                    missing.update(
+                        idx for idx, value in enumerate(materialized) if _row_has_missing(value)
+                    )
             except UserWarning as warning:
                 if str(warning) != _MASKED_FLOAT_WARNING:
                     raise

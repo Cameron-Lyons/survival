@@ -8,7 +8,7 @@ import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from itertools import combinations, compress, product
+from itertools import combinations, compress, product, repeat
 from operator import add, mul, sub
 from typing import Any
 
@@ -25,7 +25,6 @@ from ._coerce import (
     _float_or_nan,
     _floats_or_nan,
     _hashable_group_value,
-    _is_bool_like,
     _is_missing_value,
     _keep_rows_after_na_action,
     _materialize_1d,
@@ -45,6 +44,7 @@ from ._coerce import (
     _warn_outside_package,
 )
 from ._expression import (
+    _all_logical,
     _evaluate_expression,
     _expression_label,
     _expression_source,
@@ -2232,16 +2232,12 @@ def _categorical_levels(values: list[Any], column: str) -> tuple[Any, ...]:
     """The distinct values of a categorical term in order of appearance; a missing
     value is not a level (R's ``factor()``)."""
 
-    labels: dict[Any, None] = {}
-    for value in values:
-        if _is_missing_value(value):
-            continue
-        try:
-            labels.setdefault(value, None)
-        except TypeError as exc:
-            message = f"categorical formula term {column!r} contains unhashable values"
-            raise TypeError(message) from exc
-    levels = tuple(labels)
+    try:
+        labels = dict.fromkeys(values)
+    except TypeError as exc:
+        message = f"categorical formula term {column!r} contains unhashable values"
+        raise TypeError(message) from exc
+    levels = tuple(value for value in labels if not _is_missing_value(value))
     if len(levels) < 2:
         raise ValueError(f"categorical formula term {column!r} must have at least two levels")
     return levels
@@ -2280,13 +2276,7 @@ def _fit_single_design_term(
         term.transform in {None, "I", "identity"}
         and term.categorical_wrapper is None
         and term.strata is None
-        and (
-            kind == "logical"
-            or (
-                any(_is_bool_like(value) for value in values)
-                and all(_is_bool_like(value) or _is_missing_value(value) for value in values)
-            )
-        )
+        and (kind == "logical" or _all_logical(values))
         and (
             term.arithmetic is not None
             or _mstate_categories(_column_source(data, term.column)) is None
@@ -2572,35 +2562,44 @@ def _single_design_columns(
         else _term_raw_values(data, spec.term, n)
     )
     levels = spec.levels
-    if any(isinstance(level, str) for level in levels):
-        values = [
-            value if isinstance(value, str) or _is_missing_value(value) else _as_character(value)
-            for value in values
-        ]
-    missing: list[int] = []
-    for row, value in enumerate(values):
-        if _is_missing_value(value):
-            missing.append(row)
-        elif all(value != level for level in levels):
-            raise ValueError(
-                f"newdata column {spec.term.column!r} contains unknown level {value!r}"
-            )
-    if missing:
-        values = list(values)
-        for row in missing:
-            values[row] = None
-    encoded_levels = levels if spec.full else levels[1:]
+    codes = _level_codes(values, levels, spec.term.column)
+    encoded = np.arange(0 if spec.full else 1, len(levels))
     if spec.contrasts and not spec.full:
-        lookup = dict(zip(levels, spec.contrasts, strict=True))
-        return [
-            [_NA_REAL if _is_missing_value(value) else lookup[value][j] for value in values]
-            for j in range(len(spec.contrast_names))
-        ]
-    columns = [[1.0 if value == level else 0.0 for value in values] for level in encoded_levels]
-    for column in columns:
-        for row in missing:
-            column[row] = _NA_REAL
-    return columns
+        contrasts = np.asarray(spec.contrasts, dtype=float).reshape(len(levels), -1)
+        matrix = np.vstack([contrasts, np.full(contrasts.shape[1], _NA_REAL)])[codes]
+    else:
+        matrix = (codes[:, None] == encoded[None, :]).astype(float)
+        matrix[codes < 0] = _NA_REAL
+    if as_arrays:
+        return list(matrix.T)
+    return matrix.T.tolist()
+
+
+def _level_codes(values: Sequence[Any], levels: Sequence[Any], column: str) -> np.ndarray:
+    """0-based codes of *values* in *levels*, -1 for a missing value. A value that is
+    not a level matches through R's ``as.character`` when the levels are strings."""
+
+    position: dict[Any, int] = {}
+    for index, level in enumerate(levels):
+        position.setdefault(level, index)
+    try:
+        codes = np.fromiter(map(position.get, values, repeat(-1)), dtype=np.intp, count=len(values))
+    except TypeError:
+        codes = np.full(len(values), -1, dtype=np.intp)
+    string_levels = any(isinstance(level, str) for level in levels)
+    for row in np.flatnonzero(codes < 0).tolist():
+        value = values[row]
+        if _is_missing_value(value):
+            continue
+        code = None
+        if string_levels and not isinstance(value, str):
+            code = position.get(_as_character(value))
+        if code is None:
+            code = next((index for index, level in enumerate(levels) if value == level), None)
+        if code is None:
+            raise ValueError(f"newdata column {column!r} contains unknown level {value!r}")
+        codes[row] = code
+    return codes
 
 
 def _design_term_columns(

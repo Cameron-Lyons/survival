@@ -172,9 +172,15 @@ def test_numeric_model_frame_owns_matrix_and_take_preserves_empty_columns():
     assert repeated.matrix_rows() == [[], [], []]
 
 
-@pytest.mark.parametrize(
-    "term", ["factor(rx)", "age * factor(rx)", "ridge(age, theta=1)", "tt(age)"]
-)
+@pytest.mark.parametrize("term", ["factor(rx)", "age * factor(rx)"])
+def test_factor_designs_are_arrays(term):
+    frame = model_frame._model_frame(f"Surv(futime, fustat) ~ {term}", _data(), as_array=True)
+    rows = model_frame._model_frame(f"Surv(futime, fustat) ~ {term}", _data())
+    assert isinstance(frame.x, np.ndarray)
+    np.testing.assert_array_equal(frame.x, np.asarray(rows.x, dtype=float))
+
+
+@pytest.mark.parametrize("term", ["ridge(age, theta=1)", "tt(age)"])
 def test_special_designs_keep_row_lists(term):
     frame = model_frame._model_frame(
         f"Surv(futime, fustat) ~ {term}", _data(), as_array=True, defer_tt=True
