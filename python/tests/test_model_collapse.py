@@ -88,8 +88,6 @@ def test_grouped_predictions_and_residuals_match_r(case):
             and fit.nvar == 1
             and not isinstance(reference_values[0], list)
         ):
-            # The Python partial-residual API retains its matrix shape; R drops
-            # a single column after rowsum. Compare that same column explicitly.
             reference_values = [[value] for value in reference_values]
         close(values, reference_values)
         names = expected["names"]
@@ -108,7 +106,7 @@ def test_cluster_and_id_factor_order_survive_subset_and_serialization():
     groups = RFactor(data["cl"], REFERENCE["levels"])
     for key in ("cluster", "id"):
         fit = r.coxph("Surv(futime,fustat)~x+rx", data, **{key: groups}, subset=list(range(20)))
-        restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 -- locally created bytes
+        restored = pickle.loads(pickle.dumps(fit))
         explicit = r.residuals(
             restored, type="dfbeta", collapse=RFactor(data["cl"][:20], REFERENCE["levels"])
         )

@@ -81,7 +81,6 @@ def test_na_action_accepts_r_style_names_and_rejects_non_strings():
 
 
 def test_as_character_renders_numbers_like_r():
-    # as.character(c(1, 1.5, 100000, 123456, 1e-4, 1/3, TRUE))
     assert [r_coerce._as_character(v) for v in [1.0, 1.5, 100000.0, 123456.0, 1e-4]] == [
         "1",
         "1.5",
@@ -95,13 +94,11 @@ def test_as_character_renders_numbers_like_r():
     assert r_coerce._as_character(7) == "7"
     assert r_coerce._as_character(None) == "NA"
     assert r_coerce._as_character("x") == "x"
-    # the older helper names are aliases of the same function
     assert r_coerce._strata_value_label is r_coerce._as_character
     assert r_coerce._mstate_event_label is r_coerce._as_character
 
 
 def test_format_numbers_uses_a_common_layout_like_r():
-    # R's format(c(1.5, 2.25, 10)); format(1/3); format(c(0.001, 1e6)); format(100000)
     assert r_coerce._r_format_numbers([1.5, 2.25, 10]) == [" 1.50", " 2.25", "10.00"]
     assert r_coerce._r_format_numbers([1, 2, 3]) == ["1", "2", "3"]
     assert r_coerce._r_format_number(1 / 3) == "0.3333333"

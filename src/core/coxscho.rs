@@ -1,17 +1,3 @@
-//! Schoenfeld residuals of a Cox model.
-//!
-//! `coxscho` is the port of `coxscho.c` (survival 3.8-12): for each death
-//! the residual is `x - xbar(t)`, the covariate minus its risk-weighted mean
-//! over the risk set, and with Efron ties the mean is averaged over the
-//! tied-death pseudo risk sets, `xbar = mean_j (a - j/d a2) / (denom - j/d
-//! efron_wt)`.  The C code rescans the stratum for every death time
-//! (`O(deaths x n)`); the port accumulates the same sums in one backward
-//! sweep per stratum (`crate::core::risk_sweep`), the walk `zph1.c` and
-//! `agfit4.c` use, which changes nothing but the summation order.
-//! [`schoenfeld_residuals`] adds the argument checks of `residuals.coxph`
-//! and the R convention that the risk score passed down is
-//! `exp(eta) * weight`.
-
 use crate::core::risk_sweep::StratumSweep;
 use crate::core::strata_order::{SurvResponse, order_within_strata};
 use crate::error::SurvivalResult;
@@ -22,28 +8,24 @@ use crate::scoring::validate_score_inputs;
 use ndarray::ArrayView2;
 use pyo3::prelude::*;
 
-/// Schoenfeld residuals, one row per event in order of (stratum, time).
+#[doc = " Schoenfeld residuals, one row per event in order of (stratum, time)."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct CoxschoResiduals {
-    /// Event time of each row.
+    #[doc = " Event time of each row."]
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Row index into the input data of each event.
+    #[doc = " Row index into the input data of each event."]
     #[pyo3(get)]
     pub index: Vec<usize>,
-    /// Stratum label of each event.
+    #[doc = " Stratum label of each event."]
     #[pyo3(get)]
     pub strata: Vec<i32>,
-    /// `n_events x p` residual matrix `x - xbar(t)` (unweighted).
+    #[doc = " `n_events x p` residual matrix `x - xbar(t)` (unweighted)."]
     #[pyo3(get)]
     pub residuals: Vec<Vec<f64>>,
 }
 
-/// Schoenfeld residuals for right-censored or (start, stop] data.
-/// `covariates` is `n x p`, `score` is `exp(eta)`, and the weights, when
-/// given, enter the risk-set means as `exp(eta) * weight`.  As in R, an
-/// exact fit has no Schoenfeld residuals.
 pub fn schoenfeld_residuals(
     response: SurvResponse<'_>,
     covariates: ArrayView2<'_, f64>,
@@ -79,9 +61,6 @@ pub fn schoenfeld_residuals(
     ))
 }
 
-/// `coxscho.c` on validated, unsorted rows.  Strata are labels; the deaths
-/// come out in `order(strata, stop)` with tied deaths in row order, the
-/// order `residuals.coxph` reports.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn coxscho(
     start: Option<&[f64]>,
@@ -115,7 +94,6 @@ pub(crate) fn coxscho(
             rows: &order[first..last],
             second_moments: false,
         };
-        // The sweep visits death times from the largest down.
         let mut per_stratum: Vec<(usize, Vec<f64>)> = Vec::new();
         sweep.for_each_death_time(|death| {
             let steps = steps_of(death.ndead());
@@ -174,9 +152,7 @@ mod tests {
         .unwrap();
         assert_eq!(out.time, vec![1.0, 2.0, 3.0]);
         assert_eq!(out.index, vec![1, 3, 0]);
-        // t = 1: everyone at risk.
         let xbar1 = (1.0 + 4.0 + 1.5 + 6.0) / 5.0;
-        // t = 2: rows with stop >= 2.
         let xbar2 = (1.0 + 1.5 + 6.0) / 3.0;
         let expected = [2.0 - xbar1, 4.0 - xbar2, 1.0 - 1.0];
         for (row, expected) in expected.iter().enumerate() {
@@ -200,8 +176,6 @@ mod tests {
             TieMethod::Efron,
         )
         .unwrap();
-        // First pseudo set: all three (mean 1); second: deaths down-weighted
-        // by 1/2 -> (0.5*0 + 0.5*1 + 2) / 2 = 1.25; average 1.125.
         let mean = (1.0 + 1.25) / 2.0;
         assert!((out.residuals[0][0] - (0.0 - mean)).abs() < 1e-12);
         assert!((out.residuals[1][0] - (1.0 - mean)).abs() < 1e-12);
@@ -246,7 +220,6 @@ mod tests {
             TieMethod::Breslow,
         )
         .unwrap();
-        // Subject 1 enters at 1.5, so the risk set at time 1 is {0, 2}.
         assert!((out.residuals[0][0] - (0.0 - 2.0)).abs() < 1e-12);
         assert!((out.residuals[1][0] - (2.0 - 3.0)).abs() < 1e-12);
     }

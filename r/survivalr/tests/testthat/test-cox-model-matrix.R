@@ -57,8 +57,6 @@ test_that("dense frailty matrices retain full fitted contrasts and factor order"
     .matrix_compare(model.matrix(actual), expected$x)
     Terms <- delete.response(terms(expected))
     frame <- suppressWarnings(model.frame(Terms, nd, xlev = expected$xlevels))
-    # Stock model.matrix.coxph misspells contrasts.arg in the strata branch.
-    # The ordinary stats constructor independently retains fitted contrasts.
     full <- stats::model.matrix(Terms, frame, contrasts.arg = expected$contrasts)
     assign <- attr(full, "assign")
     fixed <- full[, !assign %in% c(0L, 2L), drop = FALSE]

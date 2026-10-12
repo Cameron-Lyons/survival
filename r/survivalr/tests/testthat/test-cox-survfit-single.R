@@ -42,8 +42,6 @@ capture <- function(expr) tryCatch(list(value=force(expr)),error=function(e)list
         testthat::expect_identical(dim(object),dim(expected$value),info=info)
         names <- c("time","n","n.risk","n.event","n.censor","surv","cumhaz","std.err",
           "std.chaz","lower","upper","newdata","start.time","strata")
-        # Stock aggregate retains stale cumulative-hazard uncertainty columns;
-        # the existing Python aggregate clears them deliberately.
         if (source == "aggregated") names <- setdiff(names,"std.chaz")
         for(name in names)
           testthat::expect_equal(fields[[name]],expected$value[[name]],tolerance=2e-12,

@@ -89,7 +89,6 @@ class TestSurvreg:
 
         result = _survreg(time, status, X, "weibull")
 
-        # survreg(Surv(1:5, rep(1, 5)) ~ 1): (Intercept), Log(scale), scale, loglik
         assert isinstance(result, _surv.SurvregFit)
         assert result.coefficients == pytest.approx(
             [1.2220948192663361, np.log(0.43595653120301259)]
@@ -101,8 +100,6 @@ class TestSurvreg:
         assert result.distribution.name == "Weibull"
 
 
-# R: d <- data.frame(t = 1:8, s = c(1,1,0,1,1,1,0,1), x = c(.5,.2,.9,.1,.7,.3,.8,.4))
-#    survreg(Surv(t, s) ~ x, d, dist = <dist>); predict(newdata = data.frame(x = c(.25, .75)))
 _TOY_X = np.array([[0.5], [0.2], [0.9], [0.1], [0.7], [0.3], [0.8], [0.4]], dtype=np.float64)
 _TOY_Y = np.column_stack([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], [1, 1, 0, 1, 1, 1, 0, 1]])
 _TOY_NEW = np.array([[0.25], [0.75]], dtype=np.float64)
@@ -154,11 +151,9 @@ class TestAFTEstimatorAgainstR:
         assert model.converged_
         assert model.model_.log_likelihood == pytest.approx(reference["loglik"])
 
-        # type = "response": exp(lp) for the log-transformed distributions, lp otherwise
         assert model.predict(_TOY_NEW) == pytest.approx(reference["response"])
         assert model.predict_median(_TOY_NEW) == pytest.approx(reference["q50"])
         assert model.predict_quantile(_TOY_NEW, q=0.9) == pytest.approx(reference["q90"])
-        # concordance(fit): larger predicted time goes with longer survival
         assert model.score(_TOY_X, _TOY_Y) == pytest.approx(0.68181818181818188)
 
     def test_untransformed_distributions_are_not_exponentiated(self):
@@ -291,7 +286,6 @@ class TestAFTEstimator:
             model.predict_quantile(X[:2], q=q)
 
     def test_extreme_value_predictions_match_r_survreg(self):
-        # R survival 3.8.11: survreg(Surv(time, status) ~ x, dist="extreme").
         X = np.array([[-2.0], [-1.0], [0.0], [0.0], [1.0], [2.0]])
         y = np.column_stack([[-3.0, -2.1, -0.2, 0.0, 0.7, 1.8], np.ones(6)])
         model = AFTEstimator(distribution="extreme", tol=1e-12).fit(X, y)
@@ -343,7 +337,6 @@ class TestAFTEstimator:
         y = np.column_stack([[-3.0, -2.1, -0.2, 0.0, 0.7, 1.8], np.ones(6)])
         model = AFTEstimator(distribution="gaussian").fit(X, y)
 
-        # All 15 pairs are concordant except the pair tied at x=0, which gets half credit.
         assert model.score(X, y) == pytest.approx(29.0 / 30.0)
 
     def test_acceleration_factors(self):

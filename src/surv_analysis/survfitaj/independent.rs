@@ -1,15 +1,6 @@
-//! Independent competing-risk IJ from departed influence moments.
-//!
-//! All rows still at risk have influence equal to their normalized weight
-//! times a shared coefficient. Departed rows only undergo the AJ transition
-//! and area updates. Small triangular QR factors retain their second moments
-//! without subtracting nearly equal squares or storing one vector per row.
-
 use super::AJKernelData;
 use ndarray::Array2;
 
-/// Upper triangular factor of a Gram matrix; three columns suffice for
-/// [source probability influence, target probability influence, target area].
 #[derive(Clone, Copy)]
 struct Moments<const N: usize> {
     factor: [[f64; N]; N],
@@ -65,8 +56,6 @@ struct Influence {
 }
 
 fn safe_variance_norm(norm: f64) -> bool {
-    // R's general IJ squares row influences. Retain its overflow and
-    // underflow behavior rather than changing missing confidence limits.
     norm == 0.0 || (norm >= f64::MIN_POSITIVE.sqrt() && norm <= f64::MAX.sqrt())
 }
 
@@ -151,8 +140,6 @@ impl Influence {
     }
 }
 
-/// `None` retains the general IJ for clusters, delayed entry, initial-state
-/// uncertainty, explicit influences, and inputs outside finite moment arithmetic.
 pub(super) fn estimates(
     d: &AJKernelData<'_>,
     risk: &Array2<f64>,
@@ -182,8 +169,6 @@ pub(super) fn estimates(
     let only_destination = destinations
         .next()
         .filter(|&destination| destinations.all(|other| other == destination));
-    // Backwards norms avoid cancellation after a heavy subject exits and
-    // avoid overflow/underflow from explicitly squaring normalized weights.
     let mut risk_norm = vec![0.0_f64; d.sort2.len() + 1];
     for position in (0..d.sort2.len()).rev() {
         let weight = d.wt[d.sort2[position]];
@@ -225,8 +210,6 @@ pub(super) fn estimates(
         let denominator = risk[[time_index, origin]];
         let event = d.sort2[position..end].iter().any(|&row| d.state[row] > 0);
         if !denominator.is_finite() || (event && denominator <= 0.0) {
-            // R's zero-weight events on an empty weighted risk set produce
-            // NaN standard errors. Preserve this with its general calculation.
             return None;
         }
         let inverse = if event {
@@ -253,8 +236,6 @@ pub(super) fn estimates(
             if events > 0.0 {
                 let increment = events / risk[[time_index, from]];
                 if !(increment / risk[[time_index, from]]).is_finite() {
-                    // Normalization must preserve missing values caused by
-                    // overflow in the general kernel's scaled hazard.
                     return None;
                 }
                 let derivative = increment * inverse;
@@ -316,21 +297,11 @@ pub(super) fn estimates(
             result.std_err[[time_index, state]] = se;
             result.std_auc[[time_index, state]] = area_se;
         }
-        // With a single destination its influence is exactly the negative
-        // of the source influence, including when p0 is nondegenerate.
-        // Retain that identity through complete absorption rather than
-        // introducing residual variance through independent QR updates.
         if let Some(destination) = only_destination {
             result.std_err[[time_index, destination]] = result.std_err[[time_index, origin]];
             result.std_auc[[time_index, destination]] = result.std_auc[[time_index, origin]];
         }
         if change[origin] == -1.0 {
-            // Complete absorption annihilates previous source influences.
-            // Check the current-row arithmetic in its original order: a
-            // residual of a single ulp can change log confidence limits,
-            // including when the probability itself rounded below zero.
-            // Use the general kernel when the exact-zero error mask differs,
-            // even if the errors agree numerically.
             let mut squared = 0.0;
             for &row in &d.sort2[start..] {
                 let mut value = 0.0;
@@ -517,8 +488,6 @@ mod tests {
         }
         assert_eq!(influence.source.norm(0), 0.0);
 
-        // Complete absorption leaves a zero source pivot, while existing
-        // target and area columns continue to contain departed influence.
         let probability = [-0.4, 0.0, 0.4, 0.0];
         let area = [0.75, -0.25, -0.5, 0.0];
         influence.source.add([probability[origin], area[origin]]);

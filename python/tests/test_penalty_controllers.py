@@ -71,7 +71,7 @@ def test_controller_search_agrees_with_fixed_final_penalty():
     with ThreadPoolExecutor(2) as pool:
         fits = list(pool.map(lambda _: fit_aft(value), range(2)))
     assert fits[0].coefficients == fits[1].coefficients
-    restored = pickle.loads(pickle.dumps(value))  # noqa: S301 - own round-trip state
+    restored = pickle.loads(pickle.dumps(value))
     np.testing.assert_allclose(fit_aft(restored).coefficients, fit.coefficients)
 
 
@@ -86,7 +86,7 @@ def test_cox_controller_uses_event_count_and_shared_outer_search():
     np.testing.assert_allclose(actual.var, expected.var, atol=2e-8)
     assert actual.iter[0] == 2
     np.testing.assert_allclose(np.asarray(actual.history[0].history)[:, 2], sum(Y[:, 1]))
-    assert pickle.loads(pickle.dumps(actual)).coefficients == actual.coefficients  # noqa: S301
+    assert pickle.loads(pickle.dumps(actual)).coefficients == actual.coefficients
 
 
 def fixed_controller(old, info):
@@ -168,7 +168,7 @@ def test_controller_state_is_released_with_compact_result():
     gc.collect()
     assert weak
     assert all(value() is None for value in weak)
-    assert pickle.loads(pickle.dumps(fit)).coefficients == fit.coefficients  # noqa: S301
+    assert pickle.loads(pickle.dumps(fit)).coefficients == fit.coefficients
 
 
 @pytest.mark.parametrize(
@@ -212,7 +212,7 @@ def test_fitting_variance_receives_null_fit_scale_and_survives_pickle():
     assert len(values) == 1
     assert values[0] > 0
     np.testing.assert_allclose(actual.coefficients, expected.coefficients, atol=1e-9)
-    assert pickle.loads(pickle.dumps(actual)).coefficients == actual.coefficients  # noqa: S301
+    assert pickle.loads(pickle.dumps(actual)).coefficients == actual.coefficients
 
 
 def fitting_variance(scale_squared, parms):
@@ -240,8 +240,7 @@ def test_fitting_variance_distribution_pickle_and_validation():
         parms=[1.0],
         parm_names=["variance"],
     )
-    # The hook survives independently of any fitted model.
-    restored = pickle.loads(pickle.dumps(distribution))  # noqa: S301
+    restored = pickle.loads(pickle.dumps(distribution))
     actual = r.survpenal_fit(
         X, Y, dist=restored, pcols=[[1]], pattr=[regression.CoxPenalty.ridge(theta=1, scale=False)]
     )

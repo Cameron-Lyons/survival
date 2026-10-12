@@ -38,9 +38,6 @@ def test_strata_interaction_fits_and_predictions_match_r(case):
     assert_close(prediction.fit, case["prediction"])
     assert_close(prediction.se_fit, case["prediction_se"])
     if case["kind"] == "coxph" and (case["prediction_error"] or isinstance(case["terms"], dict)):
-        # R's predict.coxph drops a column by term number after a multi-column
-        # factor. LP prediction errors; term prediction silently uses wrong
-        # columns. The fixture also records the correct R model.matrix result.
         assert_close(
             r.predict(fit, REFERENCE["newdata"], type="terms"), case["terms_from_model_matrix"]
         )
@@ -124,8 +121,6 @@ def test_survreg_term_selection_skips_all_scale_strata():
 
 
 def test_aliased_strata_factor_zph_has_the_same_global_test():
-    # R's cox.zph errors for the redundant full indicators, though its
-    # treatment-coded equivalent has the same four estimable effects.
     fit = r.coxph("Surv(time,status) ~ strata(sex):factor(ph.ecog)", REFERENCE["data"])
     table = r.cox_zph(fit).table[-1]
     equivalent = next(case for case in REFERENCE["cases"] if case["name"] == "factor_star")

@@ -136,12 +136,6 @@ def _column_expression(name: str) -> str:
     return "`" + name.replace("\\", "\\\\").replace("`", "\\`") + "`"
 
 
-# ---------------------------------------------------------------------------
-# The formula tokenizer: one scanner that knows about parentheses, backtick
-# names and string literals, and the splitters built on it.
-# ---------------------------------------------------------------------------
-
-
 def _scan(text: str, *, quotes: bool = True) -> list[tuple[int, str, int]]:
     """Every character of *text* outside backtick names (and string literals) with its depth.
 
@@ -328,7 +322,6 @@ def _is_exponent_sign(text: str, idx: int) -> bool:
     mantissa = text[start : idx - 1]
     if not any(char.isdigit() for char in mantissa):
         return False
-    # a mantissa that ends a name (x1e-3) is the name minus a number
     return start == 0 or not (text[start - 1].isalnum() or text[start - 1] in "._")
 
 
@@ -374,7 +367,7 @@ def _parse_formula_literal(value: str) -> Any:
         lowered = value.lower()
 
     try:
-        if "_" in value:  # a Python digit separator, not R
+        if "_" in value:
             raise ValueError(value)
         numeric = float(value)
     except ValueError as exc:
@@ -476,7 +469,6 @@ def _compare_response_values(left: Any, operator: str, right: Any) -> bool | Non
     if _is_missing_value(left) or _is_missing_value(right):
         return None
     if isinstance(left, str) or isinstance(right, str):
-        # R orders strings by the locale's collation (and a factor not at all)
         if operator not in {"==", "!="}:
             raise ValueError(
                 f"formula comparison {operator!r} of character or factor values is not supported"
@@ -974,8 +966,6 @@ def _expression_columns(expression: str) -> list[str]:
     return list(_parse_expression(expression).columns)
 
 
-# The calls formula arithmetic evaluates: R's functions of one numeric argument and
-# the wrappers that return theirs unchanged.
 _NUMERIC_CALLS = ("log", "sqrt", "exp", "I", "identity", "as.numeric")
 
 
@@ -991,7 +981,6 @@ def _r_literal(text: str) -> Any:
     if text == "Inf":
         return math.inf
     number = text.removesuffix("L")
-    # float() also reads Python's digit separators (1_000), which R does not
     if not number or not (number[0].isdigit() or number[0] == ".") or "_" in number:
         return None
     try:
@@ -1053,12 +1042,6 @@ def _expression_values(data: Any, expression: str, n: int) -> _ExpressionVector:
     )
 
 
-# ---------------------------------------------------------------------------
-# Literal vectors: the R vectors formula arguments spell out (cut breaks and
-# labels, penalty options), evaluated from literals only, never with eval.
-# ---------------------------------------------------------------------------
-
-
 def _literal_vector(expression: str) -> list[Any]:
     """The R vector *expression* writes with literals only.
 
@@ -1075,7 +1058,6 @@ def _literal_vector(expression: str) -> list[Any]:
         return [text == "T"]
     if text == "NULL":
         return []
-    # split at the operator R binds loosest: + -, then * /, :, a sign, ^
     for operators in ({"+", "-"}, {"*", "/"}):
         split = _find_top_level_arithmetic_operator(text, operators, quotes=True)
         if split is not None:
@@ -1135,7 +1117,6 @@ def _vector_arithmetic(left: Sequence[Any], operator: str, right: Sequence[Any])
     return [function(x[i % len(x)], y[i % len(y)]) for i in range(max(len(x), len(y)))]
 
 
-# C's FLT_EPSILON, the fuzz seq.c's seq_colon adds to the length of from:to
 _FLT_EPSILON = 2.0**-23
 
 
@@ -1167,7 +1148,6 @@ def _seq_length(start: float, stop: float, count: int) -> list[float]:
     return [start, *(start + i * by for i in range(1, count - 1)), stop]
 
 
-# seq.default's formals before its ``...``
 _SEQ_FORMALS = ("from", "to", "by", "length.out", "along.with")
 
 
@@ -1178,12 +1158,10 @@ def _r_seq(arguments: Sequence[str]) -> list[float]:
     matched = _match_arguments("seq", arguments, _SEQ_FORMALS, dots=extra)
     given = {name: _literal_vector(value) for name, value in matched.items()}
     if extra:
-        # R's chkDots: the arguments in seq.default's ... are dropped with a warning
         names = ", ".join(f"'{name}'" for name in extra)
         plural = "s" if len(extra) > 1 else ""
         _warn_outside_package(f"extra argument{plural} {names} will be disregarded")
     elif set(given) == {"from"}:
-        # seq(n) is 1:n, seq(x) of a vector 1:length(x) (R's nargs() == 1)
         only = given["from"]
         if len(only) != 1:
             return _seq_len(len(only))
@@ -1543,7 +1521,6 @@ def _with_evaluated_variables(data: Any, variables: Iterable[_CovariateTerm], n:
         )
     cache = getattr(data, "variable_cache", None)
     if cache is None:
-        # Older saved frames have no variable-cache slot value.
         cache = data.variable_cache = {}
     for term in variables:
         if term not in cache:
@@ -1828,8 +1805,6 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
 
     term_name, quoted = _formula_name(term)
     if _unsupported_formula_name(term_name, quoted):
-        # Logical formula expressions use vector operators, including R's !
-        # precedence below comparison. Arithmetic outside calls is terms algebra.
         try:
             tree = _parse_expression(term)
         except ValueError as exc:
@@ -1867,8 +1842,6 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
         try:
             options[name] = _parse_formula_literal(value)
         except ValueError:
-            # R has no scalars: a vector of length one (df = c(4), theta = 1/2,
-            # method = c("aic")) is the scalar the penalty takes
             values = _literal_vector(value)
             options[name] = values[0] if len(values) == 1 else values
     if not columns:
@@ -1876,7 +1849,6 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
     return columns, options
 
 
-# The formals of the categorising calls pyears evaluates, in R's order
 _CALL_FORMALS = {
     "tcut": ("x", "breaks", "labels", "scale"),
     "cut": ("x", "breaks", "labels", "include.lowest", "right", "dig.lab", "ordered_result"),
@@ -1973,7 +1945,6 @@ class _FormulaExpansion:
                 else:
                     _append_unique(result, expanded)
             return result
-        # Also discard a leading unary plus.
         term = tokens[0][1]
         literal = _r_literal(term)
         if isinstance(literal, (int, float)) and not isinstance(literal, bool):
@@ -1982,7 +1953,6 @@ class _FormulaExpansion:
             self.intercept = negative if literal == 0 else not negative
             return []
 
-        # Lowest precedence first; * and / associate from the left.
         binary = _find_top_level_arithmetic_operator(term, {"*", "/"})
         if binary is not None:
             left, op, right = binary
@@ -1993,7 +1963,6 @@ class _FormulaExpansion:
                 _append_unique(result, rhs)
                 combined = [_interaction_from_terms((a, b)) for a, b in product(lhs, rhs)]
             else:
-                # (a + b)/c nests c within the joint a:b group.
                 combined = [_interaction_from_terms((*lhs, b)) for b in rhs]
             _append_unique(result, combined)
             return result
@@ -2064,8 +2033,6 @@ def _split_terms_cached(
         for item in parsed_terms
     ]
 
-    # R's terms() records offsets and model-frame variables before term removal.
-    # An offset always contributes once, even in an interaction or a subtraction.
     offsets = [replace(term, special=None) for term in variables if term.special == "offset"]
     _append_unique(model_terms, [_ModelOffsetTerm(term) for term in offsets])
     cluster_terms = [term for term in variables if term.special == "cluster"]
@@ -2084,8 +2051,6 @@ def _split_terms_cached(
             covered.add(factors)
         if _ModelClusterTerm(cluster_term) not in model_terms:
             raise ValueError("invalid model formula in ExtractVars")
-        # coxph/survreg remove the cluster main term and rebuild the formula.
-        # This also resets variable order and discards unused frame variables.
         variables = []
         for item in sorted(model_terms, key=_formula_model_term_degree):
             if isinstance(item, _ModelCovariateTerm):
@@ -2109,8 +2074,6 @@ def _split_terms_cached(
 
 
 def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
-    # R's comparisons bind looser than + and -, so ~ age > 60 + sex is the single
-    # term age > (60 + sex); refuse the mixed form rather than fit another model
     if len(_formula_tokens(rhs)) > 1 and any(
         rhs.startswith(op, idx) for idx, _char in _top_level(rhs) for op in ("==", "!=", "<", ">")
     ):
@@ -2217,7 +2180,6 @@ def _numeric_variable(
     if key in cache:
         values = cache[key]
         if not term.categorical and term.transform not in {None, "I", "identity"}:
-            # Numeric transforms already produced floats; reuse them directly.
             return values
         return _floats_or_nan(values)
     return _floats_or_nan(_term_values(data, term, n))
@@ -2297,8 +2259,6 @@ def _fit_single_design_term(
     full_data: Any,
 ) -> _SingleDesignTerm:
     if term.transform == "tt":
-        # The callback, after risk-set expansion, determines this variable's
-        # type and width. Its input need not be a numeric design column.
         return _NumericDesignTerm(term)
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         columns, options = _penalty_arguments(term.call)
@@ -2318,8 +2278,6 @@ def _fit_single_design_term(
         if array is not None and array.dtype.kind in "iuf" and _mstate_categories(source) is None:
             if len(array) != n:
                 raise ValueError("formula columns must have the same length as the Surv response")
-            # Numeric dtypes already declare this term's type. Avoid materializing
-            # and scanning its scalars before constructing the list-valued design.
             return _NumericDesignTerm(term)
     values = _term_values(data, term, n)
     kind = getattr(values, "kind", None)
@@ -2339,8 +2297,6 @@ def _fit_single_design_term(
             or _mstate_categories(_column_source(data, term.column)) is None
         )
     ):
-        # R model.matrix treats logical variables as factors with both levels,
-        # even when only TRUE or FALSE remains after subset/NA omission.
         return _CategoricalDesignTerm(term, (False, True))
     if kind == "factor":
         levels = tuple(getattr(values, "categories", None) or ())
@@ -2526,8 +2482,6 @@ def _design_contrasts(
         )
         raw_factors = frozenset(factor.term for factor in factors)
         categorical_factors = _categorical_design_factors(fitted_term)
-        # R's TermCode accepts a margin contained in an earlier term, even
-        # when that margin has no standalone term of its own.
         full_factors = {
             factor.term
             for factor in categorical_factors
@@ -2573,8 +2527,6 @@ def _single_design_columns(
         if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
         if allow_missing and spec.kind == "ridge":
-            # Ridge's basis is its input matrix. Keep missing kinds and complete
-            # columns independently instead of marking an entire row as NA.
             return [_floats_or_nan(values) for values in penalty_values.values()]
         if allow_missing:
             missing_penalty_rows = _missing_row_indices(list(penalty_values.items()), n)
@@ -2624,7 +2576,6 @@ def _single_design_columns(
         else _term_raw_values(data, spec.term, n)
     )
     levels = spec.levels
-    # model.matrix of an na.pass frame: a missing value is NA in every column
     missing: list[int] = []
     for row, value in enumerate(values):
         if _is_missing_value(value):
@@ -2634,7 +2585,6 @@ def _single_design_columns(
                 f"newdata column {spec.term.column!r} contains unknown level {value!r}"
             )
     if missing:
-        # Nullable pandas scalars cannot participate in boolean comparisons.
         values = list(values)
         for row in missing:
             values[row] = None
@@ -2680,8 +2630,6 @@ def _design_term_columns(
             column_combo = tuple(reversed(reversed_combo))
             if as_arrays:
                 values = np.ones(n, dtype=float)
-                # Match math.prod's left-to-right float multiplication, including
-                # signed zero and NaNs, without NumPy's arithmetic warnings.
                 with np.errstate(over="ignore", under="ignore", invalid="ignore"):
                     for column in column_combo:
                         np.multiply(values, column, out=values)
@@ -2865,8 +2813,6 @@ def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     if isinstance(data, _FormulaRows) or hasattr(data, "columns"):
         return _data_row_count(data)
     if isinstance(data, Mapping):
-        # A variable-free R model.frame cannot infer rows from unused list
-        # columns. Data frames above carry an explicit row count instead.
         return 0
     raise ValueError("newdata must include at least one column")
 
@@ -2903,15 +2849,9 @@ def _column_or_values(data: Any, values: Any, name: str) -> Any:
     if isinstance(values, str):
         if data is None:
             raise ValueError(f"{name} column lookup requires data")
-        # Cluster factor levels determine the order of grouped influence rows.
         return _column_source(data, values) if name == "cluster" else _column(data, values)
     return values
 
-
-# ---------------------------------------------------------------------------
-# model.frame: the one path from (formula, data, subset, na.action, weights,
-# ...) to a row-aligned frame that every fitter starts from.
-# ---------------------------------------------------------------------------
 
 _MODEL_FRAME_ARGUMENTS = ("weights", "offset", "id", "cluster", "istate")
 
@@ -2936,12 +2876,6 @@ def _surv2_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv2:
     time, event = _formula_response_values(data, spec)
     return Surv2(time, event, spec.repeated)
 
-
-# ---------------------------------------------------------------------------
-# Timeline data: R's surv2counting (R/fromtimeline.R), which coxph, survfit,
-# survcheck and fromtimeline run on the model frame of a Surv2 response
-# before its na.action.
-# ---------------------------------------------------------------------------
 
 _TSTART, _TSTOP, _STATUS = "(tstart)", "(tstop)", "(status)"
 
@@ -2989,7 +2923,6 @@ def _timeline_counting(
         if repeated is None:
             repeated = response.repeated
     else:
-        # fromtimeline's Surv(time, status) form of a timeline
         response = _surv_from_spec(data, spec)
         if response.type in {"counting", "mcounting"}:
             raise ValueError("response cannot be of counting process type")
@@ -3015,7 +2948,6 @@ def _timeline_counting(
     variables = _data_order(data, model_columns + terms.clusters)
     sources = {name: _column_source(data, name) for name in variables}
     carried = set(variables if carry_clusters else model_columns)
-    # the variables to carry forward: those with a missing value
     masks: dict[str, list[bool]] = {}
     if lvcf:
         for name, source in sources.items():
@@ -3110,8 +3042,6 @@ def _numeric_response(data: Any, spec: _SurvResponseSpec, n: int) -> list[float]
             or isinstance(values[0], np.ndarray)
             and values[0].ndim == 1
         ):
-            # Guard the whole response once: ordinary matrix rows retain the
-            # fast float map, while mixed masked scalars become R NA silently.
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "error",
@@ -3195,7 +3125,6 @@ def model_frame(
     if extra is not None:
         for name in extra_names:
             value = extra[name]
-            # Rate-table matching validates declared levels, including unused ones.
             arguments[name] = _column_source(data, value) if isinstance(value, str) else value
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
@@ -3301,8 +3230,6 @@ def _parse_strata(call: str) -> _StrataSpec:
         arguments.append((_formula_name(label)[0], variable))
     if not arguments:
         raise ValueError("strata() requires at least one column")
-    # Match the existing normalized label for plain strata(a,b); preserve the
-    # expressions/options as written, as with other formula calls.
     label = f"strata({', '.join(_formula_response_parts(call[7:-1]))})"
     return _StrataSpec(
         call=label,
@@ -3335,8 +3262,6 @@ def _strata_argument_values(data: Any, term: _CovariateTerm, n: int) -> Any:
         values = _column_source(data, term.column)
     else:
         values = _term_values(data, term, n)
-        # Numeric input NaN represents R's NA throughout the Python API, but
-        # arithmetic can create a distinct R NaN. factor() makes that a level.
         created = {
             i for i, value in enumerate(values) if isinstance(value, float) and math.isnan(value)
         }
@@ -3563,5 +3488,4 @@ def _model_strata(
     ]
     if not variables:
         return None
-    # strata(mf[ovars]) hands R a named list, so the labels are never shortened
     return _strata(variables, shortlabel=False)

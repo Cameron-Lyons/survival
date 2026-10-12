@@ -1,31 +1,21 @@
-//! R's `aeqSurv` (`R/aeqSurv.R`): treat time values that differ by less
-//! than a tolerance as tied, using the same decision as `all.equal`.
-//!
-//! This is the one definition of "timefix" in the crate: routines with a
-//! `timefix` argument call [`aeq_times`] (one time column) or [`aeq_surv`]
-//! (a `Surv` object) rather than comparing times with an epsilon.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-/// R's default `tolerance = sqrt(.Machine$double.eps)`.
 pub const DEFAULT_TOLERANCE: f64 = 1.4901161193847656e-8;
 
-/// The time columns of a `Surv` object after `aeqSurv`.
+#[doc = " The time columns of a `Surv` object after `aeqSurv`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct AeqSurvResult {
-    /// The (first) time column with near ties collapsed.
+    #[doc = " The (first) time column with near ties collapsed."]
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// The second time column of counting-process data.
+    #[doc = " The second time column of counting-process data."]
     #[pyo3(get)]
     pub time2: Option<Vec<f64>>,
 }
 
-/// The unique finite times with near ties removed (R's `cuts`), or `None`
-/// when no two values are within the tolerance and nothing needs to change.
 fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
     let mut y: Vec<f64> = columns
         .iter()
@@ -41,9 +31,6 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
     let mean_abs = if total_abs.is_finite() {
         total_abs / y.len() as f64
     } else {
-        // The mean of finite magnitudes is finite even if their sum overflows.
-        // An infinite denominator would turn every finite gap into a near tie.
-        // Scale only on overflow to preserve the ordinary arithmetic exactly.
         let largest = y[0].abs().max(y[y.len() - 1].abs());
         let scaled_sum = y.iter().map(|v| v.abs() / largest).sum::<f64>();
         (scaled_sum / y.len() as f64) * largest
@@ -62,9 +49,6 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
     any_tied.then_some(cuts)
 }
 
-/// The largest finite cut not above `x`. Nonfinite endpoints remain unchanged:
-/// applying R's finite-cut indexing to them truncates positive infinity and
-/// drops negative-infinity rows when the resulting zero index is subscripted.
 fn snap(x: f64, cuts: &[f64]) -> f64 {
     if !x.is_finite() {
         return x;
@@ -77,8 +61,6 @@ fn snap(x: f64, cuts: &[f64]) -> f64 {
     }
 }
 
-/// `aeqSurv` for a right-censored (`time`) or counting-process (`time`,
-/// `time2`) response.  With `tolerance <= 0` nothing is changed.
 pub fn aeq_surv(
     time: &[f64],
     time2: Option<&[f64]>,
@@ -108,7 +90,6 @@ pub fn aeq_surv(
     let new_time: Vec<f64> = time.iter().map(|&t| snap(t, &cuts)).collect();
     let new_time2: Option<Vec<f64>> = time2.map(|t2| t2.iter().map(|&t| snap(t, &cuts)).collect());
     if let (Some(t2), Some(new_t2)) = (time2, &new_time2) {
-        // We may have created zero length intervals.
         for i in 0..time.len() {
             if new_time[i] == new_t2[i] && time[i] != t2[i] {
                 return Err(SurvivalError::invalid_input(
@@ -123,9 +104,6 @@ pub fn aeq_surv(
     })
 }
 
-/// `aeqSurv` with R's default tolerance on the time columns of a
-/// right-censored (`start` absent) or counting-process response, returned
-/// as `(start, stop)`.
 pub fn aeq_counting(
     start: Option<&[f64]>,
     stop: &[f64],
@@ -140,15 +118,13 @@ pub fn aeq_counting(
     }
 }
 
-/// `aeqSurv` on a single time column with R's default tolerance: the
-/// crate-wide "timefix" step for routines that snap near-tied times.
 pub fn aeq_times(time: &[f64]) -> Vec<f64> {
     aeq_surv(time, None, None)
         .map(|result| result.time)
         .unwrap_or_else(|_| time.to_vec())
 }
 
-/// Python entry point of [`aeq_surv`].
+#[doc = " Python entry point of [`aeq_surv`]."]
 #[pyfunction(name = "aeq_surv")]
 #[pyo3(signature = (time, time2=None, tolerance=None))]
 pub fn aeq_surv_py(
@@ -177,7 +153,6 @@ mod tests {
         let result = aeq_surv(&[1.0, 1.0 + 1e-10, 2.0, 3.0], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 2.0, 3.0]);
 
-        // Adjacent cutpoints within tolerance chain onto the first.
         let result = aeq_surv(&[1.0, 1.0 + 9e-9, 1.0 + 18e-9], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 1.0]);
     }
@@ -186,14 +161,12 @@ mod tests {
     fn relative_tolerance_uses_the_mean_absolute_time() {
         let result = aeq_surv(&[1e9, 1e9 + 1.0, 1e9 + 20.0], None, Some(1e-8)).unwrap();
         assert_eq!(result.time, vec![1e9, 1e9, 1e9 + 20.0]);
-        // The fixture case `right_1e9`: 2.000000001 is tied with 2.
         let result = aeq_surv(&[1.0, 1.00000000000001, 2.0, 2.000000001, 3.0], None, None).unwrap();
         assert_eq!(result.time, vec![1.0, 1.0, 2.0, 2.0, 3.0]);
     }
 
     #[test]
     fn large_finite_times_do_not_create_spurious_near_ties() {
-        // Independent stock-R aeqSurv results: mean(abs(time)) remains finite.
         for time in [
             vec![1e308, 1.1e308, 1.2e308],
             vec![-1e308, 0.0, 1e308],

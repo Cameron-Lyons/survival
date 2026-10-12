@@ -1,6 +1,3 @@
-//! Generalized estimating equations for pseudo-value regression (Andersen,
-//! Klein & Rosthoj 2003); not part of R's `survival`, kept as is.
-
 use crate::constants::{DIVISION_FLOOR, normal_ci_95};
 use crate::internal::statistical::normal_cdf;
 use pyo3::exceptions::PyValueError;

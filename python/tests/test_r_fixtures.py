@@ -57,15 +57,7 @@ from .r_fixture_support import (
 survival = setup_survival_import()
 r = survival.r_api
 
-# ---------------------------------------------------------------------------
-# Known failures (burndown list).  Reasons start with one of
-#   "missing feature:" the Python API cannot express the case
-#   "mismatch:"        Python runs but the numbers differ from R
-#   "error:"           the Python call raises
-# ---------------------------------------------------------------------------
 
-# The remaining numerical differences and their independent checks are
-# documented in docs/r-compatibility.md. Do not add feature/error exemptions.
 KNOWN_FAILURES: dict[str, str] = {
     "aareg/veteran_karno_celltype": "mismatch: times: length 104 differs from expected 117",
     "coxph/lung_age_sex_cluster_inst/concordance.cvar": (
@@ -159,10 +151,6 @@ def _known_failure_reason(test_id: str) -> str | None:
     topic, name, _aspect = test_id.split("/", 2)
     return KNOWN_FAILURES.get(f"{topic}/{name}")
 
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
 
 _FIT_CACHE: dict[str, Any] = {}
 
@@ -270,14 +258,7 @@ def _tt_function(source: str) -> Callable[..., Any]:
     raise UnsupportedCaseError(f"no Python translation for tt = {source!r}")
 
 
-# ---------------------------------------------------------------------------
-# survfit curve comparison (shared by KM, Cox and multistate curves)
-# ---------------------------------------------------------------------------
-
 _CURVE_FIELDS = {
-    # r field -> (python attribute candidates, rtol or None for exact)
-    # jvec serializes to 15 significant digits. Row counts still distinguish
-    # exact near-ties; the displayed times need only roundtrip that precision.
     "time": (("time",), 5e-15),
     "n_risk": (("n_risk",), 0.0),
     "n_event": (("n_event",), 0.0),
@@ -403,10 +384,6 @@ def _check_curves(result: Any, fit_expected: Mapping[str, Any], aspect: str) -> 
         )
 
 
-# ---------------------------------------------------------------------------
-# Topic handlers
-# ---------------------------------------------------------------------------
-
 HANDLERS: dict[str, TopicHandler] = {}
 
 
@@ -423,9 +400,6 @@ class TopicHandler:
 
     def check(self, case: Mapping[str, Any], aspect: str) -> None:
         raise NotImplementedError
-
-
-# --- datasets ---------------------------------------------------------------
 
 
 class DatasetsHandler(TopicHandler):
@@ -473,9 +447,6 @@ class DatasetsHandler(TopicHandler):
                     if not (v is None or (isinstance(v, float) and math.isnan(v)))
                 )
                 assert_close(total, col["sum"], rtol=1e-10, atol=1e-8, path=f"{col['name']}.sum")
-
-
-# --- survfit (KM) -----------------------------------------------------------
 
 
 def _mstate_formula(formula: str, data: Mapping[str, Any]) -> str:
@@ -586,7 +557,6 @@ class SurvfitKMHandler(TopicHandler):
                 if field in expected["fit"]:
                     assert_exact(getattr(fit, field), expected["fit"][field], path=field)
         elif aspect == "summary_std_err":
-            # summary(fit)$std.err = surv-scale standard error at event times only
             summary = r.summary_survfit(fit)
             assert_close(
                 as_float_list(summary.std_err),
@@ -595,8 +565,6 @@ class SurvfitKMHandler(TopicHandler):
                 path="summary_std_err",
             )
         elif aspect == "summary_table":
-            # generate_fixtures.R supplies these cutoffs to km_case separately
-            # from the fit arguments; they are not stored in case["args"].
             rmean = {"lung_sex": 500, "lung_weighted": 400}.get(case["name"])
             _check_summary_table(fit, expected["summary_table"], rmean=rmean)
         elif aspect == "summary_times":
@@ -605,9 +573,6 @@ class SurvfitKMHandler(TopicHandler):
             _check_quantile(fit, expected["quantile"])
         else:
             raise UnsupportedCaseError(f"unhandled survfit aspect {aspect}")
-
-
-# --- survfit multistate -----------------------------------------------------
 
 
 class SurvfitMultistateHandler(TopicHandler):
@@ -644,8 +609,6 @@ class SurvfitMultistateHandler(TopicHandler):
                 assert_close(fit.p0[0], p0, path="p0")
         elif aspect == "fit.transitions":
             table = expected["fit"]["transitions"]
-            # Numerical fixtures use 3.8-11's fixed censor-column name.
-            # Current names are independently checked against 3.8-12 references.
             columns = [
                 f"({fit.clabel})" if name == "(censored)" and fit.clabel is not None else name
                 for name in table["colnames"]
@@ -663,7 +626,6 @@ class SurvfitMultistateHandler(TopicHandler):
             influence = r.survfit(case["formula"], data, influence=True, **kwargs).influence_pstate
             if influence is None:
                 raise UnsupportedCaseError("survfit result has no influence_pstate")
-            # R: subjects x times x states; the engine: [cluster][time][state] per curve
             layers = expected[aspect]
             actual = influence[0].values
             for state, layer in enumerate(layers):
@@ -676,9 +638,6 @@ class SurvfitMultistateHandler(TopicHandler):
                     )
         else:
             raise UnsupportedCaseError(f"unhandled multistate aspect {aspect}")
-
-
-# --- survfit interval -------------------------------------------------------
 
 
 class SurvfitIntervalHandler(TopicHandler):
@@ -697,7 +656,6 @@ class SurvfitIntervalHandler(TopicHandler):
     def check_in_topic(topic, case, aspect):
         fit = _survfit_call(topic, case)
         expected = case["expected"]
-        # Turnbull's counts are EM weights, not integers: compare them like estimates
         if aspect == "curves.time_counts":
             for curve, exp in zip(
                 _python_curves(fit, expected["fit"]["curves"]),
@@ -727,9 +685,6 @@ class SurvfitIntervalHandler(TopicHandler):
             assert_close(fit.upper, expected["upper"], rtol=RTOL_VAR, path="upper")
         elif aspect == "n":
             assert_exact(fit.n, expected["n"], path="n")
-
-
-# --- survdiff ---------------------------------------------------------------
 
 
 class SurvdiffHandler(TopicHandler):
@@ -772,11 +727,7 @@ class SurvdiffHandler(TopicHandler):
         elif aspect == "df":
             assert_exact(result.df, expected["df"], path="df")
         elif aspect == "strata_names":
-            # names(fit$n): the group labels
             assert_exact(result.groups, expected["strata_names"], path="strata_names")
-
-
-# --- coxph ------------------------------------------------------------------
 
 
 def _coxph_fit(topic: str, case: Mapping[str, Any]) -> Any:
@@ -789,7 +740,7 @@ def _coxph_fit(topic: str, case: Mapping[str, Any]) -> Any:
         if "tt" in args:
             kwargs["tt"] = _tt_function(args["tt"])
         if "nocenter" in args:
-            kwargs["nocenter"] = args["nocenter"]  # None is R's NULL: centre everything
+            kwargs["nocenter"] = args["nocenter"]
         return r.coxph(case["formula"], data, **kwargs)
 
     return _cached(_fit_key("coxph", case), build)
@@ -798,7 +749,7 @@ def _coxph_fit(topic: str, case: Mapping[str, Any]) -> Any:
 def _coef_names(fit: Any) -> list[str] | None:
     try:
         return list(r.coef_names(fit))
-    except Exception:  # noqa: BLE001 - names are optional for the comparison
+    except Exception:
         return None
 
 
@@ -808,10 +759,6 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
         key = aspect.split(".", 1)[1]
         test = summary[key]
         if key == "waldtest":
-            # summary.coxph reports round(fit$wald.test, 2) (R/summary.coxph.R):
-            # compare within half a unit of the last reported digit (the extra
-            # 1e-9 absorbs R's round-half-even at an exact .xx5); the unrounded
-            # statistic is checked by the wald_test aspect.
             assert_close(
                 test["test"], expected["test"], rtol=0.0, atol=0.005 + 1e-9, path="waldtest.test"
             )
@@ -834,7 +781,7 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
             "Z": ("z", RTOL_VAR),
             "p": ("p", RTOL_VAR),
         }
-        if expected["rownames"]:  # R drops the names of a one-column cch model matrix
+        if expected["rownames"]:
             assert_exact(
                 [row["name"] for row in rows], expected["rownames"], path="coefficients.rows"
             )
@@ -941,7 +888,7 @@ class CoxphHandler(TopicHandler):
             if key in ("method", "coef_names"):
                 continue
             if key == "wald_test" and value is None:
-                continue  # R has no wald.test for a null model
+                continue
             if key == "coef":
                 out.extend(["coef", "coef_names"])
             elif key in ("residuals", "summary", "concordance") and isinstance(value, Mapping):
@@ -1239,7 +1186,6 @@ class CoxphDiagnosticsHandler(TopicHandler):
             actual = getattr(detail, sub)
             expected = exp[sub]
             if sub == "imat":
-                # R: nvar x nvar x ntime; Python: per time list of matrices
                 if isinstance(expected[0], list) and isinstance(expected[0][0], list):
                     atol = rtol * array_scale(expected)
                     for t, layer in enumerate(expected):
@@ -1347,9 +1293,6 @@ class CoxphPenalizedHandler(TopicHandler):
             raise UnsupportedCaseError(
                 f"penalised Cox terms (ridge/pspline/frailty) are not implemented: {aspect}"
             )
-
-
-# --- survreg (handler owned by the survreg module) ----------------------------
 
 
 def _survreg_fit(topic: str, case: Mapping[str, Any]) -> Any:
@@ -1533,20 +1476,11 @@ def _check_survreg_distribution(key: str, exp: Mapping[str, Any]) -> None:
     )
 
 
-# --- survreg-extra (key: survreg) ------------------------------------------
-
-
 class SurvregExtraHandler(SurvregHandler):
     """``test/r/fixtures/survreg-extra.json``: the families, censoring types and
     control options the ``survreg`` topic leaves light; same aspects."""
 
     topic = "survreg-extra"
-
-
-# --- end survreg handlers ------------------------------------------------------
-
-
-# --- concordance ------------------------------------------------------------
 
 
 class ConcordanceHandler(TopicHandler):
@@ -1584,9 +1518,6 @@ class ConcordanceHandler(TopicHandler):
 
         cc = _cached(_fit_key("concordance", case), build)
         _check_concordance_result(cc, expected, f"x.{aspect}")
-
-
-# --- aareg --------------------------------------------------------------------
 
 
 class AaregHandler(TopicHandler):
@@ -1674,16 +1605,11 @@ class AaregHandler(TopicHandler):
                         path=f"summary[{row['name']}].{name}",
                     )
         elif aspect == "dfbeta":
-            # Python: subjects x nvar x times (R's array layout); R fixture: one
-            # subjects x nvar matrix per time.
             for t, layer in enumerate(expected["dfbeta"]):
                 actual_layer = [[row[k][t] for k in range(len(row))] for row in fit.dfbeta]
                 assert_matrix_close(actual_layer, layer, rtol=RTOL_COEF, path=f"dfbeta[{t}]")
         else:
             raise UnsupportedCaseError(f"unhandled aareg aspect {aspect}")
-
-
-# --- cch ----------------------------------------------------------------------
 
 
 class CchHandler(TopicHandler):
@@ -1738,9 +1664,6 @@ class CchHandler(TopicHandler):
             _check_summary(fit, aspect, _expect(case, aspect))
 
 
-# --- clogit -------------------------------------------------------------------
-
-
 class ClogitHandler(TopicHandler):
     topic = "clogit"
 
@@ -1790,9 +1713,6 @@ class ClogitHandler(TopicHandler):
             _check_summary(fit, aspect, _expect(case, aspect))
 
 
-# --- finegray (r-data section) --------------------------------------------------
-
-
 class FinegrayHandler(TopicHandler):
     topic = "finegray"
 
@@ -1828,9 +1748,6 @@ class FinegrayHandler(TopicHandler):
             )
 
 
-# --- survobrien ---------------------------------------------------------------
-
-
 class SurvobrienHandler(TopicHandler):
     topic = "survobrien"
 
@@ -1862,9 +1779,6 @@ class SurvobrienHandler(TopicHandler):
             assert_named_values(_coef_names(fit), r.coef(fit), expected["coxph_coef"], path="coef")
 
 
-# --- yates --------------------------------------------------------------------
-
-
 def _r_level_label(value: Any) -> str:
     """R's ``as.character`` of a factor level built from a number (``factor(trt)`` -> "1")."""
 
@@ -1890,13 +1804,10 @@ class YatesHandler(TopicHandler):
         term = args.pop("term")
         expected = case["expected"]
         if case.get("fit", "coxph") == "lm":
-            # lm belongs to R's stats package. Fit its least-squares reference
-            # independently, then exercise survival's generic model adapter.
             import numpy as np
             from survival.r._formula import _design_rows_from_spec
 
             data = case_data(topic, case)
-            # The reference formula has an intercept, three contrasts, karno.
             levels = case["factors"]["celltype"]
             x = np.array(
                 [
@@ -1913,7 +1824,7 @@ class YatesHandler(TopicHandler):
         else:
             fit = _coxph_fit(topic, {**case, "args": {}})
         if args.get("predict") == "risk":
-            args["options"] = {"seed": 20240601}  # generator's set.seed()
+            args["options"] = {"seed": 20240601}
 
         def build():
             try:
@@ -1964,8 +1875,6 @@ class YatesHandler(TopicHandler):
             assert_exact(result.cmat_names, expected["cmat"]["colnames"], path="cmat.colnames")
 
 
-# --- royston / brier ----------------------------------------------------------
-
 _ROYSTON_FIELDS = {
     "D": "d",
     "se(D)": "se_d",
@@ -2012,9 +1921,6 @@ class RoystonBrierHandler(TopicHandler):
             )
 
 
-# --- pseudo / residuals.survfit / survfit0 -------------------------------------
-
-
 class PseudoHandler(TopicHandler):
     topic = "pseudo"
 
@@ -2043,8 +1949,6 @@ class PseudoHandler(TopicHandler):
         else:
             result = r.survfit_residuals(fit, times=times, type=type_name).resid
         if exp and isinstance(exp[0], list) and isinstance(exp[0][0], list):
-            # R stores the subjects x states x times array as one matrix per time; the
-            # Python layout is subject, then state, then time
             for t, layer in enumerate(exp):
                 for subject, row in enumerate(layer):
                     actual = [
@@ -2056,9 +1960,6 @@ class PseudoHandler(TopicHandler):
             assert_matrix_close(result, exp, rtol=RTOL_VAR, path=aspect)
         else:
             assert_close(as_float_list(result), exp, rtol=RTOL_VAR, path=aspect)
-
-
-# --- aggregate.survfit ---------------------------------------------------------
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2103,7 +2004,6 @@ class AggregateSurvfitHandler(TopicHandler):
             if isinstance(exp[0], list):
                 assert_matrix_close(result.surv, exp, rtol=RTOL_COEF, path="surv")
             else:
-                # no by: R drops the data margin
                 assert_close([row[0] for row in result.surv], exp, rtol=RTOL_COEF, path="surv")
         elif aspect == "pstate":
             exp = expected["pstate"]
@@ -2115,7 +2015,6 @@ class AggregateSurvfitHandler(TopicHandler):
                     path="pstate",
                 )
             else:
-                # no by: a time x state matrix
                 assert_matrix_close(
                     [row[0] for row in result.pstate], exp, rtol=RTOL_COEF, path="pstate"
                 )
@@ -2129,9 +2028,6 @@ class AggregateSurvfitHandler(TopicHandler):
                     {name: [str(v) for v in values] for name, values in frame.items()},
                     path="newdata",
                 )
-
-
-# --- survcheck ----------------------------------------------------------------
 
 
 def _check_named_table(actual_rows, actual_cols, actual_values, table, path: str) -> None:
@@ -2166,7 +2062,6 @@ class SurvcheckHandler(TopicHandler):
         elif aspect == "transitions":
             table = result.transitions
             reference = expected["transitions"]
-            # Adapt only the 3.8-11 label; keep counts and all state names exact.
             label = result.y.clabel if result.y.clabel is not None else "censor"
             reference = {
                 **reference,
@@ -2210,10 +2105,6 @@ class SurvcheckHandler(TopicHandler):
                     as_float_list(expected[name]["id"]),
                     path=f"{name}.id",
                 )
-
-
-# --- validation-extra (survobrien, yates and survcheck cases; the anova, survfit and
-#     Turnbull cases belong to the coxph and survfit handlers) -------------------
 
 
 class ValidationExtraHandler(TopicHandler):
@@ -2262,10 +2153,6 @@ class ValidationExtraHandler(TopicHandler):
                 _check_quantile(fit, case["expected"][aspect])
         else:
             raise UnsupportedCaseError(f"no validation-extra handler for {case['name']}")
-
-
-# --- survSplit / survcondense / tmerge / neardate (r-data section) --------------
-# Owner: the r-data module (python/survival/r/_data_prep.py).
 
 
 def _compare_frames(
@@ -2318,8 +2205,6 @@ class SurvcondenseHandler(TopicHandler):
         data = case_data(self.topic, case)
         kwargs = _kwargs(case.get("args", {}), data)
         frame = r.survcondense(case["formula"], data, **kwargs)
-        # R names the id column after the deparsed ``id`` argument, which the
-        # generator's do.call turns into the first id value ("1").
         _compare_frames(frame, case["expected"]["frame"], renames={"1": kwargs["id"]})
 
 
@@ -2332,7 +2217,6 @@ def _check_tcount(frame: Any, expected: Mapping[str, Any], path: str) -> None:
         for name in dict.fromkeys(names)
     ]
     rows = [list(row) for row in expected["values"]]
-    # R stacks one row per argument, repeats included; ours keys by name.
     seen: dict[str, int] = {}
     unique_rows = []
     for name, row in zip(names, rows, strict=True):
@@ -2472,14 +2356,10 @@ class NeardateHandler(TopicHandler):
         best, _, nomatch = aspect.partition("_")
         kwargs: dict[str, Any] = {"best": best}
         if nomatch == "nomatch0":
-            kwargs["nomatch"] = -1  # R's nomatch = 0 is one-based; ours is zero-based
+            kwargs["nomatch"] = -1
         result = r.neardate(args["id1"], args["id2"], args["y1"], args["y2"], **kwargs)
-        # R reports one-based row numbers, Python zero-based ones.
         actual = [None if value is None else value + 1 for value in result]
         assert_exact(actual, case["expected"][aspect], path=aspect)
-
-
-# --- rttright (r-data section) ----------------------------------------------------
 
 
 class RttrightHandler(TopicHandler):
@@ -2497,9 +2377,6 @@ class RttrightHandler(TopicHandler):
             assert_matrix_close(result, expected["weights"], rtol=RTOL_COEF, path="weights")
         else:
             assert_close(as_float_list(result), expected["weights"], rtol=RTOL_COEF, path="weights")
-
-
-# --- pyears / survexp (r-data section) --------------------------------------------
 
 
 def _pyears_call(case: Mapping[str, Any]) -> Any:
@@ -2724,9 +2601,6 @@ class SurvexpHandler(TopicHandler):
                 assert_exact(list(mn.dimnames[d]), summary["mn_dimnames"][dimid], path=dimid)
 
 
-# --- utilities ----------------------------------------------------------------
-
-
 class UtilitiesHandler(TopicHandler):
     topic = "utilities"
 
@@ -2754,7 +2628,6 @@ class UtilitiesHandler(TopicHandler):
             link, _, suffix = aspect.partition("_")
             inverse = suffix == "linkinv"
             if inverse:
-                # Inputs are literal expressions in generate_fixtures.R.
                 x = {
                     "blogit": [-3, 0, 3],
                     "bprobit": [-2, 0, 2],
@@ -2819,7 +2692,7 @@ class UtilitiesHandler(TopicHandler):
             connect = args["connect3"] if "1_2_1" not in aspect else args["connect4"]
             layout = [1, 2] if "1_2_1" not in aspect else [1, 2, 1]
             states = ["A", "B", "C"] if "1_2_1" not in aspect else ["A", "B", "C", "D"]
-            if aspect.endswith("_column"):  # R: matrix(layout, ncol = 1)
+            if aspect.endswith("_column"):
                 layout = [[count] for count in layout]
             result = r.statefig(layout, connect, states=states)
             coords = [list(position) for position in result.positions]
@@ -2841,9 +2714,6 @@ class UtilitiesHandler(TopicHandler):
                 map(int, load_topic("utilities")["metadata"]["survival_version"].split("."))
             )
             if kind == "mstate" and version < (3, 8, 12):
-                # These fixtures describe a legacy Surv object without clabel.
-                # Current constructors and their labels are checked separately
-                # against 3.8-12 by test_surv_vector_methods.py.
                 surv = r.Surv._from_normalized(
                     time=surv.time,
                     event=surv.event,
@@ -2922,14 +2792,6 @@ def _surv_matrix(surv: Any) -> list[list[Any]]:
     raise UnsupportedCaseError(f"unhandled Surv type {surv.type}")
 
 
-# ---------------------------------------------------------------------------
-# Parametrisation
-# ---------------------------------------------------------------------------
-
-
-# Cases are looked up by name inside the test: parametrising over the case
-# dictionaries themselves makes pytest's failure reports (which repr every
-# argument) prohibitively slow for the large fixture cases.
 _CASES: dict[tuple[str, str], Mapping[str, Any]] = {}
 
 
@@ -2959,11 +2821,6 @@ def test_r_fixture(topic: str, name: str, aspect: str) -> None:
     if handler is None:
         record_outcome(test_id, "missing feature", f"no handler for topic {topic}")
         raise UnsupportedCaseError(f"no handler for topic {topic}")
-    # Every failure is re-raised from this frame without the original
-    # traceback: pytest re-parses the whole source file of every frame it
-    # prints (the 20k-line r_api.py included), which multiplies the runtime of
-    # the ~2700 expected failures by ~20.  The message keeps the innermost
-    # location; set R_FIXTURES_FULL_TRACEBACK=1 to debug with full tracebacks.
     full_traceback = bool(os.environ.get("R_FIXTURES_FULL_TRACEBACK"))
     try:
         handler.check(case, aspect)
@@ -2980,7 +2837,7 @@ def test_r_fixture(topic: str, name: str, aspect: str) -> None:
         raise FixtureMismatchError(str(exc)) from None
     except pytest.skip.Exception:
         raise
-    except Exception as exc:  # noqa: BLE001 - every failure kind feeds the burndown list
+    except Exception as exc:
         message = f"{type(exc).__name__}: {exc} [{_innermost_location(exc)}]"
         record_outcome(test_id, "error", message)
         if full_traceback:
@@ -3002,25 +2859,15 @@ def _innermost_location(exc: BaseException) -> str:
     return location
 
 
-# ---------------------------------------------------------------------------
-# Harness self-tests
-# ---------------------------------------------------------------------------
-
-
 def test_assert_close_floor_is_scaled_to_the_vector() -> None:
-    # Noise around zero inside a vector whose other entries are O(1) is
-    # within rtol * max|expected| and is not a mismatch ...
     assert_close([1.0, 0.0, -2.0], [1.0, -1.2e-17, -2.0], rtol=1e-8)
     assert_close([[0.0, 1.0], [1e-15, 0.0]], [[0.0, 1.0], [0.0, 0.0]], rtol=1e-8)
-    # ... while a real difference of the same absolute size in a vector of
-    # tiny values, or against a scalar zero, still is.
     with pytest.raises(FixtureMismatchError):
         assert_close([1e-17, 0.0], [1e-17, 1e-17], rtol=1e-8)
     with pytest.raises(FixtureMismatchError):
         assert_close(1e-17, 0.0, rtol=1e-8)
     with pytest.raises(FixtureMismatchError):
         assert_close([1.0, 1e-7], [1.0, 0.0], rtol=1e-8)
-    # Exact comparisons keep a zero floor.
     with pytest.raises(FixtureMismatchError):
         assert_exact([3, 1e-17], [3, 0])
 

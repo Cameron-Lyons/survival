@@ -92,11 +92,6 @@ _SURVFIT_TYPES = ("kaplan-meier", "fleming-harrington", "fh2")
 _SPECIALS = ("weights", "id", "cluster", "istate")
 
 
-# ---------------------------------------------------------------------------
-# The model frame of a survfit call
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class _SurvfitData:
     """What ``survfit.formula`` extracts from its model frame before dispatching.
@@ -320,7 +315,6 @@ def _surv_model_frame(
     )
     group = aligned.pop("group")
     columns = {} if group is None else {"group": group}
-    # a bare vector has no variable name to label its levels with
     return _survfit_data(
         response,
         "response",
@@ -345,18 +339,11 @@ def _survfit_data_from_fit(fit: SurvfitResult | SurvfitMultiStateResult) -> _Sur
     data = _survfit_data(
         model[response_name], response_name, columns, extras, na_action=fit.na_action
     )
-    # residuals.survfit scores the rows of the k-th curve level with fit[k]; a curve that
-    # start.time emptied is not in the fit and `[.survfit` stops ("strata k not matched")
     if 0 in fit.n:
         raise ValueError("start.time has removed all the observations from at least one curve")
     if len(fit.strata_names or ["1"]) != data.n_curves:
         raise ValueError("the model frame does not match the curves of the fit")
     return data
-
-
-# ---------------------------------------------------------------------------
-# Argument checks shared by the engines (survfitKM.R, survfitAJ.R, survfitTurnbull.R)
-# ---------------------------------------------------------------------------
 
 
 def _logical(value: Any, message: str) -> bool:
@@ -407,11 +394,6 @@ def _influence_level(influence: Any) -> int:
             raise ValueError("influence argument must be 0, 1, 2, or 3")
         return int(influence)
     raise ValueError("influence argument must be numeric or logical")
-
-
-# ---------------------------------------------------------------------------
-# survfit
-# ---------------------------------------------------------------------------
 
 
 def survfit(
@@ -514,9 +496,7 @@ def survfit(
             time0=time0,
         )
     if isinstance(response, CoxphModel):
-        # survfit.coxph takes model= into its ``...``: it keeps no model frame
         _logical(model, "model must be TRUE/FALSE")
-        # survfit.coxph's second argument is newdata, so survfit(fit, frame) is R's spelling
         return survfit_coxph(
             response,
             data if newdata is None else newdata,
@@ -593,7 +573,6 @@ def survfit(
             reverse=reverse,
             **common,
         )
-    # survfitKM and survfitTurnbull take time0 but never use it
     return _survfitAJ(
         frame,
         stype=stype,
@@ -604,11 +583,6 @@ def survfit(
         time0=time0,
         **common,
     )
-
-
-# ---------------------------------------------------------------------------
-# survfitKM
-# ---------------------------------------------------------------------------
 
 
 def _km_engine(
@@ -763,11 +737,6 @@ def _km_result(
     )
 
 
-# ---------------------------------------------------------------------------
-# survfitAJ
-# ---------------------------------------------------------------------------
-
-
 def _survfitAJ(
     frame: _SurvfitData,
     *,
@@ -807,7 +776,6 @@ def _survfitAJ(
     istate, istate_levels = frame.istate_labels()
     start = _start_time_value(start_time)
     if frame.id is not None and frame.cluster is not None:
-        # R's Ctwoclust check: every id should lie within a single cluster
         cluster_of: dict[Any, Any] = {}
         if any(
             cluster_of.setdefault(subject, cluster) != cluster
@@ -928,18 +896,12 @@ def _aj_result(
     )
 
 
-# ---------------------------------------------------------------------------
-# survfitTurnbull
-# ---------------------------------------------------------------------------
-
-
 def _interval_coding(y: Surv) -> tuple[list[float], list[float], list[int]]:
     """R's ``Surv(type = "interval")`` columns: time1, time2 (interval rows) and status."""
 
     status = y._event_codes()
     if y.type == "left":
         return list(y.time), list(y.time), [2 if value == 0 else 1 for value in status]
-    # Surv already stores a left-censored row's right end in time1 (time2 is R's placeholder 1)
     time2 = [math.nan if value is None else float(value) for value in y.time2 or ()]
     return list(y.time), time2, status
 
@@ -970,8 +932,6 @@ def _survfitTurnbull(
     if robust is not None:
         robust = _logical(robust, "robust must be TRUE/FALSE")
     if frame.cluster is not None:
-        # survfitTurnbull passes the whole cluster vector to survfitKM fits of each curve's
-        # pseudo-observations, where R reads it out of bounds
         raise ValueError("cluster is not supported for interval-censored data")
     if frame.y.start is not None:
         raise ValueError("survfitTurnbull not appropriate for counting process data")
@@ -979,8 +939,6 @@ def _survfitTurnbull(
     time1, time2, status = _interval_coding(frame.y)
     rows = list(range(len(frame.y)))
     if start is not None:
-        # R keeps y[, ny-1] >= start.time: the right end of an interval row; for the other
-        # rows of an interval Surv that column is the placeholder 1, and their time is used
         rows = [row for row in rows if (time2[row] if status[row] == 3 else time1[row]) >= start]
         if not rows:
             label = _strata_value_label(start)
@@ -999,7 +957,6 @@ def _survfitTurnbull(
         se_fit=se_fit,
         robust=robust,
     )
-    # the curves are the levels with rows left (R's xlev[sort(unique(x))])
     fitted = sorted({frame.x_codes[row] for row in rows})
     levels = [frame.x_levels[code] for code in fitted]
     call = SurvfitCall(frame.terms, 1, 1, timefix, start, id=id_name)
@@ -1008,21 +965,12 @@ def _survfitTurnbull(
     )
 
 
-# ---------------------------------------------------------------------------
-# survfit0, summary.survfit, quantile.survfit, aggregate.survfit, survfit_confint
-# ---------------------------------------------------------------------------
-
-
 def _engine_of(x: Any) -> Any:
     if not isinstance(x, SurvfitResult | SurvfitMultiStateResult):
         raise TypeError("function requires a survfit object")
     if x.engine is None:
         raise ValueError("the survfit object was not built by survfit()")
     return x.engine
-
-
-# A survfit.coxph object (class c("survfitcox", "survfit")) goes through the same methods:
-# each ``surv`` column (a newdata row) becomes an engine whose curves are the strata blocks.
 
 
 def _is_matrix(values: Any) -> bool:
@@ -1266,7 +1214,6 @@ def _survfit_matrix(
         method,
         start,
     )
-    # R treats a single dimension as new1, new2, ... even when it is strata.
     if is_cox and first.strata is not None and _is_matrix(first.surv):
         labels = [f"{s}, new{j + 1}" for j in range(ncolumns) for s in first.strata]
     else:
@@ -1289,7 +1236,6 @@ def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:
     ``survfit0`` and ``survmean`` start it at ``min(0, time)``."""
 
     ncurve = x.ncurve
-    # a missing part (the cumulative hazard aggregate() leaves out) stays missing
     columns: dict[str, list[list[float]] | list[None]] = {
         name: _cox_columns(values) if (values := getattr(x, name)) else [None] * ncurve
         for name in ("cumhaz", "std_err", "std_chaz", "lower", "upper")
@@ -1308,7 +1254,6 @@ def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:
             std_chaz=columns["std_chaz"][curve],
             lower=columns["lower"][curve],
             upper=columns["upper"][curve],
-            # aggregate() drops logse and the limits: R's summaries take logse as TRUE
             logse=x.logse is not False,
             conf_int=0.95 if x.conf_int is None else x.conf_int,
             conf_type=x.conf_type or "none",
@@ -1592,7 +1537,6 @@ def _rmean_option(
             rmean, "rmean", ("none", "common", "individual"), "Invalid value for rmean option"
         )
     value = _finite_float(rmean, "rmean")
-    # survfitms and survfitcox objects record their start.time, survfitKM ones do not
     start_time = None if isinstance(fit, SurvfitResult) else fit.start_time
     first = min(fit.time)
     if include_origin:
@@ -1732,9 +1676,6 @@ def summary_survfit(
     else:
         engines = [_engine_of(object)]
         strata_names = labels = object.strata_names
-    # Finite zero-width rectangles do not change the table, so ordinary
-    # summaries can read the original fit without copying it. An infinite
-    # origin needs the actual time-zero row to retain R's Inf-Inf arithmetic.
     tables = [
         _core.survmean(
             engine if math.isfinite(engine.t0) else _core.survfit0(engine),
@@ -1764,8 +1705,6 @@ def summary_survfit(
     matrix = (
         isinstance(object, CoxSurvfitResult)
         and _is_matrix(object.surv)
-        # R summarizes each stratum via fit[i, ], whose default drop removes
-        # a singleton prediction column before the summaries are joined.
         and (times is None or object.ncurve != 1 or len(object.strata or ()) <= 1)
     )
 
@@ -1778,7 +1717,6 @@ def summary_survfit(
         n_event=rows.n_event,
         n_censor=rows.n_censor,
         surv=curves("surv"),
-        # survfit0 fills in no hazard for a survfitcox object without one (aggregate())
         cumhaz=curves("cumhaz") if object.cumhaz else [],
         strata=strata,
         table=_summary_table(
@@ -2037,8 +1975,6 @@ def _grouping_factors(by: Any, n_data: int) -> list[_core.GroupingFactor]:
     return factors
 
 
-# aggregate.survfit returns a copy of a survfit object; any other object with a surv or
-# pstate data margin gets the engine's AggregateSurvfitResult
 _Survfit = TypeVar("_Survfit", bound="DataclassInstance")
 
 
@@ -2112,7 +2048,6 @@ def aggregate_survfit(
     if result.surv is not None:
         updates["surv"] = result.surv
     if "colnames" in names:
-        # tapply names the group columns 1, 2, ...; one group is a plain vector in R
         updates["colnames"] = (
             None
             if result.newdata is None or result.surv is None
@@ -2193,7 +2128,6 @@ def survfit_confint(
     p_values = numeric_vector(p, "p")
 
     def recycled(values: Any, name: str) -> list[float] | np.ndarray:
-        # R's arithmetic recycles a single standard error over p
         vector = numeric_vector(values, name)
         if len(vector) == 1 and len(p_values) != 1:
             return np.full(len(p_values), vector[0], dtype=np.float64)

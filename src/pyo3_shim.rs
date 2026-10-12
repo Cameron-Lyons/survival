@@ -1,33 +1,3 @@
-//! Stand-in for the `pyo3` crate in Rust-only builds (`--no-default-features`).
-//!
-//! # Contract
-//!
-//! `lib.rs` declares `extern crate self as pyo3;` when the `python` feature is
-//! off, so every `pyo3::...` path inside the crate resolves to the items this
-//! module re-exports through the crate root (`crate::PyErr`,
-//! `crate::exceptions`, `crate::prelude`, ...). The shim exists so domain code
-//! annotated with `#[pyclass]`/`#[pyfunction]` compiles and its Rust tests run
-//! without an interpreter. It is deliberately small and mirrors PyO3's
-//! signatures exactly, so code that compiles here also compiles against PyO3:
-//!
-//! - the attribute macros come from `survival-pyo3-macros-shim`; they are
-//!   no-ops that strip `#[pyo3(...)]`, `#[new]`, `#[getter]`, `#[setter]` and
-//!   `#[staticmethod]` helper attributes;
-//! - [`PyErr`] records the exception class ([`PyErrKind`]) and the message, and
-//!   its `Display` prints `"<Class>: <message>"` exactly as PyO3 does, so error
-//!   assertions behave identically in both builds;
-//! - [`Python`] is `Copy`, [`Bound`] and [`Py`] are `Clone` but not `Copy`,
-//!   [`Py::bind`] hands out a reference and [`Python::detach`] requires `Send`
-//!   closures, matching PyO3's ownership rules;
-//! - [`PyAny`] and [`PyDict`] are inert placeholders: constructing a dict and
-//!   `set_item` succeed but store nothing, and every operation that would need
-//!   an interpreter (`call`, `extract`) fails with `RuntimeError`/`TypeError`.
-//!   Code that must inspect or build Python objects belongs behind
-//!   `#[cfg(feature = "python")]`, or better, behind a typed `#[pyclass]`.
-//!
-//! Anything not listed here is unsupported on purpose: add an item only when a
-//! Rust-only build needs it, and copy PyO3's signature when you do.
-
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -41,7 +11,6 @@ pub mod types {
     pub use crate::PyDict;
 }
 
-/// The Python exception class a [`PyErr`] would raise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PyErrKind {
     IndexError,
@@ -52,7 +21,6 @@ pub enum PyErrKind {
 }
 
 impl PyErrKind {
-    /// The Python class name, as PyO3's `Display` for `PyErr` prints it.
     pub fn name(self) -> &'static str {
         match self {
             Self::IndexError => "IndexError",
@@ -64,8 +32,6 @@ impl PyErrKind {
     }
 }
 
-/// Marker trait for the exception classes in [`exceptions`]; plays the role of
-/// PyO3's `PyTypeInfo` bound on `PyErr::new`.
 pub trait ExceptionClass {
     const KIND: PyErrKind;
 }
@@ -114,13 +80,10 @@ impl PyErr {
         }
     }
 
-    /// The exception class this error would raise in Python.
     pub fn kind(&self) -> PyErrKind {
         self.kind
     }
 
-    /// Mirrors `PyErr::is_instance_of::<E>(py)`; exact class match only, since
-    /// the shim has no class hierarchy.
     pub fn is_instance_of<E: ExceptionClass>(&self, _py: Python<'_>) -> bool {
         self.kind == E::KIND
     }
@@ -136,9 +99,6 @@ impl std::error::Error for PyErr {}
 
 pub type PyResult<T> = Result<T, PyErr>;
 
-/// Mutable borrow of a `#[pyclass]` value. Only PyO3 can construct one, so
-/// `#[pymethods]` builders taking `PyRefMut<Self>` compile but are not
-/// callable from Rust-only tests.
 pub struct PyRefMut<'py, T: ?Sized> {
     inner: &'py mut T,
 }
@@ -174,8 +134,6 @@ impl Python<'_> {
 
     pub fn initialize() {}
 
-    /// Runs `f` "without the GIL"; the `Send` bounds stand in for PyO3's
-    /// `Ungil`, which is `Send` on stable toolchains.
     pub fn detach<F, T>(self, f: F) -> T
     where
         F: Send + FnOnce() -> T,
@@ -185,8 +143,6 @@ impl Python<'_> {
     }
 }
 
-/// Interpreter-independent handle. Holds no value: `Py::new` drops what it is
-/// given, so a `Py<T>` built in a Rust-only test cannot be inspected.
 #[derive(Debug)]
 pub struct Py<T: ?Sized> {
     bound: Bound<'static, T>,
@@ -257,11 +213,8 @@ impl From<Bound<'_, PyDict>> for Py<PyAny> {
     }
 }
 
-/// Covariant in `'py` without requiring `T: 'py`, so `Py<T>` can hold a
-/// `Bound<'static, T>` and lend it out for any `'py`.
 type BoundMarker<'py, T> = PhantomData<(&'py (), fn() -> Box<T>)>;
 
-/// Interpreter-bound handle; `Clone` but, like PyO3's, not `Copy`.
 #[derive(Debug)]
 pub struct Bound<'py, T: ?Sized> {
     _marker: BoundMarker<'py, T>,
@@ -298,7 +251,6 @@ impl PyDict {
 }
 
 impl Bound<'_, PyDict> {
-    /// Accepted and discarded: the shim dict stores nothing.
     pub fn set_item<K, V>(&self, _key: K, _value: V) -> PyResult<()> {
         Ok(())
     }

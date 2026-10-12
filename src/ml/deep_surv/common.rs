@@ -110,7 +110,6 @@ impl DeepSurvConfig {
         ensure_nonnegative_f32("l2_reg", self.l2_reg)?;
         for &width in &self.hidden_layers {
             ensure_positive_usize("hidden_layers widths", width)?;
-            // CPU inference stores each layer's activations as f64.
             ensure_vec_capacity::<f64>("hidden_layers", width)?;
         }
         for pair in self.hidden_layers.windows(2) {

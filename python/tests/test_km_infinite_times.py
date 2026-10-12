@@ -361,7 +361,6 @@ def test_summary_queries_still_refuse_missing_times(fits):
 def test_requested_summary_refuses_origin_inserted_after_earlier_entry_rows(
     origin, expected_control, native
 ):
-    # Direct stock summary.survfit rejects these survfit0 grids via findInterval.
     response = r.Surv([-float("inf"), 0, 1, 2], [1, 2, 3, float("inf")], [1, 0, 1, 1])
     options = {"id": [1, 2, 3, 4], "start_time": origin, "timefix": False}
     fit = r.survfit(response, entry=True, **options)
@@ -376,7 +375,6 @@ def test_requested_summary_refuses_origin_inserted_after_earlier_entry_rows(
     )
     with pytest.raises(ValueError, match="sorted non-decreasingly"):
         call()
-    # The conditional origin remains usable when earlier entries are not emitted.
     control = r.survfit(response, entry=False, **options)
     summary = core.summary_survfit(control.engine, times=query, extend=True)
     assert_numeric(summary.surv, expected_control, "surv")

@@ -1,27 +1,22 @@
-//! R's `cluster(x)` (`R/cluster.R`) is an identity marker in a formula;
-//! what the fitting code then needs is `match(x, unique(x))`: the cluster
-//! of every observation as a code in order of first appearance.
-
 use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use pyo3::prelude::*;
 
-/// Cluster membership codes.
+#[doc = " Cluster membership codes."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct ClusterResult {
-    /// Zero-based cluster code of each observation, numbered by first
-    /// appearance.
+    #[doc = " Zero-based cluster code of each observation, numbered by first"]
+    #[doc = " appearance."]
     #[pyo3(get)]
     pub codes: Vec<usize>,
-    /// Label of each cluster, in code order.
+    #[doc = " Label of each cluster, in code order."]
     #[pyo3(get)]
     pub levels: Vec<String>,
-    /// Number of observations in each cluster.
+    #[doc = " Number of observations in each cluster."]
     #[pyo3(get)]
     pub sizes: Vec<usize>,
 }
 
-/// Code a cluster identifier.
 pub fn cluster<I: SubjectId>(id: &[I]) -> ClusterResult {
     let (codes, representatives) = first_appearance_codes(id);
     let mut sizes = vec![0; representatives.len()];
@@ -35,7 +30,7 @@ pub fn cluster<I: SubjectId>(id: &[I]) -> ClusterResult {
     }
 }
 
-/// Python entry point of [`cluster`].
+#[doc = " Python entry point of [`cluster`]."]
 #[pyfunction(name = "cluster")]
 pub fn cluster_py(id: Vec<IdValue>) -> PyResult<ClusterResult> {
     if id.iter().any(IdValue::is_missing) {

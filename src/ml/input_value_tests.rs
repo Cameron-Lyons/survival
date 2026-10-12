@@ -136,7 +136,6 @@ fn public_fits_and_typed_forest_inputs_reject_invalid_values() {
                 field,
                 index,
             );
-            // Public fields bypass new(), so typed fitting must validate them too.
             assert_value_error(SurvivalForest::fit_typed(py, &input, &forest), field, index);
             assert_value_error(
                 SurvivalForestInput::new(
@@ -161,7 +160,6 @@ fn deep_training_checks_f32_conversion_before_splitting_rows() {
             validation_fraction: 0.5,
             ..deep_config()
         };
-        // Cover every row so narrowing is checked in both training and validation.
         for row in 0..6 {
             for value in [-1e100, 1e100] {
                 let mut input = training_input();
@@ -235,7 +233,6 @@ fn finite_signed_times_and_all_censored_samples_remain_valid() {
         for all_censored in [false, true] {
             let mut input = training_input();
             input.time.iter_mut().for_each(|time| *time -= 4.0);
-            // Ordinary rounding and underflow to f32 remain valid neural inputs.
             input.x[0] = 1e-300;
             input.x[11] = 1.0 / 3.0;
             if all_censored {
@@ -285,7 +282,6 @@ fn deep_predictions_preserve_finite_features_beyond_the_training_dtype() {
     Python::initialize();
     Python::attach(|py| {
         let input = training_input();
-        // Tanh keeps this fitted model's f64 inference numerically bounded.
         let model = fit_input!(DeepSurv::fit, py, input, &deep_config()).unwrap();
         let x = vec![1e100, 0.0, -1e100, 0.0];
         let risk = model.predict_risk(x.clone(), 2).unwrap();

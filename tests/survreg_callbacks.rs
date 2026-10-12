@@ -1,4 +1,3 @@
-//! Compile and exercise the callback contract as an external crate consumer.
 use std::sync::Arc;
 use survival::SurvivalResult;
 use survival::regression::{

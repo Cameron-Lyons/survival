@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Exact requested-time selection through the rate-table survexp path.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -11,7 +10,6 @@ attr(table, "cutpoints") <- list(c(0, 5, 10))
 class(table) <- "ratetable"
 data <- data.frame(time = c(0, 1.5, 2, 6, 7, 9), age = c(0, 8, 3, 11, 0, 7),
                    g = c("b", "a", "b", "a", "b", "a"))
-# Hex strings preserve adjacent doubles and the sign of zero through JSON.
 hex <- function(x) I(sprintf("%a", x))
 near_two <- 2 + 2 * .Machine$double.eps
 requested <- c(-0, 0, 2, 2, near_two, 4, 4, 8, 8)
@@ -42,9 +40,6 @@ add("explicit_conditional_duplicates", method = "conditional")
 add("explicit_ederer_duplicates", method = "ederer")
 add("implicit_followup_grid", times = NULL)
 add("singleton_requested_time", times = 4)
-# R's no-response caller matches against the original grid even though the
-# fit deduplicates it. Use a unique grid here; duplicate grids have a separate
-# analytical regression in Python because R can fail with out-of-bounds rows.
 add("no_response_unique_grid", formula = ~ g,
     times = c(-0, 2, near_two, 4, 8), scale = 1.25)
 

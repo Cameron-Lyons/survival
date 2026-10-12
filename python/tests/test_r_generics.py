@@ -34,7 +34,6 @@ def _small():
 
 
 def test_coef_and_vcov_of_a_concordance(lung):
-    # cf <- concordance(Surv(time, status) ~ age, lung); coef(cf); vcov(cf)
     fit = r.concordance("Surv(time, status) ~ age", lung)
     assert r.coef(fit) == pytest.approx(0.4497601678825, rel=1e-10)
     assert r.vcov(fit) == pytest.approx(0.0006321257754, rel=1e-9)
@@ -42,22 +41,17 @@ def test_coef_and_vcov_of_a_concordance(lung):
 
 def test_residuals_and_summary_of_a_survfit(lung):
     km = r.survfit("Surv(time, status) ~ sex", lung)
-    # the first row of R's residuals(km, times = c(100, 300))
     resid = r.residuals(km, times=[100, 300])
     assert len(resid.resid) == 228
     assert resid.resid[0] == pytest.approx([0.001260239445, 0.004376894225], rel=1e-9)
     assert resid == r.survfit_residuals(km, times=[100, 300])
-    # summary(km)$table[, "median"]
     table = r.model_summary(km).table
     assert [row[table.colnames.index("median")] for row in table.values] == [270.0, 426.0]
-    # survfit.coxph curves have no residuals method in R either
     with pytest.raises(TypeError, match="residuals method for coxph survival curve not found"):
         r.residuals(r.survfit(r.coxph("Surv(time, status) ~ age", lung)))
 
 
 def test_summary_of_a_pyears_table():
-    # summary(pyears(Surv(time, status) ~ grp + cut(age, c(40, 60, 80)), d, scale = 1),
-    #         rate = TRUE): event rate a (0.2, 1/12), b (0.05, 0)
     table = r.pyears("Surv(time, status) ~ grp + cut(age, c(40, 60, 80))", _small(), scale=1)
     summary = r.model_summary(table, rate=True)
     assert summary == r.summary_pyears(table, rate=True)
@@ -72,16 +66,12 @@ def test_term_labels_of_an_aareg_fit(lung):
 
 
 def test_model_frame_of_a_formula_and_of_a_fit_without_model(lung):
-    # dim(model.frame(Surv(time, status) ~ age, lung)): 228 x 2
     frame = r.model_frame("Surv(time, status) ~ age", lung)
     assert list(frame) == ["time", "status", "age"]
     assert len(frame["time"]) == 228
     subset = r.model_frame("Surv(time, status) ~ age", lung, subset=list(range(10)))
     assert len(subset["age"]) == 10
-    # model.frame(Surv(time, status) ~ ph.ecog, lung): 227 rows, na.omit drops one
     assert len(r.model_frame("Surv(time, status) ~ ph.ecog", lung)["ph.ecog"]) == 227
-    # model.frame(coxph(Surv(time, status) ~ age + sex, lung)): 228 rows of the response,
-    # age and sex, rebuilt although the fit kept no model
     fit = r.coxph("Surv(time, status) ~ age + sex", lung)
     assert fit.model is None
     rebuilt = r.model_frame(fit)
@@ -97,8 +87,6 @@ def test_model_frame_of_a_formula_and_of_a_fit_without_model(lung):
 def test_as_data_frame_of_tmerge_survsplit_and_pyears():
     d = _small()
     base = {name: d[name] for name in ("id", "grp")}
-    # R: tm <- tmerge(d[, c("id", "grp")], d, id = id, death = event(time, status)),
-    # then tmerge(tm, data.frame(id = c(1, 3), t = c(2, 6)), id = id, trt = tdc(t))
     tm = r.tmerge(base, d, id="id", death=r.event("time", "status"))
     tm = r.tmerge(tm, {"id": [1, 3], "t": [2.0, 6.0]}, id="id", trt=r.tdc("t"))
     frame = r.as_data_frame(tm)
@@ -106,12 +94,9 @@ def test_as_data_frame_of_tmerge_survsplit_and_pyears():
     assert frame["tstop"] == [2.0, 5.0, 8.0, 6.0, 12.0, 20.0]
     assert frame["death"] == [0, 1, 0, 0, 1, 1]
     assert frame["trt"] == [0, 1, 0, 0, 1, 0]
-    # survSplit(Surv(time, status) ~ ., d, cut = c(6, 10), episode = "ep")
     split = r.as_data_frame(r.survSplit("Surv(time, status) ~ .", d, cut=[6, 10], episode="ep"))
     assert split["time"] == [5.0, 6.0, 8.0, 6.0, 10.0, 12.0, 6.0, 10.0, 20.0]
     assert split["ep"] == [1, 1, 2, 1, 2, 3, 1, 2, 3]
-    # pyears(Surv(time, status) ~ grp + cut(age, c(40, 60, 80)), d, scale = 1,
-    #        data.frame = TRUE)$data; as_data_frame of the table gives the same layout
     formula = "Surv(time, status) ~ grp + cut(age, c(40, 60, 80))"
     expected = {
         "grp": ["a", "b", "a", "b"],
@@ -125,7 +110,6 @@ def test_as_data_frame_of_tmerge_survsplit_and_pyears():
 
 
 def test_as_data_frame_keeps_only_cells_with_follow_up():
-    # the table has an empty cell: b x (60,80] once subject 2 is 45
     d = _small()
     d["age"] = [50.0, 45.0, 70.0, 45.0]
     frame = r.as_data_frame(r.pyears("Surv(time, status) ~ grp + cut(age, c(40, 60, 80))", d))
@@ -137,12 +121,11 @@ def test_survreg_object_copies_and_reads_r_components(lung):
     fit = r.survreg("Surv(time, status) ~ age + sex", lung)
     clone = copy.copy(fit)
     assert clone.coefficients == fit.coefficients
-    # survreg(Surv(time, status) ~ age + sex, lung): scale, iter, df.residual
     assert fit.scale == pytest.approx([0.754050947641], rel=1e-9)
     assert (fit.iter, fit.df, fit.df_residual, fit.n) == (5, 4, 224, 228)
     assert (fit.weights, fit.score, fit.model) == (None, None, None)
     with pytest.raises(AttributeError):
-        _ = fit.status  # the Rust fit's attributes are not R components
+        _ = fit.status
 
 
 def test_as_data_frame_rejects_mappings_that_are_not_columns(lung):

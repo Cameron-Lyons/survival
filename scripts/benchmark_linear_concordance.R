@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete concordance calls; external model fitting and input setup are excluded.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

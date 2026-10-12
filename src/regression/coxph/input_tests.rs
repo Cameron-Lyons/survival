@@ -213,7 +213,6 @@ fn permissive_prediction_inputs_cannot_bypass_strict_curve_checks() {
         } else {
             new.x[(1, 0)] = f64::NAN;
         }
-        // Partial predictions keep a valid row and propagate only the missing row.
         let expected = fit.predict_expected(Some(&new), true).unwrap();
         assert!(expected.fit[0].is_finite());
         assert!(expected.fit[1].is_nan());
@@ -246,7 +245,6 @@ fn permissive_prediction_inputs_cannot_bypass_strict_curve_checks() {
 #[test]
 fn newdata_constructors_check_lengths_and_intervals() {
     for (case, new) in malformed_new_data() {
-        // Column counts and stratum membership belong to the model.
         if ["wrong columns", "unknown stratum"].contains(&case) {
             continue;
         }
@@ -410,7 +408,6 @@ fn ambiguous_strata_are_rejected_for_single_baseline_predictions() {
         fit.survfit_individual(&first_stratum, &[1, 2], SurvfitOptions::default())
             .unwrap(),
     );
-    // A full curve request explicitly returns every stratum, so it is unambiguous.
     assert_eq!(
         fit.survfit(Some(&new), SurvfitOptions::default())
             .unwrap()

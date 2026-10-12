@@ -51,8 +51,6 @@ jobs:
         run: cargo bench --locked --bench '*' -- --test
 
       - name: Run benchmarks (PR)
-        # Keep stderr separate: Divan prints timer diagnostics while the first
-        # stdout row is being written. Bash pipefail propagates benchmark errors.
         run: >-
           cargo bench --locked --bench '*' -- --color never --sample-count 100 --min-time 0.1 --max-time 1
           | tee "$RUNNER_TEMP/pr-bench.txt"
@@ -61,8 +59,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          # Keep the PR's comparison helper and raw reports intact. Both builds
-          # share the runner and the target cache, with Cargo tracking each source.
           path: .benchmark-base
 
       - name: Run benchmarks (base)

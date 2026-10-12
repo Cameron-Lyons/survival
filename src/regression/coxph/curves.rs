@@ -1,5 +1,3 @@
-//! Cached baselines, survival curves and cohort expected survival.
-
 use super::{Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, SurvfitOptions};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::find_interval;
@@ -14,8 +12,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 impl CoxPHFit {
-    /// Survival-curve types matching the tie method (`survfit.coxph`:
-    /// `ctype` 2 for Efron, 1 otherwise).
     fn default_survtype(&self) -> CoxSurvType {
         if self.method == TieMethod::Efron {
             CoxSurvType::Efron
@@ -24,7 +20,6 @@ impl CoxPHFit {
         }
     }
 
-    /// Weighted mean of the offsets (`survfit.coxph`'s `offset.mean`).
     pub(super) fn offset_mean(&self) -> f64 {
         let total: f64 = self.weights.iter().sum();
         self.offset
@@ -35,15 +30,6 @@ impl CoxPHFit {
             / total
     }
 
-    /// Per-stratum `agsurv` pieces at `x - means`, in the fit's stratum
-    /// order, with `survfit.coxph`'s `risk = exp(X %*% beta + offset -
-    /// xcenter)`: the risks relative to a subject at the means and the mean
-    /// offset, so a large offset neither overflows nor rounds the baseline
-    /// survival to 1.  `coxsurv.fit` uses `survtype` for the variance too.
-    ///
-    /// `start_time` keeps only the rows whose stop time is at or after it
-    /// (`survfit.coxph`'s `keep <- Y[, ncol(Y) - 1] >= start.time`); a
-    /// stratum it empties keeps an empty curve.
     fn compute_curves(
         &self,
         survtype: CoxSurvType,
@@ -91,7 +77,6 @@ impl CoxPHFit {
             .collect()
     }
 
-    /// The cached baseline curves for the fit's own hazard type.
     pub(crate) fn baseline_curves(&self) -> SurvivalResult<&[AgsurvCurve]> {
         self.check_prediction_dimensions()?;
         if let Some(curves) = self.curves.get() {
@@ -101,8 +86,6 @@ impl CoxPHFit {
         Ok(self.curves.get_or_init(|| curves))
     }
 
-    /// The curves of one hazard type from the rows kept by `start_time`:
-    /// the cached ones for the fit's own type and every row.
     fn curves_for(
         &self,
         survtype: CoxSurvType,
@@ -116,9 +99,6 @@ impl CoxPHFit {
         }
     }
 
-    /// Centred new covariate rows (`newx - means`) and their relative risks
-    /// on the baseline curves' scale, `survfit.coxph`'s `risk2 = exp(x2 %*%
-    /// beta + offset2 - xcenter)`.
     fn centered_newdata(&self, newdata: &CoxNewData) -> (Array2<f64>, Vec<f64>) {
         self.centered_rows(newdata.x.view(), newdata.offset.as_deref())
     }
@@ -145,11 +125,8 @@ impl CoxPHFit {
         (x2c, risk2)
     }
 
-    /// `basehaz(fit, centered)`.
     pub fn basehaz(&self, centered: bool) -> SurvivalResult<Basehaz> {
         let curves = self.baseline_curves()?;
-        // the curves are survfit(fit)'s, at x = means and the mean offset;
-        // uncentred divides the offset sum(means * coef) back out.
         let scale = if centered {
             1.0
         } else {
@@ -179,9 +156,6 @@ impl CoxPHFit {
         })
     }
 
-    /// `survfit(fit, newdata)`: one curve per stratum (all new rows as
-    /// columns), or one curve per new row when `newdata` carries strata.
-    /// Without `newdata` the curve is for a covariate row at the means.
     pub fn survfit(
         &self,
         newdata: Option<&CoxNewData>,
@@ -199,7 +173,6 @@ impl CoxPHFit {
         let curves = self.curves_for(survtype, options.start_time)?;
         let (x2c, risk2) = match newdata {
             Some(newdata) => self.centered_newdata(newdata),
-            // the curve at the means and the mean offset
             None => (Array2::zeros((1, self.nvar())), vec![1.0]),
         };
         let varmat = options.se_fit.then_some(&self.var);
@@ -233,15 +206,6 @@ impl CoxPHFit {
         Ok(result)
     }
 
-    /// Survival probabilities at `times`, with one column per observation.
-    /// Without `newdata`, predict for the training rows in their original order.
-    /// Fits with multiple strata require a stratum for each new observation.
-    ///
-    /// Uses the same default estimate as [`Self::survfit`] (`stype = 2`,
-    /// `ctype` matching the fitted tie method). Times may be unsorted or
-    /// repeated; survival is 1 before the first time and stays at the last
-    /// value beyond follow-up. Only the requested `times.len() * nrows`
-    /// probabilities are allocated, rather than the full curves and hazards.
     pub fn predict_survival_at(
         &self,
         times: &[f64],
@@ -297,8 +261,6 @@ impl CoxPHFit {
                 if index == 0 {
                     continue;
                 }
-                // Match expand_curve's exp(-H).powf(risk), including its
-                // underflow behavior, rather than reassociating the exponent.
                 let baseline = (-curve.cumhaz[index - 1]).exp();
                 let mut output = result.row_mut(i);
                 for &row in &rows {
@@ -309,8 +271,6 @@ impl CoxPHFit {
         Ok(result)
     }
 
-    /// Cohort expected survival, aggregating baseline hazards directly instead
-    /// of materializing every subject's survival and cumulative-hazard curve.
     pub fn expected_survival(
         &self,
         newdata: &CoxNewData,
@@ -358,9 +318,6 @@ impl CoxPHFit {
         survexp_cox_prepared(&baselines, &risk, &strata, group, weights, y, times, method)
     }
 
-    /// `survfit(fit, newdata, id)`: one curve per subject whose covariates
-    /// change over the (entry, time] intervals of `newdata`. As in R, omitting
-    /// strata selects the first fitted stratum for an individual path.
     pub fn survfit_individual(
         &self,
         newdata: &CoxNewData,

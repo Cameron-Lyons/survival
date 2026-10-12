@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Stock survival differential references for grouped residual and pseudo preparation.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -26,8 +25,6 @@ make_data <- function(histories, multistate) {
     d
   })
   d <- do.call(rbind, pieces)
-  # Original rows alternate strata and reverse within-stratum history order.
-  # This keeps first-appearance id order different from factor-level order.
   per_group <- nrow(pieces[[1L]])
   order <- as.vector(t(matrix(seq_len(nrow(d)), nrow = per_group)[per_group:1, 7:1]))
   d <- d[order, , drop = FALSE]
@@ -49,9 +46,6 @@ for (histories in c(FALSE, TRUE)) for (multistate in c(FALSE, TRUE)) {
   options <- list(formula = as.formula(formula), data = d, weights = quote(weight),
                   id = quote(subject), cluster = quote(cluster), timefix = FALSE,
                   na.action = na.omit, model = TRUE)
-  # Both counting KM and right-censored AJ retain model rows before the
-  # cutoff, with different residual rules. Unconditional AJ histories also
-  # exercise multiple transitions and empirical initial-state preparation.
   start_time <- if (xor(histories, multistate)) 1.5 else NULL
   if (!is.null(start_time)) options$start.time <- start_time
   fit <- do.call(survfit, options)

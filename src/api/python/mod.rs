@@ -1,11 +1,5 @@
 use pyo3::prelude::*;
 
-// Registration files resolve every binding through its domain's `pub use`
-// surface (`crate::<domain>::Name`), so a symbol only registers once its
-// domain module re-exports it. The `#[pyfunction]`s that exist purely as
-// Python entry points live in `pybridge` and `validation::hypothesis_tests`
-// and are named explicitly; `classical::evaluation` imports the
-// `concordance` and `scoring` kernels it wraps by name.
 use crate::data_types::*;
 use crate::interval::interval_censoring::CensorType;
 #[cfg(feature = "ml")]
@@ -42,10 +36,6 @@ pub(crate) fn register_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CoxRegressionInput>()?;
     m.add_class::<CoxMartInput>()?;
     m.add_class::<AndersenGillInput>()?;
-    // Declared as `#[pyclass]` outside any domain registration file; the
-    // registration audit (`api::registration_audit`) requires it here until
-    // its owner either registers it alongside its siblings or drops the
-    // attribute.
     m.add_class::<CensorType>()?;
 
     classical::register(m)?;

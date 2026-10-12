@@ -1,43 +1,29 @@
-//! R's `ratetable` object (`?ratetable`, `R/ratetable.R`,
-//! `R/is.ratetable.R`, `R/summary.ratetable.R`, `R/ratetableDate.R`).
-//!
-//! A rate table is a multi-way array of hazard rates together with, per
-//! dimension, a name (`dimid`), labels (`dimnames`), a type code and, for
-//! non-factor dimensions, the lower cutpoint of every category.  Types follow
-//! `?ratetable`: 1 = factor, 2 = continuous (age in days), 3 = date, 4 = the
-//! calendar-year axis of the US census tables (see [`DimType`]).  Date
-//! cutpoints are stored the way `ratetableDate` returns them: days since
-//! 1970-01-01, which is how R's `Date` class counts.  Rates are stored in
-//! R's column-major order (the first index varies fastest).
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::FloatVec;
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::fmt;
 
-/// R's `type` attribute of a `ratetable` dimension.
+#[doc = " R's `type` attribute of a `ratetable` dimension."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[pyclass(eq, eq_int, from_py_object)]
 pub enum DimType {
-    /// Type 1: a categorical dimension, indexed by level (`sex`, `race`).
+    #[doc = " Type 1: a categorical dimension, indexed by level (`sex`, `race`)."]
     Factor = 1,
-    /// Type 2: a continuous, time-advancing dimension, usually age in days.
+    #[doc = " Type 2: a continuous, time-advancing dimension, usually age in days."]
     Continuous = 2,
-    /// Type 3: a calendar-date dimension (days since 1970-01-01).
+    #[doc = " Type 3: a calendar-date dimension (days since 1970-01-01)."]
     Date = 3,
-    /// Type 4: the calendar-year axis of the US census tables, whose rates
-    /// change on the subject's birthday rather than on January 1st.
+    #[doc = " Type 4: the calendar-year axis of the US census tables, whose rates"]
+    #[doc = " change on the subject's birthday rather than on January 1st."]
     UsYear = 4,
 }
 
 impl DimType {
-    /// R's integer type code.
     pub fn code(self) -> u8 {
         self as u8
     }
 
-    /// Parse R's integer type code.
     pub fn from_code(code: i64) -> Option<Self> {
         match code {
             1 => Some(Self::Factor),
@@ -48,14 +34,13 @@ impl DimType {
         }
     }
 
-    /// Whether the dimension advances with follow-up time.
     pub fn is_time_based(self) -> bool {
         self != Self::Factor
     }
 }
 
-/// Outcome of R's `is.ratetable(x, verbose = TRUE)`: an empty `messages`
-/// list means the structure is a valid rate table.
+#[doc = " Outcome of R's `is.ratetable(x, verbose = TRUE)`: an empty `messages`"]
+#[doc = " list means the structure is a valid rate table."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct RatetableCheck {
@@ -65,37 +50,36 @@ pub struct RatetableCheck {
     pub messages: Vec<String>,
 }
 
-/// A rate table with R's attributes.
+#[doc = " A rate table with R's attributes."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct RateTable {
-    /// `dim(x)`.
+    #[doc = " `dim(x)`."]
     #[pyo3(get)]
     pub dims: Vec<usize>,
-    /// `names(dimnames(x))` (R's `dimid`), one per dimension.
+    #[doc = " `names(dimnames(x))` (R's `dimid`), one per dimension."]
     #[pyo3(get)]
     pub dimid: Vec<String>,
-    /// `dimnames(x)`, one label vector per dimension.
+    #[doc = " `dimnames(x)`, one label vector per dimension."]
     #[pyo3(get)]
     pub dimnames: Vec<Vec<String>>,
-    /// `attr(x, "cutpoints")`: lower bounds per dimension, `None` for factor
-    /// dimensions (R `NULL`).  Dates are days since 1970-01-01.
+    #[doc = " `attr(x, \"cutpoints\")`: lower bounds per dimension, `None` for factor"]
+    #[doc = " dimensions (R `NULL`).  Dates are days since 1970-01-01."]
     #[pyo3(get)]
     pub cutpoints: Vec<Option<Vec<f64>>>,
-    /// `attr(x, "type")` per dimension.
+    #[doc = " `attr(x, \"type\")` per dimension."]
     #[pyo3(get)]
     pub types: Vec<DimType>,
-    /// The hazard rates in column-major order, `dims.iter().product()` long.
+    #[doc = " The hazard rates in column-major order, `dims.iter().product()` long."]
     #[pyo3(get)]
     pub rates: Vec<f64>,
-    /// Built-in table name, used to retain its R match-summary convention.
-    /// Tables constructed from raw attributes have no source-specific summary.
+    #[doc = " Built-in table name, used to retain its R match-summary convention."]
+    #[doc = " Tables constructed from raw attributes have no source-specific summary."]
     #[pyo3(get)]
     pub source: Option<&'static str>,
 }
 
 impl fmt::Display for RateTable {
-    /// The text of R's `summary.ratetable` (`R/summary.ratetable.R`).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, " Rate table with {} dimensions:", self.dims.len())?;
         for (d, name) in self.dimid.iter().enumerate() {
@@ -133,10 +117,6 @@ impl fmt::Display for RateTable {
     }
 }
 
-/// R's `is.ratetable(x, verbose = TRUE)` structural checks
-/// (`R/is.ratetable.R`), reported as its messages; an empty list is R's
-/// `TRUE`.  `types` are R's integer codes so that malformed codes can be
-/// reported rather than rejected up front.
 pub fn ratetable_problems(
     dims: &[usize],
     dimid: &[String],
@@ -244,7 +224,6 @@ impl RateTable {
         Ok(())
     }
 
-    /// Check the constructor invariants again after public fields are changed.
     pub fn validate(&self) -> SurvivalResult<()> {
         Self::validate_parts(
             &self.dims,
@@ -256,7 +235,6 @@ impl RateTable {
         )
     }
 
-    /// Build and validate a rate table from R's attributes.
     pub fn try_new(
         dims: Vec<usize>,
         dimid: Vec<String>,
@@ -277,24 +255,18 @@ impl RateTable {
         })
     }
 
-    /// Number of dimensions.
     pub fn ndim(&self) -> usize {
         self.dims.len()
     }
 
-    /// Match declared labels on a zero-based factor dimension to one-based positions.
     pub fn match_levels(&self, dimension: usize, labels: &[String]) -> SurvivalResult<Vec<usize>> {
         super::match_ratetable::match_levels(self, dimension, labels)
     }
 
-    /// Zero-based position of `label` along dimension `dim` (R's
-    /// `match(label, dimnames(x)[[dim]])`).
     pub fn level(&self, dim: usize, label: &str) -> Option<usize> {
         self.dimnames.get(dim)?.iter().position(|l| l == label)
     }
 
-    /// The rate at a zero-based multi-index, e.g. `[50, 0, 60]` for
-    /// `survexp.us["50", "male", "2000"]`.
     pub fn rate(&self, index: &[usize]) -> Option<f64> {
         if index.len() != self.dims.len() {
             return None;
@@ -311,13 +283,10 @@ impl RateTable {
         self.rates.get(offset).copied()
     }
 
-    /// Position of the type-4 (US calendar year) dimension, if any.
     pub fn us_year_dimension(&self) -> Option<usize> {
         self.types.iter().position(|t| *t == DimType::UsYear)
     }
 
-    /// R's `rfac <- 1*(atts$type == 1)`: the factor flags handed to the C
-    /// person-years code.
     pub fn factor_flags(&self) -> Vec<i32> {
         self.types
             .iter()
@@ -325,8 +294,6 @@ impl RateTable {
             .collect()
     }
 
-    /// The per-dimension cutpoints as ragged slices, empty for factor
-    /// dimensions, in the layout `pystep` expects.
     pub fn cut_slices(&self) -> Vec<&[f64]> {
         self.cutpoints
             .iter()
@@ -334,18 +301,11 @@ impl RateTable {
             .collect()
     }
 
-    /// Check a matrix of starting positions in the table (one row per
-    /// subject, one column per dimension in the table's order, the `R` of
-    /// `match.ratetable`): every entry is finite and, on a factor
-    /// dimension, an integer level subscript between 1 and the number of
-    /// levels, the invariants `match.ratetable` establishes and the C
-    /// person-years code relies on when it indexes the rate array.
     pub fn validate_positions(&self, positions: &Array2<f64>) -> SurvivalResult<()> {
         self.validate()?;
         self.validate_positions_validated(positions)
     }
 
-    /// Position checks for callers that have already checked the table itself.
     pub(crate) fn validate_positions_validated(
         &self,
         positions: &Array2<f64>,
@@ -393,7 +353,7 @@ impl RateTable {
 
 #[pymethods]
 impl RateTable {
-    /// Construct from R's attributes; `types` are R's integer codes 1-4.
+    #[doc = " Construct from R's attributes; `types` are R's integer codes 1-4."]
     #[new]
     #[pyo3(signature = (dims, dimid, dimnames, cutpoints, types, rates))]
     fn new(
@@ -422,31 +382,31 @@ impl RateTable {
         )?)
     }
 
-    /// R's integer type codes, one per dimension.
+    #[doc = " R's integer type codes, one per dimension."]
     fn type_codes(&self) -> Vec<i64> {
         self.types.iter().map(|t| i64::from(t.code())).collect()
     }
 
-    /// Match all declared factor levels, including unused levels, to one-based codes.
+    #[doc = " Match all declared factor levels, including unused levels, to one-based codes."]
     #[pyo3(name = "match_levels")]
     fn match_levels_py(&self, dimension: usize, labels: Vec<String>) -> PyResult<Vec<usize>> {
         Ok(self.match_levels(dimension, &labels)?)
     }
 
-    /// The text of R's `summary.ratetable`.
+    #[doc = " The text of R's `summary.ratetable`."]
     fn __str__(&self) -> String {
         self.to_string()
     }
 
-    /// The rate at a zero-based multi-index (`None` when out of range).
+    #[doc = " The rate at a zero-based multi-index (`None` when out of range)."]
     #[pyo3(name = "rate")]
     fn rate_py(&self, index: Vec<usize>) -> Option<f64> {
         self.rate(&index)
     }
 }
 
-/// R's `is.ratetable(x, verbose = TRUE)` on raw attributes (`types` are
-/// R's integer codes).  The `valid` flag is R's non-verbose result.
+#[doc = " R's `is.ratetable(x, verbose = TRUE)` on raw attributes (`types` are"]
+#[doc = " R's integer codes).  The `valid` flag is R's non-verbose result."]
 #[pyfunction]
 #[pyo3(signature = (dims, dimid, dimnames, cutpoints, types, n_rates))]
 pub fn is_ratetable(
@@ -464,7 +424,7 @@ pub fn is_ratetable(
     }
 }
 
-/// A proleptic Gregorian calendar date, the components of an R `Date`.
+#[doc = " A proleptic Gregorian calendar date, the components of an R `Date`."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[pyclass(from_py_object)]
 pub struct CalendarDate {
@@ -483,17 +443,13 @@ impl fmt::Display for CalendarDate {
 }
 
 const DAYS_BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-/// Days from 0000-03-01 to 1970-01-01 in the proleptic Gregorian calendar.
 const EPOCH_DAY_NUMBER: i64 = 719_468;
-/// Days from 0001-01-01 to 1970-01-01.
 const EPOCH_FROM_YEAR_ONE: i64 = 719_162;
 
-/// Whether `year` is a leap year in the proleptic Gregorian calendar.
 pub fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Number of days in a month.
 fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -508,7 +464,6 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
-/// Days from 1970-01-01 to `year-month-day`, i.e. `as.numeric(as.Date(...))`.
 fn day_number(year: i32, month: u32, day: u32) -> i64 {
     let previous_year = i64::from(year) - 1;
     let days_before_year = 365 * previous_year + previous_year.div_euclid(4)
@@ -519,7 +474,6 @@ fn day_number(year: i32, month: u32, day: u32) -> i64 {
         - EPOCH_FROM_YEAR_ONE
 }
 
-/// Days since 1970-01-01 of a calendar date.
 pub fn calendar_to_days(date: CalendarDate) -> SurvivalResult<i64> {
     if !(1..=12).contains(&date.month) {
         return Err(SurvivalError::invalid_input(
@@ -534,20 +488,20 @@ pub fn calendar_to_days(date: CalendarDate) -> SurvivalResult<i64> {
     Ok(day_number(date.year, date.month, date.day))
 }
 
-/// R's `ratetableDate` for a calendar date: the number of days since
-/// 1970-01-01, which is how `Date` objects are stored (`R/ratetableDate.R`).
-/// Numeric values pass through `ratetableDate` unchanged, so callers holding
-/// day counts need no conversion.
+#[doc = " R's `ratetableDate` for a calendar date: the number of days since"]
+#[doc = " 1970-01-01, which is how `Date` objects are stored (`R/ratetableDate.R`)."]
+#[doc = " Numeric values pass through `ratetableDate` unchanged, so callers holding"]
+#[doc = " day counts need no conversion."]
 #[pyfunction]
 #[pyo3(signature = (year, month=1, day=1))]
 pub fn ratetable_date(year: i32, month: u32, day: u32) -> PyResult<f64> {
     Ok(calendar_to_days(CalendarDate { year, month, day })? as f64)
 }
 
-/// The calendar date `days` after 1970-01-01 (`as.Date(days, origin =
-/// "1970-01-01")`); fractional days are truncated towards negative infinity
-/// as R's `Date` printing does. Nonfinite days and dates whose year cannot
-/// be represented by [`CalendarDate`]'s `i32` field return an error.
+#[doc = " The calendar date `days` after 1970-01-01 (`as.Date(days, origin ="]
+#[doc = " \"1970-01-01\")`); fractional days are truncated towards negative infinity"]
+#[doc = " as R's `Date` printing does. Nonfinite days and dates whose year cannot"]
+#[doc = " be represented by [`CalendarDate`]'s `i32` field return an error."]
 #[pyfunction]
 pub fn days_to_date(days: f64) -> SurvivalResult<CalendarDate> {
     if !calendar_days_in_range(days) {
@@ -555,7 +509,6 @@ pub fn days_to_date(days: f64) -> SurvivalResult<CalendarDate> {
             "days must be finite and within the supported calendar range (i32 years)",
         ));
     }
-    // Howard Hinnant's civil-from-days algorithm on a March-based year.
     let z = days.floor() as i64 + EPOCH_DAY_NUMBER;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -569,21 +522,15 @@ pub fn days_to_date(days: f64) -> SurvivalResult<CalendarDate> {
 }
 
 fn calendar_days_in_range(days: f64) -> bool {
-    // These integral bounds are exactly representable as f64 and leave ample
-    // room for the i64 arithmetic in civil-from-days, including its epoch shift.
     days.is_finite()
         && days.floor() >= day_number(i32::MIN, 1, 1) as f64
         && days.floor() <= day_number(i32::MAX, 12, 31) as f64
 }
 
 fn calendar_label(days: f64) -> String {
-    // Validated tables always have representable cutpoints. Keep Display safe
-    // for a Rust caller that builds the public struct directly.
     days_to_date(days).map_or_else(|_| "NA".into(), |date| date.to_string())
 }
 
-/// R's `as.Date(paste0(format(bdate, "%Y"), "-01-01"))`: January 1st of the
-/// year containing day `days`, as days since 1970-01-01.
 pub fn start_of_year(days: f64) -> SurvivalResult<f64> {
     Ok(day_number(days_to_date(days)?.year, 1, 1) as f64)
 }

@@ -48,7 +48,6 @@ def main() -> None:
         estimator = CoxPHEstimator().fit(x, np.column_stack([followup, status]))
         for n_times in args.times:
             times = np.linspace(0.0, float(np.quantile(followup, 0.9)), n_times)
-            # Plain lists keep the kernel benchmark comparable with older bindings.
             time_list, status_list, at = followup.tolist(), status.tolist(), times.tolist()
             phat = (1.0 - np.exp(-times[:, None] * np.exp(x[:, 0])[None, :])).tolist()
             calls = {

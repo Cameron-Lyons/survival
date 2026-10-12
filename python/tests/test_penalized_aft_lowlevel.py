@@ -47,8 +47,6 @@ def test_survpenal_fit_against_r(case):
     if "error" in expected:
         assert case["name"] == "unused_stratum"
         assert "exactly singular" in expected["error"]
-        # R tries to invert the unused scale's zero covariance row. The port
-        # retains it and agrees with R's otherwise identical two-stratum fit.
         compact = next(c for c in REFERENCE["cases"] if c["name"] == "gaussian_strata")
         assert case["x"] == compact["x"]
         assert case["specs"] == compact["specs"]
@@ -90,8 +88,6 @@ def test_survpenal_fit_against_r(case):
                 atol=3e-8,
                 err_msg=name,
             )
-    # The established offset and aliased-coefficient corrections also apply to
-    # bare fits. R omits dense offsets and propagates NA through every row.
     lp = np.asarray(expected["linear_predictors"], dtype=float)
     if case["name"] == "alias":
         lp = np.asarray(case["x"]) @ np.nan_to_num(fit.coefficients[:-1])
@@ -107,8 +103,6 @@ def test_survpenal_fit_against_r(case):
     for label, target in expected["history"].items():
         value = fit.history[label]
         assert value.done == target["done"]
-        # Native history schemas remain available even when R omits names
-        # for a fixed gamma penalty's empty search history.
         columns = target["columns"] or (
             ["theta", "loglik", "c.loglik"] if "gamma" in case["name"] else []
         )
@@ -121,8 +115,6 @@ def test_survpenal_fit_against_r(case):
     for terms, lines in zip((False, True), expected["print"], strict=True):
         report = r.print_survreg_penal(fit, terms=terms)
         if case["name"] == "alias":
-            # Aliased ridge cancellation leaves coefficients near machine
-            # zero. R and Rust print different tiny values at three digits.
             assert report.lines[6:] == lines[6:]
         else:
             assert report.lines == lines
@@ -136,7 +128,7 @@ def test_callbacks_and_inputs_are_not_retained():
     distribution = custom_distribution()
     distribution["variance"] = lambda *args: 1.0
     fit = r.survpenal_fit(x, case["y"], **{**kwargs, "dist": distribution})
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(fit))
     expected = r.survpenal_fit(x, case["y"], **{**kwargs, "dist": "gaussian"})
     np.testing.assert_allclose(fit.coefficients, expected.coefficients, atol=1e-9)
     x[:] = 100
@@ -207,7 +199,7 @@ def test_penalty_callbacks_release_their_state(sparse):
         x, case["y"], pattr=[regression.CoxPenalty.callback(penalty, sparse=sparse)], **kwargs
     )
     assert set(calls) == {1 if sparse else 2}
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(fit))
     assert restored.coefficients == fit.coefficients
     assert restored.frail == fit.frail
     r.print_survreg_penal(restored)
@@ -225,7 +217,7 @@ def test_spline_result_retains_only_print_metadata():
     fit = r.survpenal_fit(case["x"], case["y"], **kwargs)
     before = r.print_survreg_penal(fit)
     kwargs["pattr"][0].basis[0][:] = [100] * len(kwargs["pattr"][0].basis[0])
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(fit))
     assert r.print_survreg_penal(restored).lines == before.lines
     assert not hasattr(restored._print_info[1], "basis")
     assert list(r.as_data_frame(before)) == ["term", *before.columns]

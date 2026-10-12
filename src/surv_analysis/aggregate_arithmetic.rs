@@ -1,13 +1,3 @@
-//! Ordinary aggregation with R's extended exceptional-case arithmetic.
-//!
-//! Same-sign normal inputs use a compensated binary64 sum. Its relative error
-//! is bounded by a few binary64 ulps in the certified domain below; ordinary
-//! results need not match the reference's final bit. Exceptional groups replay
-//! R's 64-bit extended arithmetic, with a separately stored exponent so an
-//! intermediate sum may exceed the binary64 range. This is not an exact
-//! mathematical sum: terms below that precision can still be lost.
-
-/// Accurate ordinary mean with R's finite-sum and scaled-sum exceptional paths.
 pub(crate) fn r_mean(values: &[f64]) -> f64 {
     if let [value] = values {
         return if value.is_nan() {
@@ -24,9 +14,6 @@ pub(crate) fn r_mean(values: &[f64]) -> f64 {
     extended_mean(values)
 }
 
-/// R's default ungrouped survival aggregation uses `rowMeans`, which divides
-/// the sequential extended sum without mean's residual refinement. Ordinary
-/// same-sign groups use the same bounded fast path as the explicit mean.
 pub(crate) fn r_row_mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         return f64::NAN;
@@ -40,9 +27,6 @@ pub(crate) fn r_row_mean(values: &[f64]) -> f64 {
     }
 }
 
-/// Ordinary totals use a compensated binary64 sum; exceptional groups replay
-/// the reference's sequential 64-bit-significand accumulator. In particular,
-/// intermediate overflow and very large cancellation retain R's behavior.
 pub(crate) fn r_sum(values: &[f64]) -> f64 {
     if let Some(sum) = normal_sum(values) {
         return sum;
@@ -84,26 +68,11 @@ fn normal_sum(values: &[f64]) -> Option<f64> {
     Some(sum + correction)
 }
 
-/// Neumaier's compensated sum in a conservative noncancelling domain.
-///
-/// The error-free addition residuals have absolute sum <= n*u*sum|x|,
-/// u = 2^-53. Adding these residuals introduces error <= gamma(n)*n*u*sum|x|,
-/// gamma(n) = n*u/(1-n*u). For n <= 2^20 this coefficient is < u/4096.
-/// Division and the final addition add only a few further u terms. Inputs
-/// have one sign, so sum|x| = |sum x|; a normal result bounds division's
-/// gradual-underflow error by u*|mean|. The MAX/4 guard leaves room for both
-/// the reference's residual sum and rounding error. The mathematical mean's
-/// relative error is conservatively bounded by 8*EPSILON; comparison with
-/// R's sequential residual sum additionally allows 8*n*2^-64. Mixed signs,
-/// subnormal inputs/results, or any failed certificate use exact replay.
 fn normal_mean(values: &[f64]) -> Option<f64> {
     if values.is_empty() || values.len() > 1 << 20 {
         return None;
     }
     if let &[first, second] = values {
-        // In this domain, addition has relative error <= u and multiplying
-        // its normal mean by one half is exact. No residual is needed for
-        // the documented ordinary bound. Exceptional pairs still replay R.
         if (first != 0.0 && !first.is_normal())
             || (second != 0.0 && !second.is_normal())
             || (first != 0.0
@@ -157,7 +126,6 @@ fn normal_mean(values: &[f64]) -> Option<f64> {
     Some(mean)
 }
 
-/// Literal sequential replay of the reference's 64-bit significand arithmetic.
 fn extended_mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         return f64::NAN;
@@ -172,7 +140,6 @@ fn extended_mean(values: &[f64]) -> f64 {
     let mut mean = if finite_sum {
         sum.divide(n)
     } else {
-        // R divides the binary64 input before promoting each smaller term.
         values.iter().fold(Extended::ZERO, |sum, &value| {
             sum.add(Extended::from_f64(value / values.len() as f64))
         })
@@ -220,8 +187,6 @@ fn extended_sum(values: &[f64]) -> Result<Extended, f64> {
     Ok(sum)
 }
 
-/// A finite number `(-1)^negative * significand * 2^exponent`.
-/// Nonzero significands always have their highest bit set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Extended {
     negative: bool,
@@ -250,9 +215,6 @@ impl Extended {
         Self::round(significand as u128, exponent, bits >> 63 != 0, 0, 1)
     }
 
-    /// Rounds the exact value `(magnitude + remainder/denominator) * 2^exponent`.
-    /// Division supplies a quotient with at least 64 bits; smaller magnitudes
-    /// arise only from exact addition/subtraction and have no remainder.
     fn round(
         magnitude: u128,
         exponent: i32,
@@ -307,10 +269,6 @@ impl Extended {
         }
         let delta = (self.exponent - other.exponent) as u32;
         if delta > 64 {
-            // Below a power of two, spacing is half that above it. An opposite
-            // sign term between a quarter and half of the larger unit rounds
-            // to the immediately preceding value; the exact quarter tie keeps
-            // the even power of two. Every other far term rounds away.
             if self.negative != other.negative
                 && self.significand == 1 << 63
                 && delta == 65
@@ -517,8 +475,6 @@ mod tests {
         );
         let tiny = f64::from_bits(1);
         assert_eq!(r_mean(&[tiny, tiny, tiny]), tiny);
-        // The reference accumulator rounds each operation to 64 bits; it is
-        // intentionally distinct from the exact mathematical mean 1/3 here.
         assert_eq!(r_mean(&[1e300, 1.0, -1e300]), 0.0);
     }
 

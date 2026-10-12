@@ -1,20 +1,9 @@
-//! Martingale residuals of a Cox model on (start, stop] data.
-//!
-//! `agmart3` is a port of `agmart3.c` (survival 3.8-12), the O(n log n)
-//! kernel `agreg.fit` calls; [`agmart`] reproduces the R-side preparation in
-//! `agreg.fit`: observations whose interval contains no event time of their
-//! stratum are set aside (`ignore`, residual 0, never added to a sum), and
-//! the remaining ones are walked from the largest stop time down.  An exact
-//! fit gets the Breslow form, as `agexact.fit` does with `agmart(method = 0)`.
-
 use crate::core::strata_order::stratum_groups;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{AndersenGillInput, CountingProcessData, Weights};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::TieMethod;
 
-/// Martingale residuals `status - score * (H(stop) - H(start))` for
-/// (start, stop] data, in the order of `input`.
 pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
     let n = input.counting.len();
     CountingProcessData::validate_parts(
@@ -45,9 +34,6 @@ pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Ve
     ))
 }
 
-/// `agreg.fit`'s residual step on validated, unsorted rows: set aside the
-/// intervals that span no event time, build the two sort orders and run
-/// [`agmart3`].
 pub(crate) fn agmart_rows(
     start: &[f64],
     stop: &[f64],
@@ -59,10 +45,6 @@ pub(crate) fn agmart_rows(
 ) -> Vec<f64> {
     let n = start.len();
 
-    // `agreg.fit`: an interval that spans no event time of its stratum never
-    // enters a risk set.  Sorting those observations last and stopping the
-    // sweep before them (`nused`) keeps a huge risk score from poisoning
-    // the running sums.
     let mut ignore = vec![true; n];
     for (_, rows) in stratum_groups(strata) {
         let mut event_times: Vec<f64> = rows
@@ -109,9 +91,6 @@ pub(crate) fn agmart_rows(
     )
 }
 
-/// `agmart3.c`.  `sort1`/`sort2` order the observations by decreasing start
-/// and stop time within stratum, with the `n - nused` ignored observations
-/// last; `strata` are labels, compared directly as the C code does.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agmart3(
     nused: usize,
@@ -138,8 +117,6 @@ pub(crate) fn agmart3(
     let mut istrat = strata[sort2[0]];
     let mut person2 = 0;
     while person2 < nused {
-        // Find the next event time, closing the previous stratum when the
-        // walk crosses into a new one.
         let mut dtime = 0.0;
         let mut k = person2;
         while k < nused {
@@ -168,8 +145,6 @@ pub(crate) fn agmart3(
             break;
         }
 
-        // Remove those whose start time is at or beyond `dtime` and finish
-        // their residual.
         while person1 < nused {
             let p1 = sort1[person1];
             if tstart[p1] < dtime || strata[p1] != istrat {
@@ -182,7 +157,6 @@ pub(crate) fn agmart3(
             person1 += 1;
         }
 
-        // Add the newly at-risk subjects.
         let mut deaths = 0.0;
         let mut e_denom = 0.0;
         let mut wtsum = 0.0;
@@ -221,7 +195,6 @@ pub(crate) fn agmart3(
                 e_hazard += wtsum * (1.0 - temp) / (denom - temp * e_denom);
             }
             hazard = total;
-            // Tied deaths do not receive the full hazard increment.
             let temp = hazard - e_hazard;
             while person2 < k {
                 let p2 = sort2[person2];
@@ -306,7 +279,6 @@ mod tests {
 
     #[test]
     fn delayed_entry_subtracts_the_hazard_before_entry() {
-        // Subject 2 enters at 2 and so is not at risk for the event at 1.
         let resid = agmart(
             &ag_input(
                 vec![0.0, 2.0, 0.0],

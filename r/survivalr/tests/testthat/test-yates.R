@@ -23,8 +23,6 @@
 }
 
 .yates_reference <- function(fit, ...) {
-  # S3 registrations share the generic name. Resolve stock setup methods
-  # explicitly so attaching the bridge cannot substitute its curve summary.
   yates_setup <- function(fit, ...) {
     class <- class(fit)[1L]
     method <- if (class %in% c("coxph", "glm")) {
@@ -41,7 +39,6 @@ test_that("linear Yates preserves R populations, contrasts, transformations and 
   for (formula in list(y ~ a * b, y ~ a * b + z, y ~ a + b + log(z), y ~ a + b + splines::ns(z, 3))) {
     fit <- lm(formula, data, weights = w)
     for (population in c("data", "sas")) for (test in c("global", "pairwise")) {
-      # Stock R restores the original matrix dimensions after replicating rows.
       if (population == "sas" && grepl("ns", deparse(formula), fixed = TRUE)) next
       .yates_compare(fit, "a", population = population, test = test)
       .yates_compare(fit, "b", population = population, test = test)

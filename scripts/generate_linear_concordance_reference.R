@@ -45,8 +45,6 @@ add <- function(name, formulas = "y ~ x + z", weighted = FALSE, zero = FALSE,
   if (bounds) { options$ymin <- 3; options$ymax <- 5 }
   result <- do.call(concordance, c(fits, options))
   raw <- clean(result)
-  # R applies case weights twice to the joint sandwich. Use the already
-  # weighted, optionally clustered single-model influence vectors exactly once.
   if (length(fits) > 1 && weighted && !new) {
     columns <- lapply(fits, function(fit) {
       args <- options; args$influence <- 1L

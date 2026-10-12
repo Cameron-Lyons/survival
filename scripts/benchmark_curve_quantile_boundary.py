@@ -121,7 +121,6 @@ def main() -> None:
                     np.array([0.25, 0.5, 0.75]) if nprobs == 3 else np.linspace(0.01, 0.99, nprobs)
                 )
                 probabilities = input_layout(values, layout)
-                # Omitting probs exercises the entry point's default quartiles.
                 boundary_probs = None if nprobs == 3 else probabilities
                 for conf_int in (False, True):
                     boundary_call = partial(

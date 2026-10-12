@@ -1,13 +1,3 @@
-//! Score residuals of a Cox model on (start, stop] data.
-//!
-//! `agscore3_sorted` ports `agscore3.c` (survival 3.8-12): each
-//! observation's residual is updated only when it enters and when it leaves
-//! the risk set, from running totals of the cumulative hazard and of
-//! `sum xbar(t) dLambda(t)`.  [`agscore3`] reproduces the surrounding
-//! `residuals.coxph` code: sort with `order(strata, stop, -status)`, build
-//! the start-time order `sort1 = order(strata, start)` on the sorted rows,
-//! run the kernel and restore input order.
-
 use crate::core::strata_order::order_within_strata;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::CountingProcessData;
@@ -16,8 +6,6 @@ use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
 use ndarray::{Array2, ArrayView2};
 
-/// Score residuals (`n x p`, input order) for (start, stop] data; see
-/// [`crate::scoring::coxscore2()`] for the argument conventions.
 pub fn agscore3(
     counting: &CountingProcessData,
     covariates: ArrayView2<'_, f64>,
@@ -45,8 +33,6 @@ pub fn agscore3(
     ))
 }
 
-/// `residuals.coxph`'s score step on validated, unsorted (start, stop]
-/// rows: the two sort orders, [`agscore3_sorted`], input order restored.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agscore3_rows(
     start: &[f64],
@@ -97,9 +83,6 @@ pub(crate) fn agscore3_rows(
     resid
 }
 
-/// `agscore3.c` on data sorted by stratum and ascending stop time within
-/// stratum; `sort1` orders the same rows by stratum and ascending start
-/// time.  `strata` are labels, compared directly as the C code does.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agscore3_sorted(
     tstart: &[f64],
@@ -130,14 +113,10 @@ pub(crate) fn agscore3_sorted(
     let mut i1 = n as isize - 1;
     let mut currentstrata = strata[n - 1];
 
-    // `person` walks from the last row down to -1 (the C loop is
-    // `for (person = n-1; person >= 0; )`); every row is visited, including
-    // row 0.
     let mut person = n as isize - 1;
     while person >= 0 {
         let dtime = tstop[person as usize];
         if strata[person as usize] != currentstrata {
-            // First observation of a new stratum: finish off the prior one.
             while i1 >= 0 && sort1[i1 as usize] as isize > person {
                 let k = sort1[i1 as usize];
                 for j in 0..nvar {
@@ -151,7 +130,6 @@ pub(crate) fn agscore3_sorted(
             xhaz.fill(0.0);
             currentstrata = strata[person as usize];
         } else {
-            // Remove those whose start time is at or beyond `dtime`.
             while i1 >= 0 && tstart[sort1[i1 as usize]] >= dtime {
                 let k = sort1[i1 as usize];
                 if strata[k] != currentstrata {
@@ -167,7 +145,6 @@ pub(crate) fn agscore3_sorted(
             }
         }
 
-        // Count up over this time point.
         let mut e_denom = 0.0;
         let mut meanwt = 0.0;
         let mut deaths = 0.0;
@@ -175,8 +152,6 @@ pub(crate) fn agscore3_sorted(
         a2.fill(0.0);
         while person >= 0 && tstop[person as usize] == dtime {
             let row = person as usize;
-            // Rare: the first observation of the next stratum has exactly
-            // the same stop time as the last one of the current stratum.
             if strata[row] != currentstrata {
                 break;
             }
@@ -199,8 +174,6 @@ pub(crate) fn agscore3_sorted(
             }
             person -= 1;
         }
-        // As in `coxscore2`, the deaths of the tie group are found by
-        // status rather than assumed to be sorted first.
         let group_start = (person + 1) as usize;
         let group_end = group_start + group_size;
         let death_rows = || (group_start..group_end).filter(|&k| event[k] == 1);
@@ -217,10 +190,6 @@ pub(crate) fn agscore3_sorted(
                     }
                 }
             } else {
-                // Efron: k tied deaths are k pseudo death times, each death
-                // present with probability (k - d)/k at the d-th; the deaths
-                // also get a look-ahead correction for the hazard they do
-                // not deserve.
                 mh1.fill(0.0);
                 mh2.fill(0.0);
                 mh3.fill(0.0);
@@ -248,7 +217,6 @@ pub(crate) fn agscore3_sorted(
         }
     }
 
-    // Finish those in the final stratum.
     while i1 >= 0 {
         let k = sort1[i1 as usize];
         for j in 0..nvar {
@@ -318,8 +286,6 @@ mod tests {
 
     #[test]
     fn row_zero_is_processed() {
-        // A single death in row 0 of the sorted data: its residual is
-        // x - xbar over the risk set, which the pre-fix port left at zero.
         let resid = agscore3(
             &counting(vec![0.0, 0.0], vec![1.0, 2.0], vec![1, 0]),
             array![[1.0], [3.0]].view(),
@@ -335,8 +301,6 @@ mod tests {
 
     #[test]
     fn delayed_entry_excludes_earlier_risk_sets() {
-        // Subject 1 enters after the first event, so its residual only sees
-        // the second risk set, where it is the sole member besides subject 2.
         let resid = agscore3(
             &counting(vec![0.0, 2.0, 0.0], vec![1.0, 4.0, 4.0], vec![1, 1, 0]),
             array![[1.0], [2.0], [0.0]].view(),
@@ -346,7 +310,6 @@ mod tests {
             TieMethod::Breslow,
         )
         .unwrap();
-        // Event 1: risk set {0, 2}, xbar 0.5. Event 4: risk set {1, 2}, xbar 1.
         assert!((resid[[0, 0]] - (1.0 - 0.5) * (1.0 - 0.5)).abs() < 1e-12);
         assert!((resid[[1, 0]] - (2.0 - 1.0) * (1.0 - 0.5)).abs() < 1e-12);
         let expected2 = (0.0 - 0.5) * (-0.5) + (0.0 - 1.0) * (-0.5);

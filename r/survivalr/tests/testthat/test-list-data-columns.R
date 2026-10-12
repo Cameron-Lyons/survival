@@ -83,9 +83,6 @@ test_that("list model matrices match stock under every missing-data option", {
         info <- paste(kind, rhs, action, input)
         if (rhs == "1" && action == "na.fail" && is.list(stock$value) &&
             identical(stock$value$error, "no input has determined the number of cases")) {
-          # R 4.5.2 cannot determine the row count for this constant list formula
-          # under na.fail. There are no formula inputs to contain missing values;
-          # retain stock's empty list matrix as the reference under na.pass.
           options(na.action = "na.pass")
           stock <- .logical_matrix_capture(function() call(expected$value))
           options(na.action = action)
@@ -135,8 +132,6 @@ test_that("list model fits and predictions retain logical and response omissions
               expect_identical(dim(result[[field]]), dim(stock[[field]]), info = info)
               expect_identical(names(result[[field]]), names(stock[[field]]), info = info)
               if (kind == "survreg" && rhs == "age + strata(g) + flag" && type == "terms") {
-                # Stock labels the flag contribution strata(g) here. Keep the
-                # actual ordinary term name, and compare every value and row.
                 expect_identical(colnames(result[[field]]), c("age", "flag"), info = info)
                 expect_identical(colnames(stock[[field]]), c("age", "strata(g)"), info = info)
                 expect_identical(rownames(result[[field]]), rownames(stock[[field]]), info = info)
@@ -184,7 +179,6 @@ test_that("variable-free list frames have zero rows while data frames retain the
     actual <- get(kind, asNamespace("survivalr"))(form, as.list(d), x = TRUE)
     stock <- get(kind, asNamespace("survival"))(form, as.list(d), x = TRUE)
     for (nd in list(list(), as.list(d[1:4, ]), d[1:4, ], d[FALSE, ])) {
-      # A removed transform is still a model-frame variable and is required.
       if (rhs != "1" && !length(nd)) next
       .logical_matrix_compare(model.matrix(actual, nd), model.matrix(stock, nd), paste(kind, rhs))
       types <- if (kind == "coxph") c("lp", "risk") else c("link", "response")
@@ -192,9 +186,6 @@ test_that("variable-free list frames have zero rows while data frames retain the
         predict(stock, newdata = nd, type = type), tolerance = 3e-7)
     }
     if (kind == "coxph") for (nd in list(as.list(d[1:4, ]), d[1:4, ])) {
-      # Expected counts evaluate the response even with no predictor variables.
-      # Stock predict tries multiplying by NULL coefficients and fails; its
-      # baseline curve independently determines these null-model predictions.
       baseline <- survival::basehaz(stock, centered = FALSE)
       expected <- c(0, baseline$hazard)[findInterval(nd$futime, baseline$time) + 1L]
       for (type in c("expected", "survival")) {

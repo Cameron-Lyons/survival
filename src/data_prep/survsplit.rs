@@ -1,29 +1,19 @@
-//! R's `survSplit` (`R/survSplit.R` and `src/survsplit.c`): split
-//! follow-up intervals at a set of cutpoints.
-//!
-//! The C kernel ([`survsplit_intervals`]) splits `(tstart, tstop]`
-//! intervals; [`survsplit`] adds the data side of the R function: the
-//! near-tie fix that includes the cutpoints, the `zero` start of
-//! right-censored data, and the censoring of every row that ends at a cut
-//! (for timeline data, of every row that starts at one).
-
 use super::aeq_surv::aeq_surv;
 use super::id_value::{IdValue, SubjectId};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-/// The response of a `survSplit` call.
 pub enum SurvSplitResponse<'a, I> {
-    /// `Surv(time, status)`: follow-up starts at `zero`.
-    Right { time: &'a [f64], status: &'a [f64] },
-    /// `Surv(tstart, tstop, status)`.
+    Right {
+        time: &'a [f64],
+        status: &'a [f64],
+    },
     Counting {
         start: &'a [f64],
         stop: &'a [f64],
         status: &'a [f64],
     },
-    /// `Surv2(time, state)` timeline data, one row per visit of `id`.
     Timeline {
         id: &'a [I],
         time: &'a [f64],
@@ -31,36 +21,31 @@ pub enum SurvSplitResponse<'a, I> {
     },
 }
 
-/// The split data set; every vector has one entry per output row.
+#[doc = " The split data set; every vector has one entry per output row."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvSplitResult {
-    /// Zero-based row of the input each output row came from.
+    #[doc = " Zero-based row of the input each output row came from."]
     #[pyo3(get)]
     pub row: Vec<usize>,
-    /// Zero-based episode number (R's `episode` column minus one).
+    #[doc = " Zero-based episode number (R's `episode` column minus one)."]
     #[pyo3(get)]
     pub interval: Vec<usize>,
     #[pyo3(get)]
     pub start: Vec<f64>,
     #[pyo3(get)]
     pub end: Vec<f64>,
-    /// The status of each output row, censored (0) at every cut.
+    #[doc = " The status of each output row, censored (0) at every cut."]
     #[pyo3(get)]
     pub status: Vec<f64>,
-    /// Whether the row was created by a cut (R's `added` column).
+    #[doc = " Whether the row was created by a cut (R's `added` column)."]
     #[pyo3(get)]
     pub censor: Vec<bool>,
-    /// The cutpoints after the near-tie fix.
+    #[doc = " The cutpoints after the near-tie fix."]
     #[pyo3(get)]
     pub cut: Vec<f64>,
 }
 
-/// The kernel of `src/survsplit.c`: split every `(tstart, tstop]` at the
-/// cutpoints strictly inside it.  Rows with a missing endpoint pass
-/// through unchanged; `survsplit.c` gives them interval 1 (R's episode 2)
-/// and leaves their `censor` flag unset, which is `false` here.  `cut` must
-/// be sorted and unique.
 pub fn survsplit_intervals(
     tstart: &[f64],
     tstop: &[f64],
@@ -71,9 +56,6 @@ pub fn survsplit_intervals(
     let mut extra = 0;
     for i in 0..n {
         if !tstart[i].is_nan() && !tstop[i].is_nan() {
-            // The sorted cutpoints strictly inside this interval lie between
-            // these bounds. Searching them avoids scanning every cut for every
-            // row when most cuts fall outside the observed follow-up.
             let first = cut.partition_point(|&c| c <= tstart[i]);
             let last = cut.partition_point(|&c| c < tstop[i]);
             extra += last.saturating_sub(first);
@@ -103,7 +85,6 @@ pub fn survsplit_intervals(
         out.interval.push(j);
         out.start.push(tstart[i]);
         while j < cut.len() && cut[j] < tstop[i] {
-            // cut[j] > tstart[i] holds by construction of j.
             out.end.push(cut[j]);
             out.censor.push(true);
             out.row.push(i);
@@ -117,7 +98,6 @@ pub fn survsplit_intervals(
     Ok(out)
 }
 
-/// The data side of `survSplit`.
 pub fn survsplit<I: SubjectId>(
     response: SurvSplitResponse<'_, I>,
     cut: &[f64],
@@ -141,15 +121,12 @@ pub fn survsplit<I: SubjectId>(
             let n = id.len();
             let mut time = time.to_vec();
             if timefix {
-                // Include the cutpoints in the aeqSurv process.
                 let mut joint = cut.clone();
                 joint.extend_from_slice(&time);
                 let fixed = aeq_surv(&joint, None, None)?.time;
                 cut = fixed[..ntimes].to_vec();
                 time = fixed[ntimes..].to_vec();
             }
-            // A fake stop for each row: the subject's next time, or the
-            // row's own time for its last row.
             let keys: Vec<I::Key> = id.iter().map(SubjectId::key).collect();
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_by(|&a, &b| {
@@ -165,8 +142,6 @@ pub fn survsplit<I: SubjectId>(
             }
             let mut out = survsplit_intervals(&time, &fake_stop, &cut)?;
             out.status = out.row.iter().map(|&r| status[r]).collect();
-            // The C routine marks the parent of each insertion as censored;
-            // for timeline data it is the inserted row that is censored.
             for k in 0..out.censor.len() {
                 if out.censor[k] && k + 1 < out.status.len() {
                     out.status[k + 1] = 0.0;
@@ -201,7 +176,6 @@ pub fn survsplit<I: SubjectId>(
             validate_length(start.len(), status.len(), "status")?;
             let (mut start, mut stop) = (start.to_vec(), stop.to_vec());
             if timefix {
-                // The cutpoints ride along as stop times of fake rows.
                 let min_start = start
                     .iter()
                     .copied()
@@ -247,9 +221,9 @@ fn finish_surv(
     Ok(out)
 }
 
-/// Python entry point of [`survsplit`]: a right-censored response is
-/// `(time, status)`, a counting-process one adds `start`, and timeline
-/// data adds `id` instead.
+#[doc = " Python entry point of [`survsplit`]: a right-censored response is"]
+#[doc = " `(time, status)`, a counting-process one adds `start`, and timeline"]
+#[doc = " data adds `id` instead."]
 #[pyfunction(name = "survsplit")]
 #[pyo3(signature = (time, status, cut, start=None, id=None, zero=0.0, timefix=true))]
 #[allow(clippy::too_many_arguments)]
@@ -343,9 +317,6 @@ mod tests {
             assert_eq!(out.end, vec![1.0, 1.5]);
             assert_eq!(out.censor, vec![false, false]);
         }
-        // The kernel also accepts an unsplit empty interval for a final
-        // timeline visit. A reversed interval retains that same pass-through
-        // behavior when callers use the kernel directly.
         let out = survsplit_intervals(&[1.0, 2.0], &[1.0, 0.0], &[0.5, 1.0, 1.5]).unwrap();
         assert_eq!(out.row, vec![0, 1]);
         assert_eq!(out.start, vec![1.0, 2.0]);
@@ -422,7 +393,6 @@ mod tests {
             true,
         )
         .unwrap();
-        // 10 + 1e-12 becomes 10, so no split happens for the first row.
         assert_eq!(out.row, vec![0, 1, 1]);
         assert_eq!(out.end[0], 10.0);
         let unfixed = survsplit(

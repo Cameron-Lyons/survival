@@ -1,7 +1,6 @@
 use crate::internal::rng::Rng;
 use burn::tensor::{Device, Tensor};
 
-// Keep the existing CPU backend while migrating to Burn's runtime device API.
 #[allow(deprecated)]
 pub(crate) fn training_device() -> Device {
     Device::ndarray().autodiff()

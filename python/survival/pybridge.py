@@ -28,9 +28,6 @@ def _serialize_r_object(value: Any) -> dict[str, Any]:
 
     class RPickler(pickle.Pickler):
         def persistent_id(self, obj: Any) -> Any:
-            # Reticulate wraps each R function around an r_object capsule.
-            # Returning that capsule to R recovers the original R closure,
-            # which R serializes with its environment instead of a live pointer.
             if (
                 isinstance(obj, FunctionType)
                 and obj.__module__ == "rpytools.call"
@@ -77,7 +74,7 @@ def _unserialize_r_object(state: Mapping[str, Any]) -> Any:
                 raise pickle.UnpicklingError("invalid R callback reference")
             return callback_table[key[1]]
 
-    return RUnpickler(io.BytesIO(payload)).load()  # noqa: S301 - trusted model files
+    return RUnpickler(io.BytesIO(payload)).load()
 
 
 def _call_fit_with_warnings(
@@ -90,14 +87,11 @@ def _call_fit_with_warnings(
 ) -> dict[str, Any]:
     """Return a model call and its warnings for R's condition system."""
     with warnings.catch_warnings(record=True) as recorded:
-        # Each R model call should signal its diagnostics, including when Python
-        # has already emitted the same warning from this source line.
         warnings.simplefilter("always", RuntimeWarning)
         if user_warnings:
             warnings.simplefilter("always", UserWarning)
         try:
             if "fit" in arguments:
-                # singledispatch model methods require their model positionally.
                 keywords = dict(arguments)
                 fit = keywords.pop("fit")
                 result = function(fit, *positional, **keywords)
@@ -156,7 +150,7 @@ def _r_time_transform(callback: Callable[..., Any]) -> Callable[..., Any]:
     def transform(values: Any, time: Any, riskset: Any, weights: Any, *, status: Any = None) -> Any:
         return callback(list(values), time, riskset, weights, _categories(values), status)
 
-    transform._survival_tt_r_callback = True  # type: ignore[attr-defined]
+    transform._survival_tt_r_callback = True
     return transform
 
 

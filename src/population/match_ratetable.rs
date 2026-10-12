@@ -1,17 +1,9 @@
-//! R's `match.ratetable` (`R/match.ratetable.R`): map the variables named
-//! in `rmap` onto the dimensions of a rate table, producing the matrix `R`
-//! of per-subject starting positions that `pyears` and `survexp` feed to
-//! the C person-years code.
-
 use super::ratetable::{DimType, RateTable, start_of_year};
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::Array2;
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-/// One variable of the `rmap` list: either numeric (a continuous value, a
-/// date already converted with `ratetableDate`, or an integer factor code)
-/// or a vector of labels matched against the dimension's `dimnames`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "python", derive(pyo3::FromPyObject))]
 pub enum RatetableColumn {
@@ -30,22 +22,19 @@ impl RatetableColumn {
     }
 }
 
-/// The result of `match.ratetable`: `r` has one row per subject and one
-/// column per rate-table dimension (in the table's order); factor columns
-/// hold R's one-based level subscripts, the others the numeric values.
+#[doc = " The result of `match.ratetable`: `r` has one row per subject and one"]
+#[doc = " column per rate-table dimension (in the table's order); factor columns"]
+#[doc = " hold R's one-based level subscripts, the others the numeric values."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct MatchRatetableResult {
     #[pyo3(get)]
     pub r: Vec<Vec<f64>>,
-    /// The table's cutpoints after `ratetableDate` (already day counts).
+    #[doc = " The table's cutpoints after `ratetableDate` (already day counts)."]
     #[pyo3(get)]
     pub cutpoints: Vec<Option<Vec<f64>>>,
 }
 
-/// R's `charmatch(casefold(x), casefold(table))`: an exact match wins, a
-/// unique prefix match is accepted, several prefix matches give `Some(0)`
-/// (R's 0) and none gives `None` (R's `NA`).  Returns one-based positions.
 struct LevelMatcher {
     exact: HashMap<String, usize>,
     folded: Vec<String>,
@@ -56,7 +45,6 @@ impl LevelMatcher {
         let folded: Vec<String> = levels.iter().map(|s| s.to_lowercase()).collect();
         let mut exact = HashMap::with_capacity(levels.len());
         for (i, label) in folded.iter().enumerate() {
-            // R's charmatch rejects duplicate exact matches, including case folding.
             exact
                 .entry(label.clone())
                 .and_modify(|code| *code = 0)
@@ -90,8 +78,6 @@ fn visit_labels(
     mut emit: impl FnMut(usize, usize),
 ) -> SurvivalResult<()> {
     let matcher = LevelMatcher::new(levels);
-    // Sex/race dimensions usually have two labels: a tiny linear cache avoids
-    // hashing every observation. Promote once there are more distinct labels.
     let mut small: Vec<(&str, usize)> = Vec::new();
     let mut codes: HashMap<&str, usize> = HashMap::new();
     for (row, label) in labels.iter().enumerate() {
@@ -134,8 +120,6 @@ fn visit_labels(
     Ok(())
 }
 
-/// Match all declared factor levels, including levels absent from observations.
-/// The dimension is zero-based; returned level positions are one-based, as in R.
 pub fn match_levels(
     table: &RateTable,
     dimension: usize,
@@ -160,10 +144,6 @@ pub fn match_levels(
     Ok(codes)
 }
 
-/// Match user variables onto a rate table's dimensions.
-///
-/// `names` are the `rmap` variable names and `columns` their values; every
-/// `dimid` of the table must appear exactly once.
 pub fn match_ratetable(
     table: &RateTable,
     names: &[String],
@@ -232,23 +212,15 @@ pub fn match_ratetable(
             }
         }
     }
-    // Numeric factor codes must be level subscripts, and nothing missing.
     table.validate_positions_validated(&r)?;
     Ok(r)
 }
 
-/// The birthday adjustment R applies to type-4 (US calendar year) axes in
-/// `pyears` and `survexp.fit`: someone born in June 1945 keeps the 1945
-/// rate until their next birthday, while the table's cutpoints fall on
-/// January 1st, so their entry date on the year axis is moved back by the
-/// offset between their birthday and the start of that year.  `r` is the
-/// matrix from [`match_ratetable`] and is adjusted in place.
 pub fn align_us_year_axis(table: &RateTable, r: &mut Array2<f64>) -> SurvivalResult<()> {
     table.validate()?;
     align_us_year_axis_validated(table, r)
 }
 
-/// Alignment for a table already checked by the enclosing public boundary.
 pub(crate) fn align_us_year_axis_validated(
     table: &RateTable,
     r: &mut Array2<f64>,
@@ -256,7 +228,6 @@ pub(crate) fn align_us_year_axis_validated(
     if table.us_year_dimension().is_none() {
         return Ok(());
     }
-    // R looks the columns up by name, not by type.
     let (Some(age), Some(year)) = (
         table.dimid.iter().position(|id| id == "age"),
         table.dimid.iter().position(|id| id == "year"),
@@ -278,7 +249,7 @@ pub(crate) fn align_us_year_axis_validated(
     Ok(())
 }
 
-/// Python entry point of [`match_ratetable`].
+#[doc = " Python entry point of [`match_ratetable`]."]
 #[pyfunction(name = "match_ratetable")]
 #[pyo3(signature = (ratetable, names, columns))]
 pub fn match_ratetable_py(
@@ -392,11 +363,9 @@ mod tests {
     #[test]
     fn us_year_axis_moves_entry_back_to_the_birthday() {
         let table = survexp_usr_table();
-        // Born 1945-06-15 (day -8966), entered on 1996-01-01 (day 9496).
         let age = 9496.0 - (-8966.0);
         let mut r = ndarray::arr2(&[[age, 1.0, 1.0, 9496.0]]);
         align_us_year_axis(table, &mut r).unwrap();
-        // 1945-01-01 is day -9131; the birthday offset is 165 days.
         assert_eq!(r[[0, 3]], 9496.0 - 165.0);
         assert_eq!(r[[0, 0]], age);
 

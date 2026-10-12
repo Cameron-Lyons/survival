@@ -23,15 +23,10 @@ def _long():
     }
 
 
-# --- aeqSurv ------------------------------------------------------------------
-
-
 def test_aeqsurv_snaps_near_ties_and_keeps_the_type():
-    # R's aeqSurv(Surv(c(1, 1 + 1e-14, 2, 2 + 1e-9, 3), c(1, 1, 0, 1, 1)))
     right = r.aeqSurv(r.Surv([1, 1 + 1e-14, 2, 2 + 1e-9, 3], [1, 1, 0, 1, 1]))
     assert right.time == (1.0, 1.0, 2.0, 2.0, 3.0)
     assert right.event == (1, 1, 0, 1, 1)
-    # R's aeqSurv(Surv(c(0, 1e-14, 1, 1.5), c(1, 1 + 1e-14, 2, 2.5), c(1, 1, 0, 1)))
     counting = r.aeqSurv(r.Surv([0, 1e-14, 1, 1.5], [1, 1 + 1e-14, 2, 2.5], [1, 1, 0, 1]))
     assert counting.start == (0.0, 0.0, 1.0, 1.5)
     assert counting.time == (1.0, 1.0, 2.0, 2.5)
@@ -47,11 +42,7 @@ def test_aeqsurv_snaps_near_ties_and_keeps_the_type():
         r.aeqSurv([1, 2, 3])
 
 
-# --- survSplit ----------------------------------------------------------------
-
-
 def test_survsplit_dot_formula_keeps_the_data_columns_and_names():
-    # survSplit(Surv(futime, death) ~ ., base, cut = c(5, 12), episode = "ep", added = "added")
     frame = r.survSplit(
         "Surv(futime, death) ~ .", _base(), cut=[5, 12], episode="ep", added="added"
     )
@@ -85,14 +76,12 @@ def test_survsplit_multistate_response_labels_states_and_skips_the_id():
         "t": [1, 4, 2],
         "s": survival.r._coerce._RFactorVector(["a", "b", "b"], ["censor", "a", "b"]),
     }
-    # survSplit(Surv(t, s) ~ id, d, cut = 3, episode = "e", zero = -1)
     frame = r.survSplit("Surv(t, s) ~ id", data, cut=3, episode="e", zero=-1)
     assert list(frame) == ["id", "tstart", "t", "s", "e"]
     assert frame["tstart"] == [-1.0, -1.0, 3.0, -1.0]
     assert frame["t"] == [1.0, 3.0, 4.0, 2.0]
     assert frame["s"] == ["a", "censor", "b", "b"]
     assert frame["e"] == [1, 1, 2, 1]
-    # R invents the id column for right-censored (time, status) data only
     with_id = r.survSplit("Surv(t, s) ~ id", data, cut=[3], id="row")
     assert "row" not in with_id
     right = r.survSplit("Surv(t, e) ~ id", {**data, "e": [1, 1, 0]}, cut=[3], id="row")
@@ -115,9 +104,6 @@ def test_survsplit_accepts_a_surv_object_with_covariates():
         r.survSplit(r.Surv([1, 2], [1, 0], type="left"), cut=[1.5])
 
 
-# --- survcondense -------------------------------------------------------------
-
-
 def test_survcondense_merges_adjacent_rows_with_equal_covariates():
     data = {
         "id": [1, 1, 1, 2, 2],
@@ -126,7 +112,6 @@ def test_survcondense_merges_adjacent_rows_with_equal_covariates():
         "s": [0, 0, 1, 0, 0],
         "x": [1, 1, 2, 3, 3],
     }
-    # survcondense(Surv(t1, t2, s) ~ x, d, id = id)
     frame = r.survcondense("Surv(t1, t2, s) ~ x", data, id="id")
     assert list(frame) == ["x", "id", "t1", "t2", "s"]
     assert frame["x"] == [1, 2, 3]
@@ -147,16 +132,11 @@ def test_survcondense_merges_adjacent_rows_with_equal_covariates():
         r.survcondense("Surv(t1, t2, s) ~ x + cluster(id)", data, id="id")
 
 
-# --- rttright -----------------------------------------------------------------
-
-
 def test_rttright_matches_r_weights_and_time_matrix():
     aml = survival.datasets.load_aml()
     first_six = {name: list(values[:6]) for name, values in aml.items()}
-    # rttright(Surv(time, status) ~ 1, aml[1:6, ])
     weights = r.rttright("Surv(time, status) ~ 1", first_six)
     assert weights == pytest.approx([1 / 6, 1 / 6, 0, 2 / 9, 2 / 9, 0])
-    # rttright(Surv(time, status) ~ x, aml, times = c(10, 30))
     matrix = r.rttright("Surv(time, status) ~ x", aml, times=[10, 30])
     assert len(matrix) == 23
     assert len(matrix[0]) == 2
@@ -173,13 +153,8 @@ def test_rttright_matches_r_weights_and_time_matrix():
         r.rttright("Surv(time, status) ~ 1", first_six, weights=[-1, 1, 1, 1, 1, 1])
 
 
-# --- lvcf, nostutter, neardate, tcut ---------------------------------------------
-
-
 def test_lvcf_carries_values_forward_like_r():
-    # R's lvcf(c(1,1,1,2,2,2), c(NA, 3, NA, NA, NA, 5))
     assert r.lvcf([1, 1, 1, 2, 2, 2], [None, 3, None, None, None, 5]) == [None, 3, 3, None, None, 5]
-    # logical and 0/1 variables get FALSE/0 on a missing first observation
     assert r.lvcf([1, 1, 1, 2, 2, 2], [None, True, None, None, None, False]) == [
         False,
         True,
@@ -190,7 +165,6 @@ def test_lvcf_carries_values_forward_like_r():
     ]
     assert r.lvcf([1, 1, 2], [None, 1, None]) == [0, 1, 0]
     assert r.lvcf([1, 1, 2], [None, 1, None], first=False) == [None, 1, None]
-    # R's lvcf(c(2,2,1,1), c(NA, 4, 7, NA), time = c(2,1,2,1))
     assert r.lvcf([2, 2, 1, 1], [None, 4, 7, None], time=[2, 1, 2, 1]) == [4, 4, 7, None]
     assert r.lvcf(["b", "b", "a"], ["x", None, None]) == ["x", "x", None]
     with pytest.raises(ValueError, match="x must have the same length as id"):
@@ -198,7 +172,6 @@ def test_lvcf_carries_values_forward_like_r():
 
 
 def test_nostutter_censors_repeated_states_like_r():
-    # R's nostutter(c(1,1,1,1,2,2), c(0,"a","a","b","b","b"))
     assert r.nostutter([1, 1, 1, 1, 2, 2], [0, "a", "a", "b", "b", "b"]) == [0, "a", 0, "b", "b", 0]
     assert r.nostutter([1, 1, 1, 1, 2, 2], [0, 1, 1, 2, 2, 2]) == [0, 1, 0, 2, 2, 0]
     assert r.nostutter([1, 1, 2, 2], ["a", "a", "a", "b"], censor="none") == ["a", "none", "a", "b"]
@@ -211,11 +184,9 @@ def test_neardate_returns_zero_based_rows_like_r_minus_one():
     y1 = [10, 20, 5, 15, 25, 30, 4, 12, 7]
     id2 = [1, 1, 1, 2, 2, 3, 4, 4, 4, 6]
     y2 = [8, 12, 22, 4, 26, 30, 3, 11, 13, 1]
-    # neardate(id1, id2, y1, y2): 2 3 5 5 5 6 8 9 NA (one based)
     assert r.neardate(id1, id2, y1, y2) == [1, 2, 4, 4, 4, 5, 7, 8, None]
     assert r.neardate(id1, id2, y1, y2, best="prior") == [0, 1, 3, 3, 3, 5, 6, 7, None]
     assert r.neardate(id1, id2, y1, y2, nomatch=-1)[-1] == -1
-    # neardate(c(1,2,2), c(2,2,1), c(5, 3, 9), c(4, 8, 6), best = "prior"): NA NA 2
     assert r.neardate([1, 2, 2], [2, 2, 1], [5, 3, 9], [4, 8, 6], best="prior") == [None, None, 1]
     assert r.neardate([1, None], [1], [1, 2], [1])[1] is None
     with pytest.raises(ValueError, match="id1 and y1 have different lengths"):
@@ -223,7 +194,6 @@ def test_neardate_returns_zero_based_rows_like_r_minus_one():
 
 
 def test_tcut_scales_values_and_cutpoints_like_r():
-    # R's tcut(c(10, 25, 40), c(0, 20, 50), scale = 2)
     cut = r.tcut([10, 25, 40], [0, 20, 50], scale=2)
     assert list(cut.values) == [20.0, 50.0, 80.0]
     assert list(cut.cutpoints) == [0.0, 40.0, 100.0]
@@ -234,9 +204,6 @@ def test_tcut_scales_values_and_cutpoints_like_r():
         r.tcut([1, 2], [5, 0])
     with pytest.raises(ValueError, match="Number of labels must be 1 less"):
         r.tcut([1, 2], [0, 5], labels=["a", "b"])
-
-
-# --- tmerge -------------------------------------------------------------------
 
 
 def test_tmerge_arguments_match_r_values_and_tcount():
@@ -281,7 +248,6 @@ def test_tmerge_arguments_match_r_values_and_tcount():
 def test_tmerge_options_delay_na_rm_and_names():
     base, long = _base(), _long()
     d1 = r.tmerge(base, base, id="id", death=r.event("futime", "death"))
-    # options = list(delay = 1, na.rm = FALSE): change times move by one day, NA values stay
     d3 = r.tmerge(d1, long, id="id", lab=r.tdc("time", "lab"), options={"delay": 1, "na.rm": False})
     assert d3["tstop"] == [3.0, 6.0, 10.0, 4.0, 20.0, 5.0, 15.0]
     assert [None if math.isnan(v) else v for v in d3["lab"]] == [
@@ -293,7 +259,6 @@ def test_tmerge_options_delay_na_rm_and_names():
         None,
         2.0,
     ]
-    # tstart = 2 with renamed interval columns
     d4 = r.tmerge(
         base, base, id="id", tstop="futime", tstart=2, options={"tstartname": "a", "tstopname": "b"}
     )

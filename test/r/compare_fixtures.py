@@ -23,9 +23,6 @@ from pathlib import Path
 
 NON_FINITE = {"NaN": math.nan, "Inf": math.inf, "-Inf": -math.inf}
 
-# Values R itself does not reproduce across machines (or across GitHub's runner
-# pool): differences under these ``(file, case, field prefix)`` keys are reported
-# but do not fail the comparison.  Each carries the reason.
 UNSTABLE: dict[tuple[str, str, str], str] = {
     ("aareg.json", "veteran_karno_celltype", "expected.coefficient"): (
         "late-time increments sit on a rank decision of the least-squares step"
@@ -71,8 +68,6 @@ def _same_number(old: float, new: float, rtol: float, atol: float) -> bool:
 
 
 def _walk(old: object, new: object, path: str, rtol: float, atol: float, out: list[tuple]):
-    # JSON logical values must keep their type. Python equality otherwise makes
-    # True == 1 and False == 0, hiding a logical-to-numeric fixture regression.
     if isinstance(old, bool) or isinstance(new, bool):
         if type(old) is not type(new) or old != new:
             out.append((path, old, new))

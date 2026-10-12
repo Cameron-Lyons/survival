@@ -1,14 +1,6 @@
-//! Bounded link functions for pseudo-value regression: a port of
-//! `R/blogit.R` from the CRAN `survival` package (`blogit`, `bprobit`,
-//! `bcloglog`, `blog`).  Each link clamps its argument away from the edges
-//! of the unit interval before applying the usual transform, so pseudo
-//! values slightly outside `[0, 1]` stay usable.
-
 use crate::internal::statistical::{normal_cdf, probit};
 use pyo3::prelude::*;
 
-/// `pmax(edge, pmin(mu, 1 - edge))`, evaluated in R's order so an `edge`
-/// above one half still yields `edge`; `NaN` stays `NaN` as R's `NA` does.
 fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
     if input.is_nan() {
         return f64::NAN;
@@ -16,7 +8,7 @@ fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
     input.min(1.0 - edge).max(edge)
 }
 
-/// The bounded links of `blogit.R` for one `edge` (R default 0.05).
+#[doc = " The bounded links of `blogit.R` for one `edge` (R default 0.05)."]
 #[pyclass]
 pub struct LinkFunctionParams {
     edge: f64,
@@ -42,7 +34,7 @@ impl LinkFunctionParams {
         LinkFunctionParams { edge }
     }
 
-    /// `blogit(edge)$linkfun`: `log(x / (1 - x))` of the bounded value.
+    #[doc = " `blogit(edge)$linkfun`: `log(x / (1 - x))` of the bounded value."]
     fn blogit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         (adjusted_input / (1.0 - adjusted_input)).ln()
@@ -50,7 +42,7 @@ impl LinkFunctionParams {
     fn blogit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::blogit)
     }
-    /// `bprobit(edge)$linkfun`: `qnorm` of the bounded value.
+    #[doc = " `bprobit(edge)$linkfun`: `qnorm` of the bounded value."]
     fn bprobit(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         probit(adjusted_input)
@@ -58,7 +50,7 @@ impl LinkFunctionParams {
     fn bprobit_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::bprobit)
     }
-    /// `bcloglog(edge)$linkfun`: `log(-log(1 - x))` of the bounded value.
+    #[doc = " `bcloglog(edge)$linkfun`: `log(-log(1 - x))` of the bounded value."]
     fn bcloglog(&self, input: f64) -> f64 {
         let adjusted_input = bounded_unit_interval(input, self.edge);
         (-(1.0 - adjusted_input).ln()).ln()
@@ -66,7 +58,7 @@ impl LinkFunctionParams {
     fn bcloglog_many(&self, input: Vec<Option<f64>>) -> Vec<f64> {
         self.transform_many(input, Self::bcloglog)
     }
-    /// `blog(edge)$linkfun`: `log(pmax(edge, mu))`.
+    #[doc = " `blog(edge)$linkfun`: `log(pmax(edge, mu))`."]
     fn blog(&self, input: f64) -> f64 {
         if input.is_nan() {
             return f64::NAN;
@@ -77,7 +69,7 @@ impl LinkFunctionParams {
         self.transform_many(input, Self::blog)
     }
 
-    /// Inverse links use the ordinary link's range, independent of `edge`.
+    #[doc = " Inverse links use the ordinary link's range, independent of `edge`."]
     pub fn blogit_inverse(&self, eta: f64) -> f64 {
         if eta.is_nan() {
             return f64::NAN;

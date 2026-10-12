@@ -1,24 +1,17 @@
-//! `logrank_test`: a typed convenience entry over the `survdiff` kernel in
-//! `surv_analysis::logrank_components` for callers holding raw group
-//! labels.  It returns the G-rho family test of R's `survdiff`
-//! (`R/survdiff.R`, `src/survdiff2.c`) for right-censored or (start, stop]
-//! data (the latter an extension: R's `survdiff` refuses counting-process
-//! data), with observed and expected counts summed over strata.
-
 use crate::data_types::{FloatVec, IntVec};
 use crate::error::SurvivalResult;
 use crate::surv_analysis::{SurvdiffData, survdiff};
 use pyo3::prelude::*;
 
-/// Result of [`logrank_test`]: R's `survdiff` components.
+#[doc = " Result of [`logrank_test`]: R's `survdiff` components."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct LogRankResult {
-    /// The distinct group labels, sorted; observed/expected follow this order.
+    #[doc = " The distinct group labels, sorted; observed/expected follow this order."]
     pub groups: Vec<i32>,
     pub observed: Vec<f64>,
     pub expected: Vec<f64>,
-    /// Full variance-covariance matrix of `observed - expected`.
+    #[doc = " Full variance-covariance matrix of `observed - expected`."]
     pub variance: Vec<Vec<f64>>,
     pub statistic: f64,
     pub df: usize,
@@ -26,9 +19,6 @@ pub struct LogRankResult {
     pub rho: f64,
 }
 
-/// G-rho log-rank test of `group` on right-censored (`entry_times = None`)
-/// or (start, stop] data, optionally stratified.  `timefix` applies R's
-/// near-tie rounding before comparing times.
 pub fn logrank_test(
     time: &[f64],
     status: &[i32],
@@ -48,8 +38,6 @@ pub fn logrank_test(
     fit_logrank(&data, rho, timefix)
 }
 
-/// Both interfaces share the summary while the Python boundary transfers its
-/// owned vectors directly into `data` rather than copying them a second time.
 fn fit_logrank(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<LogRankResult> {
     let result = survdiff(data, rho, timefix)?;
     let observed = result.obs_totals();
@@ -66,8 +54,8 @@ fn fit_logrank(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<L
     })
 }
 
-/// Python entry point: `logrank_test(time, status, group, rho=0.0,
-/// strata=None, entry_times=None, timefix=True)`.
+#[doc = " Python entry point: `logrank_test(time, status, group, rho=0.0,"]
+#[doc = " strata=None, entry_times=None, timefix=True)`."]
 #[pyfunction(name = "logrank_test")]
 #[pyo3(signature = (time, status, group, rho=0.0, strata=None, entry_times=None, timefix=true))]
 #[allow(clippy::too_many_arguments)]
@@ -97,7 +85,6 @@ mod tests {
 
     #[test]
     fn matches_survdiff_on_a_small_example() {
-        // Same data as the survdiff2 unit tests: two groups, no strata.
         let time = [1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 5.0, 7.0];
         let status = [1, 1, 0, 1, 0, 1, 1, 1, 0];
         let group = [10, 10, 10, 20, 20, 20, 30, 30, 30];

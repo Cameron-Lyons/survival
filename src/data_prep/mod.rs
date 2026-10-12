@@ -1,16 +1,3 @@
-//! Data-preparation helpers of R's `survival` package: `aeqSurv`,
-//! `cluster`, `strata`, `lvcf`, `neardate`, `nostutter`, `rttright`,
-//! `surv2counting`/`totimeline` (timeline data), `survcondense`,
-//! `survSplit`, `tcut` and `tmerge`.
-//!
-//! Every row index that enters or leaves these routines is zero based
-//! (the first observation is row 0), including the rows R reports as
-//! one-based subscripts (`survsplit`'s `row`, `neardate`'s match,
-//! `tmerge`'s value sources); a caller that needs R's numbering adds one.
-//! Subject identifiers are generic over [`SubjectId`], so integer and
-//! string ids share one implementation; the Python bindings accept
-//! [`IdValue`].
-
 pub(crate) mod aeq_surv;
 pub(crate) mod cluster;
 pub(crate) mod id_value;

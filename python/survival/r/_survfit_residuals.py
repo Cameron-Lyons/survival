@@ -200,8 +200,6 @@ def _residuals_result(
     multistate = isinstance(fit, SurvfitMultiStateResult)
     excluded = [] if excluded is None else excluded
     ids = _pad_rows(_row_labels(frame, result.id), excluded)
-    # naresid.exclude uses the omitted positions as the inserted row names,
-    # even when the retained rows have explicit character id labels.
     for row in excluded:
         ids[row] = row + 1
     curve = [int(code) + 1 for code in result.curve] if fit.strata is not None else None
@@ -212,7 +210,6 @@ def _residuals_result(
         curve=None if curve is None else _pad_rows(curve, excluded),
         columns=list(result.columns) if multistate else None,
         column_name=("transition" if type_ == "cumhaz" else "state") if multistate else None,
-        # R names the id dimension after the id variable, "(id)" for an id vector
         id_name=(fit.call.id if isinstance(fit.call.id, str) else "(id)")
         if frame.id is not None
         else None,
@@ -289,8 +286,6 @@ def survfit_residuals(
     collapse = _collapse_rows(frame, collapse)
     if collapse and not weighted:
         raise ValueError("invalid combination of options: collapse=TRUE and weighted=FALSE")
-    # R sets weighted <- FALSE when there are no case weights, which only skips the
-    # (unit) resid * casewt product; the kernel already treats absent weights as 1.
     if collapse and frame.id is not None and frame.strata_codes is not None:
         seen: dict[Any, int] = {}
         for value, code in zip(frame.id, frame.x_codes, strict=True):

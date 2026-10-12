@@ -98,7 +98,7 @@ def test_matrix_inputs_and_output_ownership(layout):
         if layout == "frame":
             design = pytest.importorskip("pandas").DataFrame(design)
     result = r.survreg_fit(design, case["y"])
-    restored = pickle.loads(pickle.dumps(result))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(result))
     assert restored.coefficients == result.coefficients
     assert restored.var == result.var
     if layout in {"mapping", "frame"}:
@@ -117,8 +117,7 @@ def test_matrix_inputs_and_output_ownership(layout):
 def test_minimal_callbacks_are_not_retained_or_probed():
     case = REFERENCE["cases"][0]
     result = r.survreg_fit(case["x"], case["y"], dist=custom_distribution())
-    # The distribution has an unpicklable lambda; only numerical output survives.
-    restored = pickle.loads(pickle.dumps(result))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(result))
     assert restored.loglik == result.loglik
     expected = r.survreg_fit(case["x"], case["y"], dist="gaussian")
     np.testing.assert_allclose(result.coefficients, expected.coefficients, atol=1e-9)
@@ -138,7 +137,6 @@ def test_surv_inputs_keep_prepared_status_codes():
     y = np.asarray(case["y"])
     expected = r.survreg_fit(case["x"], y)
     for kind in ("right", "left"):
-        # R's bare function reads the numeric columns, ignoring the type attribute.
         result = r.survreg_fit(case["x"], r.Surv(y[:, 0], y[:, 1], type=kind))
         assert result.coefficients == expected.coefficients
     intervals = np.column_stack((y[:, 0], y[:, 0] + 0.5, np.tile([0, 1, 2, 3], 3)))

@@ -104,8 +104,6 @@ from ._types import (
 SurvregDistribution = _core.SurvregDistribution
 SurvregControl = _core.SurvregControl
 
-# R's ``survreg.distributions``: the built-in location-scale families keyed by the names
-# ``survreg(dist=)`` matches against. Users may add objects or distribution dictionaries.
 _BUILTIN_DISTRIBUTIONS = (
     "extreme",
     "logistic",
@@ -125,9 +123,6 @@ survreg_distributions: dict[str, Any] = {
 _DPQR_BUILTIN_OBJECTS = dict(survreg_distributions)
 
 _TRANSFORMS = {"log": _core.SurvregTransform.Log, "identity": _core.SurvregTransform.Identity}
-
-
-# --- results -----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -336,9 +331,6 @@ class SurvregAnovaResult:
         return columns
 
 
-# --- distributions and control -------------------------------------------------------------
-
-
 def _match_arg(value: Any, name: str, choices: Sequence[str]) -> str:
     """R's ``match.arg``: exact or unique-prefix match, with R's error message."""
 
@@ -499,9 +491,6 @@ def _resolve_control(control: Any | None, options: dict[str, Any]) -> Any:
     if isinstance(control, _core.SurvregControl):
         return control
     return survreg_control(**_control_mapping(control, "control"))
-
-
-# --- the model frame -----------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -673,9 +662,6 @@ def _matrix_frame(
     )
 
 
-# --- survreg -------------------------------------------------------------------------------
-
-
 def survreg(
     formula: str | Surv | None = None,
     data: Any | None = None,
@@ -760,7 +746,7 @@ def survreg(
         raise ValueError("survreg does not support frailty terms")
 
     time, status, time2 = _survreg_response_arrays(response)
-    cluster_codes = (  # as.numeric(as.factor(cluster)); unused when robust = FALSE
+    cluster_codes = (
         _encode_labels(frame.cluster, "cluster")
         if frame.cluster is not None and robust_value is not False
         else None
@@ -779,7 +765,6 @@ def survreg(
     penalized = None
     assign2_labels: tuple[str, ...] = ()
     if penalized_terms:
-        # survpenal.fit warns about nothing: its inner-loop warning is never reached
         penalized, assign2_labels = fit_penalized(
             frame.assign,
             frame.term_labels,
@@ -821,7 +806,6 @@ def survreg(
         x=frame.x if keep_x else None,
         y=response if keep_y else None,
         model=frame.model,
-        # fit$u of a penalized fit, frailties included
         score=list(fit.score if penalized is None else penalized.score) if keep_score else None,
         assign=frame.assign,
         term_labels=frame.term_labels,
@@ -833,9 +817,6 @@ def survreg(
         assign2_labels=assign2_labels,
         _prediction_rows=frame.row_names,
     )
-
-
-# --- accessors used by the generics ----------------------------------------------------------
 
 
 def _estimated_scale_count(model: Any) -> int:
@@ -924,7 +905,6 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
         ),
         "loglik": loglik,
         "chi": 2.0 * (loglik[1] - loglik[0]),
-        # print.summary.survreg's df: sum(x$df) - x$idf
         "chi_df": survreg_df(fit) - fit.idf,
         "iter": fit.iter,
         "idf": fit.idf,
@@ -932,9 +912,6 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
     if parms:
         summary["distribution_parameters"] = parms
     return summary
-
-
-# --- predict.survreg -------------------------------------------------------------------------
 
 
 def _newdata_inputs(
@@ -951,8 +928,6 @@ def _newdata_inputs(
 
     design = fit.design
     if design is None:
-        # a fit on a design matrix: newdata's columns named like its coefficients, or a
-        # matrix
         if isinstance(newdata, Mapping) or hasattr(newdata, "columns"):
             columns = [_column(newdata, name) for name in fit.coefficient_names]
             rows = [list(map(_float_or_nan, values)) for values in zip(*columns, strict=True)]
@@ -977,7 +952,6 @@ def _newdata_inputs(
         )
     if not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
         raise TypeError("newdata must be a data frame with the model's columns")
-    # Terms keeps the strata() term, so its variables are required
     for term in fit.strata_terms:
         for name in term.columns:
             _column_source(newdata, name)
@@ -1134,8 +1108,6 @@ def predict_survreg(
 
         predictions = missing_columns(predictions)
         se_values = missing_columns(se_values)
-    # naresid restores omitted rows; na.pass predictor NaNs have already
-    # propagated through just the outputs that use them.
     if new is None:
         gaps = _excluded_rows(fit.na_action)
     else:
@@ -1218,8 +1190,6 @@ def predict_survreg(
     return _prediction_row_result(output, fit_labels, se_labels if include_se else None)
 
 
-# --- residuals.survreg -----------------------------------------------------------------------
-
 _RESIDUAL_TYPES = (
     "response",
     "deviance",
@@ -1254,8 +1224,6 @@ def residuals_survreg(
 
     model = fit.fit
     residual_type = _match_arg(type, "type", _RESIDUAL_TYPES)
-    # naresid comes before the collapse: the engine sums the fit's rows, and a group
-    # holding a row na.exclude removed sums to NA
     excluded = _excluded_rows(fit.na_action)
     groups = _collapse_groups(collapse, int(model.n) + len(excluded))
     codes, group_names = (None, None) if groups is None else groups
@@ -1276,9 +1244,6 @@ def residuals_survreg(
         values = _rowsum_excluded(values, codes, excluded)
     result = _drop(values, residual_type in {"dfbeta", "dfbetas", "matrix"})
     return {"values": result, "group_names": group_names} if _with_group_names else result
-
-
-# --- anova.survreg ---------------------------------------------------------------------------
 
 
 def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
@@ -1433,9 +1398,6 @@ def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
     return _anova_list(fits, with_test)
 
 
-# --- dsurvreg / psurvreg / qsurvreg / rsurvreg -----------------------------------------------
-
-
 def _dpqr_parms(parms: Any) -> tuple[list[float], bool]:
     """Transport numeric query parameters without applying fitting restrictions."""
 
@@ -1584,7 +1546,6 @@ def _random_sample_count(n: Any) -> int:
     try:
         if isinstance(value, str):
             text = value.strip()
-            # R parses decimal and hexadecimal numbers, but no digit separators.
             if "_" in text:
                 raise ValueError
             numeric = (
@@ -1637,11 +1598,6 @@ def rsurvreg(
     )
 
 
-# ---------------------------------------------------------------------------
-# R's ``*.survreg`` methods of the generics in ``_models``, which registers them
-# ---------------------------------------------------------------------------
-
-
 def _normal_two_sided_p_value(statistic: float) -> float:
     """``2 * pnorm(-abs(z))``."""
 
@@ -1649,8 +1605,6 @@ def _normal_two_sided_p_value(statistic: float) -> float:
         return math.nan
     if math.isinf(statistic):
         return 0.0
-    # erfc directly: NormalDist.cdf goes through 1 + erf on older Pythons and
-    # cancels for large |z|
     return math.erfc(abs(statistic) / math.sqrt(2.0))
 
 
@@ -1680,7 +1634,7 @@ def confint_survreg(
     z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
     names = _location_names(fit)
     coefficients = fit.coefficients
-    variance = survreg_vcov(fit)  # the location block leads fit$var
+    variance = survreg_vcov(fit)
     return [
         {
             "name": names[idx],
@@ -1731,9 +1685,6 @@ def model_matrix_survreg(
         else:
             if not (isinstance(data, Mapping) or hasattr(data, "columns")):
                 raise TypeError("data must be a data frame with the model's columns")
-            # model.matrix.survreg drops standalone scale strata before model.frame.
-            # Prediction still needs them to choose scales; the matrix only needs
-            # strata that remain as factors in covariate interactions.
             new = _newdata_frame(
                 fit.design,
                 (),
@@ -1813,7 +1764,6 @@ def model_summary_survreg(fit: SurvregModelResult, correlation: Any = False) -> 
 
     correl = None
     if _normalize_bool_option(correlation, "correlation"):
-        # diag(1/stds) %*% var[!nas, !nas] %*% diag(1/stds)
         keep = [idx for idx, value in enumerate(coefficients) if not math.isnan(value)]
         correl = [
             [variance[i][j] / (standard_errors[i] * standard_errors[j]) for j in keep] for i in keep

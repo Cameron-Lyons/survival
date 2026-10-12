@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-R aggregate.survfit callback, ordering and sum references.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -79,8 +78,6 @@ functions <- list(sum = sum, affine = function(z) z[1] + 2*z[length(z)] + length
     vector = function(z) c(1, 2), list = function(z) list(1),
     required = function(z, scale) scale*sum(z))
 
-# The Python API retains a singleton data axis; normalize only that documented
-# shape difference, while recording stock R dimensions separately.
 snapshot <- function(fit) {
     n_groups <- if (is.null(fit$newdata)) 1L else nrow(fit$newdata)
     record <- function(values, states = NULL) {
@@ -134,8 +131,6 @@ for (input in c("sum_precision", "nonfinite", "extended_precision", "maximum")) 
 for (input in names(inputs)) for (by in c("none", "constant", "bare"))
     add(input, by, "mean", named = TRUE, default = TRUE)
 
-# Empty-axis behavior is retained as evidence for stock apply's probing quirks.
-# The port intentionally keeps its existing well-shaped empty array behavior.
 empty_cases <- list()
 for (margin in c("surv", "pstate")) {
     shapes <- if (margin == "surv") list(c(0, 4), c(3, 0)) else

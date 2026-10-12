@@ -55,8 +55,6 @@ for (name in names(specs)) {
       expected <- capture(function() {
         options <- list(object = if (name == "sparse" && type == "terms") dense else fit,
                         type = if (type == "survival") "expected" else type, se.fit = se)
-        # Select explicitly after the stock full terms call, retaining dimensions
-        # for repeated/empty columns and avoiding stock's one-term drop behavior.
         value <- do.call(predict, options)
         if (name == "sparse" && type == "terms") {
           index <- as.integer(factor(fit$x[, 2L]))
@@ -93,7 +91,6 @@ for (name in names(specs)) {
     for (type in types) for (se in c(FALSE, TRUE)) for (action in c("na.pass", "na.omit", "na.exclude")) {
       raw <- capture(function() predict(fit, nd, type = type, se.fit = se, collapse = group, na.action = action))
       expected <- capture(function() {
-        # For omit/exclude, collapse itself contributes to model-frame missingness.
         used <- nd
         if (action != "na.pass") used$x[is.na(group)] <- NA
         value <- predict(fit, used, type = type, se.fit = se, na.action = action)

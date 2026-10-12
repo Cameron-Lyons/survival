@@ -1,4 +1,3 @@
-/// Legacy absolute tolerance of [`same_time`]; not R's `timefix`.
 pub const TIME_EPSILON: f64 = 1e-9;
 pub const CONVERGENCE_EPSILON: f64 = 1e-6;
 pub const DIVISION_FLOOR: f64 = 1e-10;
@@ -8,16 +7,12 @@ pub const DEFAULT_MAX_ITER: usize = 30;
 pub const DEFAULT_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_BOOTSTRAP_SAMPLES: usize = 1000;
 
-/// `qnorm(0.95)`, `qnorm(0.975)` and `qnorm(0.995)` to full precision, as R
-/// computes them; prefer `z_score_for_confidence` for other levels.
 pub const Z_SCORE_90: f64 = 1.6448536269514715;
 pub const Z_SCORE_95: f64 = 1.9599639845400536;
 pub const Z_SCORE_99: f64 = 2.5758293035489;
 
 pub const DEFAULT_CONCORDANCE: f64 = 0.5;
 
-/// Two-sided normal critical value for a confidence level, exactly as R's
-/// survival package computes it: `qnorm((1 + conf.int) / 2)`.
 #[inline]
 pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
     crate::internal::dist::qnorm((1.0 + confidence_level) / 2.0, true, false)
@@ -180,12 +175,6 @@ pub const DEFAULT_POWER: f64 = 0.8;
 pub const DEFAULT_ALLOCATION_RATIO: f64 = 1.0;
 pub const DEFAULT_SIDED: usize = 2;
 
-/// Legacy near-tie test with a fixed absolute tolerance
-/// ([`TIME_EPSILON`]), kept for the modules without an R counterpart that
-/// still compare times pairwise.  It is not R's `timefix`: routines that
-/// port R bin their times once with `data_prep::aeq_surv` / `aeq_times`
-/// (`aeqSurv`, a relative tolerance applied to the whole time vector) and
-/// then compare exactly.
 #[inline]
 pub fn same_time(left: f64, right: f64) -> bool {
     (left - right).abs() < TIME_EPSILON

@@ -417,7 +417,6 @@ mod tests {
             "probit".to_string(),
         )
         .unwrap();
-        // R qnorm(p, lower.tail = FALSE); endpoint signs follow decreasing survival.
         let expected = [
             f64::NEG_INFINITY,
             0.0,

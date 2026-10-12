@@ -1,6 +1,3 @@
-//! Predictions from a parametric survival fit: a port of
-//! `R/predict.survreg.R` from the CRAN `survival` package.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
 use crate::internal::validation::validate_length;
@@ -8,24 +5,23 @@ use crate::regression::parametric_survival::SurvregFit;
 use ndarray::{ArrayView1, ArrayView2};
 use pyo3::prelude::*;
 
-/// The `type` argument of `predict.survreg` (`link`/`linear` are `lp`).
+#[doc = " The `type` argument of `predict.survreg` (`link`/`linear` are `lp`)."]
 #[pyclass(eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvregPredictType {
-    /// `itrans(eta)`: the prediction on the original response scale.
+    #[doc = " `itrans(eta)`: the prediction on the original response scale."]
     Response,
-    /// The linear predictor `eta`.
+    #[doc = " The linear predictor `eta`."]
     Lp,
-    /// Per-term contributions to `eta`, centred at the training means.
+    #[doc = " Per-term contributions to `eta`, centred at the training means."]
     Terms,
-    /// Quantiles of the response distribution, one column per `p`.
+    #[doc = " Quantiles of the response distribution, one column per `p`."]
     Quantile,
-    /// Quantiles on the transformed (linear predictor) scale.
+    #[doc = " Quantiles on the transformed (linear predictor) scale."]
     Uquantile,
 }
 
 impl SurvregPredictType {
-    /// The `type` choices of `predict.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 7] = [
         ("response", Self::Response),
         ("link", Self::Lp),
@@ -36,29 +32,27 @@ impl SurvregPredictType {
         ("uquantile", Self::Uquantile),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix (see
-    /// `match_arg`).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
         let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
         Ok(Self::CHOICES[index].1)
     }
 }
 
-/// The value of `predict.survreg`.
+#[doc = " The value of `predict.survreg`."]
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregPrediction {
-    /// Column count retained independently of the row count.
+    #[doc = " Column count retained independently of the row count."]
     #[pyo3(get)]
     pub n_columns: usize,
     #[pyo3(get)]
     pub predict_type: SurvregPredictType,
-    /// One row per observation.  `Response`/`Lp` have a single column,
-    /// `Quantile`/`Uquantile` one column per requested probability, `Terms`
-    /// one column per term.
+    #[doc = " One row per observation.  `Response`/`Lp` have a single column,"]
+    #[doc = " `Quantile`/`Uquantile` one column per requested probability, `Terms`"]
+    #[doc = " one column per term."]
     #[pyo3(get)]
     pub fit: Vec<Vec<f64>>,
-    /// Standard errors laid out like `fit`, when requested.
+    #[doc = " Standard errors laid out like `fit`, when requested."]
     #[pyo3(get)]
     pub se_fit: Option<Vec<Vec<f64>>>,
 }
@@ -76,7 +70,7 @@ impl SurvregPrediction {
     }
 
     #[cfg(feature = "python")]
-    /// Independent writable float64 matrices, including empty dimensions.
+    #[doc = " Independent writable float64 matrices, including empty dimensions."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         crate::internal::numpy_utils::prediction_matrix_arrays(
             py,
@@ -87,15 +81,6 @@ impl SurvregPrediction {
     }
 }
 
-/// The `newdata` of `predict.survreg`: a design matrix with the columns of
-/// the training design, an optional offset and, for a fit with strata, the
-/// stratum of every row.
-///
-/// The offset enters every prediction type the way the training offset
-/// enters `linear.predictors`.  (R's `predict.survreg` drops the offset of
-/// `newdata` altogether, so its new-data predictions of a model with an
-/// offset disagree with its training predictions; that is not reproduced.)
-/// NaN covariates and offsets propagate only into results that depend on them.
 #[derive(Debug, Clone, Copy)]
 pub struct SurvregNewdata<'a> {
     pub covariates: ArrayView2<'a, f64>,
@@ -103,11 +88,8 @@ pub struct SurvregNewdata<'a> {
     pub strata: Option<&'a [usize]>,
 }
 
-/// The rows a prediction is evaluated on: the training design or `newdata`.
 struct PredictionRows<'a> {
     x: ArrayView2<'a, f64>,
-    /// `x %*% coef + offset`, what `predict.survreg` calls `pred` before any
-    /// transform.
     eta: Vec<f64>,
     strata: Vec<usize>,
 }
@@ -178,7 +160,6 @@ fn prediction_rows<'a>(
     })
 }
 
-/// `x_i' V x_i` for the leading block of the variance matrix.
 fn quadratic(x: ArrayView1<'_, f64>, variance: &[Vec<f64>]) -> f64 {
     x.iter()
         .enumerate()
@@ -192,13 +173,6 @@ fn quadratic(x: ArrayView1<'_, f64>, variance: &[Vec<f64>]) -> f64 {
         .sum()
 }
 
-/// `predict.survreg(object, newdata, type, se.fit, terms, p)`.
-///
-/// `p` is only used by the quantile types.  `assign` gives, for each design
-/// column, its term number in R's `attr(x, "assign")` convention (0 for the
-/// intercept); without it every non-intercept column is its own term, with
-/// an intercept recognised as a leading column of ones.  `terms` selects a
-/// subset of the terms (zero-based, in term order).
 pub fn predict_survreg(
     fit: &SurvregFit,
     newdata: Option<&SurvregNewdata<'_>>,
@@ -241,9 +215,6 @@ pub fn predict_survreg(
         }
         SurvregPredictType::Quantile | SurvregPredictType::Uquantile => {
             let rows = prediction_rows(fit, newdata)?;
-            // R passes the complete probability vector to the distribution's
-            // quantile function. Missing and out-of-range values produce NaN
-            // columns for built-ins; runtime families retain their own behavior.
             let qq = fit.distribution.quantiles(p)?;
             let nstrata = fit.nstrata();
             let mut pred: Vec<Vec<f64>> = rows
@@ -264,7 +235,6 @@ pub fn predict_survreg(
                             let se = quadratic(x, variance).sqrt();
                             vec![se; qq.len()]
                         } else {
-                            // temp <- cbind(x, (qq[i]*scale) * x.strata)
                             let scale = fit.scale[stratum];
                             qq.iter()
                                 .map(|q| {
@@ -347,7 +317,6 @@ pub fn predict_survreg(
                 .iter()
                 .map(|&term| (0..nvar).filter(|&j| assign[j] == term).collect())
                 .collect();
-            // Centre x at the training means when the model has an intercept.
             let centered: Vec<Vec<f64>> = rows
                 .x
                 .outer_iter()
@@ -374,7 +343,6 @@ pub fn predict_survreg(
                         columns
                             .iter()
                             .map(|cols| {
-                                // xi <- x[j, ii] * coef[ii];  sqrt(xi %*% R[ii, ii] %*% t(xi))
                                 let xi: Vec<f64> = cols.iter().map(|&j| x[j] * coef[j]).collect();
                                 cols.iter()
                                     .enumerate()
@@ -532,8 +500,6 @@ mod tests {
             SurvregPredictType::parse("uq").unwrap(),
             SurvregPredictType::Uquantile
         );
-        // match.arg is case sensitive, and "l" is a prefix of "link",
-        // "lp" and "linear" although all three mean the linear predictor.
         assert!(SurvregPredictType::parse("Response").is_err());
         assert!(SurvregPredictType::parse("l").is_err());
         assert!(SurvregPredictType::parse("").is_err());
@@ -544,7 +510,6 @@ mod tests {
     fn quadratic_form_matches_manual_expansion() {
         let variance = vec![vec![2.0, 0.5], vec![0.5, 1.0]];
         let x = [1.0, 3.0];
-        // 1*2*1 + 2*(1*0.5*3) + 3*1*3
         assert!((quadratic(ArrayView1::from(&x), &variance) - 14.0).abs() < 1e-12);
     }
 }

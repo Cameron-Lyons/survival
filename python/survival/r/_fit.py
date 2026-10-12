@@ -90,10 +90,6 @@ from ._types import (
     _SurvResponseSpec,
 )
 
-# ---------------------------------------------------------------------------
-# model.frame / model.matrix
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class _ModelFrame:
@@ -120,12 +116,9 @@ class _ModelFrame:
     weights: list[float] | None
     cluster: list[Any] | None
     id: list[Any] | None
-    # a factor keeps its levels (survcheck's states come from them)
     istate: Sequence[Any] | None
     row_names: tuple[str, ...] | None = None
     extra: dict[str, list[Any]] = field(default_factory=dict)
-    # the column names the weights= / id= arguments referred to (R keeps the call's
-    # expressions, so brier's newdata can re-evaluate them); None for vector arguments
     weights_column: str | None = None
     id_column: str | None = None
     na_action: NaAction | None = None
@@ -404,8 +397,6 @@ def _model_matrix_evaluated(
     evaluated: dict[_CovariateTerm, Any] = {}
     factor_values: dict[_CovariateTerm, list[Any]] = {}
     fitted_contrasts = _model_matrix_contrasts(design) or {}
-    # Stock Cox's reduced-strata call misspells contrasts.arg, so frame
-    # contrasts apply there. Other calls override them with fitted contrasts.
     frame_contrasts = (
         cox
         and bool(covered_strata)
@@ -654,8 +645,6 @@ def _model_matrix_contrasts(
                     else labels,
                     "columns": labels,
                 }
-    # R orders contrasts by formula variable order, including interaction-only
-    # factors, rather than by the order in which output terms are expanded.
     ordered: dict[str, Any] = {}
     for name in design.variable_labels or tuple(
         _covariate_term_name(term, frame=True) for term in design.variables
@@ -860,11 +849,6 @@ def _tt_terms(design: _FormulaDesign) -> list[_CovariateTerm]:
     return [term for term in design.variables if term in used] if design.variables else used
 
 
-# ---------------------------------------------------------------------------
-# newdata
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class _NewData:
     """``model.frame(Terms2, newdata)``: the pieces a prediction needs, at the rows of
@@ -873,7 +857,7 @@ class _NewData:
     available. ``data`` holds the model's variables at the kept rows."""
 
     data: Any
-    x: Any  # Row lists by default; an owned float64 ndarray for prediction kernels.
+    x: Any
     strata: list[int] | None
     offset: list[float] | None
     y: Surv | None
@@ -935,8 +919,6 @@ def _newdata_frame(
 
     newdata, _ = _prepare_formula_inputs(newdata)
     if isinstance(newdata, _FormulaRows) and not isinstance(newdata, _EvaluatedModelFrame):
-        # A raw R data frame can be reused by separate prediction calls. Keep
-        # evaluated values local to this call, including their domain warnings.
         newdata = _FormulaRows(dict(newdata), newdata.nrow, newdata.row_names)
     present = set(_newdata_columns(newdata))
     strata_columns = [column for term in strata_terms for column in term.columns]
@@ -957,7 +939,6 @@ def _newdata_frame(
             ]
         )
     )
-    # Response/strata-only frames still derive their size from evaluated terms.
     n = len(_column(newdata, columns[0])) if columns else _formula_design_row_count(newdata, design)
     strata_specs = dict.fromkeys(
         [spec for spec in strata_terms if strata_columns]
@@ -969,8 +950,6 @@ def _newdata_frame(
         ]
     )
     newdata = _with_strata_cache(newdata, tuple(strata_specs), n)
-    # na.pass leaves missing unused variables in the model frame without
-    # propagating them into the design. They still have to exist and align.
     if pass_missing:
         used = set(columns)
         _missing_row_indices(
@@ -986,8 +965,6 @@ def _newdata_frame(
         for term in design.covariates
         for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
     ]
-    # model.frame evaluates unused transforms even with na.pass: their domain
-    # warnings still belong to the call, although their NaNs do not enter x.
     variables.extend(term for term in design.variables if term.strata is None)
     variables.extend(_strata_covariate(spec) for spec in strata_terms if strata_columns)
     newdata = _with_evaluated_variables(newdata, [*variables, *design.offsets], n)
@@ -1016,7 +993,6 @@ def _newdata_frame(
             else set()
         )
         if response_columns:
-            # Expected counts use follow-up, not the event indicator.
             response = _newdata_response(newdata, design.response)
             if response is None:
                 raise ValueError("newdata does not contain a survival response")
@@ -1061,11 +1037,6 @@ def _newdata_frame(
         y=y,
         missing=tuple(sorted(missing)),
     )
-
-
-# ---------------------------------------------------------------------------
-# naresid / napredict
-# ---------------------------------------------------------------------------
 
 
 def _prediction_row_labels(
@@ -1165,11 +1136,6 @@ def _rowsum_excluded(values: list[Any], codes: Sequence[int], excluded: Sequence
     return [
         _na_entry(width) if group in na_groups else sums[group] for group in range(max(codes) + 1)
     ]
-
-
-# ---------------------------------------------------------------------------
-# accessors
-# ---------------------------------------------------------------------------
 
 
 def _formula_design_for_fit(fit: Any) -> _FormulaDesign | None:

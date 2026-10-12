@@ -9,7 +9,6 @@
 
 .py_compare <- function(actual, expected) {
   actual$call <- expected$call <- NULL
-  # R model-frame terms can capture evaluation environments with identical content.
   if (!is.null(actual$terms)) environment(actual$terms) <- environment(expected$terms) <- baseenv()
   if (!is.null(actual$model)) {
     at <- attr(actual$model, "terms")

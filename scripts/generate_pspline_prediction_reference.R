@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_pspline_prediction_reference.R [output.json]
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly=TRUE)

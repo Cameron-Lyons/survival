@@ -74,7 +74,6 @@ test_that("prediction warnings and whole results follow evaluated variables", {
           if(grepl("missing values",expected$value$error)) {
             expect_match(result$value$error,"missing values",info=info)
           } else {
-            # Stock AFT predict.terms loses model-matrix attributes at zero rows.
             expect_identical(expected$value$error,"argument is not really a model matrix",info=info)
             expect_identical(kind,"survreg",info=info)
             expect_identical(type,"terms",info=info)

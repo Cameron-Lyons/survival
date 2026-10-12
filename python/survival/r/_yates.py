@@ -196,7 +196,6 @@ def _yates_population(
     pdata = _factorial_population(mframe, categorical)
     if not continuous:
         return pdata
-    # sas with a mixed population: each factorial row crossed with every data row
     n_data = len(next(iter(mframe.values())))
     n_pop = len(next(iter(pdata.values())))
     out = {
@@ -258,8 +257,6 @@ def _yates_sgtt(
             return replace(spec, factors=tuple(expanded(factor) for factor in spec.factors))
         if isinstance(spec, _CategoricalDesignTerm):
             levels = spec.levels
-            # R's model.matrix uses natural indicators for a promoted full
-            # factor, otherwise the supplied contrasts with baseline last.
             if not spec.full and (
                 full_intercept or factor_order.index(_covariate_term_name(spec.term)) > 0
             ):
@@ -362,7 +359,6 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
             "response", _integer_scalar(settings.get("seed", 0), "seed"), response=response
         )
     kind = _match_string_arg(
-        # match.arg(NULL) is the first choice
         "lp" if predict is None else predict,
         "predict",
         _COXPH_PREDICT,
@@ -507,7 +503,6 @@ def yates(
         for combination in zip(*yates_term.levels.values(), strict=True)
     ]
     estimable = _yates_estimable(fit, design, xmatlist) if len(kept) < len(beta) else None
-    # the coefficient columns: a Cox model's baseline absorbs the intercept
     first = 1 if design.intercept and not external else 0
     columns = [first + idx for idx in kept]
     design_names = _yates_design_names(design)

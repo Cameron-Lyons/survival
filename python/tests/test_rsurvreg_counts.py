@@ -49,7 +49,6 @@ def count_input(name):
         "bad_string": "bad",
         "bad_string_separator": "1_0",
         "strings": ["bad", "also_bad"],
-        # Python flat lists are R atomic vectors; a nested singleton is an R list.
         "list1": [[3]],
         "list2": [[-1], [None]],
         "list0": [],
@@ -70,8 +69,6 @@ def callback_distribution(calls):
         calls.append(probabilities.tolist())
         return probabilities
 
-    # Density and init are required constructor callbacks, but sampling only
-    # invokes quantile. The R generator registers the same quantile separately.
     return {
         "name": "Count callback oracle",
         "density": lambda z: np.column_stack(
@@ -87,7 +84,6 @@ def assert_stock_result(n, expected, distribution="weibull"):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if expected["error"] is not None:
-            # Preserve the facade's existing negative-count message.
             with pytest.raises(ValueError, match="invalid arguments|n must be non-negative"):
                 r.rsurvreg(n, 0, distribution=distribution, seed=REFERENCE["metadata"]["seed"])
         else:
@@ -127,7 +123,6 @@ def test_numpy_vectors_ignore_invalid_values_and_return_flat_draws(shape):
 def test_numpy_strided_vectors_and_empty_dimensions():
     n = np.array([-1, 100, math.nan, 100, math.inf, 100])[::2]
     assert_stock_result(n, CASES["ignored_invalid"]["rsurvreg"])
-    # Zero elements must not require scanning the large remaining dimensions.
     assert_stock_result(np.empty((0, 3, 1 << 28)), CASES["empty"]["rsurvreg"])
 
 

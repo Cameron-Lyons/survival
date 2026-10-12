@@ -5,9 +5,6 @@
 #include <R_ext/Rdynload.h>
 #include <R_ext/Visibility.h>
 
-/* An opaque handle: serialization invokes an R closure while the Python
- * object is live, and stores its state bundle. Fits allocate no serialized copy.
- * After loading, data2 holds that bundle until R restores the Python object. */
 static R_altrep_class_t snapshot_class;
 
 static void check_snapshot(SEXP value) {
@@ -47,7 +44,6 @@ static const void *snapshot_pointer_or_null(SEXP value) { (void) value; return N
 
 static void *snapshot_pointer(SEXP value, Rboolean writable) {
     (void) value; (void) writable;
-    /* Serialization version 2 materializes ALTREP and would discard state. */
     Rf_error("Survival model persistence requires serialization version = 3");
     return NULL;
 }

@@ -1,9 +1,3 @@
-//! Runtime-defined location-scale distributions and response transforms.
-//!
-//! Callbacks operate on complete batches and return crate errors. They own
-//! their state, so fits can retain them for predictions and residuals without
-//! retaining a language runtime lock.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::survreg_distributions::SurvregDensity;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -20,20 +14,10 @@ pub(crate) mod python;
 #[cfg(test)]
 mod tests;
 
-/// The `init`, `density`, `quantile`, `deviance` and optional `variance`
-/// functions of an R `survreg.distributions` entry. `parms` are the fitted
-/// distribution's parameters. Fitting requires returned vectors to match the
-/// input length; distribution queries apply R's arithmetic recycling rules.
 pub trait SurvregCallbacks: Any + Send + Sync {
-    /// Initial location and variance (not standard deviation).
     fn init(&self, y: &[f64], weights: &[f64], parms: &[f64]) -> SurvivalResult<[f64; 2]>;
-    /// Standardized CDF, survival, density, f'/f and f''/f at each endpoint.
     fn density(&self, z: &[f64], parms: &[f64]) -> SurvivalResult<Vec<SurvregDensity>>;
-    /// Standardized quantiles, including infinite endpoints for p=0 or 1.
     fn quantile(&self, p: &[f64], parms: &[f64]) -> SurvivalResult<Vec<f64>>;
-    /// Saturated centers and log likelihoods on the transformed response
-    /// scale. Status is 0 right, 1 exact, 2 left, 3 interval; y2 is read only
-    /// for intervals. Each observation has its own scale.
     fn deviance(
         &self,
         y1: &[f64],
@@ -42,9 +26,6 @@ pub trait SurvregCallbacks: Any + Send + Sync {
         scale: &[f64],
         parms: &[f64],
     ) -> SurvivalResult<(Vec<f64>, Vec<f64>)>;
-    /// Effective-sample-size variance used during penalized initialization.
-    /// The default is the standardized variance. R adapters can reproduce
-    /// `sd$variance(scale_squared)` without changing the ordinary variance.
     fn fitting_variance(&self, _scale_squared: f64, parms: &[f64]) -> SurvivalResult<f64> {
         let value = self.variance(parms)?;
         if !value.is_finite() || value <= 0.0 {
@@ -55,7 +36,6 @@ pub trait SurvregCallbacks: Any + Send + Sync {
         Ok(value)
     }
 
-    /// Variance of the standardized distribution, used by penalized fits.
     fn variance(&self, _parms: &[f64]) -> SurvivalResult<f64> {
         Err(SurvivalError::invalid_input(
             "custom distribution has no variance callback",
@@ -63,9 +43,6 @@ pub trait SurvregCallbacks: Any + Send + Sync {
     }
 }
 
-/// An increasing response transform and its derivative and inverse.
-/// Fitting checks that transformed responses and the exact-event Jacobian
-/// are finite. Prediction permits infinite quantile endpoints.
 pub trait SurvregTransformCallbacks: Any + Send + Sync {
     fn transform(&self, y: &[f64]) -> SurvivalResult<Vec<f64>>;
     fn derivative(&self, y: &[f64]) -> SurvivalResult<Vec<f64>>;
@@ -92,8 +69,6 @@ impl<T: ?Sized> fmt::Debug for RuntimeCallback<T> {
     }
 }
 
-/// Raw serde must never silently discard a callable. Python pickle encodes
-/// the callables separately and serializes only an explicitly detached copy.
 pub(crate) mod callback_serde {
     use super::*;
 

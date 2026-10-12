@@ -12,7 +12,6 @@ def _invalid_operation(*args: Any, **kwargs: Any) -> Never:
 
 
 def _same_value(left: Any, right: Any) -> bool:
-    # Tuple equality stays in C for the usual complete-data comparison.
     if left is right or left == right:
         return True
     if isinstance(left, tuple) and isinstance(right, tuple):

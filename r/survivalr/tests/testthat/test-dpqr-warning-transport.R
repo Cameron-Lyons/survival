@@ -133,8 +133,6 @@ test_that("named non-Student-t DPQR keeps unused parameters lazy", {
       expected <- stock(query,mean=0,distribution=distribution,parms=stop("must stay unused"))
       set.seed(17)
       observed <- actual(query,mean=0,distribution=distribution,parms=stop("must stay unused"))
-      # The numeric adapter drops stock's empty scalar row name; this check
-      # concerns unused promises and values rather than that existing metadata.
       expect_equal(unname(observed),unname(expected),tolerance=2e-12,info=paste(kind,distribution))
     }
 })

@@ -75,10 +75,6 @@ from ._types import (
     _InteractionTerm,
 )
 
-# ---------------------------------------------------------------------------
-# Access to a fitted coxph object
-# ---------------------------------------------------------------------------
-
 
 def _coxph_engine(fit: Any, message: str) -> Any:
     """The Rust ``CoxPHFit`` behind an R-style coxph result (R's ``inherits(fit, "coxph")``)."""
@@ -127,17 +123,12 @@ def _unique_in_order(values: Sequence[Any]) -> list[Any]:
     return list(dict.fromkeys(values))
 
 
-# ---------------------------------------------------------------------------
-# statefig
-# ---------------------------------------------------------------------------
-
-
 def _statefig_state_names(connect: Any, states: Any | None) -> list[str]:
     if states is not None:
         return [str(value) for value in _materialize_1d(states, "states")]
     if isinstance(connect, Mapping):
         return [str(value) for value in connect]
-    if hasattr(connect, "columns"):  # a data frame: its row labels
+    if hasattr(connect, "columns"):
         return [str(value) for value in connect.index]
     raise ValueError("connect must have the state names as dimnames")
 
@@ -203,11 +194,6 @@ def statefig(
     )
 
 
-# ---------------------------------------------------------------------------
-# cipoisson and the bounded links
-# ---------------------------------------------------------------------------
-
-
 def _numeric_or_nan(values: Any, name: str) -> list[float]:
     return [math.nan if _is_missing_value(v) else float(v) for v in _scalar_or_vector(values, name)]
 
@@ -267,11 +253,6 @@ def blog(x: Any, edge: Any = 0.05, *, inverse: bool = False) -> float | list[flo
     """R's ``blog(edge)$linkfun``: the log of ``x`` bounded below by ``edge``."""
 
     return _bounded_link(x, edge, "blog_inverse" if inverse else "blog")
-
-
-# ---------------------------------------------------------------------------
-# nsk and pspline
-# ---------------------------------------------------------------------------
 
 
 def _quantile_type7(sorted_values: list[float], probability: float) -> float:
@@ -367,8 +348,6 @@ def _second_difference_penalty(nvar: int) -> list[list[float]]:
     """R's ``t(D) %*% D`` for the second-difference matrix ``D`` of ``nvar`` coefficients."""
 
     penalty = [[0.0] * nvar for _ in range(nvar)]
-    # Each difference row has only three nonzero entries. Accumulate its
-    # outer product directly instead of multiplying dense matrices in Python.
     for i in range(nvar - 2):
         for j, left in enumerate((1.0, -2.0, 1.0)):
             for k, right in enumerate((1.0, -2.0, 1.0)):
@@ -515,11 +494,6 @@ def _frailty_encoding(
     }
 
 
-# ---------------------------------------------------------------------------
-# The model frame of survcheck
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class _ModelFrame:
     response: Surv
@@ -567,11 +541,6 @@ def _model_frame(
         kept=[row for row in range(len(response) + len(removed)) if row not in removed],
         omitted=omitted,
     )
-
-
-# ---------------------------------------------------------------------------
-# survcheck
-# ---------------------------------------------------------------------------
 
 
 def _survcheck_states(response: Surv) -> list[str]:
@@ -656,7 +625,6 @@ def survcheck(
         raise ValueError("invalid value for timefix option")
     extras = {"id": id, "istate": istate}
     if _timeline_response(formula):
-        # survcheck.R converts timeline data before its na.action
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
         subset = None
     frame = _model_frame(formula, data, subset, na_action, **extras)
@@ -691,7 +659,6 @@ def survcheck(
         censor_label=response.clabel if response.clabel is not None else "censor",
         timefix=timefix,
     )
-    # R reports rows of the data before missing values were removed.
     row_numbers = [idx + 1 for idx in frame.kept]
     return SurvCheckResult(
         states=raw.states,
@@ -710,11 +677,6 @@ def survcheck(
         id=list(id_values),
         na_action=[idx + 1 for idx in frame.omitted] or None,
     )
-
-
-# ---------------------------------------------------------------------------
-# survobrien
-# ---------------------------------------------------------------------------
 
 
 def _survobrien_columns(
@@ -767,7 +729,6 @@ def _survobrien_transformed(
         for start, end in zip(offsets[:-1], offsets[1:], strict=True):
             transformed = transform([values[row] for row in rows[start:end]])
             if isinstance(transformed, int | float):
-                # a length-one R vector comes back from reticulate as a scalar
                 transformed = [transformed]
             result = _float_vector(transformed, "transform")
             if len(result) != end - start:
@@ -829,7 +790,6 @@ def survobrien(
     else:
         columns.append(("time", list(expansion.time)))
     columns.append(("status", list(expansion.status)))
-    # data[knames]: `[.data.frame` makes the names of the kept and strata variables unique
     knames = [*keepers, *terms.strata]
     columns += [
         (label, list(_subset_sequence(_column(data, name), rows, name)))
@@ -841,14 +801,8 @@ def survobrien(
         columns.append((".id.", [row + 1 for row in rows]))
     columns += _survobrien_transformed(transform, continuous, expansion, rows)
     columns.append((".strata.", list(expansion.strata)))
-    # data.frame()'s check.names: make.names(unique = TRUE)
     names = _make_names_unique([name for name, _values in columns])
     return {name: values for name, (_label, values) in zip(names, columns, strict=True)}
-
-
-# ---------------------------------------------------------------------------
-# royston
-# ---------------------------------------------------------------------------
 
 
 def royston(
@@ -874,7 +828,6 @@ def royston(
             raise ValueError("cannot use newdata for a stratified model")
         response = _newdata_response(fit, newdata)
         eta = _float_vector(_models.predict(fit, newdata, type="lp"), "eta")
-        # rescale: eta <- coxph(y2 ~ eta)$linear.predictor
         eta = list(
             _core.coxph_fit(
                 list(response.time),
@@ -899,11 +852,6 @@ def royston(
         values["R.N"] = result.r_n
     values["C.GH"] = result.c_gh
     return values
-
-
-# ---------------------------------------------------------------------------
-# brier
-# ---------------------------------------------------------------------------
 
 
 def _brier_weights(weights: Sequence[Any] | None, n: int) -> list[float]:
@@ -996,7 +944,6 @@ def brier(
     """Brier score of a Cox model with inverse-probability-of-censoring weights (R's ``brier``)."""
 
     if isinstance(fit, CoxphmsModel):
-        # R fails later with "times contains missing or infinite values"
         raise ValueError("brier is not defined for multi-state coxph fits")
     engine = _coxph_engine(fit, "fit must be a coxph object")
     if not isinstance(timefix, bool):

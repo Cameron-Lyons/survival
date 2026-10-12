@@ -8,7 +8,7 @@ ordered/unordered factors. Model checks compare with explicit logical designs.
 import importlib
 
 import numpy as np
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 import pytest
 from survival import r
 
@@ -181,7 +181,6 @@ def test_ordered_formula_fits_and_predictions_match_explicit_logical_design(kind
         actual = r.predict(fit, new, type=prediction_type, na_action="na.exclude")
         expected = r.predict(explicit, new, type=prediction_type, na_action="na.exclude")
         np.testing.assert_allclose(actual, expected, rtol=2e-13, atol=2e-13, equal_nan=True)
-    # Missing comparison values participate in the prediction row policy.
     with pytest.raises(ValueError, match="missing"):
         r.predict(fit, {"x": [0.0], "g": factor([None], ordered=True)}, na_action="na.fail")
 

@@ -1,8 +1,3 @@
-//! Expected survival curves from a population rate table: the data side of
-//! R's `survexp` (`R/survexp.R`) once the model frame has been evaluated
-//! and matched to the table with `match_ratetable`.  A Cox model used as a
-//! rate table (`survexp.cfit`) is not handled here.
-
 use super::ratetable::RateTable;
 use super::survexp_fit::survexp_fit;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -12,23 +7,16 @@ use crate::internal::validation::{validate_finite, validate_length, validate_non
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-/// R's `method` argument of `survexp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvexpMethod {
-    /// Ederer I: everyone is followed to the last time point.
     Ederer,
-    /// Hakulinen: the cohort's expected survival given the observed follow-up.
     Hakulinen,
-    /// Conditional expected survival.
     Conditional,
-    /// One expected cumulative hazard per subject at its own follow-up.
     IndividualH,
-    /// One expected survival per subject at its own follow-up.
     IndividualS,
 }
 
 impl SurvexpMethod {
-    /// Parse R's `match.arg` choices.
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value {
             "ederer" => Ok(Self::Ederer),
@@ -42,8 +30,6 @@ impl SurvexpMethod {
         }
     }
 
-    /// R's historical defaults when `method` is not given: `conditional`
-    /// and `cohort` decide, then whether a response is present.
     pub fn default_for(cohort: bool, conditional: bool, has_response: bool) -> Self {
         if !cohort {
             Self::IndividualS
@@ -71,30 +57,20 @@ impl SurvexpMethod {
     }
 }
 
-/// The arguments of R's `survexp` that survive `model.frame`.
 pub struct SurvexpInput<'a> {
-    /// `match_ratetable`'s matrix, one row per subject.
     pub positions: &'a Array2<f64>,
-    /// The response follow-up (`Surv(time, status)` reduced to `time`), or
-    /// `None` for a formula without a response.
     pub y: Option<&'a [f64]>,
-    /// Zero-based curve number of each subject (`strata(mf[ovars])`), or
-    /// `None` for a single curve.
     pub group: Option<&'a [usize]>,
-    /// Requested output times.
     pub times: Option<&'a [f64]>,
-    /// R's `method` argument, or `None` to use the historical defaults.
     pub method: Option<SurvexpMethod>,
-    /// R's `cohort` and `conditional` arguments.
     pub cohort: bool,
     pub conditional: bool,
-    /// Divisor applied to the output times.
     pub scale: f64,
 }
 
-/// Expected survival curves (`ntime x ngroup`) or, for the individual
-/// methods, one value per subject in `surv[i][0]` with empty `time` and
-/// `n_risk`.
+#[doc = " Expected survival curves (`ntime x ngroup`) or, for the individual"]
+#[doc = " methods, one value per subject in `surv[i][0]` with empty `time` and"]
+#[doc = " `n_risk`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvExpResult {
@@ -104,9 +80,9 @@ pub struct SurvExpResult {
     pub surv: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub n_risk: Vec<Vec<f64>>,
-    /// R's label: `Ederer` without a response, `conditional` when the
-    /// `conditional` argument was set, `cohort` otherwise; the individual
-    /// methods report their own name.
+    #[doc = " R's label: `Ederer` without a response, `conditional` when the"]
+    #[doc = " `conditional` argument was set, `cohort` otherwise; the individual"]
+    #[doc = " methods report their own name."]
     #[pyo3(get)]
     pub method: String,
 }
@@ -114,7 +90,7 @@ pub struct SurvExpResult {
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvExpResult {
-    /// Independent writable NumPy snapshots; curve matrices are time by group.
+    #[doc = " Independent writable NumPy snapshots; curve matrices are time by group."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;
         let output = pyo3::types::PyDict::new(py);
@@ -132,7 +108,6 @@ impl SurvExpResult {
     }
 }
 
-/// R's `survexp` for a rate table.
 pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult<SurvExpResult> {
     let n = input.positions.nrows();
     if n == 0 {
@@ -202,8 +177,6 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
         });
     }
 
-    // newtime: the requested times plus, with a response, its unique
-    // follow-up times before the last request.
     let (newtime, y) = match (input.y, input.times) {
         (None, None) => {
             return Err(SurvivalError::invalid_input(
@@ -242,11 +215,8 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
                 .collect(),
         ),
         Some(times) => {
-            // keep <- match(times, newtime); surv <- rbind(1, surv)[keep + 1, ]
             let mut surv = Vec::with_capacity(times.len());
             let mut n_risk = Vec::with_capacity(times.len());
-            // Both grids are increasing. Retain the cursor for duplicate
-            // requests so selection takes one pass through the fitted grid.
             let mut keep = 0;
             for &t in times {
                 while keep < fit.times.len() && fit.times[keep] < t {
@@ -279,9 +249,9 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
     })
 }
 
-/// Python entry point of [`survexp`]: `positions` is `match_ratetable(...).r`,
-/// `group` zero-based curve numbers, `method` one of R's choices or `None`.
-/// The kernel runs with the GIL released.
+#[doc = " Python entry point of [`survexp`]: `positions` is `match_ratetable(...).r`,"]
+#[doc = " `group` zero-based curve numbers, `method` one of R's choices or `None`."]
+#[doc = " The kernel runs with the GIL released."]
 #[pyfunction(name = "survexp")]
 #[pyo3(signature = (ratetable, positions, y=None, group=None, times=None, method=None, cohort=true, conditional=false, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
@@ -444,7 +414,6 @@ mod tests {
         .unwrap();
         assert_eq!(out.method, "cohort");
         assert_eq!(out.time, vec![0.0, 10.0]);
-        // newtime is 0, 5, 10: subject 1 leaves after day 5.
         assert_eq!(out.n_risk, vec![vec![2.0], vec![1.0]]);
         assert!((out.surv[1][0] - (-0.1f64).exp()).abs() < 1e-12);
 
@@ -526,7 +495,6 @@ mod tests {
         );
         assert!(survexp(&table, input(&positions, None, Some(&[2.0, 1.0]), None)).is_err());
         assert!(survexp(&table, input(&positions, None, Some(&[-1.0]), None)).is_err());
-        // The reviewer's case: a sex code survexp.us does not have.
         let off_table = ndarray::arr2(&[[109.0 * 365.25, 5.0, 18262.0]]);
         let message = survexp(
             survexp_us_table(),

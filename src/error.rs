@@ -2,35 +2,18 @@ use std::fmt;
 
 pub use crate::internal::validation::ValidationError;
 
-/// Crate-wide error type.
-///
-/// Variants are grouped by how R's `survival` package would report the same
-/// condition: argument problems become `stop()` calls (mapped to Python
-/// `ValueError`), while numerical failures such as singular information
-/// matrices or exhausted iteration budgets are runtime failures (mapped to
-/// Python `RuntimeError`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SurvivalError {
-    /// A caller-supplied argument is malformed in a way that has no
-    /// structured [`ValidationError`] representation.
     InvalidInput(String),
-    /// A structured input validation failure (see
-    /// `crate::internal::validation`).
     Validation(ValidationError),
-    /// A linear system or matrix is singular. `context` names the operation
-    /// (for example `"information matrix"`), `columns` lists the zero-based
-    /// columns found to be redundant when that is known (R's `coxph` reports
-    /// those coefficients as `NA`).
     Singular {
         context: String,
         columns: Vec<usize>,
     },
-    /// A numerical routine failed for a reason other than singularity.
     Computation(String),
-    /// An iterative fit reached its iteration cap without converging. Wording
-    /// follows R's `coxph`/`survreg`: "Ran out of iterations and did not
-    /// converge".
-    NotConverged { iterations: usize },
+    NotConverged {
+        iterations: usize,
+    },
 }
 
 impl SurvivalError {
@@ -42,7 +25,6 @@ impl SurvivalError {
         Self::Computation(message.into())
     }
 
-    /// A singular system with no column-level diagnosis.
     pub fn singular(context: impl Into<String>) -> Self {
         Self::Singular {
             context: context.into(),
@@ -50,7 +32,6 @@ impl SurvivalError {
         }
     }
 
-    /// A singular system whose redundant (zero-based) columns are known.
     pub fn singular_columns(context: impl Into<String>, columns: Vec<usize>) -> Self {
         Self::Singular {
             context: context.into(),

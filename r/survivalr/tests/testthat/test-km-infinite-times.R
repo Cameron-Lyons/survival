@@ -30,8 +30,6 @@
 }
 
 .infinite_km_finite_aeq <- function(response) {
-  # Stock aeqSurv owns finite cutpoint selection. Its result is inserted into
-  # the original matrix positions, preserving infinite endpoints and status rows.
   columns <- seq_len(ncol(response) - 1L)
   times <- unclass(response)[, columns, drop = FALSE]
   finite <- is.finite(times)
@@ -102,7 +100,6 @@
   normalize <- function(value) {
     if (!is.numeric(value)) return(as.character(value))
     value <- as.numeric(value)
-    # Numerical curve outputs use NaN for R's undefined NA estimates/bounds.
     value[is.na(value)] <- NA_real_
     value
   }
@@ -219,9 +216,6 @@ test_that("infinite summary rows retain values lost by stock empty-stratum assem
     stock_summary(stock_subset(stock, i), times = Inf, extend = FALSE,
                   dosum = TRUE, rmean = "none")
   })
-  # Leading NULL fields make stock unlistsurv discard later strata. Retain
-  # every original stock field and use its direct per-stratum kernels for the
-  # missing values, rather than implementing the event-count arithmetic here.
   repaired <- raw
   for (field in c("surv", "n.event", "n.censor", "n.enter", "std.err", "std.chaz",
                   "cumhaz", "lower", "upper")) {
@@ -259,8 +253,6 @@ test_that("KM infinite start times and summary queries retain stock behavior", {
         times = c(-Inf, Inf), extend = TRUE, rmean = "none"))
       expect_identical(value$warnings, reference$warnings)
       if (is.list(reference$value) && !is.null(reference$value$error)) {
-        # Stock counting curves with an infinite conditional origin may have
-        # earlier entry rows; survfit0 then produces an unsorted time grid.
         expect_identical(value$value$error, reference$value$error)
       } else .infinite_km_compare_columns(value$value,
         .infinite_km_expected_columns(reference$value, TRUE), paste("start", start))

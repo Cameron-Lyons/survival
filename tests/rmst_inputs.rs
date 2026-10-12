@@ -1,5 +1,3 @@
-//! RMST comparison validates row alignment before selecting group observations.
-
 use survival::surv_analysis::{RmeanOption, SurvfitKMData, SurvfitKMOptions, survfitkm, survmean};
 use survival::validation::rmst_comparison;
 
@@ -12,7 +10,7 @@ fn comparison_rejects_short_and_long_status_before_subsetting() {
     for len in [0, 1, 3, 5] {
         let mut status = vec![1; len];
         if len > TIME.len() {
-            status[TIME.len()] = 2; // This trailing value must not be discarded.
+            status[TIME.len()] = 2;
         }
         let error = rmst_comparison(&TIME, &status, &GROUP, None, 4.0, 0.95)
             .unwrap_err()
@@ -94,8 +92,6 @@ fn interleaved_groups_with_ties_agree_with_independently_fitted_curves() {
         ordered_labels
     );
     for actual in result.groups {
-        // Select from the original input independently, including its tied
-        // times and fractional-weight addition order within each group.
         let rows: Vec<usize> = (0..time.len())
             .filter(|&row| group[row] == actual.group)
             .collect();

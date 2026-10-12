@@ -61,8 +61,6 @@ add("lines_bands","ties_robust",list(se=TRUE),"lines")
 add("lines_selected","robust",list(se=TRUE,maxtime=400),"lines",var=2)
 add("straight_lines","single",list(type="l"))
 
-# Record upstream failures separately, rather than treating them as the
-# numerical contract: dropped dimensions and the zero-origin robust bands.
 failures <- list()
 for(item in list(list(name="first_event",fit="ovarian",options=list(maxtime=59)),
                 list(name="before_first",fit="ovarian",options=list(maxtime=1)),

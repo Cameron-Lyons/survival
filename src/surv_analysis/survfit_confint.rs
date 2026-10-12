@@ -1,14 +1,9 @@
-//! Confidence bands for survival-type curves: the port of `survfit_confint`
-//! in R's `survfit.R`, used by every Kaplan-Meier, Nelson-Aalen and
-//! Aalen-Johansen curve in this crate.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
 use crate::internal::numpy_utils::FloatVec;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-/// The `conf.type` argument of `survfit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfType {
     #[default]
@@ -21,9 +16,6 @@ pub enum ConfType {
 }
 
 impl ConfType {
-    /// Parse R's spelling (`"log-log"`); `"loglog"` and `"log_log"` are
-    /// accepted as well since Python callers cannot type the hyphen in a
-    /// keyword.
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value.to_ascii_lowercase().as_str() {
             "log" => Ok(Self::Log),
@@ -50,7 +42,6 @@ impl ConfType {
     }
 }
 
-/// The `conf.lower` argument of `survfit`: how the lower band is widened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfLower {
     #[default]
@@ -80,8 +71,8 @@ impl ConfLower {
     }
 }
 
-/// Lower and upper confidence limits, element for element with the curve
-/// they were computed for.  `NaN` marks a limit R reports as `NA`.
+#[doc = " Lower and upper confidence limits, element for element with the curve"]
+#[doc = " they were computed for.  `NaN` marks a limit R reports as `NA`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct ConfidenceBands {
@@ -91,7 +82,6 @@ pub struct ConfidenceBands {
     pub upper: Vec<f64>,
 }
 
-/// Validate a confidence level the way `survfit_confint` does.
 pub(crate) fn validate_conf_int(conf_int: f64) -> SurvivalResult<()> {
     if !(conf_int > 0.0 && conf_int < 1.0) {
         return Err(SurvivalError::invalid_input(
@@ -101,12 +91,10 @@ pub(crate) fn validate_conf_int(conf_int: f64) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// R's `log()` on a value that may be `NA`: non-positive arguments give NaN.
 fn r_log(value: f64) -> f64 {
     if value > 0.0 { value.ln() } else { f64::NAN }
 }
 
-/// `pmin(value, limit)` with R's NA propagation.
 fn r_pmin(value: f64, limit: f64) -> f64 {
     if value.is_nan() {
         f64::NAN
@@ -115,7 +103,6 @@ fn r_pmin(value: f64, limit: f64) -> f64 {
     }
 }
 
-/// `pmax(value, limit)` with R's NA propagation.
 fn r_pmax(value: f64, limit: f64) -> f64 {
     if value.is_nan() {
         f64::NAN
@@ -124,19 +111,6 @@ fn r_pmax(value: f64, limit: f64) -> f64 {
     }
 }
 
-/// Port of `survfit_confint` (R `survfit.R`).
-///
-/// `p` is the estimate, `se` its standard error: on the log scale when
-/// `logse` is true (the simple Greenwood variance of a Kaplan-Meier curve),
-/// otherwise on the scale of `p` (robust variances, multi-state curves).
-/// `selow`, when given, widens only the lower limit (`conf.lower = "peto"` /
-/// `"modified"`); `ulimit` caps the upper limit at 1 for the `plain` and
-/// `log` transforms, which R turns off for cumulative hazards.
-///
-/// Edge rule, as in R: when `se == 0` both limits equal `p`; otherwise a
-/// transform that cannot be evaluated at `p` (`log(0)`, `log(-log(1))`) gives
-/// `NA`, so a curve that reaches 0 has `NA` limits there rather than limits
-/// that dive to zero.
 pub fn survfit_confint(
     p: &[f64],
     se: &[f64],
@@ -160,12 +134,10 @@ pub fn survfit_confint(
     let mut upper = Vec::with_capacity(n);
     for i in 0..n {
         let p_i = p[i];
-        // scale = ifelse(selow == 0, 1, selow / se); avoids 0/0 at the origin
         let scale = match selow {
             Some(selow) if selow[i] != 0.0 => selow[i] / se[i],
             _ => 1.0,
         };
-        // se of log(survival) when the caller supplied se(S)
         let se_i = if logse {
             se[i]
         } else if se[i] == 0.0 {
@@ -175,7 +147,6 @@ pub fn survfit_confint(
         };
         let (lo, hi) = match conf_type {
             ConfType::Plain => {
-                // equation 4.3.1 in Klein & Moeschberger
                 let se2 = se_i * p_i * zval;
                 let hi = p_i + se2;
                 (
@@ -255,7 +226,7 @@ pub fn survfit_confint(
     Ok(ConfidenceBands { lower, upper })
 }
 
-/// Python binding of [`survfit_confint`].
+#[doc = " Python binding of [`survfit_confint`]."]
 #[pyfunction(name = "survfit_confint")]
 #[pyo3(signature = (p, se, logse=true, conf_type="log", conf_int=0.95, selow=None, ulimit=true))]
 #[allow(clippy::too_many_arguments)]
@@ -307,7 +278,6 @@ mod tests {
 
     #[test]
     fn matches_r_confidence_transforms() {
-        // survfit_confint(c(.2, .5, .9), .1, conf.type=...) in R
         let p = [0.2, 0.5, 0.9];
         let se = [0.1; 3];
         let plain = bands(&p, &se, ConfType::Plain);
@@ -329,17 +299,14 @@ mod tests {
 
     #[test]
     fn edge_rules_follow_r() {
-        // se == 0 -> both limits equal p, even at p = 0
         for kind in [ConfType::Log, ConfType::LogLog, ConfType::Logit] {
             let out = bands(&[0.0], &[0.0], kind);
             assert_close(&out.lower, &[0.0]);
             assert_close(&out.upper, &[0.0]);
         }
-        // p == 0 with se > 0 -> NA for the transforms that need log(p)
         let out = bands(&[0.0, 1.0], &[0.1, 0.1], ConfType::LogLog);
         assert!(out.lower.iter().all(|v| v.is_nan()));
         assert!(out.upper.iter().all(|v| v.is_nan()));
-        // logse = FALSE rescales se(S) to se(log S)
         let out = survfit_confint(
             &[0.2, 0.5],
             &[0.1, 0.1],
@@ -352,7 +319,6 @@ mod tests {
         .unwrap();
         assert_close(&out.lower, &[0.004003602, 0.304003602]);
         assert_close(&out.upper, &[0.3959964, 0.695996398]);
-        // no upper cap for cumulative hazards
         let out = survfit_confint(&[0.9], &[0.5], true, ConfType::Log, 0.95, None, false).unwrap();
         assert!(out.upper[0] > 1.0);
     }

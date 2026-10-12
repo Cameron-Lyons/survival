@@ -22,8 +22,6 @@ influence <- function(x) {
 add <- function(name, group=x, response=y, ...) {
     values <- list(...)
     warnings <- character()
-    # Force defaults before filtering. R's bare fitter otherwise first evaluates
-    # its lazy weights after subsetting x, and can access missing id/cluster.
     result <- withCallingHandlers(tryCatch(do.call(survfitKM,modifyList(list(x=group,y=response,weights=rep(1,length(group)),id=NULL,cluster=NULL),values,keep.null=TRUE)),
         error=function(e) list(error=conditionMessage(e))),
         warning=function(w) {warnings <<- c(warnings,conditionMessage(w)); invokeRestart("muffleWarning")})

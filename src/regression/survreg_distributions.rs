@@ -1,16 +1,3 @@
-//! The location-scale distributions of R's `survreg`.
-//!
-//! Ports `R/survreg.distributions.R` (the `survreg.distributions` list),
-//! `R/survregDtest.R` and `R/dsurvreg.R` from the CRAN `survival` package.
-//! A [`SurvregDistribution`] plays the role of one entry of
-//! `survreg.distributions`: a base [`SurvregFamily`] (R's `init`,
-//! `deviance`, `density` and `quantile` functions), an optional response
-//! [`SurvregTransform`] (`trans`/`dtrans`/`itrans`), an optional fixed
-//! `scale` and the distribution `parms`.  Distribution names are parsed once,
-//! by [`SurvregDistribution::from_name`] (`survreg`'s `match.arg`) or by the
-//! case-folded exact lookup of the `d/p/q/rsurvreg` functions; everything
-//! downstream works with the struct.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{dnorm, dt, erf, erfc, pnorm, pt, qnorm, qt};
 use crate::internal::match_arg::match_arg;
@@ -21,15 +8,12 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{PI, SQRT_2};
 
-/// `sqrt(2 * pi)` as `#define SPI` in `survregc1.c`.
 const SPI: f64 = 2.506628274631001;
-/// `#define SMALL -200`: `exvalue_d` clamps `z` to `[SMALL, -SMALL]` before
-/// exponentiating so a wild Newton step never produces an infinite answer.
 const KERNEL_CLAMP: f64 = 200.0;
 
-/// A distribution with its own `init`/`deviance`/`density`/`quantile`
-/// definition in `survreg.distributions` (`extreme`, `logistic`, `gaussian`
-/// and `t`); the remaining entries are transforms of one of these.
+#[doc = " A distribution with its own `init`/`deviance`/`density`/`quantile`"]
+#[doc = " definition in `survreg.distributions` (`extreme`, `logistic`, `gaussian`"]
+#[doc = " and `t`); the remaining entries are transforms of one of these."]
 #[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurvregFamily {
@@ -37,27 +21,26 @@ pub enum SurvregFamily {
     Logistic,
     Gaussian,
     T,
-    /// A runtime-defined family retained by the distribution object.
+    #[doc = " A runtime-defined family retained by the distribution object."]
     Custom,
 }
 
-/// The `trans`/`dtrans`/`itrans` triple of a derived distribution.
+#[doc = " The `trans`/`dtrans`/`itrans` triple of a derived distribution."]
 #[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurvregTransform {
-    /// No transform: the response is modelled directly.
+    #[doc = " No transform: the response is modelled directly."]
     Identity,
-    /// `trans = log`, `dtrans = 1/y`, `itrans = exp` (Weibull, log-normal,
-    /// log-logistic, exponential, Rayleigh).
+    #[doc = " `trans = log`, `dtrans = 1/y`, `itrans = exp` (Weibull, log-normal,"]
+    #[doc = " log-logistic, exponential, Rayleigh)."]
     Log,
-    /// A runtime transform retained by the distribution object.
+    #[doc = " A runtime transform retained by the distribution object."]
     Custom,
 }
 
 crate::internal::pickle::picklable!(SurvregFamily, SurvregTransform);
 
 impl SurvregTransform {
-    /// `trans(y)`.
     pub fn apply(self, y: f64) -> SurvivalResult<f64> {
         Ok(match self {
             Self::Identity => y,
@@ -70,7 +53,6 @@ impl SurvregTransform {
         })
     }
 
-    /// `dtrans(y)`, the derivative of the transform.
     pub fn derivative(self, y: f64) -> SurvivalResult<f64> {
         Ok(match self {
             Self::Identity => 1.0,
@@ -83,7 +65,6 @@ impl SurvregTransform {
         })
     }
 
-    /// `itrans(x)`, the inverse transform.
     pub fn inverse(self, x: f64) -> SurvivalResult<f64> {
         Ok(match self {
             Self::Identity => x,
@@ -97,49 +78,40 @@ impl SurvregTransform {
     }
 }
 
-/// Which block of `survregc1.c`'s `sreg_gg(z, ans, j)` to evaluate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KernelCase {
-    /// `j = 1`: `ans = [_, f, f'/f, f''/f]`, used for exact observations.
     Density,
-    /// `j = 2`: `ans = [F, 1 - F, f, f']`, used for censored observations.
     Distribution,
 }
 
-/// The five columns of `survreg.distributions$<family>$density(z, parms)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurvregDensity {
-    /// `F(z)`.
     pub cdf: f64,
-    /// `1 - F(z)`, evaluated directly so the upper tail keeps its accuracy.
     pub survival: f64,
-    /// `f(z)`.
     pub pdf: f64,
-    /// `f'(z) / f(z)`.
     pub score: f64,
-    /// `f''(z) / f(z)`.
     pub curvature: f64,
 }
 
-/// One entry of R's `survreg.distributions`.
+#[doc = " One entry of R's `survreg.distributions`."]
 #[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurvregDistribution {
-    /// R's `name` component ("Weibull", "Log Normal", ...).
+    #[doc = " R's `name` component (\"Weibull\", \"Log Normal\", ...)."]
     #[pyo3(get)]
     pub name: String,
-    /// The base distribution whose `density`/`quantile` are used.
+    #[doc = " The base distribution whose `density`/`quantile` are used."]
     #[pyo3(get)]
     pub family: SurvregFamily,
-    /// The response transform (R's `trans`/`dtrans`/`itrans`).
+    #[doc = " The response transform (R's `trans`/`dtrans`/`itrans`)."]
     #[pyo3(get)]
     pub transform: SurvregTransform,
-    /// A fixed scale (R's `scale` component: 1 for the exponential, 0.5 for
-    /// the Rayleigh); `None` when the scale is estimated.
+    #[doc = " A fixed scale (R's `scale` component: 1 for the exponential, 0.5 for"]
+    #[doc = " the Rayleigh); `None` when the scale is estimated."]
     #[pyo3(get)]
     pub scale: Option<f64>,
-    /// Distribution parameters (R's `parms`): the degrees of freedom for
-    /// the `t` family, empty otherwise.
+    #[doc = " Distribution parameters (R's `parms`): the degrees of freedom for"]
+    #[doc = " the `t` family, empty otherwise."]
     #[pyo3(get)]
     pub parms: Vec<f64>,
     #[serde(skip)]
@@ -150,8 +122,6 @@ pub struct SurvregDistribution {
     pub(crate) transform_callbacks: Option<RuntimeCallback<dyn SurvregTransformCallbacks>>,
 }
 
-/// `names(survreg.distributions)`, in R's order, with each entry's
-/// definition.
 const BUILTIN_DISTRIBUTIONS: [(&str, &str, SurvregFamily, SurvregTransform, Option<f64>); 10] = [
     (
         "extreme",
@@ -225,26 +195,18 @@ const BUILTIN_DISTRIBUTIONS: [(&str, &str, SurvregFamily, SurvregTransform, Opti
     ),
 ];
 
-/// R's default `parms = c(df = 4)` for the `t` family.
 const DEFAULT_T_DF: f64 = 4.0;
 
 fn invalid(message: impl Into<String>) -> SurvivalError {
     SurvivalError::invalid_input(message)
 }
 
-/// `pt(z, df)` and `pt(-z, df)` from one `pt` call.  `pt` computes the same
-/// `pbeta` value `v` for `z` and `-z` and only then picks the tail, `v` or
-/// `0.5 - v + 0.5` (`R_D_Cval`), so both columns come out bit for bit from
-/// `v = pt(-|z|, df)` for the finite `df` that [`SurvregDistribution::dtest`]
-/// requires.
 fn t_tails(z: f64, df: f64) -> (f64, f64) {
     let v = pt(-z.abs(), df, true, false);
     let other = 0.5 - v + 0.5;
     if z > 0.0 { (other, v) } else { (v, other) }
 }
 
-/// `dt(z, df)` and the closed-form `f'/f` and `f''/f` columns of the `t`
-/// family's `density`: everything but the two `pt` columns.
 fn t_density(z: f64, df: f64) -> [f64; 3] {
     let denom = df + z * z;
     [
@@ -255,20 +217,11 @@ fn t_density(z: f64, df: f64) -> [f64; 3] {
 }
 
 impl SurvregDistribution {
-    /// `survreg`'s lookup of a character `dist`,
-    /// `survreg.distributions[[match.arg(dist, names(survreg.distributions))]]`:
-    /// case sensitive, with unique prefixes such as `"exp"` accepted (see
-    /// `match_arg`).  `parms` are only accepted by families that define
-    /// them, and unspecified parameters take their default (`df = 4` for
-    /// `t`).
     pub fn from_name(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
         let index = match_arg(name, &BUILTIN_DISTRIBUTIONS.map(|(builtin, ..)| builtin))?;
         Self::builtin(index, parms)
     }
 
-    /// The lookup of `dsurvreg`/`psurvreg`/`qsurvreg`/`rsurvreg`,
-    /// `survreg.distributions[[casefold(distribution)]]`: an exact name after
-    /// case folding (`"Weibull"` is found, the prefix `"weib"` is not).
     pub fn for_query(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
         let key = name.to_lowercase();
         let index = BUILTIN_DISTRIBUTIONS
@@ -287,8 +240,6 @@ impl SurvregDistribution {
         Ok(result)
     }
 
-    /// Entry `index` of `survreg.distributions` with the `parms` handling of
-    /// [`Self::from_name`].
     fn builtin(index: usize, parms: Option<&[f64]>) -> SurvivalResult<Self> {
         let (_, display, family, transform, scale) = BUILTIN_DISTRIBUTIONS[index];
         let parms = match (family, parms) {
@@ -322,9 +273,6 @@ impl SurvregDistribution {
         Ok(distribution)
     }
 
-    /// A user-defined distribution in the shape of an entry of
-    /// `survreg.distributions` that references a base distribution
-    /// (`dist = "gaussian"`, `trans`/`dtrans`/`itrans`, optional `scale`).
     pub fn custom(
         name: impl Into<String>,
         family: SurvregFamily,
@@ -349,9 +297,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `survregDtest(dlist, verbose = TRUE)`: every problem with the
-    /// definition, or an empty list when it is legal. Custom density and
-    /// transform callbacks are probed at the same points as R's checker.
     pub fn dtest(&self) -> Vec<String> {
         let mut issues = self.definition_issues();
         if !issues.is_empty() {
@@ -428,9 +373,6 @@ impl SurvregDistribution {
         issues
     }
 
-    /// Check metadata and callback ownership without invoking user code.
-    /// Use [`Self::dtest`] for R's additional functional probes. Fitting also
-    /// validates every callback result on the actual observations.
     pub fn validate(&self) -> SurvivalResult<()> {
         let issues = self.definition_issues();
         if issues.is_empty() {
@@ -443,12 +385,10 @@ impl SurvregDistribution {
         }
     }
 
-    /// The degrees of freedom of the `t` family (`parms["df"]`).
     fn df(&self) -> f64 {
         self.parms.first().copied().unwrap_or(DEFAULT_T_DF)
     }
 
-    /// `variance(parms)`: the variance of the standardised base distribution.
     pub fn variance(&self) -> SurvivalResult<f64> {
         Ok(match self.family {
             SurvregFamily::Custom => {
@@ -470,8 +410,6 @@ impl SurvregDistribution {
         })
     }
 
-    /// `init(x, weights, parms)`: `c(location, variance)` starting values
-    /// from the weighted mean and variance of the (transformed) response.
     pub(crate) fn init(&self, y: &[f64], weights: &[f64]) -> SurvivalResult<[f64; 2]> {
         if self.family == SurvregFamily::Custom {
             let values = self.custom_callbacks()?.init(y, weights, &self.parms)?;
@@ -505,15 +443,6 @@ impl SurvregDistribution {
         })
     }
 
-    /// `deviance(y, scale, parms)` for one observation on the transformed
-    /// scale: the `center` of the saturated model and its log-likelihood.
-    /// `y2` is only read for an interval-censored (`status == 3`) row.
-    ///
-    /// Two slips of the R code are corrected rather than copied: for the `t`
-    /// family R's `center` is `rowMeans(y)`, which averages the status column
-    /// in, and its `loglik` is `log(1 - 2*pt(width/2))`, the log of a
-    /// negative number; the Gaussian formulas (`(y1 + y2)/2` and
-    /// `log(2*pt(width/2) - 1)`) are what was meant.
     pub(crate) fn builtin_deviance(&self, y1: f64, y2: f64, status: i32, scale: f64) -> (f64, f64) {
         let interval = status == 3;
         match self.family {
@@ -576,8 +505,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `density(x, parms)`: the five-column summary
-    /// `cbind(F, 1 - F, f, f'/f, f''/f)` of the base distribution.
     pub(crate) fn builtin_density(&self, z: f64) -> SurvregDensity {
         match self.family {
             SurvregFamily::Custom => unreachable!("custom density uses batches"),
@@ -625,8 +552,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `density(z, parms)[, 3]`: `f(z)`, skipping the other columns where
-    /// they cost more than `f` itself.
     pub(crate) fn base_pdf(&self, z: f64) -> SurvivalResult<f64> {
         Ok(match self.family {
             SurvregFamily::Custom => self.density(z)?.pdf,
@@ -636,8 +561,6 @@ impl SurvregDistribution {
         })
     }
 
-    /// `density(z, parms)[, 1]`: `F(z)`, skipping the other columns where
-    /// they cost more than `F` itself.
     pub(crate) fn base_cdf(&self, z: f64) -> SurvivalResult<f64> {
         Ok(match self.family {
             SurvregFamily::Custom => self.density(z)?.cdf,
@@ -647,7 +570,6 @@ impl SurvregDistribution {
         })
     }
 
-    /// `quantile(p, parms)` of the base distribution.
     pub(crate) fn builtin_quantile(&self, p: f64) -> f64 {
         match self.family {
             SurvregFamily::Custom => unreachable!("custom quantiles use batches"),
@@ -658,14 +580,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// The distribution evaluation used by the fitting kernel: `exvalue_d`,
-    /// `logistic_d` and `gauss_d` of `survregc1.c` for the built-in
-    /// families, and for the `t` family the columns of the R-level
-    /// [`Self::density`] that `survregc2.c` reads for the case (`f' = f *
-    /// f'/f`): exact rows need no `pt`, censored rows one.
-    ///
-    /// Returns `[_, f, f'/f, f''/f]` for [`KernelCase::Density`] and
-    /// `[F, 1 - F, f, f']` for [`KernelCase::Distribution`].
     pub(crate) fn kernel(&self, z: f64, case: KernelCase) -> [f64; 4] {
         match self.family {
             SurvregFamily::Custom => unreachable!("custom density uses batches"),
@@ -678,8 +592,6 @@ impl SurvregDistribution {
                 }
             }
             SurvregFamily::Logistic => {
-                // The symmetry of the logistic lets the C code never take
-                // exp(large number).
                 let (w, sign, positive) = if z > 0.0 {
                     ((-z).exp(), -1.0, true)
                 } else {
@@ -732,8 +644,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `dsurvreg(x, mean, scale, distribution, parms)` for one value.
-    /// Vector parameter views must reduce to exactly one result.
     pub fn pdf(&self, x: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
         if self.simple_builtin_query() && self.transform_callbacks.is_none() {
             self.query_probability_one(x, mean, scale, true, 1)
@@ -742,7 +652,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `psurvreg(q, mean, scale, distribution, parms)` for one value.
     pub fn cdf(&self, q: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
         if self.simple_builtin_query() && self.transform_callbacks.is_none() {
             self.query_probability_one(q, mean, scale, false, 1)
@@ -751,7 +660,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// `qsurvreg(p, mean, scale, distribution, parms)` for one value.
     pub fn quantile_at(&self, p: f64, mean: f64, scale: f64) -> SurvivalResult<f64> {
         if self.simple_builtin_query() && self.transform_callbacks.is_none() {
             self.query_quantile_at_one(p, mean, scale)
@@ -771,8 +679,8 @@ fn single_query_value(values: Vec<f64>) -> SurvivalResult<f64> {
     }
 }
 
-/// `survregDtest(dlist, verbose = TRUE)` as a function: the problems with
-/// `distribution`, empty when it is a legal definition.
+#[doc = " `survregDtest(dlist, verbose = TRUE)` as a function: the problems with"]
+#[doc = " `distribution`, empty when it is a legal definition."]
 #[pyfunction]
 pub fn survreg_dtest(distribution: &SurvregDistribution) -> Vec<String> {
     distribution.dtest()
@@ -786,8 +694,8 @@ fn dpqr_python_warning(_: crate::regression::survreg_callbacks::DpqrWarning) -> 
     Ok(())
 }
 
-/// `dsurvreg(x, mean, scale, distribution, parms)`: the density of the
-/// distribution on the original response scale.
+#[doc = " `dsurvreg(x, mean, scale, distribution, parms)`: the density of the"]
+#[doc = " distribution on the original response scale."]
 #[pyfunction]
 #[pyo3(signature = (x, mean, scale, distribution="weibull", parms=None))]
 pub fn dsurvreg(
@@ -801,7 +709,7 @@ pub fn dsurvreg(
     distribution.pdf_values_with_warnings(&x, &mean, &scale, &mut dpqr_python_warning)
 }
 
-/// `psurvreg(q, mean, scale, distribution, parms)`: the distribution function.
+#[doc = " `psurvreg(q, mean, scale, distribution, parms)`: the distribution function."]
 #[pyfunction]
 #[pyo3(signature = (q, mean, scale, distribution="weibull", parms=None))]
 pub fn psurvreg(
@@ -815,7 +723,7 @@ pub fn psurvreg(
     distribution.cdf_values_with_warnings(&q, &mean, &scale, &mut dpqr_python_warning)
 }
 
-/// `qsurvreg(p, mean, scale, distribution, parms)`: the quantile function.
+#[doc = " `qsurvreg(p, mean, scale, distribution, parms)`: the quantile function."]
 #[pyfunction]
 #[pyo3(signature = (p, mean, scale, distribution="weibull", parms=None))]
 pub fn qsurvreg(
@@ -829,12 +737,12 @@ pub fn qsurvreg(
     distribution.quantile_values_with_warnings(&p, &mean, &scale, &mut dpqr_python_warning)
 }
 
-/// `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`.
-/// With a `seed` the uniforms are R's, so the draw equals R's
-/// `set.seed(seed); rsurvreg(n, mean, scale, distribution, parms)`, and
-/// `seed = -2^31`, R's `NA_integer_`, is an error as in `set.seed`; without
-/// one they come from the crate's clock-seeded generator, whose stream is not
-/// R's.
+#[doc = " `rsurvreg(n, mean, scale, distribution, parms)`: `qsurvreg(runif(n), ...)`."]
+#[doc = " With a `seed` the uniforms are R's, so the draw equals R's"]
+#[doc = " `set.seed(seed); rsurvreg(n, mean, scale, distribution, parms)`, and"]
+#[doc = " `seed = -2^31`, R's `NA_integer_`, is an error as in `set.seed`; without"]
+#[doc = " one they come from the crate's clock-seeded generator, whose stream is not"]
+#[doc = " R's."]
 #[pyfunction]
 #[pyo3(signature = (n, mean, scale, distribution="weibull", parms=None, seed=None))]
 pub fn rsurvreg(
@@ -868,7 +776,6 @@ mod tests {
                 .name,
             "Weibull"
         );
-        // survreg(dist = "exp") and "logn": unique prefixes.
         assert_eq!(
             SurvregDistribution::from_name("exp", None).unwrap().name,
             "Exponential"
@@ -877,7 +784,6 @@ mod tests {
             SurvregDistribution::from_name("logn", None).unwrap().family,
             SurvregFamily::Gaussian
         );
-        // match.arg is case sensitive and "log" is ambiguous.
         for name in ["log", "Weibull", "extreme_value", "mystery", ""] {
             let err = SurvregDistribution::from_name(name, None).unwrap_err();
             assert!(
@@ -890,8 +796,6 @@ mod tests {
 
     #[test]
     fn dpqr_names_are_case_folded_exact_matches() {
-        // dsurvreg(c(0.5, 2), 0.2, 1.5, "Weibull"); psurvreg(c(0.5, 2), 0, 1,
-        // "T", parms = 5); dsurvreg(1, 0, 1, "weib") is "Distribution not found".
         let d = dsurvreg(vec![0.5, 2.0], vec![0.2], vec![1.5], "Weibull", None).unwrap();
         assert_close(d[0], 0.423_554_101_409_290_8, 1e-15);
         assert_close(d[1], 0.115_429_127_863_144_91, 1e-15);
@@ -1029,7 +933,6 @@ mod tests {
             assert_eq!((kernel[0], kernel[1]), (lower, upper), "z = {z}");
             assert_eq!(t.cdf(z, 0.0, 1.0).unwrap(), lower, "z = {z}");
         }
-        // R: pt(c(-2.5, 3.1, 1e60), 4) and pt(-c(-2.5, 3.1, 1e60), 4)
         let relative = |actual: f64, expected: f64| {
             assert!(
                 (actual / expected - 1.0).abs() < 1e-13,
@@ -1055,7 +958,6 @@ mod tests {
 
     #[test]
     fn dpq_match_r_reference_values() {
-        // dsurvreg(c(1, 2), 0.5, 1.2), psurvreg(...), qsurvreg(c(.25, .5, .75), 0.5, 1.2)
         let d = dsurvreg(vec![1.0, 2.0], vec![0.5], vec![1.2], "weibull", None).unwrap();
         assert_close(d[0], 0.2841569, 1e-7);
         assert_close(d[1], 0.1512009, 1e-7);
@@ -1067,7 +969,6 @@ mod tests {
         assert_close(q[1], 1.0620325, 1e-7);
         assert_close(q[2], 2.4399099, 1e-7);
 
-        // Student t with parms = 5, mean 0, scale 1.
         let d = dsurvreg(vec![1.0, 2.0], vec![0.0], vec![1.0], "t", Some(vec![5.0])).unwrap();
         assert_close(d[0], 0.2196798, 1e-7);
         assert_close(d[1], 0.06509031, 1e-7);
@@ -1104,7 +1005,6 @@ mod tests {
                 assert_close(*a, *e, 1e-15);
             }
         };
-        // set.seed(1); rsurvreg(3, 0, 1)
         assert_all_close(
             rsurvreg(3, vec![0.0], vec![1.0], "weibull", None, Some(1)).unwrap(),
             &[
@@ -1113,7 +1013,6 @@ mod tests {
                 0.850_627_913_351_822_8,
             ],
         );
-        // set.seed(42); rsurvreg(4, 1:4, 0.5, "lognormal")
         assert_all_close(
             rsurvreg(
                 4,
@@ -1131,7 +1030,6 @@ mod tests {
                 88.055_546_326_660_62,
             ],
         );
-        // set.seed(-7); rsurvreg(3, 1, 2, "t", parms = 5)
         assert_all_close(
             rsurvreg(3, vec![1.0], vec![2.0], "t", Some(vec![5.0]), Some(-7)).unwrap(),
             &[
@@ -1144,7 +1042,6 @@ mod tests {
 
     #[test]
     fn rsurvreg_rejects_the_seed_r_reads_as_na() {
-        // set.seed(-2147483648): "supplied seed is not a valid integer"
         let err = rsurvreg(3, vec![0.0], vec![1.0], "weibull", None, Some(i32::MIN)).unwrap_err();
         assert!(
             err.to_string()
@@ -1164,7 +1061,6 @@ mod tests {
     fn deviance_saturated_loglik_matches_r() {
         let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
         let (center, loglik) = weibull.builtin_deviance(0.0, 2.0f64.ln(), 3, 1.0);
-        // width = log 2, temp = width/(2 - 1), center = -log(temp)
         let width = 2.0f64.ln();
         assert_close(center, -(width / (width.exp() - 1.0)).ln(), 1e-14);
         assert_close(

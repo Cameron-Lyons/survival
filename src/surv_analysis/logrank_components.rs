@@ -1,8 +1,3 @@
-//! The G-rho family of tests for a difference between survival curves:
-//! R's `survdiff` (`R/survdiff.R`, `R/survdiff.fit.R`) and its C kernel
-//! `survdiff2` (`src/survdiff2.c`), including the one-sample test against
-//! expected survival probabilities.
-
 use super::survfitkm::strata_index;
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
@@ -18,12 +13,6 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-/// The data of a `survdiff(Surv(...) ~ group + strata(s))` call.
-///
-/// `group` and `strata` are integer codes; groups and strata are ordered by
-/// ascending code (R's factor levels).  `start` extends the test to
-/// `(start, stop]` intervals, which R itself refuses: the risk set at each
-/// event time is then the set of intervals containing it.
 #[derive(Debug, Clone)]
 pub struct SurvdiffData {
     pub start: Option<Vec<f64>>,
@@ -52,8 +41,6 @@ impl SurvdiffData {
         Ok(data)
     }
 
-    /// Validate values and row alignment, including after public fields have
-    /// been modified. [`survdiff`] checks these invariants before fitting.
     pub fn validate(&self) -> SurvivalResult<()> {
         validate_non_empty(&self.time, "time")?;
         validate_finite(&self.time, "time")?;
@@ -72,12 +59,12 @@ impl SurvdiffData {
     }
 }
 
-/// A `survdiff` object.  `obs` and `exp` are `groups x strata` (one column
-/// without strata), `var` is the `groups x groups` covariance of `obs - exp`.
+#[doc = " A `survdiff` object.  `obs` and `exp` are `groups x strata` (one column"]
+#[doc = " without strata), `var` is the `groups x groups` covariance of `obs - exp`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvDiffResult {
-    /// Observations per group (`table(groups)`).
+    #[doc = " Observations per group (`table(groups)`)."]
     #[pyo3(get)]
     pub n: Vec<usize>,
     #[pyo3(get)]
@@ -92,29 +79,24 @@ pub struct SurvDiffResult {
     pub pvalue: f64,
     #[pyo3(get)]
     pub df: usize,
-    /// Observations per stratum when strata were given.
+    #[doc = " Observations per stratum when strata were given."]
     #[pyo3(get)]
     pub strata: Option<Vec<usize>>,
-    /// The group code of each row of `obs`, in ascending order.
+    #[doc = " The group code of each row of `obs`, in ascending order."]
     #[pyo3(get)]
     pub group_codes: Vec<i32>,
 }
 
 impl SurvDiffResult {
-    /// `obs` summed over strata, one entry per group.
     pub fn obs_totals(&self) -> Vec<f64> {
         self.obs.iter().map(|row| row.iter().sum()).collect()
     }
 
-    /// `exp` summed over strata, one entry per group.
     pub fn exp_totals(&self) -> Vec<f64> {
         self.exp.iter().map(|row| row.iter().sum()).collect()
     }
 }
 
-/// The left-continuous KM values in this stratum's existing stop-time order.
-/// The reverse test sweep reads them directly, as in R's `survdiff2.c`.
-/// Counting-process risk sets exclude starts at the current event time.
 fn left_continuous_km(
     rows: &[usize],
     entries_desc: &[usize],
@@ -133,7 +115,6 @@ fn left_continuous_km(
             while entered < n && start[entries_desc[n - 1 - entered]] < current {
                 entered += 1;
             }
-            // Every row that already ended also entered before this time.
             entered - i
         } else {
             n - i
@@ -147,7 +128,6 @@ fn left_continuous_km(
         }
         if deaths > 0.0 {
             let nrisk = nrisk as f64;
-            // Keep the multiplication order used by the shared KM engine.
             km *= (nrisk - deaths) / nrisk;
         }
         i = end;
@@ -155,10 +135,6 @@ fn left_continuous_km(
     kaplan
 }
 
-/// Port of `survdiff2` (`src/survdiff2.c`) for one stratum, given its rows
-/// ordered by `(time, -status)`. For `rho != 0`, reuse this ordering to
-/// compute Kaplan-Meier weights. Accumulates into `obs[group][stratum]`, `exp[group][stratum]`
-/// and `var`.
 #[allow(clippy::too_many_arguments)]
 fn survdiff_stratum(
     rows: &[usize],
@@ -174,7 +150,6 @@ fn survdiff_stratum(
 ) {
     let n = rows.len();
     let ngroup = obs.len();
-    // entry times of the stratum, descending, for the counting-process case
     let entries_desc: Vec<usize> = match start {
         Some(start) => {
             let mut entries = rows.to_vec();
@@ -185,13 +160,11 @@ fn survdiff_stratum(
     };
     let kaplan = (rho != 0.0).then(|| left_continuous_km(rows, &entries_desc, start, time, status));
 
-    // Walk backwards so risk sets accumulate.
     let mut risk = vec![0.0; ngroup];
-    let mut left = 0; // intervals with start >= current time, already removed
+    let mut left = 0;
     let mut i = n;
     while i > 0 {
         let current = time[rows[i - 1]];
-        // the G-rho weight is the left-continuous Kaplan-Meier, S(t-)^rho
         let wt = match &kaplan {
             Some(kaplan) => kaplan[i - 1].powf(rho),
             None => 1.0,
@@ -208,7 +181,6 @@ fn survdiff_stratum(
         }
         i = j;
         if let Some(start) = start {
-            // intervals that begin at or after this time are not at risk
             while left < n && start[entries_desc[left]] >= current {
                 risk[group[entries_desc[left]]] -= 1.0;
                 left += 1;
@@ -220,7 +192,7 @@ fn survdiff_stratum(
                 exp[k][stratum] += wt * deaths * risk[k] / nrisk;
             }
             if nrisk == 1.0 {
-                continue; // only 1 subject, so no variance
+                continue;
             }
             let wt2 = wt * wt;
             for j in 0..ngroup {
@@ -234,8 +206,6 @@ fn survdiff_stratum(
     }
 }
 
-/// R's `survdiff` chi-square: groups with no expected events are dropped,
-/// the first remaining group is the reference.
 fn survdiff_chisq(
     obs_totals: &[f64],
     exp_totals: &[f64],
@@ -246,7 +216,7 @@ fn survdiff_chisq(
         .collect();
     let df = keep.len().saturating_sub(1);
     if keep.len() < 2 {
-        return Ok((0.0, df)); // No test, actually
+        return Ok((0.0, df));
     }
     let contrast: Vec<f64> = keep[1..]
         .iter()
@@ -267,11 +237,6 @@ fn survdiff_chisq(
     Ok((chisq, df))
 }
 
-/// Port of `survdiff` (`R/survdiff.R`) for the k-sample test.
-///
-/// `rho = 0` is the log-rank test, `rho = 1` the Peto & Peto modification
-/// of the Gehan-Wilcoxon test, whose weights are the left-continuous
-/// Kaplan-Meier curve of each stratum.
 pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
     data.validate()?;
     if !rho.is_finite() {
@@ -290,9 +255,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     }
     let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
     let nstrat = strata_levels.len();
-    // the rows of each stratum in order(strat, time, -status): one pass
-    // to bucket them, then a sort per stratum; sorting (time, -status,
-    // row) keys rather than indices keeps the comparisons local in memory
     let mut rows_by_stratum: Vec<Vec<usize>> = vec![Vec::new(); nstrat];
     for (i, &s) in stratum.iter().enumerate() {
         rows_by_stratum[s].push(i);
@@ -355,10 +317,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     })
 }
 
-/// The one-sample test of `survdiff(Surv(time, status) ~ offset(expected))`:
-/// observed events against the expected number `sum(-log(expected))` from
-/// the survival probabilities `expected` (usually `survexp(...,
-/// cohort = FALSE)`).
 pub fn survdiff_one_sample(
     status: &[i32],
     expected: &[f64],
@@ -406,7 +364,7 @@ pub fn survdiff_one_sample(
     })
 }
 
-/// Python binding of [`survdiff`].
+#[doc = " Python binding of [`survdiff`]."]
 #[pyfunction(name = "survdiff")]
 #[pyo3(signature = (time, status, group, start=None, strata=None, rho=0.0, timefix=true))]
 #[allow(clippy::too_many_arguments)]
@@ -430,7 +388,7 @@ pub fn survdiff_py(
     Ok(py.detach(|| survdiff(&data, rho, timefix))?)
 }
 
-/// Python binding of [`survdiff_one_sample`].
+#[doc = " Python binding of [`survdiff_one_sample`]."]
 #[pyfunction(name = "survdiff_one_sample")]
 #[pyo3(signature = (status, expected, rho=0.0))]
 pub fn survdiff_one_sample_py(
@@ -456,7 +414,6 @@ mod tests {
 
     #[test]
     fn three_group_logrank_matches_r() {
-        // survdiff(Surv(time, status) ~ g) with the data below
         let result = survdiff(
             &right(
                 vec![1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0],
@@ -495,7 +452,6 @@ mod tests {
         assert!(close(result.exp_totals()[1], 13.0 / 6.0));
         assert!(close(result.var[0][0], 17.0 / 36.0));
         assert!(close(result.chisq, 1.0 / 17.0));
-        // timefix bins the near-tie and the groups balance exactly
         let fixed = survdiff(
             &right(
                 vec![1.0, 1.0 + 5e-10, 2.0, 3.0],
@@ -551,7 +507,6 @@ mod tests {
         );
         let logrank = survdiff(&data, 0.0, true).unwrap();
         let wilcoxon = survdiff(&data, 1.0, true).unwrap();
-        // the first event has weight 1 under both tests
         assert!(close(logrank.obs[0][0], 3.0));
         assert!(wilcoxon.obs[0][0] < logrank.obs[0][0]);
         assert!(wilcoxon.obs[0][0] > 1.0);
@@ -578,7 +533,6 @@ mod tests {
             true,
         )
         .unwrap();
-        // the third subject enters after the first event
         assert!(delayed.exp_totals()[0] < right_censored.exp_totals()[0]);
         assert_eq!(delayed.obs_totals(), right_censored.obs_totals());
     }

@@ -1,23 +1,9 @@
-//! Martingale residuals of a right-censored Cox model.
-//!
-//! `coxmart_sorted` is a line-for-line port of `coxmart.c` (survival
-//! 3.8-12), the routine `coxph.fit` calls once after the last iteration.
-//! [`coxmart`] adds the surrounding R work: it sorts with `order(strata,
-//! time)`, runs the kernel and returns the residuals in input order.  An
-//! exact fit gets the Breslow form, as R's `coxmart2.c` does for
-//! `coxexact.fit`.
-
 use crate::core::strata_order::{last_of_run, order_within_strata};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{CoxMartInput, SurvivalData, Weights};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::TieMethod;
 
-/// Martingale residuals `status - expected` for a right-censored Cox model.
-///
-/// `input.score` is `exp(linear predictor)` per observation and the strata,
-/// when given, are integer labels (any order); the residuals come back in
-/// the order of `input`.
 pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
     let n = input.survival.len();
     SurvivalData::validate_parts(&input.survival.time, &input.survival.status)?;
@@ -46,9 +32,6 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     ))
 }
 
-/// `coxph.fit`'s residual step on validated rows in input order: gather
-/// them in `order`, the `order(strata, time)` permutation (`coxph.fit`'s
-/// `sorted`), run [`coxmart_sorted`] and restore the input order.
 pub(crate) fn coxmart_rows(
     order: &[usize],
     time: &[f64],
@@ -79,9 +62,6 @@ pub(crate) fn coxmart_rows(
     resid
 }
 
-/// `coxmart.c`: martingale residuals for data sorted by stratum and then
-/// ascending time.  `strata` are labels forming contiguous runs (the C code's
-/// `strata[i] == 1` end markers are derived here).
 pub(crate) fn coxmart_sorted(
     time: &[f64],
     status: &[i32],
@@ -97,8 +77,6 @@ pub(crate) fn coxmart_sorted(
     }
     let last = last_of_run(strata);
 
-    // Pass 1: store the risk-set denominator in `expect`, on the first
-    // observation of each tied-time group only.
     let mut denom = 0.0;
     for i in (0..n).rev() {
         if last[i] {
@@ -112,7 +90,6 @@ pub(crate) fn coxmart_sorted(
         };
     }
 
-    // Pass 2: walk forward, accumulating the hazard per tied-time group.
     let mut deaths = 0.0;
     let mut wtsum = 0.0;
     let mut e_denom = 0.0;
@@ -127,8 +104,6 @@ pub(crate) fn coxmart_sorted(
         deaths += status_i;
         wtsum += status_i * weights[i];
         e_denom += score[i] * status_i * weights[i];
-        // `last[n - 1]` is always true, so `time[i + 1]` is never read past
-        // the end.
         if last[i] || time[i + 1] != time[i] {
             if deaths < 2.0 || !method.is_efron() {
                 hazard += wtsum / denom;
@@ -189,8 +164,6 @@ mod tests {
 
     #[test]
     fn null_model_matches_nelson_aalen() {
-        // Unit scores: the expected count is the Nelson-Aalen cumulative
-        // hazard at each subject's time.
         let resid = coxmart(
             &input(
                 vec![1.0, 2.0, 3.0, 4.0],
@@ -284,7 +257,6 @@ mod tests {
                 .zip(&efron)
                 .any(|(a, b)| (a - b).abs() > 1e-9)
         );
-        // Weighted residuals sum to zero within a stratum for both methods.
         let weights = [1.0, 2.0, 1.0, 1.0];
         for resid in [&breslow, &efron] {
             let total: f64 = resid.iter().zip(weights).map(|(r, w)| r * w).sum();

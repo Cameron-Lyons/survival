@@ -68,10 +68,8 @@ def run_case(case, interface):
 
 
 def supported(case, interface):
-    # R NULL is distinct from the documented Python None meaning omitted parms.
     if case["distribution"] == "t" and case["parms_mode"] == "null":
         return False
-    # The numeric native ABI is stricter than Python's ignored arbitrary parms.
     return interface == "facade" or case["parms_mode"] != "character"
 
 
@@ -154,10 +152,6 @@ def test_omitted_t_parms_error_occurs_after_stock_preceding_warnings(method):
 @pytest.mark.parametrize("interface", ["native", "facade", "distribution"])
 @pytest.mark.parametrize("unequal", [False, True])
 def test_multiplication_missing_kinds_follow_stock_operand_lengths(interface, unequal):
-    # Stock R 4.5.3 / survival 3.8-12:
-    # qsurvreg(c(NA, NaN), 0, c(NaN, NA), "gaussian") -> c(NA, NaN)
-    # qsurvreg(c(NA, NaN), 0, c(NaN, NA, 1), "gaussian") -> c(NaN, NA, NA)
-    # The unequal case also emits one recycling warning.
     probabilities = [NA_REAL, math.nan]
     scales = [math.nan, NA_REAL, 1.0] if unequal else [math.nan, NA_REAL]
 
@@ -202,10 +196,6 @@ def test_multiplication_missing_kinds_follow_stock_operand_lengths(interface, un
 def test_addition_missing_kinds_follow_stock_operand_lengths(
     interface, distribution, parms, probabilities, means, expected_na, warning_count
 ):
-    # Independent stock survival 3.8-12: equal-length addition and scalar
-    # means preserve the scaled quantile's NA/NaN kind; unequal nonscalar
-    # means supply their own kind. qt(NA, c(4, 5)) first expands to c(NA, NA),
-    # making the scalar-query Student-t addition equal-length too.
     if distribution == "t" and len(probabilities) == 1:
         expected_na = [True, True]
 

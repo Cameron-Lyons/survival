@@ -25,9 +25,6 @@ def _veteran():
     return data
 
 
-# --- survcheck ---------------------------------------------------------------
-
-
 def test_survcheck_matches_r_on_multistate_data_with_istate():
     data = {
         "id": ["a", "a", "b", "b", "c"],
@@ -75,7 +72,6 @@ def test_survcheck_reports_problem_rows_of_the_original_data():
     assert overlap.transitions.to_states == ["event"]
     assert overlap.transitions.counts == [[2], [0]]
 
-    # a missing start time is dropped by na.omit; rows keep their original numbers
     gap = r.survcheck(
         "Surv(tstart, tstop, status) ~ 1",
         {
@@ -112,8 +108,6 @@ def test_survcheck_reports_problem_rows_of_the_original_data():
 
 
 def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
-    # the multi-state example above with the states coded as the bridge does:
-    # state_names = c("A", "B", "C"), status/istate = match(label, state_names)
     codes = r._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
@@ -126,7 +120,6 @@ def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
     assert (codes.overlap_rows, codes.gap_rows, codes.teleport_rows) == ([], [], [])
     assert codes.n_transitions == 4
 
-    # without istate the current state codes are 0 for istate0, k for the k-th state
     no_istate = r._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
@@ -140,9 +133,6 @@ def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
 
     with pytest.raises(ValueError, match="a formula argument is required"):
         r.survcheck(id=[1, 2])
-
-
-# --- survobrien --------------------------------------------------------------
 
 
 def test_survobrien_builds_r_data_frames():
@@ -239,9 +229,6 @@ def test_survobrien_applies_subset_and_na_action_before_expanding():
         r.survobrien("Surv(time, status) ~ z", data=data, transform=lambda v: v[:1])
     with pytest.raises(ValueError, match="right censored or"):
         r.survobrien("Surv(time, z, status, type = 'interval') ~ x", data=data)
-
-
-# --- royston and brier -------------------------------------------------------
 
 
 def test_royston_matches_r_with_and_without_newdata():
@@ -352,9 +339,6 @@ def test_brier_matches_r_and_checks_the_data_as_r_does():
         r.brier(fit, timefix="yes")
 
 
-# --- yates -------------------------------------------------------------------
-
-
 def test_yates_population_means_match_r():
     fit = r.coxph("Surv(time, status) ~ celltype + karno", _veteran(), model=True)
     result = r.yates(fit, "celltype")
@@ -447,9 +431,6 @@ def test_yates_populations_and_unsupported_options():
         r.yates(fit, "celltype", population=3)
 
 
-# --- cipoisson, bounded links, statefig ----------------------------------------
-
-
 def test_cipoisson_recycles_like_r():
     assert r.cipoisson(5, time=10.0) == pytest.approx((0.1623486, 1.1668332))
     vector = r.cipoisson([0, 5, 20], time=[1.0, 10.0, 4.0])
@@ -514,9 +495,6 @@ def test_statefig_matches_r_layouts():
         r.statefig([1.5, 1.5], connect, states=["A", "B", "C"])
 
 
-# --- nsk and pspline ------------------------------------------------------------
-
-
 def test_nsk_follows_r_boundary_knot_rules():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     basis = r.nsk(x, df=3)
@@ -569,7 +547,6 @@ def test_pspline_carries_r_attributes():
     outside = r.pspline([0.0, 1.0, 5.0, 6.0], df=3, Boundary_knots=[1.0, 5.0], penalty=False)
     assert outside.penalty is False
     assert outside.basis[0] == pytest.approx([2.0 / 3.0, -5.0 / 6.0, *([0.0] * 8)])
-    # predict.pspline in the R bridge passes the stored attributes under the bridge's names
     same = r.pspline(
         [0.0, 1.0, 5.0, 6.0], nterm=8, degree=3, boundary_knots=[1.0, 5.0], penalty=False
     )

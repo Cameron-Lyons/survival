@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete R matrix fits, including custom penalty calls and result conversion.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Raw survreg.fit outputs; responses are already on the fitting scale.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

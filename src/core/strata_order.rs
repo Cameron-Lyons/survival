@@ -1,21 +1,8 @@
-//! Data conventions shared by the ports of R's Cox C routines: the
-//! right-censored / (start, stop] response, strata labels, sort orders and
-//! interval checks.
-//!
-//! Every kernel in `residuals`, `scoring` and `core` takes one integer label
-//! per observation and expects the data sorted by stratum first (R sorts
-//! with `order(strata, time)`), so equal labels form contiguous runs.  R's C
-//! code receives the same information as 0/1 markers, `strata[i] == 1` on
-//! the last observation of a run (`coxmart.c`, `coxscho.c`) or on the first
-//! (`coxcount1.c`); the helpers below derive those markers from the labels.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use ndarray::{Array2, ArrayView2};
 use std::cmp::Ordering;
 
-/// The outcome of a Cox-type routine: a right-censored or a (start, stop]
-/// `Surv` object.
 #[derive(Clone, Copy, Debug)]
 pub enum SurvResponse<'a> {
     Right(&'a SurvivalData),
@@ -45,8 +32,6 @@ impl<'a> SurvResponse<'a> {
     }
 }
 
-/// R's `Surv()` rule for counting-process data: every interval must have
-/// `start < stop` (the kernels' sweeps assume it).
 pub(crate) fn validate_intervals(start: &[f64], stop: &[f64]) -> SurvivalResult<()> {
     if let Some(index) = (0..start.len()).find(|&i| start[i] >= stop[i]) {
         return Err(SurvivalError::invalid_input(format!(
@@ -57,9 +42,6 @@ pub(crate) fn validate_intervals(start: &[f64], stop: &[f64]) -> SurvivalResult<
     Ok(())
 }
 
-/// `true` on the last observation of each run of equal labels; the final
-/// observation is always a run end (the "failsafe" `strata[n-1] = 1` of
-/// `coxmart.c`).
 pub(crate) fn last_of_run(strata: &[i32]) -> Vec<bool> {
     let n = strata.len();
     (0..n)
@@ -67,15 +49,12 @@ pub(crate) fn last_of_run(strata: &[i32]) -> Vec<bool> {
         .collect()
 }
 
-/// `true` on the first observation of each run of equal labels.
 pub(crate) fn first_of_run(strata: &[i32]) -> Vec<bool> {
     (0..strata.len())
         .map(|i| i == 0 || strata[i - 1] != strata[i])
         .collect()
 }
 
-/// Stable permutation that sorts by stratum label and then by `within`, the
-/// R idiom `order(strata, ...)` that every kernel here expects.
 pub(crate) fn order_within_strata(
     strata: &[i32],
     within: impl Fn(usize, usize) -> Ordering,
@@ -85,12 +64,6 @@ pub(crate) fn order_within_strata(
     order
 }
 
-/// Row indices grouped by stratum label, labels ascending; each group keeps
-/// the input order.  This is how `concordancefit` and `agreg.fit` iterate
-/// over strata, and how `rowsum` groups by cluster.  One stable sort of the
-/// row indices followed by a split into runs of equal labels, `O(n log n)`
-/// however many labels there are (one cluster per subject is the common
-/// case).
 pub(crate) fn stratum_groups(strata: &[i32]) -> Vec<(i32, Vec<usize>)> {
     let mut order: Vec<usize> = (0..strata.len()).collect();
     order.sort_by_key(|&i| strata[i]);
@@ -104,17 +77,10 @@ pub(crate) fn stratum_groups(strata: &[i32]) -> Vec<(i32, Vec<usize>)> {
     groups
 }
 
-/// R's `rowsum(x, group)` (`reorder = TRUE`): the column sums of the rows
-/// of each group, one row per group in ascending label order.  Rows are
-/// added in input order, as R does.
 pub(crate) fn rowsum(values: ArrayView2<'_, f64>, group: &[i32]) -> Array2<f64> {
     grouped_sum(values, group, false).expect("internal rowsum groups match the matrix rows")
 }
 
-/// Sum matrix rows by integer group in ascending group order, retaining the
-/// input addition order within each group. With `squares`, return the square
-/// root of each sum of squared entries (R's collapsed prediction errors).
-/// Empty and zero-column matrices retain their column count; NaN propagates.
 pub fn grouped_sum(
     values: ArrayView2<'_, f64>,
     group: &[i32],
@@ -183,8 +149,6 @@ mod tests {
         let groups = stratum_groups(&[2, 1, 2, 1]);
         assert_eq!(groups, vec![(1, vec![1, 3]), (2, vec![0, 2])]);
         assert!(stratum_groups(&[]).is_empty());
-        // Every row its own group (one cluster per subject): rows keep
-        // their input order within a group and labels come out ascending.
         let strata = [5, -1, 3, 5, 0, 3];
         assert_eq!(
             stratum_groups(&strata),
@@ -199,7 +163,6 @@ mod tests {
 
     #[test]
     fn rowsum_sums_rows_by_ascending_label() {
-        // R: rowsum(matrix(1:8, 4), c(2, 1, 2, 5))
         let values = ndarray::array![[1.0, 5.0], [2.0, 6.0], [3.0, 7.0], [4.0, 8.0]];
         let sums = rowsum(values.view(), &[2, 1, 2, 5]);
         assert_eq!(sums, ndarray::array![[2.0, 6.0], [4.0, 12.0], [4.0, 8.0]]);

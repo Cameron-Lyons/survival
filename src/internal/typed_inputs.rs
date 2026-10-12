@@ -1,14 +1,3 @@
-//! Typed input containers shared by the Rust API and the PyO3 bindings.
-//!
-//! Containers validate component lengths and values at construction. Their
-//! public Rust fields can be modified afterwards, so public numeric entry
-//! points must revalidate before indexing. Validation goes through
-//! `crate::internal::validation`, so error wording is uniform across the crate.
-//!
-//! The `#[new]` constructors copy their component arguments because Python
-//! keeps ownership of the objects it passes in; Rust callers should use the
-//! `try_new` constructors, which take ownership and never copy.
-
 use crate::core::strata_order::validate_intervals;
 use crate::internal::validation::{
     validate_equal_len, validate_finite, validate_length, validate_matrix_shape,
@@ -36,12 +25,12 @@ fn validate_strata_len(strata: &[i32], expected: usize) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Right-censored outcome, the equivalent of R's `Surv(time, status)`.
-///
-/// Times must be finite but may be negative, as in R (`Surv` accepts any
-/// numeric time; only individual routines such as `survreg` restrict the
-/// sign). `status` is any non-negative code so that multi-state outcomes can
-/// share the container; routines needing 0/1 validate that themselves.
+#[doc = " Right-censored outcome, the equivalent of R's `Surv(time, status)`."]
+#[doc = ""]
+#[doc = " Times must be finite but may be negative, as in R (`Surv` accepts any"]
+#[doc = " numeric time; only individual routines such as `survreg` restrict the"]
+#[doc = " sign). `status` is any non-negative code so that multi-state outcomes can"]
+#[doc = " share the container; routines needing 0/1 validate that themselves."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct SurvivalData {
@@ -87,7 +76,7 @@ impl SurvivalData {
     }
 }
 
-/// Row-major `n_obs x n_vars` design matrix with finite entries.
+#[doc = " Row-major `n_obs x n_vars` design matrix with finite entries."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct CovariateMatrix {
@@ -234,8 +223,6 @@ impl CountingProcessData {
         validate_finite(start, "start")?;
         validate_finite(stop, "stop")?;
         validate_status_values(event, "event")?;
-        // R's Surv(start, stop) makes an interval with stop <= start NA with
-        // a warning; this container has no NA, so it rejects the row instead.
         validate_intervals(start, stop)?;
         Ok(())
     }
@@ -645,8 +632,6 @@ mod tests {
 
     #[test]
     fn counting_process_data_rejects_empty_intervals_as_surv_does() {
-        // R: Surv(c(0, 0, 2, 0), c(1, 2, 2, 3), c(1, 1, 1, 0)) makes the
-        // third interval NA ("Stop time must be > start time, NA created")
         let err = CountingProcessData::try_new(
             vec![0.0, 0.0, 2.0, 0.0],
             vec![1.0, 2.0, 2.0, 3.0],

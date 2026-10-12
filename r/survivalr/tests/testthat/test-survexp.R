@@ -38,8 +38,6 @@ test_that("Cox cohorts and individual predictions share numerical kernels", {
   for (counting in c(FALSE, TRUE)) for (ties in c("efron", "breslow", "exact")) {
     form <- if (counting) survival::Surv(start,time,status) ~ score + z else survival::Surv(time,status) ~ score + z
     fit <- survival::coxph(form, d, ties = ties, model = TRUE)
-    # R 3.8-12's exact counting fitter omits the class and retains a numeric
-    # method code. Repair only that metadata before checking its curve kernels.
     if (counting && ties == "exact") { class(fit) <- "coxph"; fit$method <- "exact" }
     for (method in c("ederer", "hakulinen", "conditional", "individual.h", "individual.s")) {
       for (requested in list(NULL, c(0, .5, 2, 2, 5, 12, 30))) {
@@ -68,8 +66,6 @@ test_that("Cox offsets use multiplicative relative risk for individual predictio
   fit <- survival::coxph(survival::Surv(time,status) ~ score + offset(off), d, weights = wt, model = TRUE)
   .se_equal(survexp(Surv(time,status) ~ group, d, ratetable = fit, method = "ederer", model = TRUE),
     survival::survexp(Surv(time,status) ~ group, d, ratetable = fit, method = "ederer", model = TRUE))
-  # predict.coxph adds the new offset after exp; use the per-row survfit hazard
-  # as an independent check of the intended multiplicative offset model.
   curves <- survival::survfit(fit, newdata = d, se.fit = FALSE)
   expected <- vapply(seq_len(nrow(d)), function(i) curves$cumhaz[max(which(curves$time <= d$time[i])), i], numeric(1))
   actual <- survexp(Surv(time,status) ~ 1, d, ratetable = fit, method = "individual.h")
@@ -83,8 +79,6 @@ test_that("Cox stratified cohorts use each row's baseline", {
     survival::survexp(~ group, d, ratetable = fit, method = "ederer", times = c(0, 3, 8)))
   for (method in c("conditional", "hakulinen")) {
     actual <- survexp(Surv(time,status) ~ z, d, ratetable = fit, method = method)
-    # The stock stratified conditional/Hakulinen branch errors in hazard[,].
-    # Compare separate predictions using the same fitted coefficients/baselines.
     curves <- lapply(seq_len(nrow(d)), function(i) survival::survfit(fit, newdata = d[i,,drop=FALSE], se.fit=FALSE, censor=FALSE))
     grid <- sort(unique(unlist(lapply(curves, `[[`, "time"))))
     hazard <- vapply(curves, function(c) c(0,c$cumhaz)[findInterval(grid,c$time)+1L], numeric(length(grid)))
@@ -109,7 +103,6 @@ test_that("Cox population mapping and exclusions keep source rows aligned", {
   args <- list(formula = follow ~ group, data = input, ratetable = fit,
     rmap = quote(list(score=changed*2)), subset = quote(seq_len(nrow(input)) <= 30),
     na.action = na.exclude, times = c(0,3,8), model = TRUE)
-  # do.call must retain the unevaluated mapping/subset expressions.
   .se_equal(do.call(survexp,args), do.call(survival::survexp,args))
   actual <- survexp(follow ~ group, input, ratetable = fit, rmap = list(score=changed*2),
     subset = seq_len(nrow(input)) <= 30, na.action=na.exclude, method="individual.h")
@@ -118,7 +111,6 @@ test_that("Cox population mapping and exclusions keep source rows aligned", {
   expected <- predict(fit, newdata=selected, type="expected", na.action=na.pass)
   expect_equal(unname(actual), unname(expected), tolerance=1e-11)
   expect_true(all(is.na(actual[c(2,4)])))
-  # The fitted response controls individual predictions, rather than follow.
   no_map <- survexp(follow ~ 1, d <- transform(d,follow=time+100), ratetable=fit, method="individual.h")
   expect_equal(unname(no_map), unname(predict(fit,newdata=d,type="expected")), tolerance=1e-11)
 })
@@ -218,7 +210,6 @@ test_that("Cox design preparation handles null, transformed and interaction mode
   d <- .se_data()
   for (form in list(survival::Surv(time,status)~poly(score,2),
                     survival::Surv(time,status)~score*z)) {
-    # Reconstruct the training frame from the fit when it was not retained.
     fit <- survival::coxph(form,d)
     for (method in c("ederer","hakulinen","individual.h")) {
       .se_equal(survexp(time~group,d,ratetable=fit,method=method),
@@ -228,8 +219,6 @@ test_that("Cox design preparation handles null, transformed and interaction mode
   null <- survival::coxph(survival::Surv(time,status)~1,d)
   py_null <- coxph(Surv(time,status)~1,d)
   baseline <- survival::survfit(null,se.fit=FALSE,censor=FALSE)
-  # R's survexp drops all rows while constructing its empty rate data frame.
-  # A null model gives each retained population row the same baseline curve.
   for (fit in list(null,py_null)) {
     out <- survexp(~group,d,ratetable=fit)
     expect_equal(out$time,baseline$time)

@@ -1,5 +1,4 @@
 [default]
-# Hexadecimal commit references in documentation are not prose.
 extend-ignore-re = ['`[0-9a-f]{7,40}`']
 
 [default.extend-words]
@@ -24,25 +23,23 @@ parms = "parms"
 parm = "parm"
 inital = "inital"
 
-# Identifiers and message text carried over verbatim from R's sources, including
-# R's own misspellings, so the ports stay diffable against the originals.
-parmameters = "parmameters"  # summary.survreg's printed output
-iteraction = "iteraction"    # yates.R: "cannot deal with iteraction terms"
-implimented = "implimented"  # survfit: "only stype=1, ctype=1 implimented"
-columm = "columm"            # survfit.coxph: "the default curve based on columm means"
-argments = "argments"        # "all additional argments must have a name"
-coverge = "coverge"          # coxpenal.fit: "Inner loop failed to coverge for iterations"
-rcall = "rcall"              # pyears' rate-table call expansion
-alph = "alph"                # nmath pgamma's shape parameter
-infp = "infp"                # survfit residual kernels
-yhat = "yhat"                # survfit residual kernels
-arange = "arange"            # numpy.arange, in the binding tests
-writeable = "writeable"      # numpy's ndarray.flags.writeable
-gam = "gam"                  # frailty(method = "gam") abbreviation matching
-gaus = "gaus"                # frailty(distribution = "gaus") abbreviation matching
-objet = "objet"              # [.survfitms: "... for a survfit objet with both data and state dimesions"
-dimesions = "dimesions"      # the same R message
-stauts = "stauts"            # tmerge test reproducing R's "object 'stauts' not found"
+parmameters = "parmameters"
+iteraction = "iteraction"
+implimented = "implimented"
+columm = "columm"
+argments = "argments"
+coverge = "coverge"
+rcall = "rcall"
+alph = "alph"
+infp = "infp"
+yhat = "yhat"
+arange = "arange"
+writeable = "writeable"
+gam = "gam"
+gaus = "gaus"
+objet = "objet"
+dimesions = "dimesions"
+stauts = "stauts"
 
 [files]
 extend-exclude = [
@@ -54,5 +51,4 @@ extend-exclude = [
 extend-glob = ["cox_report_reference.json"]
 
 [type.cox-report-reference.extend-words]
-# R truncates this frailty term label to fit the printed coefficient table.
 distributio = "distributio"

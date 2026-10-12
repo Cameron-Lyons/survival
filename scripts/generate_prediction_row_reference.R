@@ -3,8 +3,6 @@ suppressPackageStartupMessages(library(survival))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/prediction_row_reference.json"
 d <- ovarian
-# A reserved suffix, repeated subset and non-syntactic names distinguish source labels
-# from row positions and exercise data.frame's make.unique before NA removal.
 row.names(d) <- c("case:1", "case:1.1", paste0("patient / ", seq.int(3L,nrow(d))))
 d$cl <- factor(rep(c("a","b","c"),length.out=nrow(d)),levels=c("c","b","a"))
 nd <- d[c(3L,4L,5L,6L),]; row.names(nd) <- c("四","two / 2","six:6","one")
@@ -51,8 +49,6 @@ for (name in names(specs)) for (action in c("na.omit","na.exclude")) {
       if(!is.null(p)) args$p <- p
       if(source!="stored") {args$newdata<-if(source=="new") nd else single; args$na.action<-na}
       raw <- capture(function() do.call(predict,args))
-      # The penalized wrapper refuses survival; retain it and check the ordinary
-      # prediction method on the same fitted state as in the preceding reference.
       if(type=="survival" && inherits(fit,"coxph.penal")) class(args$object) <- "coxph"
       expected <- capture(function() do.call(predict,args))
       if(name=="aft_intercept" && type=="terms") {
@@ -72,7 +68,6 @@ for (name in names(specs)) for (action in c("na.omit","na.exclude")) {
     }
   }
 }
-# Compact case records avoid thousands of one-value-per-line label copies.
 header <- list(metadata=list(r=as.character(getRversion()),survival=as.character(packageVersion("survival")),
   reference="complete stock predictions and metadata; raw penalized survival refusal retained beside ordinary-method reference"),
   data=d,newdata=nd,levels=I(levels(d$cl)),row_names=I(row.names(d)),new_names=I(row.names(nd)),

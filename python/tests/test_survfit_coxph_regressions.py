@@ -52,8 +52,6 @@ def _heart_newdata(**changes):
 
 
 def _strata_data():
-    # set.seed(1); data.frame(time = c(1:10, 21:30), status = rep(c(1, 0, 1, 1, 0), 4),
-    #                         g = rep(1:2, each = 10), x = rnorm(20))
     x = [
         -0.62645381074233242,
         0.18364332422208224,
@@ -84,10 +82,6 @@ def _strata_data():
     }
 
 
-# ---------------------------------------------------------------------------
-# type= and individual=
-# ---------------------------------------------------------------------------
-
 _KP = [0.995814008586017, 0.983222465461149, 0.979007485657402]
 _BRESLOW = [0.995820708869676, 0.983347601004328, 0.97914552919369]
 _EFRON = [0.995820708869676, 0.983268756915752, 0.979067022024147]
@@ -106,7 +100,6 @@ _EFRON = [0.995820708869676, 0.983268756915752, 0.979067022024147]
     ],
 )
 def test_type_picks_rs_curve(lung_fit, type_, surv, std_err):
-    # survfit(coxph(Surv(time, status) ~ age + sex, lung), type = type_)
     curve = r.survfit(lung_fit, type=type_)
     assert curve.surv[:3] == approx(surv)
     assert curve.std_err[:2] == approx(std_err)
@@ -141,7 +134,6 @@ def test_individual_is_accepted_with_rs_warning(lung_fit, heart_fit):
     with pytest.warns(RuntimeWarning, match="the `id' option supersedes `individual'"):
         curve = r.survfit(lung_fit, newdata, individual=False)
     assert curve.surv[:3] == approx([0.995093079780872, 0.980377439641655, 0.975458714919046])
-    # survfit(fit, newdata = nd[3:4, ], individual = TRUE): one subject, no names
     subject = {key: values[2:] for key, values in _heart_newdata().items()}
     with pytest.warns(RuntimeWarning, match="supersedes"):
         curve = r.survfit(heart_fit, subject, individual=True)
@@ -151,13 +143,7 @@ def test_individual_is_accepted_with_rs_warning(lung_fit, heart_fit):
         r.survfit("Surv(time, status) ~ 1", datasets.load_lung(), individual=True)
 
 
-# ---------------------------------------------------------------------------
-# start.time
-# ---------------------------------------------------------------------------
-
-
 def test_start_time_builds_the_curve_from_the_rows_at_risk(lung_fit):
-    # survfit(fit, start.time = 100)
     curve = r.survfit(lung_fit, start_time=100)
     assert curve.start_time == 100.0
     assert curve.n == [196]
@@ -178,7 +164,6 @@ def test_start_time_builds_the_curve_from_the_rows_at_risk(lung_fit):
     assert newdata.surv[0] == approx([0.995074030974004, 0.996501018866574])
     assert newdata.surv[2] == approx([0.980213558640518, 0.985914819509285])
     assert newdata.std_err[2] == approx([0.010350446313988, 0.00729606222312575])
-    # the cached curve of the whole fit is untouched
     assert r.survfit(lung_fit).time[0] == 5.0
 
 
@@ -190,7 +175,6 @@ def test_start_time_reads_the_stop_time_of_counting_data(heart_fit):
     assert curve.n_risk[:3] == [50.0, 49.0, 48.0]
     assert curve.surv[:3] == approx([0.979448223850899, 0.958850707206296, 0.958850707206296])
     assert curve.std_err[:3] == approx([0.0214277667125728, 0.0315718279279994, 0.0315718279279994])
-    # survfit(fit, newdata = nd, id = nd$pid, start.time = 100), numeric ids 1, 2
     subjects = r.survfit(heart_fit, _heart_newdata(pid=[1, 1, 2, 2]), id="pid", start_time=100)
     assert subjects.strata == {"1": 26, "2": 43}
     assert subjects.n == [54, 54]
@@ -221,9 +205,6 @@ def test_start_time_keeps_a_stratum_it_empties():
     assert every.strata == {"g=1": 0, "g=2": 10}
     assert every.surv[0] == approx([0.921861441044301, 0.859787664575014])
     assert every.surv[-1] == approx([0.246763315487031, 0.0744024345015147])
-    # a newdata row in the emptied stratum gets an empty curve, and the row in g=2 its own
-    # curve (x = -1, the second column above); R's split() drops the empty stratum here and
-    # hands the second row the first row's column (0.921861441044301, ...)
     found = r.survfit(fit, {"x": [0.5, -1], "g": [1, 2]}, start_time=15)
     assert found.strata == {"1": 0, "2": 10}
     assert found.n == [0, 10]
@@ -250,11 +231,6 @@ def test_start_time_errors_as_r(lung_fit):
             lung_fit.survfit(start_time=value)
 
 
-# ---------------------------------------------------------------------------
-# interactions without their lower-order terms
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "formula",
     [
@@ -274,7 +250,6 @@ def test_interaction_without_its_lower_order_terms_is_refused(lung, formula):
     for newdata in (None, {"age": [60], "sex": [1], "ph.ecog": [1]}):
         with pytest.raises(ValueError, match=message):
             r.survfit(fit, newdata)
-    # basehaz and survexp(ratetable = fit) build the same curves
     with pytest.raises(ValueError, match=message):
         r.basehaz(fit)
     with pytest.raises(ValueError, match=message):
@@ -302,14 +277,8 @@ def test_interaction_with_its_margins_gives_curves(lung, formula, at_means, at_n
     assert newdata.surv[0] == pytest.approx(at_newdata, rel=1e-7)
 
 
-# ---------------------------------------------------------------------------
-# newdata with missing values
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("missing", [None, math.nan])
 def test_incomplete_newdata_rows_are_left_out(lung_fit, missing):
-    # R: survfit(fit, newdata = data.frame(age = c(50, NA, 60), sex = c(1, 2, 1))) drops row 2
     newdata = {"age": [50, missing, 60], "sex": [1, 2, 1]}
     curve = r.survfit(lung_fit, newdata)
     assert curve.newdata is newdata
@@ -344,8 +313,6 @@ def test_newdata_rows_missing_a_strata_offset_or_transformed_value(lung):
 
 
 def test_survexp_refuses_a_row_the_cox_terms_make_missing(lung):
-    # R: survexp(~ 1, d, ratetable = coxph(Surv(time, status) ~ log(age) + sex, lung)) with
-    # d$age[1] = -1 stops ("non-conformable arguments"): survexp.cfit needs a curve per row
     logged = r.coxph("Surv(time, status) ~ log(age) + sex", lung)
     data = {**lung, "age": [-1, *lung["age"][1:]]}
     with (
@@ -353,11 +320,6 @@ def test_survexp_refuses_a_row_the_cox_terms_make_missing(lung):
         pytest.raises(ValueError, match="missing values in newdata"),
     ):
         r.survexp("~ 1", data, ratetable=logged)
-
-
-# ---------------------------------------------------------------------------
-# curve names
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -384,7 +346,6 @@ def test_id_curves_are_named_by_the_id_values(heart_fit, pid, strata):
     ],
 )
 def test_id_values_that_print_alike_keep_a_curve_each(heart_fit, pid, strata):
-    # R: pid = c(0.1 + 0.2, 0.1 + 0.2, 0.3, 0.3) gives two curves, both named "0.3"
     curve = r.survfit(heart_fit, _heart_newdata(pid=pid), id="pid")
     assert curve.strata == strata
     assert curve.n == [172, 172]
@@ -417,9 +378,6 @@ def test_stratified_newdata_curves_are_named_by_the_row_names(lung):
 
 
 def test_an_index_that_cannot_be_rs_row_names_gives_the_row_numbers(lung):
-    # R: rbind(data.frame(age = c(50, 60), sex = 1:2), data.frame(age = c(70, 80), sex = 1:2))
-    # numbers the rows 1..4, where pd.concat repeats the index 0, 1; labels that repeat
-    # under as.character or are missing cannot be R row names either
     pd = pytest.importorskip("pandas")
     fit = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
     newdata = pd.concat(
@@ -438,11 +396,6 @@ def test_an_index_that_cannot_be_rs_row_names_gives_the_row_numbers(lung):
             [0.982676086421029, 0.989248906353565, 0.976119901176607, 0.985161358364436]
         )
         assert r.survfit(fit, frame, censor=False).strata == {"1": 99, "2": 51, "3": 99, "4": 51}
-
-
-# ---------------------------------------------------------------------------
-# confidence limits
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -489,8 +442,6 @@ def test_newdata_confidence_limits_match_r(lung_fit, conf_type, lower_first, upp
 
 
 def test_survfit_reads_the_curves_once_and_limits_them_in_one_call(monkeypatch, lung):
-    # the curve getters convert the whole ntime x m block, and R calls survfit_confint once on
-    # the whole matrix: one read of each block per curve, one call for all the columns
     fit = r.coxph("Surv(time, status) ~ age + strata(sex)", lung)
     newdata = {"age": [50, 60, 70]}
     expected = r.survfit(fit, newdata)

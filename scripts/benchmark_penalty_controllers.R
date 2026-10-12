@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Compare complete shared AFT fits changing only the penalty controller callback.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 pkgload::load_all("r/survivalr", quiet = TRUE)

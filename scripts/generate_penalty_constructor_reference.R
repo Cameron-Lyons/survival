@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_penalty_constructor_reference.R [output.json]
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -59,7 +58,6 @@ add <- function(name, kind, values, options = list(), constructor = kind) {
                  else if (isTRUE(sparse)) matrix(codes, ncol = 1L)
                  else attr(value, "contrasts")[as.integer(value), , drop = FALSE]
         cparm <- attr(value, "cparm")
-        # R's $name selects the first entry when options contain duplicate names.
         effective <- if (length(cparm)) cparm[!duplicated(names(cparm))] else cparm
         entries <- lapply(seq_along(cparm), function(i)
             list(name = names(cparm)[i], value = plain(cparm[[i]])))
@@ -159,8 +157,6 @@ add("frailty/missing-sparse", "frailty", list(x = rep(NA_character_, 3)), list(s
 add("frailty/empty-dense", "frailty", list(x = character()))
 add("frailty/empty-sparse", "frailty", list(x = character()), list(sparse = TRUE))
 
-# Complete unweighted fits check that the constructor basis, scaling, names,
-# and native penalty configuration remain connected through coxph(tt=).
 data <- ovarian
 data$x <- (data$age - 60) / 10
 data$g <- factor(data$rx, levels = c(2, 1, 9))

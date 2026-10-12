@@ -128,13 +128,7 @@ from ._types import (
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
 _LOG_DOUBLE_MAX = math.log(sys.float_info.max)
-# coxph.control's default toler.chol, .Machine$double.eps ^ .75
 _TOLER_CHOL = sys.float_info.epsilon**0.75
-
-
-# ---------------------------------------------------------------------------
-# the coxph object
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -163,14 +157,10 @@ class CoxphModel:
     id: tuple[Any, ...] | None = None
     cluster: tuple[Any, ...] | None = None
     model: dict[str, Any] | None = None
-    # the columns the call's weights= / id= named, for re-evaluation on newdata
     weights_column: str | None = None
     id_column: str | None = None
     penalized: Any | None = None
     na_action: NaAction | None = None
-    # the model frame the fit was made from (after subset and na.action), which
-    # model.frame(fit) rebuilds when the fit did not keep it; the design rows are
-    # dropped, since model.frame() does not use them
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
     cluster_levels: tuple[Any, ...] | None = None
     id_levels: tuple[Any, ...] | None = None
@@ -368,11 +358,6 @@ def _coxph_df(fit: CoxphModel) -> float:
     return sum(1 for value in fit.coefficients if not math.isnan(value))
 
 
-# ---------------------------------------------------------------------------
-# coxph
-# ---------------------------------------------------------------------------
-
-
 def _obrien_time_transform(
     x: Sequence[float],
     time: Sequence[float],
@@ -392,7 +377,7 @@ def _obrien_time_transform(
         order = sorted(members, key=lambda idx: ranks[idx])
         size = len(order)
         pos = 0
-        while pos < size:  # average ranks over ties, as R's rank()
+        while pos < size:
             end = pos
             while end + 1 < size and x[order[end + 1]] == x[order[pos]]:
                 end += 1
@@ -660,7 +645,6 @@ def _check_init(
     at the centred offset must neither overflow nor underflow everywhere."""
 
     values = _float_vector(init, "init")
-    # Keep the scalar accumulation and overflow behavior of the original check.
     if isinstance(x, np.ndarray):
         x = x.tolist()
     nvar = len(x[0]) if x else 0
@@ -764,8 +748,7 @@ def _cox_fit_diagnostic_messages(
     var = fit.var if naive_var is None else naive_var
     infs = [abs(sum(u[i] * var[i][j] for i in range(nvar))) for j in range(nvar)]
     info = fit.info
-    if info is not None:  # agreg.fit
-        # the fitter's coefficients, before an aliased one is marked NA
+    if info is not None:
         raw = [0.0 if math.isnan(b) and var[j][j] == 0.0 else b for j, b in enumerate(coef)]
         if not all(math.isfinite(value) for value in [*raw, *(v for row in var for v in row)]):
             raise ValueError(
@@ -780,17 +763,16 @@ def _cox_fit_diagnostic_messages(
             if not math.isfinite(u[j]) or infs[j] > toler * (1.0 + abs(raw[j]))
         ]
         suffix = "; beta may be infinite. "
-    elif _TIE_METHOD_NAMES[int(fit.method)] == "exact":  # coxexact.fit, agexact.fit
+    elif _TIE_METHOD_NAMES[int(fit.method)] == "exact":
         if fit.flag == 1000:
             return ["Ran out of iterations and did not converge"]
         which = [
             j + 1 for j in range(nvar) if infs[j] > eps_value and infs[j] > toler * abs(coef[j])
         ]
         suffix = "; beta may be infinite. "
-    else:  # coxph.fit
+    else:
         if fit.flag == 1000:
             messages = ["Ran out of iterations and did not converge"]
-            # coxph.fit's lp is at coxph()'s centred offset
             lp_max = max(fit.linear_predictors)
             if offset_centered:
                 offset = list(fit.offset)
@@ -861,7 +843,6 @@ def _coxph_fit_frame(
     cluster: list[int] | None = None
     if has_cluster:
         if not use_robust:
-            # coxph() still hands the cluster to the concordance
             warnings.warn(
                 "cluster specified with robust=FALSE, cluster ignored",
                 RuntimeWarning,
@@ -875,8 +856,6 @@ def _coxph_fit_frame(
             cluster = list(range(len(data.y)))
         else:
             raise ValueError("one of cluster or id is needed")
-    # without events coxph() returns before checking the predictors or init and
-    # before fitting anything, penalized terms included
     events = data.y._event_codes()
     no_events = not any(events)
     if not no_events:
@@ -971,7 +950,6 @@ def _coxph_fit_frame(
             for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, toler_inf):
                 warnings.warn(message, RuntimeWarning, stacklevel=3)
         elif iter_max > 1 and penalized.inner_failures:
-            # coxpenal.fit's warning, R's spelling kept
             warnings.warn(
                 "Inner loop failed to coverge for iterations "
                 + " ".join(map(str, penalized.inner_failures)),
@@ -1047,7 +1025,6 @@ def _surv_design_formula(response: Surv, design: Any) -> tuple[str, dict[str, An
     return f"{surv} ~ {' + '.join(names)}", data
 
 
-# the coxph.control formals coxph() can only receive through **kwargs
 _COXPH_CONTROL_KWARGS = ("iter.max", "toler.chol", "toler.inf", "outer.max")
 
 
@@ -1180,10 +1157,8 @@ def coxph(
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
-    # the R bridge evaluates weights= / id= itself and names the columns they came from
     weights_column = kwargs.pop("_weights_column", None)
     id_column = kwargs.pop("_id_column", None)
-    # coxph.R hands its ... to coxph.control
     control_args = {
         name: value
         for name, value in (
@@ -1209,7 +1184,6 @@ def coxph(
         formulas = _formula_list(formula, statedata)
         formula = formulas.master
     elif isinstance(formula, Surv):
-        # coxph(<Surv>, x = <design>): the R bridge's matrix interface, as survreg has
         formula, data = _surv_design_formula(formula, x)
         x = False
     _ = _normalize_bool_option_with_default(x, "x", False)
@@ -1235,8 +1209,6 @@ def coxph(
     fit_formula = formula
     timeline = _timeline_response(formula)
     if timeline:
-        # coxph.R converts timeline data (surv2counting) before its na.action; a
-        # cluster() term is by then its cluster argument, which is not carried forward
         weights_column = weights_column or (weights if isinstance(weights, str) else None)
         id_column = id_column or (id if isinstance(id, str) else None)
         fit_formula, data, arguments = _timeline_counting(
@@ -1245,7 +1217,6 @@ def coxph(
         subset = None
     elif subset is not None and data is not None:
         subset = _subset_indices(subset, _data_row_count(data, fit_formula))
-    # a formula list defers its missing values until the transitions are known
     frame = _model_frame(
         fit_formula,
         data,
@@ -1281,21 +1252,17 @@ def coxph(
         else _normalize_numeric_sequence_or_none(nocenter, "nocenter"),
         "keep_model": _normalize_bool_option_with_default(model, "model", False),
     }
-    # istate/statedata only matter for a multi-state response (R keeps istate in the
-    # model frame of an ordinary fit)
     if frame.y.type in {"mright", "mcounting"}:
         if strata is not None:
             raise ValueError("use strata() terms in the formula for multi-state models")
         from ._coxphms import _survcheckallow, fit_multistate
 
-        # rownames(mf) before the na.action, which the residuals and predictions carry
         source_rows = range(_data_row_count(data, fit_formula)) if subset is None else subset
         fit: CoxphModel = fit_multistate(
             frame,
             row_labels=_row_names(data, source_rows),
             formulas=formulas,
             na_action=na_action,
-            # coxph.R: breslow when neither ties nor method was given
             method="breslow" if ties is None and method is None else method_name,
             survcheckallow=_survcheckallow(options["survcheckallow"]),
             **fit_options,
@@ -1348,8 +1315,6 @@ def clogit(
             weights = None
     if not _response_arg_columns(response):
         raise ValueError("clogit response must name a column of data")
-    # R's Surv(1 + 0*case, case): a constant time as long as the response after
-    # subset and na.action
     fit = coxph(
         f"Surv(rep(1, length({response})), {response}) ~ {rhs.strip()}",
         data=data,
@@ -1360,11 +1325,6 @@ def clogit(
         **kwargs,
     )
     return ClogitModel(**fit.__dict__)
-
-
-# ---------------------------------------------------------------------------
-# summary.coxph / summary.coxph.penal / coxph.wtest
-# ---------------------------------------------------------------------------
 
 
 def _coefficient_table(
@@ -1469,7 +1429,6 @@ def summary_coxph(
     from ._coxphms import CoxphmsModel
 
     if isinstance(fit, CoxphmsModel):
-        # summary.coxph adds the multi-state maps
         result["cmap"] = fit.cmap
         result["states"] = list(fit.states)
     wald = fit.wald_test
@@ -1550,10 +1509,8 @@ def _pspline_print(
         raise ValueError("spline reporting requires basis boundaries")
     cbase = _pspline_cbase(term.nterm, term.degree, term.boundary, nvar)
     test1 = coxph_wtest(var, coef).test[0]
-    # xmat = cbind(1, cbase) and xsig = V X, for V a g-inverse of var
     xmat = [[1.0, centre] for centre in cbase]
     xsig = _as_rows(coxph_wtest(var, xmat).solve, "spline solution")
-    # the slope's weights: the second row of [X' V X]^- X' V
     xvx = [
         [sum(x[a] * v[b] for x, v in zip(xmat, xsig, strict=True)) for b in (0, 1)] for a in (0, 1)
     ]
@@ -1574,7 +1531,6 @@ def _pspline_print(
             1.0,
             _core.pchisq(test2, 1.0, lower_tail=False),
         ),
-        # max(.5, df - 1) stops silly p-values for a chisq of 0 on 0 df
         _penal_row(
             f"{label}, nonlin",
             math.nan,
@@ -1606,7 +1562,6 @@ def _frailty_print(
     text = f"Variance of random effect= {_r_format_number(theta, digits)}"
     if distribution == "gamma":
         text += f"   I-likelihood = {_r_format_number(round(history.c_loglik, 1), 10)}"
-    # max(df, .5) stops silly p-values
     p = _core.pchisq(test, max(df, 0.5), lower_tail=False)
     return _penal_row(label, math.nan, math.nan, math.nan, test, df, p), text
 
@@ -1803,11 +1758,6 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     return CoxPHWTestResult(test=list(result.test), df=int(result.df), solve=solve)
 
 
-# ---------------------------------------------------------------------------
-# predict.coxph
-# ---------------------------------------------------------------------------
-
-
 def _prediction_newdata(
     fit: CoxphModel,
     newdata: Any,
@@ -2000,7 +1950,6 @@ def predict_coxph(
                     i for i, value in enumerate(collapse_values) if _is_missing_value(value)
                 ]
         need_response = predict_type in {"expected", "survival"}
-        # predict.coxph keeps the strata in Terms2 only when the prediction uses them
         need_strata = _has_strata(fit) and (
             include_se
             or predict_type in {"terms", "expected", "survival"}
@@ -2008,8 +1957,6 @@ def predict_coxph(
             or (reference_name == "zero" and any(value != 0.0 for value in fit.means))
         )
         if sparse_only:
-            # predict.coxph.penal returns zero for a new frailty-only population;
-            # it uses newdata's row count without evaluating its model variables.
             new = _NewData(newdata, np.empty((_data_row_count(newdata), 0)), None, None, None)
         else:
             new = _prediction_newdata(
@@ -2035,8 +1982,6 @@ def predict_coxph(
     pred: Any
     se: Any
     width = len(selected) if predict_type == "terms" and not sparse_only else None
-    # Prepare groups against the padded output rows, then send only retained
-    # codes to the native predictor. Groups containing gaps are restored below.
     if new is None:
         gaps = _excluded_rows(fit.na_action)
         nrows = fit.n
@@ -2054,7 +1999,7 @@ def predict_coxph(
         )
         missing = set(gaps)
         fitted_codes = [code for row, code in enumerate(codes) if row not in missing]
-    if new is not None and new.n == 0:  # no complete newdata row
+    if new is not None and new.n == 0:
         pred = _empty_prediction(width, as_arrays)
         se = _empty_prediction(width, as_arrays) if include_se else None
     elif sparse_only:
@@ -2092,8 +2037,6 @@ def predict_coxph(
         if se is not None:
             se = _restore_prediction_groups(se, codes, fitted_codes, gaps, len(group_names), width)
     else:
-        # Without grouping, napredict restores omitted rows. Numeric kernels
-        # propagate predictor NaNs directly under na.pass.
         pred = _pad_rows(pred, gaps, width)
         se = None if se is None else _pad_rows(se, gaps, width)
     output = PredictResult(pred, se) if include_se else pred
@@ -2176,7 +2119,6 @@ def _predict_terms(
 
     active = _active_assign(fit)
     position = _sparse_term(fit)
-    # the engine's terms are the model terms without the sparse one
     engine_terms = [
         idx if position is None or idx < position else idx - 1
         for idx in selected
@@ -2192,7 +2134,6 @@ def _predict_terms(
         collapse=collapse,
     )
     rows, se_rows = _prediction_values(result, as_arrays)
-    # the frailty column goes in at each place the selection names it, left to right
     columns = [column for column, idx in enumerate(selected) if idx == position]
     if columns:
         penalized = fit.penalized
@@ -2242,10 +2183,6 @@ def predict_terms_constant(fit: CoxphModel) -> float:
         if not math.isnan(coefficient)
     )
 
-
-# ---------------------------------------------------------------------------
-# residuals.coxph
-# ---------------------------------------------------------------------------
 
 _RESIDUAL_TYPES = (
     "martingale",
@@ -2332,7 +2269,6 @@ def residuals_coxph(
     with_group_names = kwargs.pop("_with_group_names", False)
 
     if isinstance(fit, CoxphmsModel):
-        # residuals.coxphms's na.action overrides the kind of the fit's na.action
         na_action = _pop_dotted_keyword(
             kwargs, "na.action", "na_action", kwargs.pop("na_action", None), None
         )
@@ -2353,7 +2289,6 @@ def residuals_coxph(
     weighted_value = _normalize_optional_bool_option(weighted, "weighted")
     if weighted_value is None:
         weighted_value = otype in {"dfbeta", "dfbetas"}
-    # residuals.coxph.null
     if not fit.coef_names and fit.penalized is None and otype not in {"martingale", "deviance"}:
         raise ValueError(f"'{otype}' residuals are not defined for a null model")
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
@@ -2371,8 +2306,6 @@ def residuals_coxph(
         return {"values": result, "group_names": None} if with_group_names else result
     groups = _collapse_groups(fit, collapse, len(fit.residuals) + len(excluded))
     codes, group_names = (None, None) if groups is None else groups
-    # naresid comes before the collapse: the engine sums the fit's rows, and a group
-    # holding a row na.exclude removed sums to NA
     padded_codes = codes if excluded and collapse is not True else None
     fit_codes = codes
     if padded_codes is not None:
@@ -2407,12 +2340,6 @@ def residuals_coxph(
     return {"values": output, "group_names": group_names} if with_group_names else output
 
 
-# ---------------------------------------------------------------------------
-# survfit.coxph / basehaz
-# ---------------------------------------------------------------------------
-
-
-# survfit.coxph's old-style ``type`` values and the stype and ctype each stands for
 _SURVFIT_TYPES = (
     "kalbfleisch-prentice",
     "aalen",
@@ -2609,12 +2536,9 @@ def _survfit_curves(
             raise ValueError("Survival type of newdata does not match the fitted model")
         if new.y.start is None:
             raise ValueError("Individual=TRUE is only valid for counting process data")
-        if ids is None:  # individual = TRUE: one subject
+        if ids is None:
             codes, labels = [0] * new.n, []
         else:
-            # coxsurv.fit's curves are the unique ids in order of first appearance, named
-            # by as.character; make.unique keeps apart distinct ids that print alike
-            # (0.1 + 0.2 and 0.3), whose repeated names R keeps but a dict cannot
             levels = _label_levels(ids, "id")
             index = {label: code for code, label in enumerate(levels)}
             codes = [index[label] for label in ids]
@@ -2779,11 +2703,6 @@ def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBa
     return CoxBaseHazardResult(hazard=hazard, time=list(sfit.time), strata=strata)
 
 
-# ---------------------------------------------------------------------------
-# cox.zph / coxph.detail
-# ---------------------------------------------------------------------------
-
-
 def cox_zph(
     fit: Any,
     transform: Any = "km",
@@ -2835,7 +2754,7 @@ def cox_zph(
     groups: list[tuple[str, Sequence[int]]]
     if not use_terms:
         groups = [(name, [col]) for col, name in enumerate(fit.coef_names)]
-    elif isinstance(fit, CoxphmsModel):  # narrows fit, which multistate does not
+    elif isinstance(fit, CoxphmsModel):
         groups = list(_zph_assign(fit))
     else:
         groups = list(fit.assign.items())
@@ -2961,11 +2880,6 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHD
         nevent_wt=list(detail.nevent_wt) if weighted else None,
         nrisk_wt=list(detail.wtrisk) if weighted else None,
     )
-
-
-# ---------------------------------------------------------------------------
-# anova.coxph / anova.coxphlist
-# ---------------------------------------------------------------------------
 
 
 def _anova_test_name(test: Any) -> str | None:
@@ -3095,7 +3009,6 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
     from ._coxphms import CoxphmsModel
 
     if any(isinstance(fit, CoxphmsModel) for fit in fits):
-        # anova.coxphms (reached through anova.coxph) stops here
         raise NotImplementedError("anova not yet available for multistate")
     if not isinstance(fits[0], CoxphModel):
         from ._survreg import SurvregModelResult, anova_survreg

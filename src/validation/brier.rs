@@ -1,13 +1,3 @@
-//! Brier score of a Cox model with inverse-probability-of-censoring weights.
-//!
-//! Port of R survival `R/brier.R` for right-censored data and for (start,
-//! stop] data whose subjects all enter at the same time (R stops with
-//! "delayed entry is not yet implemented" otherwise).  The model's predicted
-//! event probabilities at the evaluation times come from the caller (R
-//! evaluates `survfit(fit, newdata)` there); the null model, the censoring
-//! distribution and the weighting are computed here.  The Python entry
-//! point lives in `pybridge::brier`.
-
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::step_at;
@@ -18,52 +8,34 @@ use rayon::prelude::*;
 
 const PARALLEL_WORK_THRESHOLD: usize = 8_192;
 
-/// Inputs of [`brier`].
 #[derive(Debug, Clone)]
 pub struct BrierInput<'a> {
-    /// Entry times of (start, stop] rows, which only the null model's
-    /// risk sets see (R's `survfit(Y ~ 1)`); `None` for right-censored data.
     pub start: Option<&'a [f64]>,
     pub time: &'a [f64],
     pub status: &'a [i32],
-    /// Case weights (R `weights`); `None` for unit weights.
     pub weights: Option<&'a [f64]>,
-    /// Evaluation times (R `times`; the default, the event times of the
-    /// null curve, is chosen by the caller since `phat` must match).
     pub times: &'a [f64],
-    /// Model predicted probability of an event by each evaluation time:
-    /// `phat[i][j]` for time `i`, subject `j` (R's `p1`); it becomes the
-    /// result's `phat`.
     pub phat: Vec<Vec<f64>>,
-    /// Move censorings just after tied events before estimating the
-    /// censoring distribution (R `ties`).
     pub ties: bool,
-    /// Use the Efron-type baseline for the null model (`survfit(..., ctype
-    /// = 2, stype = 2)`); R does so when `efron = TRUE` and the fit used the
-    /// Efron approximation.
     pub efron: bool,
-    /// Apply R's `aeqSurv` near-tie rounding to `time` first.
     pub timefix: bool,
 }
 
-/// Output of [`brier`]: R's `brier` object with `detail = TRUE`.
+#[doc = " Output of [`brier`]: R's `brier` object with `detail = TRUE`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct BrierResult {
     pub times: Vec<f64>,
     pub brier: Vec<f64>,
     pub rsquared: Vec<f64>,
-    /// Null-model event probabilities at `times`.
+    #[doc = " Null-model event probabilities at `times`."]
     pub p0: Vec<f64>,
-    /// Model event probabilities, one row per time (the `phat` input).
+    #[doc = " Model event probabilities, one row per time (the `phat` input)."]
     pub phat: Vec<Vec<f64>>,
-    /// Effective sample size `1 / sum(w^2)` at each time.
+    #[doc = " Effective sample size `1 / sum(w^2)` at each time."]
     pub eff_n: Vec<f64>,
 }
 
-/// `survfit(Surv(time, status) ~ 1, weights, se.fit = FALSE)`: the
-/// Kaplan-Meier curve, or `exp(-H)` with the Efron-corrected hazard
-/// (`ctype = 2`, `stype = 2`) that matches an Efron Cox fit's baseline.
 fn survfit_curve(
     start: Option<&[f64]>,
     time: &[f64],
@@ -123,8 +95,6 @@ fn validate(input: &BrierInput<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Brier score, its null-model counterpart and the resulting R-squared at
-/// each evaluation time.
 pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
     validate(&input)?;
     let n = input.time.len();
@@ -141,7 +111,6 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
             "weights must have a positive sum",
         ));
     }
-    // Null model: survfit(Y ~ 1, weights = casewt), evaluated with extend = TRUE.
     let (null_time, null_surv) =
         survfit_curve(start.as_deref(), &time, input.status, &weights, input.efron)?;
     let p0: Vec<f64> = input
@@ -150,7 +119,6 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
         .map(|&at| 1.0 - step_at(&null_time, &null_surv, at, 1.0))
         .collect();
 
-    // Censoring distribution, with censorings nudged past tied events.
     let shifted: Vec<f64> = if input.ties {
         let mut unique = time.clone();
         unique.sort_by(f64::total_cmp);
@@ -171,9 +139,6 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
         survfit_curve(None, &shifted, &censor_status, &weights, false)?;
 
     let case_weight: Vec<f64> = weights.iter().map(|w| w / total_weight).collect();
-    // G(min(subject_time, evaluation_time)) only ever reads G at one of
-    // those two endpoints. Cache the subject values once; each evaluation
-    // needs one more lookup instead of a binary search for every subject.
     let censor_at_subject: Vec<f64> = shifted
         .iter()
         .map(|&at| step_at(&censor_time, &censor_surv, at, 1.0))
@@ -246,9 +211,6 @@ mod tests {
 
     #[test]
     fn cached_censoring_values_match_direct_ipcw() {
-        // Compute G independently from the risk sets, including tied events
-        // and censorings, zero weights, G=0, and times outside follow-up.
-        // Repetition exercises both the sequential and parallel score paths.
         for copies in [1, 256] {
             let time = [4.0, 1.0, 2.0, 2.0, 6.0, 5.0, 6.0, 3.0].repeat(copies);
             let status = [1, 1, 0, 1, 0, 0, 1, 1].repeat(copies);
@@ -338,8 +300,6 @@ mod tests {
 
     #[test]
     fn matches_a_hand_calculation() {
-        // Two subjects, no censoring: the censoring curve stays at 1 and the
-        // weights are the normalised case weights.
         let result = brier(BrierInput {
             start: None,
             time: &[1.0, 3.0],
@@ -352,8 +312,6 @@ mod tests {
             timefix: true,
         })
         .unwrap();
-        // KM at t=2: S = 0.5, so p0 = 0.5.  Subject 1 (event before 2):
-        // (1 - p)^2; subject 2 (after): p^2.
         assert!((result.p0[0] - 0.5).abs() < 1e-12);
         let expected_null = (0.25 + 0.25) / 2.0;
         let expected_model = ((1.0f64 - 0.2).powi(2) + 0.6f64.powi(2)) / 2.0;
@@ -364,8 +322,6 @@ mod tests {
 
     #[test]
     fn censoring_weights_follow_the_ipcw_rule() {
-        // Subject 2 censored at 2 (shifted to 2.5) gets weight zero at time
-        // 3; the others are reweighted by the censoring survival.
         let result = brier(BrierInput {
             start: None,
             time: &[1.0, 2.0, 4.0],
@@ -378,8 +334,6 @@ mod tests {
             timefix: true,
         })
         .unwrap();
-        // G(t): drops to 0.5 at 2.5.  Weights: subject 1 -> (1/3)/1,
-        // subject 2 -> 0, subject 3 -> (1/3)/0.5.
         let w1 = 1.0 / 3.0;
         let w3 = 2.0 / 3.0;
         assert!((result.eff_n[0] - 1.0 / (w1 * w1 + w3 * w3)).abs() < 1e-12);

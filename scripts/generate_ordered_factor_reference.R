@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Regenerate stock base-R ordered contrasts, including numerical rank loss.
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else
     "python/tests/fixtures/ordered_factor_reference.json"

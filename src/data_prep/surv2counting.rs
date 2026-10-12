@@ -1,33 +1,17 @@
-//! R's `surv2counting` (`R/fromtimeline.R`), the engine of `fromtimeline`
-//! and of `coxph`/`survfit` on `Surv2` responses: turn a timeline data set
-//! (one row per subject per time, giving the state or event at that time)
-//! into counting-process rows `(tstart, tstop, status)` with the subject's
-//! current state.
-//!
-//! A subject with `k` rows yields `k - 1` intervals; row `j + 1` supplies
-//! the end time and outcome of interval `j`, row `j` everything else.
-//! Covariate values are carried forward over missing entries; the caller
-//! copies values (of any type) along [`Surv2CountingResult::carry_from`].
-
 use super::id_value::{IdValue, SubjectId};
 use super::tmerge::tmerge_carry_forward;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 
-/// R's `repeated` argument of `Surv2`/`fromtimeline`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repeated {
-    /// A transition into the subject's current state is censored.
     No,
-    /// Every recorded outcome counts, even a repeat of the current state.
     Yes,
-    /// Only the first instance of each outcome counts.
     First,
 }
 
 impl Repeated {
-    /// Parse `FALSE`/`TRUE`/`"first"`.
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value.to_lowercase().as_str() {
             "false" | "no" => Ok(Self::No),
@@ -40,44 +24,38 @@ impl Repeated {
     }
 }
 
-/// Counting-process rows, in the order of the input rows they start from.
+#[doc = " Counting-process rows, in the order of the input rows they start from."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct Surv2CountingResult {
-    /// Zero-based input row each interval starts from (all but the last
-    /// row of every subject).
+    #[doc = " Zero-based input row each interval starts from (all but the last"]
+    #[doc = " row of every subject)."]
     #[pyo3(get)]
     pub row: Vec<usize>,
     #[pyo3(get)]
     pub tstart: Vec<f64>,
     #[pyo3(get)]
     pub tstop: Vec<f64>,
-    /// Outcome at `tstop`: 0 censored, otherwise the state code; `None`
-    /// keeps a missing status of a plain 0/1 response.
+    #[doc = " Outcome at `tstop`: 0 censored, otherwise the state code; `None`"]
+    #[doc = " keeps a missing status of a plain 0/1 response."]
     #[pyo3(get)]
     pub status: Vec<Option<i32>>,
-    /// The state the subject is in during the interval; absent when the
-    /// first row of every subject is censored (ordinary or competing-risks
-    /// data).
+    #[doc = " The state the subject is in during the interval; absent when the"]
+    #[doc = " first row of every subject is censored (ordinary or competing-risks"]
+    #[doc = " data)."]
     #[pyo3(get)]
     pub istate: Option<Vec<i32>>,
-    /// For each requested covariate (outer) and output row (inner), the
-    /// input row whose value applies: the interval's own start row, or an
-    /// earlier row of the subject when that value is missing.
+    #[doc = " For each requested covariate (outer) and output row (inner), the"]
+    #[doc = " input row whose value applies: the interval's own start row, or an"]
+    #[doc = " earlier row of the subject when that value is missing."]
     #[pyo3(get)]
     pub carry_from: Vec<Vec<usize>>,
-    /// Whether any subject has more than one interval, i.e. the response
-    /// is of counting-process rather than right-censored type.
+    #[doc = " Whether any subject has more than one interval, i.e. the response"]
+    #[doc = " is of counting-process rather than right-censored type."]
     #[pyo3(get)]
     pub counting: bool,
 }
 
-/// Convert timeline rows to counting-process rows.
-///
-/// `status[i]` is the recorded outcome at `time[i]` (`None` for missing),
-/// `has_states` says whether the outcomes are factor levels (in which
-/// case a missing status means censored), and `missing[c][i]` flags the
-/// missing entries of covariate `c` for last-value-carried-forward.
 pub fn surv2counting<I: SubjectId>(
     id: &[I],
     time: &[f64],
@@ -103,7 +81,6 @@ pub fn surv2counting<I: SubjectId>(
         ));
     }
 
-    // isort <- order(id, y[, 1]); the data is not reordered on output.
     let keys: Vec<I::Key> = id.iter().map(SubjectId::key).collect();
     let mut isort: Vec<usize> = (0..n).collect();
     isort.sort_by(|&a, &b| {
@@ -122,7 +99,6 @@ pub fn surv2counting<I: SubjectId>(
         .map(|p| p + 1 == n || !same_subject(p, p + 1))
         .collect();
 
-    // Sorted status with the substitutions R applies before pairing rows.
     let mut y_status: Vec<Option<i32>> = isort.iter().map(|&i| status[i]).collect();
     if has_states {
         for s in y_status.iter_mut() {
@@ -147,8 +123,6 @@ pub fn surv2counting<I: SubjectId>(
         }
     }
 
-    // The positions (in sorted order) that start an interval, and integer
-    // ids for the carry-forward kernel.
     let starts: Vec<usize> = (0..n).filter(|&p| !last[p]).collect();
     let mut idi = Vec::with_capacity(starts.len());
     let mut code = 0;
@@ -159,7 +133,6 @@ pub fn surv2counting<I: SubjectId>(
         idi.push(code);
     }
 
-    // Initial state: censored (or missing) first rows mean no initial state.
     let censored: Vec<bool> = y_status.iter().map(|s| s.is_none_or(|s| s == 0)).collect();
     let first_censored = (0..n).filter(|&p| first[p]).map(|p| censored[p]);
     let istate = if first_censored.clone().all(|c| c) {
@@ -184,7 +157,6 @@ pub fn surv2counting<I: SubjectId>(
         Some(istate)
     };
 
-    // status <- y2[!first, 2], censoring repeats of the current state.
     let mut out_status: Vec<Option<i32>> =
         (0..n).filter(|&p| !first[p]).map(|p| y_status[p]).collect();
     if repeated == Repeated::No
@@ -203,7 +175,6 @@ pub fn surv2counting<I: SubjectId>(
         .collect();
     let counting = idi.windows(2).any(|w| w[0] == w[1]);
 
-    // Last value carried forward for each covariate, in sorted order.
     let carry_from: Vec<Vec<usize>> = missing
         .iter()
         .map(|column| {
@@ -218,7 +189,6 @@ pub fn surv2counting<I: SubjectId>(
         })
         .collect::<SurvivalResult<_>>()?;
 
-    // Put the rows back into the original order: order(isort[!last]).
     let rows: Vec<usize> = starts.iter().map(|&p| isort[p]).collect();
     let mut order: Vec<usize> = (0..rows.len()).collect();
     order.sort_by_key(|&k| rows[k]);
@@ -234,8 +204,8 @@ pub fn surv2counting<I: SubjectId>(
     })
 }
 
-/// Python entry point of [`surv2counting`]; `repeated` is `"false"`,
-/// `"true"` or `"first"`.
+#[doc = " Python entry point of [`surv2counting`]; `repeated` is `\"false\"`,"]
+#[doc = " `\"true\"` or `\"first\"`."]
 #[pyfunction(name = "surv2counting")]
 #[pyo3(signature = (id, time, status, has_states=false, repeated="false", missing=Vec::new()))]
 pub fn surv2counting_py(
@@ -267,7 +237,6 @@ mod tests {
 
     #[test]
     fn subjects_become_intervals_in_original_row_order() {
-        // Rows are deliberately shuffled across subjects.
         let id = [1i64, 2, 1, 1, 2];
         let time = [0.0, 0.0, 5.0, 2.0, 3.0];
         let status = [Some(1), Some(1), Some(3), Some(2), None];
@@ -289,7 +258,6 @@ mod tests {
         assert_eq!(stutter.status, vec![Some(0), Some(2)]);
         let repeated = surv2counting(&id, &time, &status, true, Repeated::Yes, &[]).unwrap();
         assert_eq!(repeated.status, vec![Some(1), Some(2)]);
-        // "first": the second 1 is dropped before the current state is set.
         let first = surv2counting(
             &[1i64, 1, 1, 1],
             &[0.0, 1.0, 2.0, 3.0],

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent ordinary survfitcox margin/subscript references from stock R.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

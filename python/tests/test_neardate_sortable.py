@@ -100,8 +100,6 @@ def test_calendar_date_containers_agree_with_stock_date_references(best, kind):
 
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns", "ps", "fs", "as"])
 def test_numpy_timestamp_matching_retains_exact_resolution(unit):
-    # A float conversion can merge adjacent large integer timestamps. Ranking
-    # the union preserves them before the native matcher reads double ranks.
     query = np.array([2**53 + 1, 2**53 + 3], dtype=np.int64).view(f"datetime64[{unit}]")
     reference = np.array([2**53, 2**53 + 2], dtype=np.int64).view(f"datetime64[{unit}]")
     assert r.neardate([1, 1], [1, 1], query, reference, nomatch=-1) == [1, -1]

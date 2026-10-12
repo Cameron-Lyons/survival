@@ -26,8 +26,6 @@ fn assert_same_results(actual: CoxFitResults, expected: CoxFitResults) {
 
 #[test]
 fn borrowed_strided_inputs_match_owned_fits_for_every_fitter() {
-    // Every input has padding, and the covariate view strides both rows and
-    // columns. This checks gathering without assuming contiguous transport.
     let pad = |values: &[f64]| Array1::from_iter(values.iter().flat_map(|&v| [v, f64::NAN]));
     let pad_codes = |values: &[i32]| Array1::from_iter(values.iter().flat_map(|&v| [v, -99]));
     let time = pad(&[4.0, 2.0, 6.0, 3.0, 2.0, 5.0, 1.0, 4.0]);
@@ -62,8 +60,6 @@ fn borrowed_strided_inputs_match_owned_fits_for_every_fitter() {
                 let mut borrowed = CoxFitBuilder::new(time, status, covar)
                     .strata(strata)
                     .offset(offset);
-                // The builder retains each borrowed view instead of making
-                // an intermediate copy, before build owns its sorted data.
                 assert!(borrowed.time.is_view());
                 assert!(borrowed.status.is_view());
                 assert!(borrowed.covar.is_view());
@@ -99,7 +95,6 @@ fn borrowed_strided_inputs_match_owned_fits_for_every_fitter() {
             }
         }
     }
-    // Centre/scale applies only to the gathered matrix, preserving inputs.
     assert_eq!(covar[(0, 0)], 0.6);
     assert_eq!(covar[(7, 1)], 0.8);
 }

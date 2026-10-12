@@ -84,7 +84,7 @@ def test_full_precision_frames_and_independent_ownership(objects):
     frame["age"][0] = "changed"
     assert report.rates == source.rates
     assert report.dimnames == source.dimnames
-    restored = pickle.loads(pickle.dumps(report))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(report))
     assert restored == report
     report.rates[0] = 1000
     report.dimnames[0][0] = "different"
@@ -172,6 +172,5 @@ def test_rate_rendering_only_formats_displayed_slices(objects, monkeypatch):
     monkeypatch.setattr(_array_print, "_r_format_numbers", counted)
     report = r.print_ratetable(objects["survexp.us"], max_print=6)
     assert report.displayed == 6
-    # R uses every row of each visible column to choose precision, but no hidden slices.
     assert lengths == [report.dims[0]] * report.dims[1]
     assert len(report.rates) > sum(lengths)

@@ -88,20 +88,16 @@ def test_surv_status_coding_is_the_same_for_every_input_kind(status):
 
 
 def test_surv_status_warning_and_recoding_follow_r():
-    # Surv(1:5, c(1, 2, 2, 1, 3)): the maximum is not 2, so 2 and 3 are invalid codes
     with pytest.warns(UserWarning, match="Invalid status value, converted to NA"):
         surv = r.Surv(np.arange(1, 6), np.array([1, 2, 2, 1, 3]))
     assert surv.event == (1, None, None, 1, None)
-    # Surv(1:4, c(1, 2, 2, NA)): the 1/2 coding with a missing status
     assert r.Surv(np.arange(1, 5), np.array([1, 2, 2, NAN])).event == (0, 1, 1, None)
-    # integer and bool columns
     assert r.Surv(np.array([1, 2]), np.array([2, 1], dtype=np.int32)).event == (1, 0)
     assert r.Surv(np.array([1, 2]), np.array([True, False])).event == (1, 0)
     assert r.Surv(np.array([1, 2], dtype=np.uint8), [1, 0]).time == (1.0, 2.0)
 
 
 def test_surv_time_rejects_logical_numpy_columns():
-    # Surv(c(TRUE, FALSE), c(1, 0)): "Time variable is not numeric"
     with pytest.raises(ValueError, match="Time variable is not numeric"):
         r.Surv(np.array([True, False]), [1, 0])
     with pytest.raises(ValueError, match="Stop time is not numeric"):
@@ -126,21 +122,18 @@ def test_masked_entries_are_missing():
     assert r.is_na_surv(surv) == [False, True, True]
     assert r_coerce._missing_row_indices([("time", time), ("status", status)], 3) == {1, 2}
     assert r_coerce._factor(status) == ([0, 0, None], ["1"])
-    # survfit(Surv(time, status) ~ 1) with time[2] and status[3] NA: one row is left
     fit = r.survfit("Surv(time, status) ~ 1", {"time": time, "status": status})
     assert list(fit.n) == [1]
     assert list(fit.time) == [1.0]
 
 
 def test_is_na_surv_marks_a_missing_entry_in_any_column():
-    # is.na(Surv(c(1, NA, 3, 4), c(1, 1, NA, 0)))
     assert r.is_na_surv(r.Surv(np.array([1, NAN, 3, 4]), np.array([1, 1, NAN, 0]))) == [
         False,
         True,
         True,
         False,
     ]
-    # is.na(Surv(c(0, 1, NA), c(1, 2, 3), c(1, 0, 1)))
     counting = r.Surv([0.0, 1.0, None], [1.0, 2.0, 3.0], [1, 0, 1])
     assert r.is_na_surv(counting) == [False, False, True]
     assert r.is_na_surv(r.Surv2([1.0, NAN], [1, 0])) == [False, True]
@@ -163,7 +156,6 @@ def test_factor_codes_match_the_generic_path(values):
 
 
 def test_factor_levels_put_infinities_in_r_order():
-    # levels(factor(c(1, Inf, -Inf, 0))); levels(strata(x)) with x <- c(2, -Inf, Inf, 0)
     assert r_coerce._factor([1.0, math.inf, -math.inf, 0.0])[1] == ["-Inf", "0", "1", "Inf"]
     assert r_coerce._factor(np.array([1.0, np.inf, -np.inf, 0.0]))[1] == ["-Inf", "0", "1", "Inf"]
     expected = ["x=-Inf", "x=0", "x=2", "x=Inf"]
@@ -212,9 +204,6 @@ def test_formula_fits_are_the_same_for_list_numpy_and_pandas_data():
         assert test.chisq == tests[0].chisq
 
 
-# --- strata() ----------------------------------------------------------------------
-
-
 def _padding_data():
     pd = pytest.importorskip("pandas")
     return pd.DataFrame(
@@ -228,19 +217,15 @@ def _padding_data():
     )
 
 
-# levels(with(d, strata(x, f))) with f <- factor(., levels = c("a", "bb", "longlevel")):
-# format() pads to the unused level's width
 R_PADDED = ["x=1, f=a        ", "x=1, f=bb       ", "x=2, f=a        ", "x=2, f=bb       "]
 
 
 def test_multi_variable_strata_pad_to_unused_factor_levels_everywhere():
     d = _padding_data()
     assert r.strata(d["x"], d["f"], labels=["x", "f"]).levels == R_PADDED
-    # names(survfit(coxph(Surv(time, status) ~ z + strata(x, f), d))$strata)
     fit = r.coxph("Surv(time, status) ~ z + strata(x, f)", d)
     assert list(fit.strata_levels) == R_PADDED
     assert list(r.survfit(fit).strata) == R_PADDED
-    # names(survreg(Surv(time, status) ~ z + strata(x, f), d)$scale)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert list(r.survreg("Surv(time, status) ~ z + strata(x, f)", d).strata_levels) == (
@@ -251,7 +236,6 @@ def test_multi_variable_strata_pad_to_unused_factor_levels_everywhere():
 def test_survreg_strata_keep_the_declared_level_order():
     pd = pytest.importorskip("pandas")
     d = _padding_data().assign(f=pd.Categorical(["z", "a", "z"] * 4, categories=["z", "a"]))
-    # sr <- survreg(Surv(time, status) ~ z + strata(f), d); sr$scale
     fit = r.survreg("Surv(time, status) ~ z + strata(f)", d)
     assert fit.strata_levels == ("z", "a")
     assert fit.scale == pytest.approx([0.4701498230, 0.9827083501], rel=1e-8)
@@ -273,7 +257,6 @@ def _veteran():
     )
 
 
-# names(survfit(coxph(Surv(time, status) ~ karno + strata(trt) + strata(celltype), veteran))$strata)
 R_VETERAN = [
     f"trt={trt}, {cell}" for trt in (1, 2) for cell in ("squamous", "smallcell", "adeno", "large")
 ]
@@ -289,8 +272,6 @@ def test_several_strata_terms_combine_with_short_labels():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert list(r.survreg(formula, veteran).strata_levels) == R_VETERAN
-    # predict(fit, newdata = veteran[1:5, ], type = "expected") codes the newdata strata the
-    # same way, so a subset with fewer levels still finds its strata
     expected = r.predict(fit, newdata=veteran.iloc[:5], type="expected")
     assert expected == pytest.approx(
         [0.339696941328158, 2.273391499177269, 1.321029280105599]
@@ -300,7 +281,6 @@ def test_several_strata_terms_combine_with_short_labels():
 
 
 def test_survreg_strata_terms_of_numeric_columns_are_not_padded():
-    # names(survreg(Surv(time, status) ~ age + strata(sex) + strata(inst), lung)$scale)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fit = r.survreg(
@@ -348,13 +328,10 @@ def test_strata_labels_read_the_levels_once(monkeypatch):
         "gg": ids,
     }
     r.survdiff("Surv(time, status) ~ grp + strata(gg)", data)
-    assert len(reads) == 2  # the strata() term and the group factor
+    assert len(reads) == 2
 
 
 def test_grouping_by_a_strata_term_keeps_its_level_order():
-    # l <- na.omit(lung[, c("time", "status", "age")]); l$g <- ifelse(l$age > 62, 10, 2)
-    # e <- survexp(~ strata(g), data = l, ratetable = coxph(Surv(time, status) ~ age, l))
-    # names(e$strata); e$surv[5, ]
     lung = survival.datasets.load_lung()
     data = {name: np.array(lung[name], dtype=float) for name in ("time", "status", "age")}
     data["g"] = np.where(data["age"] > 62, 10.0, 2.0)
@@ -365,8 +342,6 @@ def test_grouping_by_a_strata_term_keeps_its_level_order():
 
 
 def test_missing_strata_are_refused_when_na_action_keeps_them():
-    # coxph(Surv(time, status) ~ z + strata(g), d, na.action = na.pass) with g[3] NA fails
-    # in coxph.fit ("NAs in foreign function call")
     d = {
         "time": [5, 8, 3, 9, 12, 4, 7, 10],
         "status": [1, 0, 1, 1, 0, 1, 1, 0],
@@ -379,9 +354,6 @@ def test_missing_strata_are_refused_when_na_action_keeps_them():
 
 
 def test_concordance_newdata_codes_several_strata_terms_as_the_fit():
-    # fit <- coxph(Surv(time, status) ~ karno + strata(trt) + strata(celltype), veteran)
-    # concordance(fit, newdata = veteran[veteran$celltype %in% c("squamous", "large"), ])
-    # (the subset lacks two celltype levels, so its strata are found only when coded as the fit)
     veteran = _veteran()
     fit = r.coxph("Surv(time, status) ~ karno + strata(trt) + strata(celltype)", veteran)
     subset = veteran[veteran["celltype"].isin(["squamous", "large"])]
@@ -399,12 +371,8 @@ def _lung_sex_reversed():
 
 
 def test_brier_newdata_codes_strata_as_the_fit():
-    # d <- lung[!is.na(lung$ph.ecog), c("time", "status", "age", "sex")]; d <- d[nrow(d):1, ]
-    # fit <- coxph(Surv(time, status) ~ age + strata(sex), d); brier(fit, times = c(200, 400))
-    # (R's own brier() fails in summary.survfit for a stratified fit, so the reference is its
-    # body evaluated with the per-row curves of survfit(fit, newdata = d) read by hand)
     d = _lung_sex_reversed()
-    assert d["sex"].iloc[0] == 2  # the first stratum seen is not the first level
+    assert d["sex"].iloc[0] == 2
     fit = r.coxph("Surv(time, status) ~ age + strata(sex)", d)
     expected = [0.207839440728107, 0.232565480891645]
     assert r.brier(fit, times=[200, 400]).brier == pytest.approx(expected, rel=1e-10)
@@ -417,9 +385,6 @@ def test_brier_newdata_codes_strata_as_the_fit():
 
 
 def test_finegray_splits_the_strata_in_their_level_order():
-    # d <- data.frame(time = 1:8, ev = factor(c(1, 2, 0, 1, 2, 1, 0, 1), 0:2,
-    #   c("censor", "a", "b")), g = factor(rep(c("a", "z"), 4), levels = c("z", "a")), x = 1:8)
-    # finegray(Surv(time, ev) ~ x + strata(g), data = d)
     pd = pytest.importorskip("pandas")
     d = pd.DataFrame(
         {

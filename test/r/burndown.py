@@ -34,7 +34,6 @@ TARGETS = {
 DATASET_MISMATCH = re.compile(
     r"column '.*' not found in data|no Python loader for dataset|no bundled CSV"
 )
-# API errors that really mean "this feature does not exist in the Python API".
 MISSING_FEATURE = re.compile(
     r"unsupported formula term|only supported for|not supported|unexpected keyword argument|"
     r"requires a survfit result with a stored model frame|formula response must be Surv|"

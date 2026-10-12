@@ -46,7 +46,6 @@ def test_prepared_survival_predictions_and_summaries(case, fits):
     for name, expected in case["corrected_summary"].items():
         np.testing.assert_allclose(getattr(summary, name), expected, rtol=2e-11, atol=2e-12)
     assert summary.std_chaz == summary.std_err
-    # Keep the original R result as evidence of both documented metadata defects.
     assert np.asarray(case["raw_summary"]["surv"]).size == len(case["eta"]) * (
         len(case["time"]) + 1
     )
@@ -129,9 +128,9 @@ def test_setup_does_not_keep_fit_and_supports_pickle():
     del fit
     gc.collect()
     assert weak() is None
-    restored = pickle.loads(pickle.dumps(setup))  # noqa: S301 - own round-trip data
+    restored = pickle.loads(pickle.dumps(setup))
     np.testing.assert_array_equal(restored.predict([-0.3, 0.5]), setup.predict([-0.3, 0.5]))
-    restored_risk = pickle.loads(pickle.dumps(risk))  # noqa: S301 - own round-trip data
+    restored_risk = pickle.loads(pickle.dumps(risk))
     np.testing.assert_array_equal(restored_risk([-0.3, 0.5]), risk([-0.3, 0.5]))
     with pytest.raises(KeyError):
         setup["other"]

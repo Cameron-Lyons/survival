@@ -1,4 +1,3 @@
-# R callback signatures and history attributes around the shared Rust searches.
 .penalty_control <- function(method, opt, iter, old = NULL, ..., gamma = FALSE) {
   eps <- opt$eps
   if (!length(eps)) eps <- if (method == "df") 0.1 else 1e-5

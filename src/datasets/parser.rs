@@ -1,13 +1,5 @@
-//! Minimal CSV tokenizer for the bundled dataset files.
-//!
-//! The files are written by R's `write.table(sep = ",", na = "NA")` with
-//! string columns quoted, so the only syntax needed is: comma separators,
-//! optional double-quoted fields with `""` as an escaped quote, and an
-//! unquoted `NA` token for missing values of any type.
-
 use std::borrow::Cow;
 
-/// One CSV field, borrowed from the input line when no unescaping was needed.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Field<'a> {
     pub(super) text: Cow<'a, str>,
@@ -15,8 +7,6 @@ pub(super) struct Field<'a> {
 }
 
 impl Field<'_> {
-    /// R's `na = "NA"` writes missing values unquoted; a quoted `"NA"` is the
-    /// literal string.
     pub(super) fn is_na(&self) -> bool {
         !self.quoted && (self.text.is_empty() || self.text == "NA")
     }
@@ -61,8 +51,6 @@ impl Field<'_> {
     }
 }
 
-/// Split one line into fields, appending to `out` (cleared first so the
-/// caller can reuse the allocation across lines).
 pub(super) fn split_line<'a>(line: &'a str, out: &mut Vec<Field<'a>>) {
     out.clear();
     let bytes = line.as_bytes();
@@ -73,8 +61,6 @@ pub(super) fn split_line<'a>(line: &'a str, out: &mut Vec<Field<'a>>) {
             out.push(field);
             pos = match bytes.get(next) {
                 Some(&b',') => next + 1,
-                // Anything else after the closing quote is malformed; skip to
-                // the next comma rather than silently merging fields.
                 _ => match line[next..].find(',') {
                     Some(offset) => next + offset + 1,
                     None => break,
@@ -94,8 +80,6 @@ pub(super) fn split_line<'a>(line: &'a str, out: &mut Vec<Field<'a>>) {
     }
 }
 
-/// Parse a quoted field whose opening quote sits just before `start`.
-/// Returns the field and the index just past the closing quote.
 fn quoted_field(line: &str, start: usize) -> (Field<'_>, usize) {
     let bytes = line.as_bytes();
     let mut owned: Option<String> = None;
@@ -121,7 +105,6 @@ fn quoted_field(line: &str, start: usize) -> (Field<'_>, usize) {
         }
         pos += 1;
     }
-    // Unterminated quote: take the rest of the line.
     let text = match owned {
         Some(mut s) => {
             s.push_str(&line[seg_start..]);
@@ -132,7 +115,6 @@ fn quoted_field(line: &str, start: usize) -> (Field<'_>, usize) {
     (Field { text, quoted: true }, line.len())
 }
 
-/// Parse the header line into column names (quotes stripped).
 pub(super) fn parse_header(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     split_line(line, &mut fields);

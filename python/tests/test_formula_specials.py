@@ -47,14 +47,12 @@ def test_formula_specials_match_r(case):
     assert_close(predicted.se_fit, case["prediction_se"])
     terms = r.predict(fit, frame("newdata"), type="terms")
     if isinstance(case["terms"], dict):
-        # R indexes nonexistent term columns in intercept/offset-only models.
         assert not any(matrix["assign"])
         assert terms == [[] for _ in REFERENCE["newdata"]["age"]]
     else:
         assert_close(terms, case["terms"])
     if case["kind"] == "survreg":
         assert_close(fit.scale, case["scale"])
-    # The Python model frame keeps source columns rather than R call labels.
     for column in ("unused", "transformed"):
         expected = (
             any(column in name for name in case["retained_columns"])

@@ -90,9 +90,6 @@ def print_survfit(
         and option not in {"none", "common", "individual"}
         and float(option) < min(x.time)
     ):
-        # A conditional Cox curve allows a cutoff at start.time before its
-        # first observation. Add the zero-time row the native KM validator
-        # needs; counts and the mean table otherwise remain unchanged.
         engines = [_core.survfit0(engine) for engine in engines]
     means = [_core.survmean(engine, scale, option) for engine in engines]
     labels = _cox_curve_labels(x) if isinstance(x, CoxSurvfitResult) else x.strata_names
@@ -102,8 +99,6 @@ def print_survfit(
     columns = list(table.colnames)
     selected = list(range(len(columns)))
     values = table.values
-    # R drops redundant count columns, but retains the record count when n.id
-    # is present: subjects may contribute multiple observation intervals.
     if columns[1] == "n.id":
         selected.remove(2)
         columns[1] = "n"
@@ -149,8 +144,6 @@ def print_survfitms(
     if not isinstance(x, _MULTISTATE):
         raise TypeError("print_survfitms requires fitted multistate curves")
     scale, digits, width = print_options(scale, digits, width, 7)
-    # R validates the cutoff after adding the origin row with survfit0. The
-    # native table kernel already inserts it; avoid copying a whole fit here.
     option = _rmean_option(rmean, x, include_origin=True)
     if isinstance(x, CoxSurvfitMultiStateResult):
         engine = _coxms_engine(x, "print")

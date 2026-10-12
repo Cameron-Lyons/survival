@@ -62,11 +62,6 @@ def strata_fit(ovarian):
     return r.coxph("Surv(futime, fustat) ~ age + strata(rx)", ovarian)
 
 
-# ---------------------------------------------------------------------------
-# coxph
-# ---------------------------------------------------------------------------
-
-
 def test_coxph_matches_r_components(fit):
     assert isinstance(fit, r._coxph.CoxphModel)
     assert fit.coef_names == ("age", "rx")
@@ -113,7 +108,7 @@ def test_coxph_ties_init_and_control(ovarian):
     assert exact.loglik == approx([-34.9849403711626, -27.0418988630084])
     init = r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, init=[0.1, -0.5], iter_max=1)
     assert init.coefficients == approx([0.142430939255352, -0.830893914178188])
-    assert init.wald_test == approx(1.33688420305505, rel=1e-6)  # coxph.wtest(var, coef - init)
+    assert init.wald_test == approx(1.33688420305505, rel=1e-6)
     control = r.coxph(
         "Surv(futime, fustat) ~ age + rx",
         ovarian,
@@ -147,7 +142,7 @@ def test_coxph_robust_weights_offset_subset(ovarian):
     assert not weighted.robust
     assert weighted.weights[:3] == [1.0, 2.0, 1.0]
     fractional = r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, weights=[1, 1.5] * 13)
-    assert fractional.robust  # non-integer weights default to the robust variance, as in R
+    assert fractional.robust
     assert fractional.var == approx(
         [[0.00235439823163678, 0.017170029798964], [0.017170029798964, 0.384191487657066]],
         rel=1e-6,
@@ -226,10 +221,8 @@ def test_coxph_formula_terms(ovarian):
     assert list(r.model_frame(with_model)) == ["time", "status", "futime", "fustat", "age", "rx"]
     with pytest.raises(TypeError, match="a formula argument is required"):
         r.coxph()
-    # istate is only a multi-state matter; an ordinary fit keeps it in the model frame
     with_istate = r.coxph("Surv(futime, fustat) ~ age", ovarian, istate="rx", model=True)
     assert "(istate)" in with_istate.model
-    # a factor status is a multi-state response, which needs an id
     mstate = {
         "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         "status": r._coerce._RFactorVector(
@@ -257,7 +250,7 @@ def test_coxph_time_transform(ovarian):
     assert custom.coef_names == ("age", "tt(age)")
     assert custom.coefficients == approx([0.672048069354324, -0.0912792487479385])
     assert (custom.n, custom.nevent) == (26, 12)
-    default = r.coxph("Surv(futime, fustat) ~ age + tt(age)", ovarian)  # O'Brien logit rank
+    default = r.coxph("Surv(futime, fustat) ~ age + tt(age)", ovarian)
     assert default.coefficients == approx([0.182949263237415, -0.0112600994753437])
     with pytest.raises(ValueError, match="function not defined for models with tt"):
         r.predict(custom)
@@ -302,11 +295,6 @@ def test_clogit_matches_r():
         r.basehaz(exact)
     with pytest.raises(ValueError, match="score residuals are not available for the exact"):
         r.residuals(exact, type="score")
-
-
-# ---------------------------------------------------------------------------
-# summary / wtest
-# ---------------------------------------------------------------------------
 
 
 def test_summary_coxph_matches_r(fit):
@@ -360,7 +348,7 @@ def test_summary_coxph_matches_r(fit):
     scaled = r.model_summary(fit, scale=2.0)
     assert scaled["coefficients"][0]["coef"] == approx(2 * 0.147326595469114)
     null_fit = r.coxph("Surv(futime, fustat) ~ 1", datasets.load_ovarian())
-    assert r.model_summary(null_fit) is null_fit  # summary.coxph returns a null model as is
+    assert r.model_summary(null_fit) is null_fit
 
 
 def test_coxph_wtest_matches_r():
@@ -385,11 +373,6 @@ def test_coxph_wtest_matches_r():
         r.coxph_wtest([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [1.0, 2.0])
     with pytest.raises(ValueError, match="infinite argument"):
         r.coxph_wtest([[1.0, 0.0], [0.0, math.inf]], [1.0, 2.0])
-
-
-# ---------------------------------------------------------------------------
-# predict / residuals
-# ---------------------------------------------------------------------------
 
 
 def test_predict_types_match_r(fit):
@@ -501,7 +484,7 @@ def test_residual_types_match_r(fit):
     assert r.residuals(fit, weighted=True)[:2] == approx(r.residuals(fit)[:2])
     assert r.residuals(fit, collapse=[1, 2] * 13) == approx([0.120085288635876, -0.120085288635875])
     single = r.coxph("Surv(futime, fustat) ~ age", datasets.load_ovarian())
-    assert isinstance(r.residuals(single, type="score")[0], float)  # R drops to a vector
+    assert isinstance(r.residuals(single, type="score")[0], float)
     with pytest.raises(ValueError, match="type must be one of"):
         r.residuals(fit, type="response")
     with pytest.raises(ValueError, match="Wrong length for 'collapse'"):
@@ -523,11 +506,6 @@ def test_residuals_collapse_true_uses_the_cluster(cgd):
     assert r.predict(fit, newdata, type="expected") == approx(
         [0.172511140290613, 0.17889894508017, 1.1164435791036]
     )
-
-
-# ---------------------------------------------------------------------------
-# survfit / basehaz
-# ---------------------------------------------------------------------------
 
 
 def test_survfit_coxph_matches_r(fit):
@@ -581,7 +559,7 @@ def test_survfit_strata_and_newdata_blocks(strata_fit):
     assert curve.strata == {"rx=1": 13, "rx=2": 13}
     assert curve.n == [13, 13]
     found = r.survfit(strata_fit, {"age": [50, 60], "rx": [1, 2]})
-    assert found.strata == {"1": 13, "2": 13}  # one block per newdata row, named by row
+    assert found.strata == {"1": 13, "2": 13}
     assert found.surv[:3] == approx([0.990398488920438, 0.978417955484759, 0.960217536226302])
     every = r.survfit(strata_fit, {"age": [50, 60]})
     assert every.strata == {"rx=1": 13, "rx=2": 13}
@@ -636,11 +614,6 @@ def test_basehaz_matches_r(fit, strata_fit):
     assert list(r.as_data_frame(stratified)) == ["hazard", "time", "strata"]
     with pytest.raises(TypeError, match="must be a coxph object"):
         r.basehaz("Surv(futime, fustat) ~ age")
-
-
-# ---------------------------------------------------------------------------
-# cox.zph / coxph.detail / anova
-# ---------------------------------------------------------------------------
 
 
 def test_cox_zph_matches_r(fit):

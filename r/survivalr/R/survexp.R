@@ -1,6 +1,3 @@
-# The Python survexp kernel on matched rate-table positions: the individual
-# methods give one value per subject, the cohort methods the fit at each of `times`
-# (which already holds every output time).
 .survexp_ratetable_fit <- function(group, expected_data, followup, times,
                                    method, ratetable) {
   times <- sort(unique(times))
@@ -26,8 +23,6 @@
   }
 }
 
-# R handles terms, contrasts and factor levels; baseline hazards and cohort
-# reduction use the same Rust kernels as Python's fitted-model methods.
 .survexp_cox_fit <- function(fit, data, groups, weights, response, times, method) {
   individual <- startsWith(method, "individual")
   if (inherits(fit, "survival_py_coxph")) {
@@ -90,7 +85,6 @@
       if (is.null(response)) NULL else array(as.numeric(response)),
       if (is.null(times)) NULL else array(as.numeric(times)), method)$to_arrays()
   }
-  # The reference exposes counts only for Ederer Cox cohorts.
   list(time = as.numeric(raw$time), surv = raw$surv,
     n = if (method == "ederer") raw$n_risk else NULL)
 }
@@ -140,8 +134,6 @@
   }
   if (is.null(rate_call)) rate_call <- quote(list())
   new_variables <- all.vars(rate_call)
-  # Individual Cox predictions read the fitted response, which can differ from
-  # this formula's follow-up. Include its variables before subset/NA processing.
   individual <- (!method_missing && startsWith(method, "individual")) || (method_missing && !isTRUE(cohort))
   if (!israte && individual) new_variables <- union(new_variables, all.vars(stats::formula(cox_terms)[[2L]]))
   expanded <- .formula_with_native_surv_response(stats::formula(Terms), evaluation_env)
@@ -380,7 +372,6 @@ survexp <- function(formula, data, weights, subset, na.action, rmap, times,
     )
   }
   if (!is.null(sex) && is.numeric(sex) && all(sex %in% c(0, 1))) {
-    # this interface's 0/1 codes are survexp.us's male/female
     sex <- c("male", "female")[sex + 1L]
   }
   result <- .call_r_api(

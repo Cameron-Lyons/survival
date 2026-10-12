@@ -106,9 +106,6 @@ test_that("transformed penalties keep their controller, summary, and saved state
                    function(x,t,...) survival::ridge(cbind(x*log(t),x*sqrt(t)),theta=2))) {
     actual <- coxph(Surv(futime,fustat)~age+tt(age),d,tt=fun,x=TRUE)
     expected <- survival::coxph(Surv(futime,fustat)~age+tt(age),d,tt=fun,x=TRUE)
-    # Stock coxpenal.fit's cleanup residual kernel gives nonzero sums within
-    # these one-event strata. Recompute with the ordinary R Cox kernel at the
-    # same fitted coefficients, replacing only aliased coefficients by zero.
     expanded <- data.frame(t=expected$y[,1],event=expected$y[,2],group=expected$strata)
     expanded$basis <- expected$x
     residual_reference <- survival::coxph(survival::Surv(t,event)~basis+strata(group),

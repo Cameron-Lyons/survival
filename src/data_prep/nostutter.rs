@@ -1,21 +1,9 @@
-//! R's `nostutter` (`R/xtras.R`): in timeline data, turn a repeat of the
-//! subject's current state into "censored", so that a visit at which
-//! nothing changed is not counted as a new transition.
-//!
-//! The result is the set of rows whose state should be replaced by the
-//! censoring code; the caller applies it to values of any type.  R's
-//! `single = TRUE` variant (each state may be entered once per subject)
-//! is provided although R's own implementation of it does not run.
-
 use super::id_value::{IdValue, SubjectId};
 use crate::error::SurvivalResult;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use std::collections::HashSet;
 
-/// Rows (as a mask) whose state is a stutter of the current state.
-/// `state[i]` is `None` for a missing value, which neither replaces nor
-/// changes the current state.
 pub fn nostutter<I: SubjectId, S: SubjectId>(
     id: &[I],
     state: &[Option<S>],
@@ -53,7 +41,7 @@ pub fn nostutter<I: SubjectId, S: SubjectId>(
     Ok(replace)
 }
 
-/// Python entry point of [`nostutter`].
+#[doc = " Python entry point of [`nostutter`]."]
 #[pyfunction(name = "nostutter")]
 #[pyo3(signature = (id, state, censor, single=false))]
 pub fn nostutter_py(

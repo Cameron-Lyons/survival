@@ -1,11 +1,3 @@
-//! The catalog of R `survival` datasets bundled with this crate.
-//!
-//! Each entry mirrors the data frame exported from R (`data(package =
-//! "survival")`, survival 3.8-11): the R name, the CSV written from that data
-//! frame, and the R storage mode of every column in R's column order. One
-//! `#[pyfunction]` loader per dataset is generated from the same table so the
-//! Python surface stays `load_<name>()` while the data lives in one place.
-
 use super::common::{ColType, Dataset};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -32,7 +24,6 @@ macro_rules! datasets {
             }
         )*
 
-        /// Every bundled dataset, in the order of R's `data(package = "survival")`.
         #[cfg(test)]
         pub(crate) static DATASETS: &[&Dataset] = &[ $( &$const ),* ];
     };
@@ -554,13 +545,13 @@ datasets! {
     ];
 }
 
-/// R's `cancer` is the same data frame as `lung` (`identical(cancer, lung)`).
+#[doc = " R's `cancer` is the same data frame as `lung` (`identical(cancer, lung)`)."]
 #[pyfunction]
 pub(crate) fn load_cancer(py: Python<'_>) -> PyResult<Py<PyDict>> {
     LUNG.to_pydict(py)
 }
 
-/// R's `leukemia` is the same data frame as `aml` (`identical(leukemia, aml)`).
+#[doc = " R's `leukemia` is the same data frame as `aml` (`identical(leukemia, aml)`)."]
 #[pyfunction]
 pub(crate) fn load_leukemia(py: Python<'_>) -> PyResult<Py<PyDict>> {
     AML.to_pydict(py)
@@ -571,8 +562,6 @@ mod tests {
     use super::super::common::{Column, DataFrame};
     use super::*;
 
-    /// Per-dataset shape, column kinds, NA counts, checksums and bit-pattern
-    /// hashes computed in R.
     const R_REFERENCE: &str = include_str!("r_reference.tsv");
 
     fn dataset(name: &str) -> &'static Dataset {
@@ -600,10 +589,6 @@ mod tests {
         }
     }
 
-    /// Order-dependent hash of the IEEE-754 bit patterns of the non-NA values
-    /// (`(h * 31 + low32) mod 2^32`, then the same with the high word), as
-    /// computed by the R script that wrote `r_reference.tsv`. Unlike the
-    /// tolerant checksum it catches a value that is off by a single ulp.
     fn bits_hash(values: &[Option<f64>]) -> u64 {
         values.iter().flatten().fold(0, |h, v| {
             let bits = v.to_bits();
@@ -665,14 +650,12 @@ mod tests {
 
     #[test]
     fn bits_hash_matches_the_r_definition() {
-        // aml$time, hashed in R with the same recurrence.
         let time = frame("aml").column("time").unwrap().clone();
         let Column::Float(values) = time else {
             unreachable!()
         };
         assert_eq!(bits_hash(&values), 327_819_264);
         assert_eq!(bits_hash(&[]), 0);
-        // 1.0 is 0x3ff0_0000_0000_0000: a zero low word, then the high word.
         assert_eq!(bits_hash(&[Some(1.0)]), 0x3ff0_0000);
         assert_ne!(
             bits_hash(&[Some(1.0)]),

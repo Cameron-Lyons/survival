@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_surv_quantile_reference.R [output.json]
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly=TRUE)
@@ -22,8 +21,6 @@ cases <- lapply(names(responses), function(name) {
          median=median(y, na.rm=TRUE),
          plain=quantile(y, probs, na.rm=TRUE, conf.int=FALSE, scale=2))
 })
-# Confidence bands can be non-monotone; approx() sorts their probabilities.
-# Also cover duplicate levels, NAs, and ties created by adding tolerance.
 findq_cases <- list(
     list(name="nonmonotone", x=0:6, y=c(0,.05,.3,.15,.5,.6,.8),
          p=c(.1,.2,.3,.4,.5,.6,.8,.9), tol=sqrt(.Machine$double.eps)),

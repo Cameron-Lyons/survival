@@ -20,8 +20,6 @@ cases <- list(
   ridge_empty = list(shared = function() survreg(Surv(time, status) ~ ridge(x, theta = 2) + strata(g), d, subset = g != "b", weights = w)),
   cox_empty = list(shared = function() coxph(Surv(time, status) ~ x + strata(g), d, subset = g != "b", weights = w),
                    stock_R = function() survival::coxph(survival::Surv(time, status) ~ x + strata(g), d, subset = g != "b", weights = w)))
-# R's penalized empty-strata fit fails during inversion. Recode only removed
-# rows to check estimable coefficients without altering the penalty's scaling.
 compact <- d
 compact$g[compact$g == "b"] <- "a"
 selected <- which(d$g != "b")

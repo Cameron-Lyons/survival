@@ -1,13 +1,3 @@
-//! Kaplan-Meier and Fleming-Harrington survival curves for right-censored
-//! and counting-process data: the port of R's `survfitKM` (`R/survfitKM.R`)
-//! and its C kernel `survfitkm` (`src/survfitkm.c`), survival 3.8-11/12.
-//!
-//! [`survfitkm`] is the only survival/cumulative-hazard engine in the crate:
-//! the Nelson-Aalen facade, the pseudo-value and residual code, the
-//! summary helpers, the G-rho weights of `survdiff`, the censoring
-//! distribution of the Brier score, the Turnbull EM and the
-//! `validation` summaries all read its [`SurvfitKMResult`].
-
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{aeq_counting, first_appearance_codes};
@@ -28,13 +18,10 @@ use std::sync::Arc;
 
 mod robust;
 
-/// The `stype` argument of `survfit`: how the survival curve is formed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SurvType {
-    /// `stype = 1`: the Kaplan-Meier product limit.
     #[default]
     KaplanMeier,
-    /// `stype = 2`: `exp(-cumulative hazard)`.
     ExpCumhaz,
 }
 
@@ -48,13 +35,10 @@ impl SurvType {
     }
 }
 
-/// The `ctype` argument of `survfit`: how tied events enter the hazard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HazardType {
-    /// `ctype = 1`: Nelson-Aalen, one increment `d / n` per time.
     #[default]
     NelsonAalen,
-    /// `ctype = 2`: Fleming-Harrington, `d` tied events enter one at a time.
     FlemingHarrington,
 }
 
@@ -68,8 +52,6 @@ impl HazardType {
     }
 }
 
-/// The `influence` argument of `survfit`: which per-cluster influence
-/// matrices to return (`1 * survival + 2 * cumulative hazard`, as R).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InfluenceRequest {
     #[default]
@@ -101,33 +83,19 @@ impl InfluenceRequest {
     }
 }
 
-/// The arguments of `survfitKM` beyond the data.
 #[derive(Debug, Clone)]
 pub struct SurvfitKMOptions {
     pub stype: SurvType,
     pub ctype: HazardType,
-    /// `se.fit`: compute standard errors (and hence confidence limits).
     pub se_fit: bool,
-    /// `conf.int`: the confidence level.
     pub conf_int: f64,
     pub conf_type: ConfType,
     pub conf_lower: ConfLower,
-    /// `start.time`: observations ending before it are dropped and the
-    /// curves start there.
     pub start_time: Option<f64>,
-    /// `robust`: `None` leaves the choice to R's rule (a cluster, non-integer
-    /// weights, or an id with more than one event per subject turn it on).
     pub robust: Option<bool>,
     pub influence: InfluenceRequest,
-    /// `entry`: report the number entering the risk set at each time
-    /// (counting-process data with an `id` only).
     pub entry: bool,
-    /// `timefix`: bin times that differ by less than `sqrt(.Machine$double.eps)`
-    /// (`aeqSurv`) before anything else.
     pub timefix: bool,
-    /// Estimate the censoring distribution instead (the `reverse` flag of
-    /// `survfitkm.c`): censorings become the events and the deaths tied at
-    /// the same time leave the risk set first.
     pub reverse: bool,
 }
 
@@ -150,12 +118,6 @@ impl Default for SurvfitKMOptions {
     }
 }
 
-/// The data of a `survfit(Surv(...) ~ strata, weights, id, cluster)` call.
-///
-/// `strata` holds one integer code per observation; curves are produced for
-/// the distinct codes in ascending order (R's factor levels).  `id` links
-/// the rows of one subject in counting-process data and `cluster` groups
-/// observations for the robust variance; both are arbitrary integer labels.
 #[derive(Debug, Clone)]
 pub struct SurvfitKMData {
     pub start: Option<Vec<f64>>,
@@ -168,7 +130,6 @@ pub struct SurvfitKMData {
 }
 
 impl SurvfitKMData {
-    /// Right-censored data without weights or grouping.
     pub fn right_censored(time: Vec<f64>, status: Vec<i32>) -> SurvivalResult<Self> {
         Self::try_new(None, time, status, None, None, None, None)
     }
@@ -195,8 +156,6 @@ impl SurvfitKMData {
         Ok(data)
     }
 
-    /// Check row alignment and numerical values, including after public fields
-    /// have been modified. [`survfitkm`] performs this check before fitting.
     pub fn validate(&self) -> SurvivalResult<()> {
         validate_non_empty(&self.time, "time")?;
         validate_no_nan(&self.time, "time")?;
@@ -229,8 +188,8 @@ impl SurvfitKMData {
     }
 }
 
-/// Unweighted counts, reported alongside the weighted ones when case
-/// weights are present (R's `counts` component).
+#[doc = " Unweighted counts, reported alongside the weighted ones when case"]
+#[doc = " weights are present (R's `counts` component)."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitCounts {
@@ -246,13 +205,13 @@ pub struct SurvfitCounts {
 
 #[pymethods]
 impl SurvfitCounts {
-    /// Pickle and copy support (see `internal::pickle`).
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
         crate::internal::pickle::reduce(py, self)
     }
 
-    /// The counts of one stratum, for callers that split a curve set.
+    #[doc = " The counts of one stratum, for callers that split a curve set."]
     #[new]
     #[pyo3(signature = (n_risk, n_event, n_censor, n_enter = None))]
     fn py_new(
@@ -270,15 +229,15 @@ impl SurvfitCounts {
     }
 }
 
-/// One curve's influence matrix: `values[[k, t]]` is the influence of
-/// cluster `cluster[k]` on the estimate at the curve's `t`-th time.  The
-/// labels are R's row names `clname`: the `cluster` (else `id`) value of the
-/// cluster, or the observation number 1, 2, ... when the observations are
-/// the clusters.
-///
-/// The matrix is column-major, one contiguous column per time as
-/// `survfitkm.c` writes it (R's layout), and shared: clones of the fit and
-/// the NumPy array Python reads (a read-only view) do not copy it.
+#[doc = " One curve's influence matrix: `values[[k, t]]` is the influence of"]
+#[doc = " cluster `cluster[k]` on the estimate at the curve's `t`-th time.  The"]
+#[doc = " labels are R's row names `clname`: the `cluster` (else `id`) value of the"]
+#[doc = " cluster, or the observation number 1, 2, ... when the observations are"]
+#[doc = " the clusters."]
+#[doc = ""]
+#[doc = " The matrix is column-major, one contiguous column per time as"]
+#[doc = " `survfitkm.c` writes it (R's layout), and shared: clones of the fit and"]
+#[doc = " the NumPy array Python reads (a read-only view) do not copy it."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", frozen, from_py_object)]
 pub struct SurvfitInfluence {
@@ -291,30 +250,28 @@ pub struct SurvfitInfluence {
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvfitInfluence {
-    /// Pickle and copy support (see `internal::pickle`).
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
         crate::internal::pickle::reduce(py, self)
     }
 
-    /// The `clusters x times` matrix as a read-only NumPy array.
+    #[doc = " The `clusters x times` matrix as a read-only NumPy array."]
     #[getter(values)]
     fn values_array<'py>(this: &Bound<'py, Self>) -> Bound<'py, numpy::PyArray2<f64>> {
-        // SAFETY: the frozen object owns the matrix through its `Arc` and
-        // never changes it.
         unsafe { readonly_view(&this.get().values, this.as_any()) }
     }
 }
 
-/// A `survfit` object for single-endpoint survival, curves stacked one
-/// after the other as in R.
-///
-/// `std_err` is the standard error of `log(surv)` when `logse` is true (the
-/// Greenwood variance) and of `surv` itself otherwise (robust variance);
-/// `std_chaz` is always the standard error of `cumhaz`.
+#[doc = " A `survfit` object for single-endpoint survival, curves stacked one"]
+#[doc = " after the other as in R."]
+#[doc = ""]
+#[doc = " `std_err` is the standard error of `log(surv)` when `logse` is true (the"]
+#[doc = " Greenwood variance) and of `surv` itself otherwise (robust variance);"]
+#[doc = " `std_chaz` is always the standard error of `cumhaz`."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitKMResult {
-    /// Observations used by each curve.
+    #[doc = " Observations used by each curve."]
     #[pyo3(get)]
     pub n: Vec<usize>,
     #[pyo3(get)]
@@ -341,13 +298,13 @@ pub struct SurvfitKMResult {
     pub lower: Option<Vec<f64>>,
     #[pyo3(get)]
     pub upper: Option<Vec<f64>>,
-    /// Rows per curve; `None` for a single curve without strata.
+    #[doc = " Rows per curve; `None` for a single curve without strata."]
     #[pyo3(get)]
     pub strata: Option<Vec<usize>>,
-    /// The strata code of each curve, in curve order.
+    #[doc = " The strata code of each curve, in curve order."]
     #[pyo3(get)]
     pub strata_codes: Option<Vec<i32>>,
-    /// Subjects per curve when an `id` was given.
+    #[doc = " Subjects per curve when an `id` was given."]
     #[pyo3(get)]
     pub n_id: Option<Vec<usize>>,
     #[pyo3(get)]
@@ -358,14 +315,14 @@ pub struct SurvfitKMResult {
     pub conf_type: String,
     #[pyo3(get)]
     pub conf_lower: String,
-    /// The survival type: `"right"` or `"counting"`, `"interval"` for a
-    /// Turnbull curve.
+    #[doc = " The survival type: `\"right\"` or `\"counting\"`, `\"interval\"` for a"]
+    #[doc = " Turnbull curve."]
     #[pyo3(get, name = "type")]
     pub type_: String,
-    /// The starting time of the curves.
+    #[doc = " The starting time of the curves."]
     #[pyo3(get)]
     pub t0: f64,
-    /// One entry per curve when requested.
+    #[doc = " One entry per curve when requested."]
     #[pyo3(get)]
     pub influence_surv: Option<Vec<SurvfitInfluence>>,
     #[pyo3(get)]
@@ -373,18 +330,14 @@ pub struct SurvfitKMResult {
 }
 
 impl SurvfitKMResult {
-    /// Number of curves.
     pub fn n_curves(&self) -> usize {
         self.strata.as_ref().map_or(1, Vec::len)
     }
 
-    /// Row range of each curve in the stacked vectors.
     pub fn curve_ranges(&self) -> Vec<std::ops::Range<usize>> {
         curve_ranges(self.strata.as_deref(), self.time.len())
     }
 
-    /// Standard error on the survival scale (`summary.survfit` reports it
-    /// this way whatever `logse` is).
     pub fn std_err_surv_scale(&self) -> Option<Vec<f64>> {
         self.std_err.as_ref().map(|se| {
             if self.logse {
@@ -395,8 +348,6 @@ impl SurvfitKMResult {
         })
     }
 
-    /// The fit without its influence matrices, for the summaries, which
-    /// never read them (the matrices are shared, so none is copied).
     pub fn clone_without_influence(&self) -> Self {
         Self {
             influence_surv: None,
@@ -405,9 +356,6 @@ impl SurvfitKMResult {
         }
     }
 
-    /// `fit[curves]` (`[.survfit`): the curves at the given positions of
-    /// `strata` (0-based, in the order given) as a result of their own.  A
-    /// single curve has no `strata`, like a fit without strata.
     pub fn select_curves(&self, curves: &[usize]) -> SurvivalResult<Self> {
         let ranges = self.curve_ranges();
         check_curve_indices(curves, ranges.len())?;
@@ -416,8 +364,6 @@ impl SurvfitKMResult {
             .flat_map(|&curve| ranges[curve].clone())
             .collect();
         let pick = |values: &[f64]| select_items(values, &rows);
-        // `n` and `n_id` also count the curves start.time emptied, which were
-        // not fitted: the fitted curves are the levels with observations
         let fitted: Vec<usize> = (0..self.n.len()).filter(|&k| self.n[k] > 0).collect();
         let per_level = |values: &[usize]| -> Vec<usize> {
             curves.iter().map(|&curve| values[fitted[curve]]).collect()
@@ -466,11 +412,6 @@ impl SurvfitKMResult {
         })
     }
 
-    /// A fit holding curves computed elsewhere (a Turnbull estimate, the
-    /// columns of a `survfit.coxph` object, a `survfit` object's vectors),
-    /// so that `survfit0`, `summary.survfit`, `survmean` and
-    /// `quantile.survfit` can read them.  The curves are checked for
-    /// matching lengths and times that do not decrease within a curve.
     pub fn from_stacked(curves: StackedCurves) -> SurvivalResult<Self> {
         let n_rows = curves.time.len();
         validate_length(n_rows, curves.n_risk.len(), "n_risk")?;
@@ -521,7 +462,6 @@ impl SurvfitKMResult {
             }
             start += size;
         }
-        // survfit0.R fills in `-log(surv)` for a curve without a hazard
         let cumhaz = curves
             .cumhaz
             .unwrap_or_else(|| curves.surv.iter().map(|&s| -s.ln()).collect());
@@ -557,11 +497,6 @@ impl SurvfitKMResult {
     }
 }
 
-/// The stacked vectors of [`SurvfitKMResult::from_stacked`]: the curves
-/// one after the other, `strata` giving the rows of each (`None` for a
-/// single curve) and `n` / `n_id` R's `fit$n` / `fit$n.id`, one per curve.
-/// A missing `n_censor` is taken as zeros and a missing `cumhaz` as
-/// `-log(surv)`; `lower` and `upper` are given together or not at all.
 #[derive(Debug, Clone)]
 pub struct StackedCurves {
     pub time: Vec<f64>,
@@ -577,19 +512,14 @@ pub struct StackedCurves {
     pub std_chaz: Option<Vec<f64>>,
     pub lower: Option<Vec<f64>>,
     pub upper: Option<Vec<f64>>,
-    /// Whether `std_err` is the standard error of `log(surv)` (R's default
-    /// for an object without `logse`) or of `surv`.
     pub logse: bool,
     pub conf_int: f64,
     pub conf_type: String,
     pub type_: String,
-    /// R's `fit$t0`, where the curves start.
     pub t0: f64,
 }
 
 impl StackedCurves {
-    /// Curves with only the required vectors: no standard errors or limits,
-    /// `logse`, a 95% `"log"` interval, type `"right"` and `t0 = 0`.
     pub fn new(
         time: Vec<f64>,
         n_risk: Vec<f64>,
@@ -621,7 +551,6 @@ impl StackedCurves {
     }
 }
 
-/// The error of a curve subscript outside `0..n_curves` (or an empty one).
 pub(crate) fn check_curve_indices(curves: &[usize], n_curves: usize) -> SurvivalResult<()> {
     if curves.is_empty() {
         return Err(SurvivalError::invalid_input("select at least one curve"));
@@ -634,26 +563,25 @@ pub(crate) fn check_curve_indices(curves: &[usize], n_curves: usize) -> Survival
     }
 }
 
-/// `values[indices]`.
 pub(crate) fn select_items<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
     indices.iter().map(|&i| values[i].clone()).collect()
 }
 
 #[pymethods]
 impl SurvfitKMResult {
-    /// Pickle and copy support (see `internal::pickle`).
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
         crate::internal::pickle::reduce(py, self)
     }
 
-    /// `fit[curves]`: see [`SurvfitKMResult::select_curves`].
+    #[doc = " `fit[curves]`: see [`SurvfitKMResult::select_curves`]."]
     #[pyo3(name = "select_curves")]
     fn py_select_curves(&self, curves: Vec<usize>) -> PyResult<Self> {
         Ok(self.select_curves(&curves)?)
     }
 
-    /// See [`SurvfitKMResult::from_stacked`]; `type` is the survival type.
+    #[doc = " See [`SurvfitKMResult::from_stacked`]; `type` is the survival type."]
     #[staticmethod]
     #[pyo3(name = "from_stacked", signature = (
         time, n_risk, n_event, surv, n, *, strata=None, n_id=None, n_censor=None, std_err=None,
@@ -704,27 +632,17 @@ impl SurvfitKMResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The C kernel: one curve
-// ---------------------------------------------------------------------------
-
-/// Rows of one curve, in the order `survfitkm.c` walks them.
 struct CurveRows {
-    /// Rows ordered by start time (counting-process data only).
     sort1: Option<Vec<usize>>,
-    /// Rows ordered by stop time.
     sort2: Vec<usize>,
 }
 
-/// Everything `survfitkm.c` reads besides the row order.
 struct KernelData<'a> {
     time1: Option<&'a [f64]>,
     time2: &'a [f64],
     status: &'a [i32],
     wt: &'a [f64],
-    /// `1 * (first obs of a subject) + 2 * (last obs)`.
     position: &'a [u8],
-    /// Cluster code (`0..nid`) of every row of the curve, with `nid`.
     cluster: Option<(&'a [usize], usize)>,
 }
 
@@ -737,7 +655,6 @@ struct KernelOptions {
     entry: bool,
 }
 
-/// Output of the kernel for one curve.
 struct CurveFit {
     time: Vec<f64>,
     n_risk: Vec<f64>,
@@ -752,15 +669,10 @@ struct CurveFit {
     cumhaz: Vec<f64>,
     std_surv: Vec<f64>,
     std_chaz: Vec<f64>,
-    /// `nid x ntime`, column-major, when requested.
     influence_surv: Option<Array2<f64>>,
     influence_chaz: Option<Array2<f64>>,
 }
 
-/// The reporting times of one curve: events, final intervals of subjects
-/// and, with `entry`, their first entry times. This is the 3.8-12 rule for
-/// a single curve, applied consistently to every stratum. Its grouped R
-/// branch accidentally excludes events on internal intervals.
 fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> Vec<f64> {
     let sort2 = &rows.sort2;
     let mut dtime = Vec::new();
@@ -797,7 +709,6 @@ fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> 
     dtime
 }
 
-/// Port of `survfitkm` (`src/survfitkm.c`) for one curve.
 fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> CurveFit {
     let nused = rows.sort2.len();
     let sort2 = &rows.sort2;
@@ -805,7 +716,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
     let ntime = dtime.len();
     let counting = data.time1.is_some();
 
-    // -- the counts, walking backwards in time so risk sets accumulate
     let mut n_risk = vec![0.0; ntime];
     let mut n_event = vec![0.0; ntime];
     let mut n_censor = vec![0.0; ntime];
@@ -832,7 +742,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     n2 += 1.0;
                     wt2 += data.wt[i2];
                 } else if data.position[i2] & 2 != 0 {
-                    // the last of a subject's (a,b](b,c]... string: a real censor
                     n3 += 1.0;
                     wt3 += data.wt[i2];
                 }
@@ -845,7 +754,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     if time1[i1] < dtime[k] {
                         break;
                     }
-                    // entry is >= dtime, remove from the risk set
                     n1 -= 1.0;
                     wt1 -= data.wt[i1];
                     if options.entry && data.position[i1] & 1 != 0 && time1[i1] == dtime[k] {
@@ -868,7 +776,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         }
     }
 
-    // (unweighted events, weighted events, weighted at risk) at time i
     let event_terms = |i: usize| -> (f64, f64, f64) {
         if options.reverse {
             (n_censor[i], wt_censor[i], wt_risk[i] - wt_event[i])
@@ -877,7 +784,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         }
     };
 
-    // -- survival, cumulative hazard and the simple (Greenwood) variances
     let mut surv = vec![0.0; ntime];
     let mut cumhaz = vec![0.0; ntime];
     let mut std_surv = vec![0.0; ntime];
@@ -912,7 +818,7 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 SurvType::KaplanMeier => {
                     if d0 > 0.0 && d1 > 0.0 {
                         km *= (nrisk - d1) / nrisk;
-                        v1 += d1 / (nrisk * (nrisk - d1)); // Greenwood
+                        v1 += d1 / (nrisk * (nrisk - d1));
                     }
                     surv[i] = km;
                     std_surv[i] = v1.sqrt();
@@ -925,7 +831,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         }
     }
 
-    // -- infinitesimal jackknife (robust) variance and influence
     let mut influence_surv = None;
     let mut influence_chaz = None;
     if !counting
@@ -946,24 +851,20 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             options.influence.survival() && options.stype == SurvType::KaplanMeier;
         let want_chaz_matrix = options.influence.cumhaz()
             || (options.influence.survival() && options.stype == SurvType::ExpCumhaz);
-        // one column of nid values per time, appended as the C code writes
-        // them (*imat1++)
         let mut imat1 = want_surv_matrix.then(|| Vec::with_capacity(nid * ntime));
         let mut imat2 = want_chaz_matrix.then(|| Vec::with_capacity(nid * ntime));
         let mut gcount = vec![0i64; nid];
         let mut gwt = vec![0.0; nid];
-        let mut inf1 = vec![0.0; nid]; // survival influence
-        let mut inf2 = vec![0.0; nid]; // cumulative hazard influence
+        let mut inf1 = vec![0.0; nid];
+        let mut inf2 = vec![0.0; nid];
         let mut person1 = 0;
         let mut person2 = 0;
         if !counting {
-            // at the start everyone is at risk
             for &i2 in sort2 {
                 gcount[cluster[i2]] += 1;
                 gwt[cluster[i2]] += data.wt[i2];
             }
         }
-        // Whether a row counts as an event for the curve being estimated.
         let is_event = |i2: usize| -> bool {
             if options.reverse {
                 data.status[i2] == 0 && data.position[i2] & 2 != 0
@@ -980,12 +881,10 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 gwt[g] -= data.wt[i2];
             }
         };
-        let mut km = 1.0; // lags one step behind the estimate
+        let mut km = 1.0;
         let mut v1 = 0.0;
         let mut v2 = 0.0;
         for i in 0..ntime {
-            // toss the outdated; with reverse the deaths tied at this time
-            // leave before the censorings are treated as events
             while person2 < nused {
                 let i2 = sort2[person2];
                 let gone = data.time2[i2] < dtime[i]
@@ -997,7 +896,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 person2 += 1;
             }
             if let (Some(time1), Some(sort1)) = (data.time1, &rows.sort1) {
-                // add in new subjects
                 while person1 < nused {
                     let i1 = sort1[person1];
                     if time1[i1] >= dtime[i] {
@@ -1011,7 +909,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             let (d0, d1, nrisk) = event_terms(i);
             if d0 > 0.0 && d1 > 0.0 {
                 let haz = d1 / nrisk;
-                // per-event derivative terms of the cumulative hazard
                 let (dn_term, risk_term) =
                     robust::hazard_influence_terms(d0, d1, nrisk, options.ctype);
                 for g in 0..nid {
@@ -1022,7 +919,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                         inf2[g] -= gwt[g] * risk_term;
                     }
                 }
-                // catch the endpoints up to this event time
                 while person2 < nused {
                     let i2 = sort2[person2];
                     if data.time2[i2] > dtime[i] {
@@ -1086,13 +982,6 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
     }
 }
 
-// ---------------------------------------------------------------------------
-// The R-level driver
-// ---------------------------------------------------------------------------
-
-/// Port of `survflag` (`R/xtras.R`): `1 * (first interval of a subject) +
-/// 2 * (last interval)`, where a gap between consecutive intervals or a
-/// change of curve also ends a sequence.
 pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize]) -> Vec<u8> {
     let n = stop.len();
     let mut indx: Vec<usize> = (0..n).collect();
@@ -1118,8 +1007,6 @@ pub(crate) fn survflag(start: &[f64], stop: &[f64], id: &[usize], group: &[usize
     flag
 }
 
-/// Row range of each curve in vectors stacked curve by curve, `strata`
-/// holding the number of rows of each (one curve of `len` rows without).
 pub(crate) fn curve_ranges(strata: Option<&[usize]>, len: usize) -> Vec<std::ops::Range<usize>> {
     match strata {
         Some(counts) => {
@@ -1137,9 +1024,6 @@ pub(crate) fn curve_ranges(strata: Option<&[usize]>, len: usize) -> Vec<std::ops
     }
 }
 
-/// `as.integer(factor(strata))` minus one for integer strata codes: the
-/// sorted distinct codes and the zero-based level of each row.  Without
-/// strata every one of the `n` rows is in the single level `0`.
 pub(crate) fn strata_index(strata: Option<&[i32]>, n: usize) -> (Vec<i32>, Vec<usize>) {
     let Some(codes) = strata else {
         return (vec![0], vec![0; n]);
@@ -1158,7 +1042,6 @@ pub(crate) fn strata_index(strata: Option<&[i32]>, n: usize) -> (Vec<i32>, Vec<u
     (levels, index)
 }
 
-/// The rows of each curve in data order: `split(seq_along(x), x)`.
 pub(crate) fn rows_by_curve(x: &[usize], n_curves: usize) -> Vec<Vec<usize>> {
     let mut rows = vec![Vec::new(); n_curves];
     for (i, &curve) in x.iter().enumerate() {
@@ -1167,15 +1050,11 @@ pub(crate) fn rows_by_curve(x: &[usize], n_curves: usize) -> Vec<Vec<usize>> {
     rows
 }
 
-/// The rows of one curve in data order and in the orders the kernel walks
-/// them.
 struct CurveInput {
     keep: Vec<usize>,
     rows: CurveRows,
 }
 
-/// [`CurveInput`] of every curve: the sorts run in parallel over the
-/// curves, or within the sort when there is a single curve.
 fn curve_inputs(
     x: &[usize],
     n_curves: usize,
@@ -1189,8 +1068,6 @@ fn curve_inputs(
     let prepare = |keep: Vec<usize>| {
         let sort1 = start.map(|start| ordered_subset(&keep, start, single));
         let sort2 = if reverse {
-            // deaths first among ties so the kernel can drop them from the
-            // risk set before the tied censorings are treated as events
             let mut sort2 = keep.clone();
             sort2.sort_by(|&a, &b| {
                 time[a]
@@ -1221,9 +1098,6 @@ fn count_unique(values: impl Iterator<Item = usize>) -> usize {
 }
 
 fn has_nonunit_weights(weights: &[f64]) -> bool {
-    // R: !isTRUE(all.equal(weights, rep(1, length(weights)))). all.equal
-    // excludes exact matches before averaging the relative error. Keep the
-    // original weights for fitting and for the separate robust-variance rule.
     let n = weights.iter().filter(|&&weight| weight != 1.0).count();
     if n == 0 {
         return false;
@@ -1248,14 +1122,6 @@ fn has_nonunit_weights(weights: &[f64]) -> bool {
     difference.is_nan() || difference > tolerance
 }
 
-/// Port of `survfitKM` (`R/survfitKM.R`).
-///
-/// Every curve (one per distinct `strata` code, in ascending order) goes
-/// through the C kernel once; the curves are then stacked and the
-/// confidence limits added through [`survfit_confint`].  The rules for the
-/// default `robust` choice, the cluster used by the robust variance, the
-/// `conf.lower` adjustments and the derived survival influence for
-/// `stype = 2` are R's.
 pub fn survfitkm(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
@@ -1270,7 +1136,6 @@ pub fn survfitkm(
         (data.start.clone(), data.time.clone())
     };
 
-    // start.time: drop observations that end before it
     let t0 = match options.start_time {
         Some(start_time) => {
             if start_time.is_nan() {
@@ -1301,12 +1166,9 @@ pub fn survfitkm(
         Some(w) => pick(w),
         None => vec![1.0; n],
     };
-    // levels come from the full data, as in R, so a stratum that
-    // start.time empties still gets an n of 0
     let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), data.time.len());
     let x: Vec<usize> = rows.iter().map(|&i| curve_of[i]).collect();
 
-    // cluster / id / robust logic
     let has_cluster = data.cluster.is_some();
     let has_id = data.id.is_some();
     let has_rwt = weights.iter().any(|w| *w != w.floor());
@@ -1326,7 +1188,6 @@ pub fn survfitkm(
         None => {
             if influence != InfluenceRequest::None {
                 if !(has_cluster || has_id) {
-                    // cluster <- seq_along(x), which also names the rows
                     cluster_source = Some((1..=n as i64).collect());
                 }
                 true
@@ -1342,9 +1203,7 @@ pub fn survfitkm(
             }
         }
     };
-    // (cluster code per row, R's clname); None = no robust variance
     let cluster: Option<(Vec<usize>, Vec<i64>)> = if let Some(source) = &cluster_source {
-        // R warns "cluster specified with robust=FALSE, cluster ignored"
         robust.then(|| first_appearance_codes(source))
     } else if robust {
         if let Some(id) = &data.id {
@@ -1361,7 +1220,6 @@ pub fn survfitkm(
         None
     };
     if !robust {
-        // R warns "robust=FALSE implies influence=FALSE"
         influence = InfluenceRequest::None;
     }
     let cluster = if options.se_fit {
@@ -1378,7 +1236,6 @@ pub fn survfitkm(
         _ => vec![3; n],
     };
 
-    // one kernel call per curve
     let kernel_options = KernelOptions {
         stype: options.stype,
         ctype: options.ctype,
@@ -1402,13 +1259,11 @@ pub fn survfitkm(
     for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
         n_used[curve] = keep.len();
         if keep.is_empty() {
-            continue; // rare case where all are < start.time
+            continue;
         }
         if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
             n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
         }
-        // clusters are renumbered 0, 1, 2, ... per curve in order of
-        // appearance so each curve's influence matrix has only its own rows
         let (kernel_cluster, curve_clusters) = match &cluster {
             Some((codes, labels)) => {
                 let subset: Vec<usize> = keep.iter().map(|&i| codes[i]).collect();
@@ -1433,7 +1288,6 @@ pub fn survfitkm(
         fits.push((curve, fit, curve_clusters));
     }
 
-    // stack the curves
     let total: usize = fits.iter().map(|(_, fit, _)| fit.time.len()).sum();
     let mut result = SurvfitKMResult {
         n: n_used,
@@ -1452,9 +1306,6 @@ pub fn survfitkm(
         strata: None,
         strata_codes: None,
         n_id,
-        // R: se(log S) unless the robust variance was used; the C kernel's
-        // Fleming-Harrington survival influence is nonetheless reported as
-        // se(log S) by survfitKM.R, and this mirrors that source
         logse: cluster.is_none() || options.ctype == HazardType::FlemingHarrington,
         conf_int: options.conf_int,
         conf_type: options.conf_type.as_str().to_string(),
@@ -1504,9 +1355,6 @@ pub fn survfitkm(
         let (surv_matrix, chaz_matrix) =
             match (fit.influence_surv.take(), fit.influence_chaz.take()) {
                 (None, Some(chaz)) if influence.survival() => {
-                    // stype = 2: an obs that moves the cumulative hazard up
-                    // moves S down, influence.surv = -influence.chaz * S(t),
-                    // formed in the hazard's buffer unless that is returned too
                     let (mut surv, chaz) = if influence.cumhaz() {
                         (chaz.clone(), Some(chaz))
                     } else {
@@ -1539,7 +1387,6 @@ pub fn survfitkm(
     result.influence_surv = influence_surv;
     result.influence_chaz = influence_chaz;
 
-    // confidence limits
     if options.se_fit && options.conf_type != ConfType::None {
         let std_err = result.std_err.as_deref().expect("se.fit keeps std.err");
         let std_low: Option<Vec<f64>> = match options.conf_lower {
@@ -1553,8 +1400,6 @@ pub fn survfitkm(
                     .collect(),
             ),
             ConfLower::Modified => {
-                // n.lag = the number at risk the last time there was an
-                // event (or the first time of a stratum)
                 let mut n_lag = vec![0.0; result.time.len()];
                 for range in result.curve_ranges() {
                     let mut lag = f64::NAN;
@@ -1590,8 +1435,8 @@ pub fn survfitkm(
     Ok(result)
 }
 
-/// Python binding of [`survfitkm`]; the keyword arguments mirror
-/// `survfit.formula` and `survfitKM`.
+#[doc = " Python binding of [`survfitkm`]; the keyword arguments mirror"]
+#[doc = " `survfit.formula` and `survfitKM`."]
 #[pyfunction(name = "survfitkm")]
 #[pyo3(signature = (time, status, start=None, weights=None, strata=None, id=None, cluster=None, stype=1, ctype=1, se_fit=true, conf_int=0.95, conf_type="log", conf_lower="usual", start_time=None, robust=None, influence=0, entry=false, timefix=true, reverse=false))]
 #[allow(clippy::too_many_arguments)]
@@ -1661,7 +1506,6 @@ mod tests {
     fn count_table_uses_r_relative_weight_comparison() {
         assert!(!has_nonunit_weights(&[1.0; 8]));
         assert!(!has_nonunit_weights(&[1.0 + 1e-10; 8]));
-        // Exactly equal values must not dilute the mean difference.
         assert!(has_nonunit_weights(&[1.0, 1.0, 1.0, 1.0, 1.0 + 2e-8]));
         assert!(!has_nonunit_weights(&[1.0, 1.0 + 1e-8]));
         assert!(has_nonunit_weights(&[0.0, 1.0]));
@@ -1675,7 +1519,6 @@ mod tests {
 
     #[test]
     fn matches_r_aml_maintained() {
-        // survfit(Surv(time, status) ~ 1, aml[aml$x == "Maintained", ])
         let time = vec![
             9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0,
         ];
@@ -1724,7 +1567,6 @@ mod tests {
 
     #[test]
     fn robust_cluster_variance_matches_r() {
-        // survfit(Surv(time, status) ~ 1, cluster = id) with id = c(1,1,2,2,3,3)
         let data = SurvfitKMData::try_new(
             None,
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
@@ -1763,19 +1605,15 @@ mod tests {
             None,
         )
         .unwrap();
-        // integer weights, no id: Greenwood
         let integer = fit(data.clone(), SurvfitKMOptions::default());
         assert!(integer.logse);
         assert!(integer.counts.is_some());
-        // a non-integer weight switches to the infinitesimal jackknife
         let mut half = data.clone();
         half.weights = Some(vec![1.0, 2.0, 1.0, 1.0, 1.0, 0.5]);
         assert!(!fit(half, SurvfitKMOptions::default()).logse);
-        // an id with more than one event per subject does too
         let mut repeated = data.clone();
         repeated.id = Some(vec![1, 1, 2, 2, 3, 3]);
         assert!(!fit(repeated, SurvfitKMOptions::default()).logse);
-        // robust = FALSE overrides
         let mut forced = data;
         forced.cluster = Some(vec![1, 1, 2, 2, 3, 3]);
         let plain = fit(
@@ -1790,7 +1628,6 @@ mod tests {
 
     #[test]
     fn counting_data_with_id_matches_r() {
-        // survfit(Surv(start, stop, status) ~ 1, id = id)
         let data = SurvfitKMData::try_new(
             Some(vec![0.0, 2.0, 0.0, 3.0, 0.0, 4.0]),
             vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0],
@@ -1808,13 +1645,11 @@ mod tests {
         assert_eq!(result.n_censor, vec![0.0, 0.0, 1.0, 0.0]);
         assert_vec_approx(&result.surv, &[2.0 / 3.0, 4.0 / 9.0, 4.0 / 9.0, 0.0], 1e-12);
         assert_eq!(result.n_id, Some(vec![3]));
-        // id with one event per subject keeps the Greenwood variance
         assert!(result.logse);
     }
 
     #[test]
     fn entry_counts_match_r() {
-        // survfit(Surv(start, stop, status) ~ 1, id = id, entry = TRUE, influence = TRUE)
         let data = SurvfitKMData::try_new(
             Some(vec![0.0, 2.0, 1.0, 3.0, 0.0, 4.0, 2.0]),
             vec![2.0, 5.0, 3.0, 6.0, 4.0, 7.0, 9.0],
@@ -1850,7 +1685,6 @@ mod tests {
             1e-12,
         );
         assert_eq!(result.n_id, Some(vec![4]));
-        // influence = TRUE forces the robust variance, clustered on the id
         assert!(!result.logse);
         let influence = &result.influence_surv.as_ref().unwrap()[0];
         assert_eq!(influence.cluster, vec![1, 2, 3, 4]);
@@ -1891,7 +1725,6 @@ mod tests {
         assert_eq!(result.n, vec![4, 4]);
         let ranges = result.curve_ranges();
         assert_eq!(ranges, vec![0..4, 4..8]);
-        // each curve equals the fit of its own rows
         let mut own = data;
         own.strata = None;
         own.time = vec![1.5, 2.5, 3.5, 4.5];
@@ -1955,8 +1788,6 @@ mod tests {
 
     #[test]
     fn select_curves_keeps_each_curve_whole() {
-        // survfit(Surv(time, status) ~ g, influence = TRUE)[2] is the fit of
-        // group 2 alone; start.time = 3.5 empties group 1 (n = c(0, 4))
         let data = SurvfitKMData::try_new(
             None,
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
@@ -2033,7 +1864,6 @@ mod tests {
 
     #[test]
     fn reverse_estimates_the_censoring_distribution() {
-        // deaths tied with a censoring leave the risk set first
         let data =
             SurvfitKMData::right_censored(vec![1.0, 2.0, 2.0, 3.0, 4.0], vec![1, 1, 0, 0, 1])
                 .unwrap();
@@ -2043,7 +1873,6 @@ mod tests {
         };
         let result = fit(data, options);
         assert_eq!(result.time, vec![1.0, 2.0, 3.0, 4.0]);
-        // G(2) = 1 - 1/(4 - 1): the death at 2 is not in the risk set
         assert_vec_approx(&result.surv, &[1.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], 1e-12);
     }
 
@@ -2137,7 +1966,6 @@ mod tests {
                     let chaz_value = chaz.values[[k, col]];
                     assert!((value + chaz_value * result.surv[col]).abs() < 1e-12);
                 }
-                // influence = 1 alone forms the same matrix in the hazard's buffer
                 let alone = fit(
                     data.clone(),
                     SurvfitKMOptions {
@@ -2155,8 +1983,6 @@ mod tests {
 
     #[test]
     fn independent_robust_variance_matches_explicit_influences() {
-        // The matrix path remains a separate, general calculation. Exercise
-        // ties, zero weights, reversed curves, strata and both estimators.
         for seed in 0..12usize {
             let n = 61;
             let data = SurvfitKMData::try_new(
@@ -2166,7 +1992,6 @@ mod tests {
                 Some((0..n).map(|i| ((i * 7 + seed) % 13) as f64 / 4.0).collect()),
                 (seed % 2 == 0).then(|| (0..n).map(|i| (i % 3) as i32).collect()),
                 None,
-                // Arbitrary, unique labels must behave like independent rows.
                 Some((0..n).map(|i| 1000 - 7 * i as i64).collect()),
             )
             .unwrap();

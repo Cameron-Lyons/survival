@@ -42,9 +42,6 @@ def lung_weibull(lung):
     return r.survreg("Surv(time, status) ~ age + sex", data=lung)
 
 
-# --- fitting ---------------------------------------------------------------------------------
-
-
 def test_survreg_weibull_matches_r_object(lung_weibull):
     fit = lung_weibull
     assert isinstance(fit, _survreg.SurvregModelResult)
@@ -57,7 +54,7 @@ def test_survreg_weibull_matches_r_object(lung_weibull):
     assert (r.degrees_freedom(fit), r.df_residual(fit), r.nobs(fit)) == (4, 224, 228)
     assert fit.var[0][0] == pytest.approx(0.231714143303)
     assert r.vcov(fit) == fit.var
-    assert r.vcov(fit, complete=False) == fit.var  # nothing aliased: R keeps Log(scale)
+    assert r.vcov(fit, complete=False) == fit.var
     assert r.coef_names(fit) == ["(Intercept)", "age", "sex"]
     assert r.coef_names(fit, complete=True) == ["(Intercept)", "age", "sex", "Log(scale)"]
     assert fit.icoef == pytest.approx([6.0349039102, math.log(0.759393601108)])
@@ -141,7 +138,7 @@ def test_survreg_strata_scales_and_labels(lung):
 
 def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
     clustered = r.survreg("Surv(time, status) ~ age + sex + cluster(inst)", data=lung)
-    assert clustered.n == 227  # one institution is missing
+    assert clustered.n == 227
     assert clustered.robust
     assert clustered.var[0][0] == pytest.approx(0.172296116856)
     assert clustered.naive_var[0][0] == pytest.approx(0.233558196788)
@@ -291,7 +288,7 @@ def test_survreg_weights_offset_and_collapsed_residuals(lung):
     labelled = r.residuals(
         weighted, type="response", collapse=["b" if value == 1 else "a" for value in lung["sex"]]
     )
-    assert labelled == pytest.approx([-16691.5026995, -7414.24580574])  # rowsum orders groups
+    assert labelled == pytest.approx([-16691.5026995, -7414.24580574])
     with pytest.raises(ValueError, match="Wrong length for 'collapse'"):
         r.residuals(weighted, type="response", collapse=[1, 2, 3])
 
@@ -305,9 +302,6 @@ def test_survreg_weights_offset_and_collapsed_residuals(lung):
             data=lung,
             offset=lung["sex"],
         )
-
-
-# --- predict ---------------------------------------------------------------------------------
 
 
 def test_predict_survreg_types_and_shapes(lung_weibull):
@@ -331,7 +325,7 @@ def test_predict_survreg_types_and_shapes(lung_weibull):
     assert r.predict(fit, {"age": [50], "sex": [1]}, type="uquantile", p=[0.1, 0.9]) == (
         pytest.approx([4.34719530293, 6.67298987433])
     )
-    training = r.predict(fit, type="quantile")  # p defaults to c(.1, .9)
+    training = r.predict(fit, type="quantile")
     assert len(training) == 228
     assert len(training[0]) == 2
 
@@ -381,11 +375,7 @@ def test_predict_survreg_newdata_with_strata(lung):
         r.predict(fit, {"age": [50], "sex": [3]}, type="quantile")
 
 
-# --- residuals -------------------------------------------------------------------------------
-
-
 def test_residuals_default_type_follows_the_model(lung, lung_weibull):
-    # residuals.survreg defaults to "response", residuals.coxph to "martingale"
     assert r.residuals(lung_weibull)[:3] == pytest.approx(
         [-8.16499336963079, 116.85984881069709, 618.28099252166544]
     )
@@ -428,14 +418,11 @@ def test_residuals_survreg_all_types(lung_weibull):
     )
     assert len(r.residuals(fit, type="dfbeta", rsigma=False)[0]) == 3
     assert r.residuals(fit, type="dev") == r.residuals(fit, type="deviance")
-    assert r.residuals(fit, type="response", weighted=True) == response  # no weights: no-op
+    assert r.residuals(fit, type="response", weighted=True) == response
     with pytest.raises(ValueError, match="'type' should be one of"):
         r.residuals(fit, type="martingale")
     with pytest.raises(TypeError, match="unexpected keyword argument 'terms'"):
         r.residuals(fit, type="response", terms="age")
-
-
-# --- anova -----------------------------------------------------------------------------------
 
 
 def test_anova_survreg_sequential_terms(lung, lung_weibull):
@@ -499,9 +486,6 @@ def test_anova_survreg_model_list(lung, lung_weibull):
         _survreg.anova_survreg(lung_weibull, test="F")
 
 
-# --- censoring types and the model frame -------------------------------------------------------
-
-
 def test_survreg_left_censored_gaussian_tobin(tobin):
     fit = r.survreg(
         'Surv(durable, durable > 0, type = "left") ~ age + quant', data=tobin, dist="gaussian"
@@ -520,7 +504,7 @@ def test_survreg_interval2_missing_endpoints_are_censoring():
         "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b"],
     }
     fit = r.survreg('Surv(left, right, type = "interval2") ~ g', data=data)
-    assert fit.n == 10  # a missing endpoint is a censoring code, not a missing response
+    assert fit.n == 10
     events = list(fit.y.event)
     assert (events.count(3), events.count(2), events.count(0), events.count(1)) == (5, 2, 2, 1)
 
@@ -574,7 +558,7 @@ def test_survreg_subset_and_na_action(lung):
 def test_survreg_matrix_input_uses_the_design_as_given(lung):
     response = survival.Surv(lung["time"], [value - 1 for value in lung["status"]])
     fit = r.survreg(response, x={"age": lung["age"], "sex": lung["sex"]})
-    assert r.coef_names(fit) == ["age", "sex"]  # no intercept unless the caller adds one
+    assert r.coef_names(fit) == ["age", "sex"]
     assert fit.formula is None
     assert fit.term_labels == ("age", "sex")
     prediction = r.predict(fit, {"age": [50, 70], "sex": [1, 2]}, type="lp")
@@ -627,9 +611,6 @@ def test_survreg_argument_errors(lung):
         )
 
 
-# --- summary -----------------------------------------------------------------------------------
-
-
 def test_model_summary_survreg_structure(lung_weibull):
     summary = r.model_summary(lung_weibull)
     assert summary["model_type"] == "survreg"
@@ -651,9 +632,6 @@ def test_model_summary_survreg_structure(lung_weibull):
     assert rows[3]["coef"] == pytest.approx(math.log(0.754050947641))
     assert rows[3]["se"] == pytest.approx(math.sqrt(lung_weibull.var[3][3]))
     assert rows[1]["p"] == pytest.approx(0.0781188632, rel=1e-6)
-
-
-# --- dsurvreg, psurvreg, qsurvreg, rsurvreg ---------------------------------------------------
 
 
 def test_survreg_distribution_functions_match_r():
@@ -689,7 +667,7 @@ def test_survreg_distribution_functions_match_r():
     ]
     assert all(math.isnan(value) for value in r.dsurvreg([0.0, -1.0], mean=0.0))
     assert r.psurvreg([0.0], mean=0.0) == [0.0]
-    assert math.isnan(r.psurvreg([-1.0], mean=0.0)[0])  # R: log(-1) is NaN
+    assert math.isnan(r.psurvreg([-1.0], mean=0.0)[0])
     assert r.qsurvreg([0.0, 1.0], mean=0.0) == [0.0, math.inf]
 
     draws = r.rsurvreg(5, mean=0.5, scale=1.2, seed=7)

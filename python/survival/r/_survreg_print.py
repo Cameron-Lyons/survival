@@ -169,7 +169,6 @@ def print_summary_survreg(
     )
     tables = {"coefficients": table}
     lines = coefficient_matrix_lines(table, digits, width, signif_stars=stars)
-    # Older summaries can infer scale metadata from location/table dimensions.
     metadata = dict(x)
     metadata.setdefault("fixed_scale", len(x["var"]) == len(x["location_coefficients"]))
     metadata.setdefault(

@@ -1,7 +1,3 @@
-//! Natural-spline curves and standard errors from R's `plot.cox.zph`.
-//! Knot placement includes prediction times as well as observed event times.
-//! Terms sharing an observed-row mask reuse their QR factorization and leverage.
-
 use std::collections::HashMap;
 
 use crate::core::natural_spline::ns;
@@ -12,29 +8,23 @@ use crate::internal::qr::LinpackLeastSquares;
 use ndarray::{ArrayView2, s};
 use pyo3::prelude::*;
 
-/// Numerical diagnostic curves in transformed time and coefficient units.
+#[doc = " Numerical diagnostic curves in transformed time and coefficient units."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxZphSmooth {
     #[pyo3(get)]
     pub x: Vec<f64>,
-    /// Prediction-time by term matrix. Singular terms contain NaNs.
+    #[doc = " Prediction-time by term matrix. Singular terms contain NaNs."]
     #[pyo3(get)]
     pub y: Vec<Vec<f64>>,
-    /// One standard error, before R's factor of two for plotted bands.
+    #[doc = " One standard error, before R's factor of two for plotted bands."]
     #[pyo3(get)]
     pub std_err: Option<Vec<Vec<f64>>>,
-    /// Zero-based columns skipped because the spline design is singular.
+    #[doc = " Zero-based columns skipped because the spline design is singular."]
     #[pyo3(get)]
     pub skipped: Vec<usize>,
 }
 
-/// Smooth scaled Schoenfeld residuals with R's natural cubic spline.
-///
-/// `x` contains transformed death times, `y` is death-by-term, and `variance`
-/// contains the diagonal of the `cox.zph` residual variance. Missing residuals
-/// are NaN and are excluded separately for each term. No residual variance is
-/// estimated from the spline fit. `df >= 2` and `nsmo >= 2` are required.
 pub fn cox_zph_smooth(
     x: &[f64],
     y: ArrayView2<'_, f64>,

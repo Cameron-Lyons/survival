@@ -95,9 +95,6 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Create virtualenv
-        # Later steps call .venv/bin/python explicitly; .venv/bin also goes first on PATH so the
-        # subprocesses they spawn (ruff, run by scripts/generate_stubs.py directly and again from
-        # test_binding_contract.py) resolve to the venv's pinned copy.
         run: |
           python -m venv .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

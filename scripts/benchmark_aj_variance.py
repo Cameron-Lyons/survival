@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
-from survival import _survival, surv_analysis  # noqa: E402
+from survival import _survival, surv_analysis
 
 
 def measure(arguments: dict, repeats: int, check) -> dict:
@@ -39,8 +39,6 @@ def independent_input(rows: int, weighted: bool = False) -> dict:
     }
     if weighted:
         arguments["weights"] = 0.5 + (np.arange(rows) % 7) / 4.0
-        # Leave weighted survival positive, so this workload measures the
-        # independent sweep without the absorbed-curve compatibility fallback.
         arguments["state"][-1] = 0
     return arguments
 
@@ -136,7 +134,6 @@ def variance_control(rows: int, clusters: int | None, repeats: int, weighted: bo
     arguments = {**independent_input(rows, weighted), "se_fit": True}
     if clusters is not None:
         arguments["cluster"] = (np.arange(rows) % clusters).tolist()
-    # Asking for influence retains the general per-cluster reference kernel.
     reference = surv_analysis.survfitaj(**arguments, influence=True)
     expected = independent_expectation(arguments["state"], arguments.get("weights"))
 

@@ -1,5 +1,3 @@
-# Independent stock survival DPQR vector arithmetic and callback references.
-# Run from the repository root; an optional argument selects the fixture directory.
 arguments <- commandArgs(trailingOnly=TRUE)
 output_directory <- if (length(arguments)) arguments[[1L]] else 'python/tests/fixtures'
 dir.create(output_directory,recursive=TRUE,showWarnings=FALSE)

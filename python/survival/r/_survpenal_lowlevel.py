@@ -210,8 +210,6 @@ def survpenal_fit(
         if any(not isinstance(label, str) for label in labels):
             raise TypeError("assign names must be strings")
     else:
-        # Validate bounds before using column names. The native layer checks
-        # term coverage, duplicate columns and penalty/assignment agreement.
         if any(j >= len(names) for group in assignments for j in group):
             raise ValueError("assign refers to a column outside x")
         labels = [

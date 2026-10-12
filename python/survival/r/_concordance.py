@@ -211,7 +211,6 @@ def concordancefit(
         labels = _materialize_labels(strata, "strata")
         if len(labels) != n:
             raise ValueError("y and strata are not the same length")
-        # R's as.factor(strata): the declared levels in their order, else the sorted values
         declared = _strata_levels or _categories(strata)
         strata_codes, levels = _factor(
             labels if declared is None else _r_factor(labels, declared), "strata"
@@ -220,7 +219,6 @@ def concordancefit(
             raise ValueError("strata contains missing values")
     cluster_codes: list[int | None] | None = None
     if cluster is not None:
-        # R's rowsum(dfbeta, cluster) orders the clusters as sort(unique(cluster))
         cluster_codes = _cluster_codes(cluster)
         if len(cluster_codes) != n:
             raise ValueError("y and cluster are not the same length")
@@ -323,7 +321,7 @@ def _orderable_response(data: Any, lhs: str) -> tuple[Any, str]:
     name, _quoted = _formula_name(lhs)
     source = _column_source(data, name) if name in columns else _response_arg_values(data, lhs)
     if _categories(source) is not None or lhs.startswith(("factor(", "as.factor(")):
-        codes, levels = _factor(source, name)  # R's as.factor: declared or sorted levels
+        codes, levels = _factor(source, name)
         if not _is_ordered(source) and len(levels) != 2:
             raise ValueError(_RESPONSE_ERROR)
         values = [None if code is None else code + 1.0 for code in codes]
@@ -421,7 +419,6 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     if isinstance(fit, YatesModel):
         return _external_fit_data(fit, newdata, need_weights, cluster)
     if isinstance(fit, CoxphmsModel):
-        # R fails with "x and y are not the same length"
         raise ValueError(
             "concordance is not available for multi-state coxph fits; the fit's "
             "concordance component holds the value computed on the stacked data"
@@ -478,8 +475,6 @@ def _external_fit_data(
         predictor = list(fit.linear_predictors)
     else:
         x = np.asarray(_design_rows_from_spec(frame.data, fit.design, frame.n), dtype=float)
-        # lm predictions omit aliased columns. The caller supplies coefficients in
-        # the full formula-column order, including NaN for those aliases.
         beta = np.asarray(fit.coefficients, dtype=float)
         values = x @ np.where(np.isnan(beta), 0.0, beta)
         if frame.offset is not None:
@@ -492,8 +487,6 @@ def _external_fit_data(
         strata_levels=(),
         weights=fit.weights if newdata is None and need_weights else None,
         cluster=cluster,
-        # R scores a training lm response as a numeric vector, without aeqSurv.
-        # Its new-data path explicitly creates a Surv before scoring.
         timefix=False if newdata is None else None,
     )
 
@@ -608,8 +601,6 @@ def _concordance_from_data(
         if other.weights != first.weights:
             raise ValueError("all models must have the same weight vector")
     if any(d.cluster is not None for d in data):
-        # Influence rows must refer to the same groups before cross-multiplying.
-        # Names and factor order may differ without changing group membership.
         cluster_codes, partition = _prepare_cluster(first.cluster, len(first.x))
         for other in data[1:]:
             if other.cluster is first.cluster:
@@ -619,7 +610,6 @@ def _concordance_from_data(
         data = [replace(d, cluster=cluster_codes) for d in data]
     influence = _influence_option(options["influence"])
     options["influence"] = 3 if influence == 2 else 1
-    # each fit has one predictor: scalar concordance/cvar, a dfbeta vector
     results: list[Any] = [_fit_concordance(d, options) for d in data]
     dfbeta = [result.dfbeta for result in results]
     if any(len(column) != len(dfbeta[0]) for column in dfbeta[1:]):
@@ -637,8 +627,6 @@ def _concordance_from_data(
         count=[_count_total(result.count) for result in results],
         n=results[0].n,
         names=names,
-        # crossprod(dfbeta): the single-fit variance on the diagonal.  R's
-        # t(wt * dfbeta) %*% dfbeta applies the case weights a second time.
         var=[[math.fsum(map(operator.mul, u, v)) for v in dfbeta] for u in dfbeta],
         cvar=[result.cvar for result in results],
         dfbeta=[list(row) for row in zip(*dfbeta, strict=True)] if influence == 1 else None,
@@ -662,7 +650,7 @@ def _prepare_cluster(cluster: Any, n: int) -> tuple[_ClusterCodes | None, list[i
 
 
 def concordance(
-    object: Any,  # noqa: A002 - R's argument name
+    object: Any,
     *more: Any,
     data: Any | None = None,
     weights: Any | None = None,
@@ -688,8 +676,8 @@ def concordance(
     models), or for a ``Surv`` plus ``scores``."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
-    object = _pop_dotted_keyword(kwargs, "response", "object", object, None)  # noqa: A001
-    object = _pop_dotted_keyword(kwargs, "formula", "object", object, None)  # noqa: A001
+    object = _pop_dotted_keyword(kwargs, "response", "object", object, None)
+    object = _pop_dotted_keyword(kwargs, "formula", "object", object, None)
     scores = _pop_dotted_keyword(kwargs, "risk_scores", "scores", scores, None)
     if kwargs:
         raise TypeError(f"concordance got unexpected argument(s): {', '.join(sorted(kwargs))}")
@@ -730,7 +718,6 @@ def concordance(
         )
     if object is None:
         raise TypeError("a formula argument is required")
-    # R's concordance.coxph/.survreg take any other argument as one more fit
     for name, given in (
         ("data", data is not None),
         ("weights", weights is not None),
@@ -822,7 +809,7 @@ def survConcordance(
         rows = list(stats.values())
     total = {name: sum(row[name] for row in rows) for name in _SURVCONCORDANCE_NAMES}
     npair = total["concordant"] + total["discordant"] + total["tied.risk"]
-    if npair == 0:  # no comparable pairs: R's 0/0
+    if npair == 0:
         npair = math.nan
     return SurvConcordanceResult(
         concordance=(total["concordant"] + total["tied.risk"] / 2.0) / npair,
@@ -857,7 +844,7 @@ def survConcordance_fit(
     weights = _optional_float_vector(weight, "weight", n)
     if strata is None:
         return _survconcordance_row(y, values, weights)
-    codes, levels = _factor(strata, "strata")  # R's as.factor(strata)
+    codes, levels = _factor(strata, "strata")
     if len(codes) != n:
         raise ValueError("y and strata are not the same length")
     return _survconcordance_strata(y, values, weights, codes, levels)

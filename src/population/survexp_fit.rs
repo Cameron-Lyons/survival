@@ -1,7 +1,3 @@
-//! Expected survival of one or more cohorts from a rate table: a port of R
-//! survival's `src/pyears3b.c` and of `R/survexp.fit.R`, the routine
-//! `survexp` calls once the model frame has been matched to the table.
-
 use super::match_ratetable::align_us_year_axis_validated;
 use super::pystep::{PystepTable, pystep_cell};
 use super::ratetable::RateTable;
@@ -9,31 +5,17 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::Array2;
 
-/// The per-interval output of `pyears3b.c`, `ntime x ngroup`.
 struct Pyears3bOutput {
-    /// Conditional survival over each interval (before `cumprod`).
     surv: Array2<f64>,
-    /// Number of subjects contributing to each cell.
     n: Array2<usize>,
 }
 
-/// The subjects handed to `pyears3b`: zero-based curve numbers, starting
-/// positions in the table (one row each) and follow-up times.
 struct Pyears3bSubjects<'a> {
     group: &'a [usize],
     positions: &'a Array2<f64>,
     y: &'a [f64],
 }
 
-/// `pyears3b(death, efac, edims, ecut, expect, grpx, x, y, times, ngrp)`.
-///
-/// The C code calls `pystep` for every step, searching the cutpoints again
-/// even when the subject is still in the same cell of the table, and
-/// evaluates both `exp(-cumhaz)` and `exp(-(cumhaz + hazard))` for every
-/// output interval.  Here each subject keeps its cell's rate and the
-/// cutpoints ending that cell (`pystep_cell`), so the cutpoints are searched
-/// once per cell entered while every step still has `pystep`'s length, and
-/// carries `exp(-cumhaz)` from one interval to the next.
 fn pyears3b(
     conditional: bool,
     table: &PystepTable<'_>,
@@ -57,9 +39,6 @@ fn pyears3b(
     let mut limits = vec![0.0; edim];
 
     for i in 0..n {
-        // `data2` is the subject's current position in the expected table,
-        // `cell_rate` the hazard of its cell, `limits` the cutpoints ending
-        // that cell and `cell_left` the time until the first of them.
         for (j, value) in data2.iter_mut().enumerate() {
             *value = positions[[i, j]];
         }
@@ -87,8 +66,6 @@ fn pyears3b(
                 }
                 let dt = etime.min(cell_left);
                 hazard += dt * cell_rate;
-                // `cell_left` is measured from the new position, as `pystep`
-                // would measure it.
                 cell_left = f64::INFINITY;
                 for ((value, &limit), &factor) in data2.iter_mut().zip(&limits).zip(table.factors) {
                     if factor != 1 {
@@ -105,7 +82,6 @@ fn pyears3b(
                 esurv[[j, g]] += hazard * thiscell;
                 wvec[[j, g]] += thiscell;
             } else {
-                // `survival` is exp(-cumhaz) at the start of the interval.
                 let next = (-(cumhaz + hazard)).exp();
                 esurv[[j, g]] += next * thiscell;
                 wvec[[j, g]] += survival * thiscell;
@@ -135,23 +111,13 @@ fn pyears3b(
     }
 }
 
-/// The output of `survexp.fit`: one curve per group, `ntime x ngroup`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvexpFit {
-    /// The sorted unique output times.
     pub times: Vec<f64>,
-    /// Expected survival at each time (rows) for each group (columns).
     pub surv: Array2<f64>,
-    /// Number of subjects contributing to each cell.
     pub n: Array2<usize>,
 }
 
-/// `survexp.fit(group, x, y, times, death, ratetable)` (`R/survexp.fit.R`).
-///
-/// `group` holds zero-based curve numbers, `positions` is the matrix from
-/// `match_ratetable` (one row per subject), `y` the follow-up days of each
-/// subject (`None` follows everyone to the last time point) and
-/// `conditional` is R's `death` argument.
 pub fn survexp_fit(
     group: &[usize],
     positions: &Array2<f64>,
@@ -213,7 +179,6 @@ pub fn survexp_fit(
         &times,
         n_groups,
     );
-    // cumprod down each column, except for a single time point.
     if times.len() > 1 {
         for mut column in surv.columns_mut() {
             let mut running = 1.0;
@@ -312,8 +277,6 @@ mod tests {
         assert!((fit.surv[[1, 0]] - (-0.1f64).exp()).abs() < 1e-14);
     }
 
-    /// Each interval's (hazard, length) as `pyears3b.c` accumulates them,
-    /// with a `pystep` call at every step.
     fn pyears3b_c_hazards(
         table: &PystepTable<'_>,
         rates: &[f64],
@@ -358,7 +321,6 @@ mod tests {
             cuts: &cuts,
             edge: true,
         };
-        // Output intervals that end inside the yearly age and calendar cells.
         let times: Vec<f64> = (1..=400).map(|k| k as f64 * 29.7).collect();
         let positions = ndarray::arr2(&[
             [-400.25, 1.0, -3652.5],

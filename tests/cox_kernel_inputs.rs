@@ -1,5 +1,3 @@
-//! Public mutable typed inputs are revalidated before Cox kernel indexing.
-
 use survival::core::{coxcount1, coxcount2};
 use survival::prelude::{CountingProcessData, CoxMartInput, SurvivalData, Weights};
 use survival::regression::TieMethod;
@@ -137,8 +135,6 @@ fn valid_risk_sets_and_weighted_martingale_residuals_keep_input_order() {
     assert_eq!(expanded.index, [2, 1, 0]);
     assert_eq!(expanded.status, [1, 0, 1]);
 
-    // Independent two-stratum hand calculation: the first event's weighted
-    // hazard is .5 / (.5 * 1 + 2 * 2) = 1/9; the second stratum has one death.
     for method in [TieMethod::Breslow, TieMethod::Efron, TieMethod::Exact] {
         let residuals = coxmart(&mart(), method).unwrap();
         for (actual, expected) in residuals.into_iter().zip([8.0 / 9.0, -2.0 / 9.0, 0.0]) {

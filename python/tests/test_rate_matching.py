@@ -76,7 +76,7 @@ def test_full_result_ownership_and_numpy_dates(tables):
     }
     result = r.match_ratetable(data, table)
     assert result.r == [[18000.125, 1.0, 9496.0], [22000.375, 2.0, 9862.0]]
-    assert pickle.loads(pickle.dumps(result)) == result  # noqa: S301 - own test data
+    assert pickle.loads(pickle.dumps(result)) == result
     frame = r.as_data_frame(result)
     frame["age"][0] = 0
     result.cutpoints[0][0] = -999

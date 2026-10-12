@@ -67,8 +67,6 @@ def test_concatenation_preserves_type_states_and_normalized_codes(case):
     x = response(case["response"])
     result = r.concat_surv(x.subset([2, 0]), x.subset([6, 1]))
     assert_response(result, case["concat"])
-    # A status code of 2 in a multistate or interval response must not be
-    # reinterpreted through the constructor's ordinary 1/2 event coding.
     assert result.event == (x.event[2], x.event[0], x.event[6], x.event[1])
 
 

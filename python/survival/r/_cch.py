@@ -152,7 +152,6 @@ def cch(
     outside = sum(1 for sub, event in zip(subcohort, y.event, strict=True) if not sub and not event)
     if outside:
         raise ValueError(f"{outside} censored observations not in subcohort")
-    # the Borgan score rows are collapsed by id in R's rowsum order (sort(unique(id)))
     sorted_ids = _r_levels(_column_source(data, id) if isinstance(id, str) else id, id_levels)
     id_rank = {value: rank for rank, value in enumerate(sorted_ids)}
     id_codes = [id_rank[value] for value in id_values]
@@ -228,7 +227,6 @@ def summary_cch(fit: CchModelResult) -> dict[str, Any]:
     for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
         se = math.sqrt(variance[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
-        # Use the shared R normal CDF to keep 2*(1-pnorm(Z)) rounding platform-independent.
         cdf = _core.psurvreg([z], [0.0], [1.0], "gaussian")[0]
         p = 2.0 * (1.0 - cdf)
         rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})

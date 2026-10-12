@@ -85,7 +85,7 @@ def test_prentice_matches_r(ccoh_data):
     assert [row[k] for k in ("coef", "se", "z", "p")] == approx(
         [0.734570842045653, 0.168496197244282, 4.35956926066816, 1.30318703686072e-05], rel=1e-6
     )
-    assert summary["coefficients"][3]["p"] == 0.0  # R: 2*(1-pnorm(Z)) underflows to 0
+    assert summary["coefficients"][3]["p"] == 0.0
     assert r.confint(fit)[0]["lower"] == approx(
         0.734570842045653 - 1.959963984540054 * 0.168496197244282, rel=1e-6
     )
@@ -105,7 +105,6 @@ def test_summary_p_values_preserve_r_rounding_across_platforms(ccoh_data, monkey
         result = original_erfc(value)
         return math.nextafter(result, 0.0) if result < 2.0 else result
 
-    # Emulate the libm rounding difference behind the Windows CI failure.
     monkeypatch.setattr(math, "erfc", platform_erfc)
     summary = r.model_summary(fit)
     assert summary["coefficients"][2]["p"] == pytest.approx(1.40099043477449e-11, rel=1e-6, abs=0.0)

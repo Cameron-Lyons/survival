@@ -38,7 +38,6 @@ test_that("trailing scales and penalized empty strata preserve estimable results
     form <- if (penalized) survival::Surv(time, status) ~ ridge(age, theta = 2) + sex + strata(g)
             else survival::Surv(time, status) ~ age + sex + strata(g)
     fit <- survreg(form, d, subset = g != drop, weights = w)
-    # ridge() is evaluated before subset; preserve its original scaling.
     selected <- which(d$g != drop)
     compact_data <- d
     replacement <- setdiff(c("a", "b", "c"), drop)[1L]

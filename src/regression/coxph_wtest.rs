@@ -1,32 +1,23 @@
-//! Cholesky-based Wald test, a port of R survival's `coxph.wtest()`
-//! (`R/coxph.wtest.R`, `src/coxph_wtest.c`).
-//!
-//! `coxph` uses it for the overall Wald statistic `b' V^{-1} b` because a
-//! plain `solve()` would choke on a singular variance matrix: the
-//! generalised Cholesky (`cholesky2`/`chsolve2`, `internal::matrix`) zeroes
-//! redundant directions and reports the rank as the degrees of freedom.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{cholesky2, chsolve2};
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-/// `coxph.wtest(var, b)`: one test per column of `b`.
+#[doc = " `coxph.wtest(var, b)`: one test per column of `b`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxphWtest {
-    /// `b' V^{-1} b` for each column of `b`.
+    #[doc = " `b' V^{-1} b` for each column of `b`."]
     #[pyo3(get)]
     pub test: Vec<f64>,
-    /// Rank of `var`, the degrees of freedom of each test.
+    #[doc = " Rank of `var`, the degrees of freedom of each test."]
     #[pyo3(get)]
     pub df: usize,
-    /// `V^{-1} b` (one row per variable, one column per test).
+    #[doc = " `V^{-1} b` (one row per variable, one column per test)."]
     #[pyo3(get)]
     pub solve: Vec<Vec<f64>>,
 }
 
-/// Port of `coxph_wtest.c`.  `b` is `nvar x ntest`.
 pub fn wald_tests(
     var: &Array2<f64>,
     b: &Array2<f64>,
@@ -54,8 +45,6 @@ pub fn wald_tests(
             "toler.chol must be non-negative",
         ));
     }
-    // dmatrix() hands cholesky2 the columns of R's matrix as rows, so the
-    // C routine reads R's lower triangle; the transpose reproduces that.
     let mut factor = var.t().to_owned();
     cholesky2(&mut factor, toler_chol);
     let df = (0..nvar).filter(|&i| factor[(i, i)] > 0.0).count();
@@ -75,7 +64,6 @@ pub fn wald_tests(
     Ok(CoxphWtest { test, df, solve })
 }
 
-/// The scalar case `coxph.wtest(var, b)$test` for a coefficient vector.
 pub(crate) fn wald_statistic(var: &Array2<f64>, b: &[f64], toler_chol: f64) -> SurvivalResult<f64> {
     if b.is_empty() {
         return Ok(0.0);
@@ -85,7 +73,7 @@ pub(crate) fn wald_statistic(var: &Array2<f64>, b: &[f64], toler_chol: f64) -> S
     Ok(wald_tests(var, &column, toler_chol)?.test[0])
 }
 
-/// `coxph.wtest(var, b, toler.chol)`; `b` is given as one row per test.
+#[doc = " `coxph.wtest(var, b, toler.chol)`; `b` is given as one row per test."]
 #[pyfunction(name = "coxph_wtest")]
 #[pyo3(signature = (var, b, toler_chol=1e-9))]
 pub fn coxph_wtest_py(
@@ -200,7 +188,6 @@ mod tests {
 
     #[test]
     fn wald_statistic_matches_r_reference() {
-        // A <- matrix(c(4,2,2, 2,5,3, 2,3,6), 3, 3); coxph.wtest(A, 1:3)$test = 1.578125
         let var = arr2(&[[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]]);
         let test = wald_statistic(&var, &[1.0, 2.0, 3.0], 1e-9).unwrap();
         assert!((test - 1.578125).abs() < 1e-12);

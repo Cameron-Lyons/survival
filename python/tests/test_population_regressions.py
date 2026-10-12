@@ -74,9 +74,6 @@ def _lung_entries():
     ],
 )
 def test_survexp_cohort_methods_follow_each_subject_across_rate_cells(method, male, female):
-    # lung2$entry <- as.Date("1985-03-01") + (1:228) * 29
-    # survexp(Surv(time, status) ~ sex, lung2, rmap = list(age = age * 365.25, sex = sex,
-    #         year = entry), method = method, times = c(0, 182, 365, 730, 1000))
     result = r.survexp(
         "Surv(time, status) ~ sex",
         _lung_entries(),
@@ -93,8 +90,6 @@ TCUT = 'tcut(age, c(0, 65, 120) * 365.25, labels = c("young", "old"))'
 
 
 def _cohort():
-    # d2 <- data.frame(time, status, g = factor(g, levels = c("a", "b", "c")), age, sex,
-    #                  entry = as.Date(...))
     return {
         "time": [100, 250, 400, 30, 700, 365],
         "status": [1, 0, 1, 0, 1, 0],
@@ -116,8 +111,6 @@ _COHORT_RMAP = {"age": "age", "sex": "sex", "year": "entry"}
 
 
 def _by_group(data_frame=False):
-    # pyears(Surv(time, status) ~ g, d2, rmap = list(age = age, sex = sex, year = entry),
-    #        ratetable = survexp.us, scale = 365.25)
     return r.pyears(
         "Surv(time, status) ~ g",
         _cohort(),
@@ -128,7 +121,6 @@ def _by_group(data_frame=False):
 
 
 def test_cipoisson_gives_a_missing_row_for_a_missing_count():
-    # R gives NA limits for cipoisson(c(1, NA, 3), 2) row 2 and for cipoisson(0, 0)
     limits = r.cipoisson([1, None, 3], 2)
     assert limits[0] == approx((0.012658903992144949, 2.7858216954694495))
     assert all(math.isnan(value) for value in limits[1])
@@ -143,8 +135,6 @@ def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
     assert result.pyears == approx([2.8747433264887063, 2.1765913757700206, 0.0])
     assert result.expected == approx([0.17216054085712138, 0.066775795966720508, 0.0])
 
-    # summary(p, rate = TRUE, ci.r = TRUE, rr = TRUE, ci.rr = TRUE, totals = TRUE,
-    #         scale = 1000): the empty level c prints "." and ". - ."
     summary = r.summary_pyears(
         result, rate=True, totals=True, scale=1000, **{"ci.r": True, "ci.rr": True}
     )
@@ -179,7 +169,6 @@ def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
     )
     assert (summary.offtable, summary.observations) == (0.0, 6)
 
-    # data.frame = TRUE keeps the non-empty cells; summary() restores the full table
     restored = r.summary_pyears(
         _by_group(data_frame=True), rate=True, ci_r=True, ci_rr=True, totals=True, scale=1000
     )
@@ -187,7 +176,6 @@ def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
     assert restored.rate == approx(summary.rate)
     assert restored.ci_rr == pairs(summary.ci_rr)
 
-    # the defaults: no rates, rr on because the result has expected counts
     plain = r.summary_pyears(result)
     assert plain.rate is None
     assert plain.ci_r is None
@@ -197,14 +185,11 @@ def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
 
 def test_summary_pyears_totals_of_tcut_tables_follow_r():
     cohort = _cohort()
-    # p2 <- pyears(Surv(time, status) ~ g + tcut(...), d2, scale = 365.25)
-    # summary(p2, rate = TRUE, ci.r = TRUE, totals = TRUE)
     summary = r.summary_pyears(
         r.pyears(f"Surv(time, status) ~ g + {TCUT}", cohort), rate=True, ci_r=True, totals=True
     )
     assert summary.dim == [4, 3]
     assert list(summary.dimnames.values()) == [["a", "b", "c", "Total"], ["young", "old", "Total"]]
-    # a tcut term makes the totals of n meaningless
     assert summary.n[0][:2] == [1, 2]
     assert math.isnan(summary.n[0][2])
     assert all(math.isnan(value) for value in summary.n[3])
@@ -220,7 +205,6 @@ def test_summary_pyears_totals_of_tcut_tables_follow_r():
     assert summary.ci_r[2][1] == approx((NAN, NAN))
     assert summary.rr is None
 
-    # p3 adds sex: the totals are margins of the first two dimensions in every slab
     three = r.summary_pyears(
         r.pyears(f"Surv(time, status) ~ g + sex + {TCUT}", cohort), totals=True
     )
@@ -250,7 +234,6 @@ def test_summary_pyears_rejects_what_r_rejects():
         r.summary_pyears(result, conf_level=1.0)
     with pytest.raises(ValueError, match="scale"):
         r.summary_pyears(result, scale=0)
-    # summary(pyears(Surv(time, status) ~ 1, d2), totals = TRUE) fails in R too
     with pytest.raises(ValueError, match="at least one term"):
         r.summary_pyears(r.pyears("Surv(time, status) ~ 1", _cohort()), totals=True)
     single = r.summary_pyears(r.pyears("Surv(time, status) ~ 1", _cohort()), rate=True)
@@ -268,33 +251,23 @@ def test_pyears_factor_terms_take_their_levels_as_model_frame_does():
         result = r.pyears(f"Surv(time, status) ~ {term}", cohort, scale=1, **kwargs)
         return result.dimnames[term], result.pyears, result.n
 
-    # pyears(Surv(time, status) ~ factor(g), d2, scale = 1): factor() drops the empty level c,
-    # which as.factor(g) and a bare g keep
     assert tables("factor(g)") == (["a", "b"], [1050, 795], [3, 3])
     assert tables("as.factor(g)") == (["a", "b", "c"], [1050, 795, 0], [3, 3, 0])
     assert tables("g") == (["a", "b", "c"], [1050, 795, 0], [3, 3, 0])
-    # model.frame calls factor() before subset = g != "b" (and na.action) remove rows,
-    # so b stays a level
     without_b = [level != "b" for level in cohort["g"]]
     assert tables("factor(g)", subset=without_b) == (["a", "b"], [1050, 0], [3, 0])
     result = r.pyears("Surv(time, status) ~ factor(g) + w", cohort, scale=1)
     assert result.dimnames["factor(g)"] == ["a", "b"]
     assert result.pyears == [[1050], [0]]
-    # ... and a character column keeps its levels under factor() and as.factor(), where the
-    # bare column is tabulated from the rows subset = h != "z" keeps
     without_z = [level != "z" for level in cohort["h"]]
     assert tables("factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
     assert tables("as.factor(h)", subset=without_z) == (["x", "y", "z"], [865, 280, 0], [3, 2, 0])
     assert tables("h", subset=without_z) == (["x", "y"], [865, 280], [3, 2])
-    # the levels of o = factor(g, levels = c("b", "c", "a")) keep their declared order,
-    # not the sorted one
     cohort["o"] = RFactor(cohort["g"], ["b", "c", "a"])
     assert tables("o") == (["b", "c", "a"], [795, 0, 1050], [3, 0, 3])
     assert tables("factor(o)") == (["b", "a"], [795, 1050], [3, 3])
     assert tables("as.factor(o)") == (["b", "c", "a"], [795, 0, 1050], [3, 0, 3])
 
-    # a filtered data frame keeps its unused categories:
-    # sub <- df[df$grp != "c", ]; pyears(Surv(time, status) ~ factor(grp), sub, scale = 1)
     pd = pytest.importorskip("pandas")
     frame = pd.DataFrame(
         {
@@ -328,10 +301,8 @@ def _dated():
 def test_dates_in_a_non_date_rate_dimension_are_errors():
     data = _dated()
     message = "Data has a date type variable, but the reference ratetable is not a date variable"
-    # R stops on survexp(~1, d, rmap = list(age = birth, sex = sex, year = entry), times = 365)
     with pytest.raises(ValueError, match=f"{message}: age$"):
         r.survexp("~1", data, rmap={"age": "birth", "sex": "sex", "year": "entry"}, times=[365])
-    # pyears(..., rmap = list(age = birth, sex = sexd, year = entry)): every dimension named
     data["sexd"] = data["birth"]
     with pytest.raises(ValueError, match=f"{message}: age sex$"):
         r.pyears(
@@ -345,12 +316,10 @@ def test_dates_in_a_non_date_rate_dimension_are_errors():
 def test_time_differences_are_ages_in_days():
     data = _dated()
     ages = [entry - birth for entry, birth in zip(data["entry"], data["birth"], strict=True)]
-    # R: survexp(~1, d, rmap = list(age = entry - birth, sex = sex, year = entry), times = 365)$surv
     expected = 0.99519210488657173
     for age in (ages, [age.days for age in ages]):
         fit = r.survexp("~1", data, rmap={"age": age, "sex": "sex", "year": "entry"}, times=[365])
         assert fit.surv == approx([expected])
-    # pyears(Surv(time, status) ~ 1, d, rmap = list(age = entry - birth, ...))
     result = r.pyears(
         "Surv(time, status) ~ 1",
         data,
@@ -383,7 +352,6 @@ def test_time_differences_are_ages_in_days():
 
 
 def test_pyears_without_categories_takes_the_default_category_data():
-    # pyears(Surv(c(1, 2), c(1, 0)) ~ 1)
     result = population.pyears([1.0, 2.0], event=[1.0, 0.0])
     assert result.pyears == approx([0.0082135523613963042])
     assert result.n == [2.0]
@@ -406,21 +374,16 @@ def _lung_complete():
     ],
 )
 def test_survexp_coxph_group_with_nobody_at_risk_is_missing(method, expected):
-    # lung2 <- na.omit(lung[, c("time", "status", "ph.ecog", "age", "sex")])
-    # survexp(Surv(time, status) ~ ph.ecog, lung2, ratetable = coxph(Surv(time, status) ~
-    #         age + sex, lung2), method = method, times = c(100, 300, 500))
     lung = _lung_complete()
     fit = r.coxph("Surv(time, status) ~ age + sex", lung)
     result = r.survexp(
         "Surv(time, status) ~ ph.ecog", lung, ratetable=fit, method=method, times=[100, 300, 500]
     )
     assert [row[0] for row in result.surv] == approx(expected, rel=1e-9)
-    # ph.ecog = 3 has one subject, who dies at 118
     assert [row[3] for row in result.surv] == approx([0.82587377664176709, NAN, NAN], rel=1e-9)
 
 
 def test_pyears_cut_terms_sort_their_breaks_like_r():
-    # pyears(Surv(time, status) ~ cut(age / 365.25, c(70, 0, 60, 100)), d2, scale = 1)
     data = {
         "time": [100, 250, 400, 30, 700, 365],
         "status": [1, 0, 1, 0, 1, 0],

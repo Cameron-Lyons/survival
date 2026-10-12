@@ -63,14 +63,11 @@ def test_residuals_survfit_collapse_and_weights_follow_r_rules():
     )
     with pytest.raises(ValueError, match="collapse=TRUE and weighted=FALSE"):
         r.survfit_residuals(fit, times=[2], collapse=True, weighted=False)
-    # ids that do not repeat cannot be collapsed: R silently turns collapse off
     plain = r.survfit_residuals(_group_fit(), times=[2], collapse=True)
     assert len(plain.id) == 8
 
 
 def test_residuals_survfit_collapse_without_weights_matches_r():
-    # residuals(fit, times, collapse=TRUE) on counting-process data with repeated ids and
-    # no case weights: R's `weighted <- FALSE` for missing weights must not reach the kernel
     data = {
         "id": [1, 1, 2, 2, 3, 3, 4, 4],
         "t1": [0, 1, 0, 2, 0, 1, 0, 3],
@@ -191,7 +188,6 @@ def test_pseudo_collapses_by_subject_and_returns_r_data_frame():
     assert list(frame) == ["id", "time", "resid", "pseudo"]
     assert frame["id"] == [1, 2, 3, 4] * 2
     assert len(frame["pseudo"]) == 8
-    # collapse = FALSE keeps one row per observation
     assert len(r.pseudo(fit, times=[2], collapse=False)) == 8
     with pytest.raises(ValueError, match="the times argument is required"):
         r.pseudo(fit)
@@ -217,12 +213,7 @@ def test_pseudo_multistate_has_subject_state_time_layout():
     assert all(not math.isnan(v) for row in single for v in row)
 
 
-# R 4.5.3, survival 3.8-12 for the tests below
-
-
 def _mgus2_competing_risks(n=60):
-    # R: m <- mgus2 with m$etime <- ifelse(pstat == 0, futime, ptime) and
-    # m$event <- factor(ifelse(pstat == 0, 2 * death, 1), 0:2, c("censor", "pcm", "death"))
     mgus2 = survival.datasets.load_mgus2()
     labels = ["censor", "pcm", "death"]
     etime, event = [], []
@@ -234,13 +225,10 @@ def _mgus2_competing_risks(n=60):
 
 
 def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
-    # R: the residuals and pseudo values at times c(20, 40) of
-    # fit <- survfit(Surv(time, status) ~ 1, aml, start.time = 10)
     fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_aml(), start_time=10)
 
     result = r.survfit_residuals(fit, times=[20, 40])
     assert len(result.resid) == 23
-    # the row ending at 9 is not part of the curve
     assert result.resid[0] == [0.0, 0.0]
     _close(result.resid[1], [-0.04585537918871252, -0.01959631589261219])
     _close(result.resid[3], [-0.05322499370118418, -0.02274572380392486])
@@ -253,7 +241,6 @@ def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
     _close(values[3], [-0.132653061224490, -0.0566893424036282])
     _close(r.pseudo(fit, times=[20, 40], type="rmst")[0], [9.03968253968254, 20.30599647266314])
 
-    # survfit(Surv(time, status) ~ x, aml, start.time = 10): rows 1, 2, 12, 13
     by_group = r.survfit("Surv(time, status) ~ x", survival.datasets.load_aml(), start_time=10)
     resid = r.survfit_residuals(by_group, times=[20, 40]).resid
     _close(resid[1], [-0.07875, -0.0405])
@@ -265,10 +252,6 @@ def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
 
 @pytest.mark.parametrize("groups", [3, 2])
 def test_residuals_and_pseudo_refuse_a_curve_that_start_time_emptied(groups):
-    # R: d <- data.frame(t = c(1:8, 5:7, 9), e = c(1,1,0,1, 0,1,1,0, 1,0,1,1),
-    # g = rep(1:3, each = 4)); fit <- survfit(Surv(t, e) ~ g, d, start.time = 5) has
-    # n = c(0, 4, 4), and residuals(fit, times = c(6, 7)) and pseudo(fit, times = c(6, 7))
-    # stop with "strata 3 not matched"; on d[1:8, ] (n = c(0, 4)) "strata 2 not matched"
     rows = 4 * groups
     data = {
         "t": [1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 9][:rows],
@@ -288,8 +271,6 @@ def test_residuals_and_pseudo_refuse_a_curve_that_start_time_emptied(groups):
 
 
 def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
-    # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], start.time = 12), then
-    # resid(fit, times = c(24, 60))[i, , ] and pseudo(fit, times = c(24, 60))[i, , ]
     fit = r.survfit("Surv(etime, event) ~ 1", _mgus2_competing_risks(), start_time=12)
     assert fit.n == [49]
     assert fit.start_time == 12.0
@@ -301,7 +282,6 @@ def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
     _close(first[0], [0.00444444444444444, -0.008602150537634409])
     _close(first[1], [0.0, -0.000277777777777778])
     _close(first[2], [-0.00444444444444444, 0.008879928315412186])
-    # row 5 ends at 8, before the start, and still takes part as in R
     _close(result.resid[4][0], [-0.0122222222222222, -0.008602150537634403])
     values = r.pseudo(fit, times=[24, 60])
     _close(values[0][0], [1.115736961451247, 0.21048935703313554])
@@ -310,7 +290,6 @@ def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
 
 
 def test_ctype_2_hazard_residuals_warn_as_in_r():
-    # residuals(survfit(Surv(time, status) ~ 1, aml, ctype = 2), times = c(10, 20), type)
     aml = survival.datasets.load_aml()
     fit = r.survfit("Surv(time, status) ~ 1", aml, ctype=2)
     approximate = "code for ctype=2 not yet completed, result is approximate"
@@ -326,7 +305,6 @@ def test_ctype_2_hazard_residuals_warn_as_in_r():
         pstate = r.survfit_residuals(exp_cumhaz, times=[10, 20])
     _close(pstate.resid[0], [-0.03255074101112063, -0.0270312195408266])
 
-    # the Kaplan-Meier survival and the AUC use no hazard: no warning
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         pstate = r.survfit_residuals(fit, times=[10, 20])
@@ -336,20 +314,15 @@ def test_ctype_2_hazard_residuals_warn_as_in_r():
 
 
 def test_old_style_type_fits_use_the_default_stype_and_ctype_as_in_r():
-    # fh <- survfit(Surv(time, status) ~ 1, aml, type = "fleming-harrington"), and the same
-    # with type = "fh2": type reaches survfitKM through ..., so residuals.survfit finds no
-    # Call$stype or Call$ctype and uses 1 for both
     aml = survival.datasets.load_aml()
     fh = r.survfit("Surv(time, status) ~ 1", aml, type="fleming-harrington")
     fh2 = r.survfit("Surv(time, status) ~ 1", aml, type="fh2")
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        # resid(fh, times = c(10, 20)): the Kaplan-Meier formula on the FH curve
         pstate = r.survfit_residuals(fh, times=[10, 20])
         auc = r.survfit_residuals(fh, times=[10, 20], type="auc")
         values = r.pseudo(fh, times=[10, 20])
-        # resid(fh2, times = c(10, 20), type = "cumhaz"): the fit's hazard and no ctype = 2 note
         cumhaz = r.survfit_residuals(fh2, times=[10, 20], type="cumhaz")
         chaz_values = r.pseudo(fh2, times=[10, 20], type="cumhaz")
         fh2_pstate = r.survfit_residuals(fh2, times=[10, 20])
@@ -366,9 +339,6 @@ def test_old_style_type_fits_use_the_default_stype_and_ctype_as_in_r():
 
 
 def test_ctype_2_multistate_residuals_do_not_warn_as_in_r():
-    # R: fit <- survfit(Surv(etime, event) ~ 1, data = m[1:60, ], ctype = 2) warns when it is
-    # fitted; resid(fit, times = c(24, 60), type = "cumhaz")[i, , ] and pseudo() do not, as
-    # rsurvpart2 has no ctype = 2 note
     with pytest.warns(UserWarning, match="only stype=1, ctype=1 implimented"):
         fit = r.survfit("Surv(etime, event) ~ 1", _mgus2_competing_risks(), ctype=2)
     assert fit.call.ctype == 2

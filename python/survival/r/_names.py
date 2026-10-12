@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-# the words isValidName (R's gram.c) rejects
 _RESERVED_WORDS = frozenset(
     {
         "if",

@@ -8,7 +8,6 @@
 }
 
 .quantile_argument_labels <- function(captured, actual_fit) {
-  # Preserve the bridge's established bare labels for split ordinary KM curves.
   if (!is.list(actual_fit) || inherits(actual_fit, "python.builtin.object")) return(captured)
   labels <- names(actual_fit)
   if (is.list(captured$value) && is.null(captured$value$error)) {

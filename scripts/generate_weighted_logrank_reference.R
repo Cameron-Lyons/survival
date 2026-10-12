@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Stock G-rho tests and a direct risk-set oracle for the delayed-entry extension.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly=TRUE)
@@ -36,8 +35,6 @@ counting_oracle <- function(frame,rho,timefix,grouped) {
     variance <- matrix(0,3,3)
     for (s in seq_along(levels)) {
         d <- frame[strata==levels[s],]
-        # Use stock KM to obtain left limits; construct test moments by
-        # explicitly selecting risk sets, independent of the Rust sweeps.
         km <- survfit(Surv(start,time,status)~1,data=d,se.fit=FALSE,timefix=FALSE)
         for (t in sort(unique(d$time[d$status==1]))) {
             earlier <- which(km$time<t)
@@ -77,8 +74,6 @@ for (near in c(FALSE,TRUE)) {
             if (timefix) {
                 fit <- survdiff(as.formula(formula),frame,rho=rho)
             } else {
-                # Stock 3.8-11 forwards explicit timefix into model.frame.
-                # Call its unchanged native test on the unrounded response.
                 strata <- if (grouped) factor(frame$stratum) else rep(1,nrow(frame))
                 native <- survival:::survdiff.fit(Surv(frame$time,frame$status),
                                                  factor(frame$group),strata,rho)

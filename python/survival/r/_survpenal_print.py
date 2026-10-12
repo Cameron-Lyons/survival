@@ -27,7 +27,7 @@ from ._types import NaAction, _PenaltyDesignTerm
 
 _COLUMNS = ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
 _ROW_KEYS = ("coef", "se", "se2", "chisq", "df", "p")
-_WIDTH = 80  # options(width)
+_WIDTH = 80
 
 
 @dataclass(frozen=True)
@@ -124,8 +124,6 @@ def _term_table(
             rows.append([row[key] for key in _ROW_KEYS])
             history.append(text)
         elif pterm == 2:
-            # Callback penalties have no retained printfun. Keep the sparse
-            # term separate instead of indexing the unrelated dense column.
             test = _frailty_wald(penalized.frail, penalized.fvar)
             names.append(label)
             rows.append(
@@ -139,7 +137,6 @@ def _term_table(
                 ]
             )
         elif terms and len(columns) > 1:
-            # the p-value is on 1 df whatever the DF column says, as in R
             test = coxph_wtest(_block(var, columns), term_coef).test[0]
             names.append(label)
             rows.append(
@@ -332,7 +329,6 @@ def print_survreg_penal(
     df = list(penalized.df)
     df_text = _r_format_numbers([round(value, 1) for value in df], digits)
     if any(math.isnan(value) for value in df):
-        # These are computed NaNs, rather than R's missing-value sentinel.
         df_text = [
             "NaN" if math.isnan(value) else text.strip()
             for value, text in zip(df, df_text, strict=True)
@@ -343,7 +339,6 @@ def print_survreg_penal(
     loglik = fit.loglik
     logtest = -2.0 * (loglik[0] - loglik[1])
     logtest_p = _core.pchisq(logtest, logtest_df, lower_tail=False)
-    # format.pval at pdig = max(1, digits - 4) (print.survreg.penal.R:114)
     df_label = "NaN" if math.isnan(logtest_df) else _r_format_number(round(logtest_df, 1) + 0.0)
     test = (
         f"Likelihood ratio test={_r_format_number(round(logtest, 2) + 0.0, digits)}"

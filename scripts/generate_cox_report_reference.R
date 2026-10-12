@@ -22,7 +22,6 @@ snapshot <- function(x, level=.95) {
        concordance=x$concordance,used_robust=x$used.robust,cmap=encode(x$cmap),states=if(is.null(x$states)) NULL else I(x$states))
 }
 d <- lung
-# Deterministic data keep all multistate coefficients finite.
 i <- seq_len(80)
 m <- data.frame(time=(i*7)%%29+1,status=as.integer(i%%3!=0),age=(i*3)%%11,
                 sex=as.integer(i%%5>2), id=i, endpoint=factor(ifelse(i%%3==0,'censor',ifelse(i%%4==0,'a','b')),
@@ -87,7 +86,6 @@ for(name in c('multistate','shared','proportional')) {
   add(paste0(name,'_narrow'),name,arguments=list(digits=5),width=40)
   add(paste0(name,'_expanded_narrow'),name,'summary',list(expand=TRUE,digits=5),width=40)
 }
-# Isolate number-formatting edge cases from numerical solver precision.
 matrices <- list()
 a <- cbind(coef=c(.0123456,-3.98765,0,NA,1e-12,1e3),se=c(.0234567,2.65432,0,NA,2e-13,10),
            z=c(1.23456,-2.45678,0,NA,5,100),p=c(.217,.014,1,NA,2e-7,0))

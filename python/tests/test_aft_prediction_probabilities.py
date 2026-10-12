@@ -110,8 +110,6 @@ def test_custom_quantile_callback_receives_missing_and_invalid_probabilities_in_
     actual = r.predict(model, type="quantile", p=probabilities, se_fit=True)
     assert len(calls) == 1
     np.testing.assert_array_equal(calls[0], probabilities)
-    # The user's distribution determines the missing-probability behavior;
-    # a constant standardized quantile gives the location and its standard error.
     location = r.predict(model, type="lp", se_fit=True)
     np.testing.assert_array_equal(
         actual.fit, np.repeat(np.asarray(location.fit)[:, None], 5, axis=1)

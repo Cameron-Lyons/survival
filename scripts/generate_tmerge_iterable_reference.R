@@ -43,7 +43,6 @@ add <- function(name,data1,data2,operations,id="id",tstart=NULL,tstop=NULL,
     warning=function(warning) {
       warnings <<- c(warnings,conditionMessage(warning));invokeRestart("muffleWarning")
     })
-  # First-call id must be a name, even when direct update vectors are requested.
   cases[[length(cases)+1L]] <<- c(list(name=name,data1=lapply(data1,encode),
     data2=lapply(data2,encode),operations=operations,id=id,tstart=tstart,tstop=tstop,
     options=options,update=update,same=same,direct=direct,warnings=I(warnings)),result)

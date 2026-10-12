@@ -88,8 +88,6 @@ fn malformed_inputs() -> Vec<(SurvivalForestInput, &'static str)> {
         ));
     }
     for n_obs in [usize::MAX / 2 + 1, usize::MAX] {
-        // The first product wraps to zero in release builds, so an ordinary
-        // equality check would accept the empty feature buffer.
         cases.push((
             SurvivalForestInput {
                 x: vec![],
@@ -219,8 +217,6 @@ fn typed_forest_inputs_cannot_bypass_dimension_validation() {
     Python::attach(|py| {
         let config = forest_config();
         for (input, message) in malformed_inputs() {
-            // Rust callers can construct or mutate the public fields without
-            // going through new(), so fit_typed must recheck them.
             assert_value_error(SurvivalForest::fit_typed(py, &input, &config), message);
             assert_value_error(
                 SurvivalForestInput::new(
@@ -424,8 +420,6 @@ fn tree_models_preserve_training_and_predictions_without_features() {
             "x_new dimensions don't match",
         );
         for n_new in [isize::MAX as usize / size_of::<Vec<f64>>() + 1, usize::MAX] {
-            // Zero input columns make the feature product zero, but the
-            // prediction rows still require an addressable output buffer.
             let message = "n_new is too large for prediction output";
             assert_value_error(forest.predict_risk(vec![], n_new), message);
             assert_value_error(forest.predict_survival(vec![], n_new), message);

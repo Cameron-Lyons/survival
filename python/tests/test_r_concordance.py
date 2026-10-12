@@ -44,7 +44,7 @@ def test_formula_concordance_matches_r(ovarian):
     reverse = r.concordance("Surv(futime, fustat) ~ age", ovarian, reverse=True)
     assert reverse.concordance == approx(0.784403669724771)
     assert counts(reverse.count) == [171, 47, 0, 0, 0]
-    numeric = r.concordance("futime ~ age", ovarian)  # y ~ x is read as Surv(y) ~ x
+    numeric = r.concordance("futime ~ age", ovarian)
     assert numeric.concordance == approx(0.276923076923077)
     assert counts(numeric.count) == [90, 235, 0, 0, 0]
     frame = r.as_data_frame(result)
@@ -196,5 +196,4 @@ def test_concordancefit_and_deprecated_entry_points(ovarian):
     with pytest.warns(DeprecationWarning, match="deprecated"):
         stats = r.survConcordance_fit(y, ovarian["age"])
     assert (stats["concordant"], stats["discordant"]) == (171.0, 47.0)
-    # R: 2 * npair * sqrt(cvar), the Cox-model standard deviation of C - D
     assert stats["std(c-d)"] == approx(39.5558676641869, rel=1e-12)

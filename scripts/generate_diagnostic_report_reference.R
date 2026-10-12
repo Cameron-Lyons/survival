@@ -80,7 +80,6 @@ add <- function(name,object,method,arguments=list(),width=80) {
 for(name in names(objects)) {
   kind<-specs[[name]]$kind
   method<-switch(kind,cox_zph='cox.zph',concordancefit='concordance',kind)
-  # print.clogit calls NextMethod and needs the generic dispatch context.
   if(method=='clogit') method<-'coxph'
   add(name,name,method)
   if(method=='cch') add(paste0(name,'_summary'),name,'summary.cch')

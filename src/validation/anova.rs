@@ -1,58 +1,39 @@
-//! Analysis of deviance tables for Cox models.
-//!
-//! Port of the table arithmetic of R survival `R/anova.coxph.R` (a single
-//! model, terms added sequentially) and `R/anova.coxphlist.R` (a list of
-//! nested models).  Refitting the intermediate models of a single-model
-//! table needs the design's term assignment and the Cox fitter, so the
-//! caller supplies the log-likelihoods and degrees of freedom of every
-//! model in order; this module produces R's table shape from them.  The
-//! degrees of freedom are real numbers: a penalized fit counts `sum(fit$df)`,
-//! so a step can be fractional or, in a single-model table, negative (its
-//! p-value is then `NaN`, as `pchisq` gives in R).
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// How the models were produced, which decides the sign convention of
-/// the chi-square column exactly as R does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnovaKind {
-    /// `anova(fit)`: terms added sequentially; `Chisq = 2 * diff(loglik)`.
     Sequential,
-    /// `anova(fit1, fit2, ...)`: `Chisq = |2 * diff(loglik)|`, `Df = |diff(df)|`.
     Models,
 }
 
-/// One row of the table.  The first model has no test (R's `NA` cells).
+#[doc = " One row of the table.  The first model has no test (R's `NA` cells)."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct AnovaRow {
-    /// R's row name: `"NULL"` then the term labels, or `"1"`, `"2"`, ...
+    #[doc = " R's row name: `\"NULL\"` then the term labels, or `\"1\"`, `\"2\"`, ..."]
     pub name: String,
     pub loglik: f64,
     pub chisq: Option<f64>,
     pub df: Option<f64>,
-    /// `Pr(>|Chi|)`; absent for the first row and when `test` is off.
+    #[doc = " `Pr(>|Chi|)`; absent for the first row and when `test` is off."]
     pub p_value: Option<f64>,
 }
 
-/// R's `anova` data frame for Cox models.
+#[doc = " R's `anova` data frame for Cox models."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct AnovaCoxphResult {
     pub rows: Vec<AnovaRow>,
-    /// `"Chisq"` when p-values were requested (R's `test` argument).
+    #[doc = " `\"Chisq\"` when p-values were requested (R's `test` argument)."]
     pub test: Option<String>,
 }
 
 crate::internal::pickle::picklable!(AnovaRow, AnovaCoxphResult);
 
-/// Build the analysis-of-deviance table from the models' final partial
-/// log-likelihoods and their degrees of freedom (`sum(fit$df)` for a
-/// penalized fit, else the number of non-`NA` coefficients).
 pub fn anova_coxph(
     loglik: &[f64],
     df: &[f64],
@@ -104,8 +85,8 @@ pub fn anova_coxph(
     })
 }
 
-/// Python entry point: `anova_coxph(loglik, df, names=None, sequential=True,
-/// test="Chisq")`.  `names` default to `NULL` and the model index like R.
+#[doc = " Python entry point: `anova_coxph(loglik, df, names=None, sequential=True,"]
+#[doc = " test=\"Chisq\")`.  `names` default to `NULL` and the model index like R."]
 #[pyfunction(name = "anova_coxph")]
 #[pyo3(signature = (loglik, df, names=None, sequential=true, test=Some("Chisq")))]
 pub fn anova_coxph_py(
@@ -236,9 +217,6 @@ mod tests {
 
     #[test]
     fn penalized_df_are_fractional_and_may_decrease() {
-        // anova(coxph(Surv(time, status) ~ pspline(age, df=4) + sex, lung)): the
-        // pspline basis is refitted unpenalized (12 df), the full model counts
-        // sum(fit$df), so the sex row has negative Df and a NaN p-value
         let result = anova_coxph(
             &[-749.9098013903947, -743.0529439580274, -741.0266343140879],
             &[0.0, 12.0, 5.08864312775353],
@@ -253,7 +231,6 @@ mod tests {
         assert!((result.rows[2].chisq.unwrap() - 4.052619287878997).abs() < 1e-9);
         assert!(result.rows[2].p_value.unwrap().is_nan());
 
-        // anova(coxph(~ age + sex), coxph(~ pspline(age, df=4) + sex)) on lung
         let result = anova_coxph(
             &[-742.8482457837704, -741.0266343140879],
             &[2.0, 5.08864312775353],

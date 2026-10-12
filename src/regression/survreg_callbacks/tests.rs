@@ -1,4 +1,3 @@
-//! Public native callbacks, including postfit operations, against R references.
 use super::*;
 use crate::regression::parametric_survival::{SurvregControl, SurvregData, survreg_fit};
 use crate::regression::survreg_density::{SurvregDensitySource, test_support::*};

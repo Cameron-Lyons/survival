@@ -31,7 +31,6 @@ def lung():
 
 @pytest.fixture(scope="module")
 def lung_na(lung):
-    # lung with wt.loss missing and age 30 in the first row
     data = {key: list(values) for key, values in lung.items()}
     data["wt.loss"][0] = math.nan
     data["age"][0] = 30
@@ -52,11 +51,7 @@ def _coxph(*args, **kwargs):
         return r.coxph(*args, **kwargs)
 
 
-# --- the terms see the data before na.action and subset ------------------------------
-
-
 def test_pspline_knots_span_the_rows_na_action_drops(lung_na):
-    # coxph(Surv(time, status) ~ pspline(age, df = 3) + wt.loss, d, na.action = na.omit)
     fit = _coxph(
         "Surv(time, status) ~ pspline(age, df = 3) + wt.loss", lung_na, na_action="na.omit"
     )
@@ -79,8 +74,6 @@ def test_pspline_knots_span_the_rows_na_action_drops(lung_na):
 
 
 def test_ridge_scales_by_the_variances_before_na_action(lung):
-    # coxph(Surv(time, status) ~ ridge(age, wt.loss, theta = 1) + ph.karno, lung,
-    #       na.action = na.omit)
     fit = _coxph(
         "Surv(time, status) ~ ridge(age, wt.loss, theta = 1) + ph.karno", lung, na_action="na.omit"
     )
@@ -91,15 +84,12 @@ def test_ridge_scales_by_the_variances_before_na_action(lung):
 
 
 def test_frailty_df_search_starts_from_the_length_before_na_action(lung):
-    # coxph(Surv(time, status) ~ age + frailty(inst, df = 4), lung, na.action = na.omit):
-    # guess = 3 * 4 / 228 with the row whose inst is missing
     fit = _coxph("Surv(time, status) ~ age + frailty(inst, df = 4)", lung, na_action="na.omit")
     assert fit.coefficients == approx([0.0193680390769959])
     assert fit.df == approx([0.984302099151188, 3.98713808220157])
 
 
 def test_penalty_terms_see_the_rows_subset_drops(lung):
-    # coxph(Surv(time, status) ~ pspline(age, df = 3), lung, subset = age > 50)
     fit = _coxph(
         "Surv(time, status) ~ pspline(age, df = 3)", lung, subset=[a > 50 for a in lung["age"]]
     )
@@ -119,8 +109,6 @@ def test_penalty_terms_see_the_rows_subset_drops(lung):
     )
     assert fit.df == approx([3.0332541355986])
 
-    # coxph(Surv(time, status) ~ age + frailty(inst, df = 4), lung, subset = sex == 1,
-    #       na.action = na.omit)
     fit = _coxph(
         "Surv(time, status) ~ age + frailty(inst, df = 4)",
         lung,
@@ -134,8 +122,6 @@ def test_penalty_terms_see_the_rows_subset_drops(lung):
 def test_frailty_groups_are_the_levels_before_subset():
     kidney = _kidney(6)
     subset = [value != 3 for value in kidney["id"]]
-    # coxph(Surv(time, status) ~ age + frailty(id, theta = 0.5), k6, subset = id != 3):
-    # six levels make the term sparse although five remain
     fit = _coxph("Surv(time, status) ~ age + frailty(id, theta = 0.5)", kidney, subset=subset)
     assert fit.coef_names == ("age",)
     assert fit.coefficients == approx([-0.00597873632701662])
@@ -150,7 +136,6 @@ def test_frailty_groups_are_the_levels_before_subset():
     )
     assert fit.df == approx([0.551917423496589, 1.32034859935297])
 
-    # the dense term keeps a column for the level subset removed
     fit = _coxph(
         "Surv(time, status) ~ age + frailty(id, theta = 0.5, sparse = FALSE)", kidney, subset=subset
     )
@@ -166,9 +151,6 @@ def test_frailty_groups_are_the_levels_before_subset():
             -0.205633530076152,
         ]
     )
-
-
-# --- coefficient names -----------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -202,7 +184,6 @@ def test_frailty_groups_are_the_levels_before_subset():
     ],
 )
 def test_dense_frailty_names_carry_the_distribution(term, prefix, coefficients):
-    # coxph(Surv(time, status) ~ age + <term>, kidney[kidney$id <= 5, ])
     fit = _coxph(f"Surv(time, status) ~ age + {term}", _kidney(5))
     assert fit.coef_names == tuple(["age"] + [f"{prefix}:{level}" for level in range(1, 6)])
     if coefficients is not None:
@@ -216,7 +197,6 @@ def test_frailty_distribution_is_matched_as_pmatch_does(dist):
 
 
 def test_pspline_with_intercept_numbers_the_columns_from_one(lung):
-    # coxph(Surv(time, status) ~ pspline(age, df = 3, intercept = TRUE), lung)
     fit = _coxph("Surv(time, status) ~ pspline(age, df = 3, intercept = TRUE)", lung)
     assert fit.coef_names == tuple(f"ps(age){j}" for j in range(1, 12))
     assert fit.coefficients[:10] == approx(
@@ -236,11 +216,7 @@ def test_pspline_with_intercept_numbers_the_columns_from_one(lung):
     assert math.isnan(fit.coefficients[10])
 
 
-# --- pspline(combine =) and pspline(penalty = FALSE) ----------------------------------
-
-
 def test_pspline_combine_sums_basis_columns(lung):
-    # coxph(Surv(time, status) ~ pspline(age, df = 4, combine = c(1,1,2,2,...,6,6)), lung)
     fit = _coxph(
         "Surv(time, status) ~ pspline(age, df = 4, combine = c(1,1,2,2,3,3,4,4,5,5,6,6))", lung
     )
@@ -256,7 +232,6 @@ def test_pspline_combine_sums_basis_columns(lung):
         ]
     )
     assert fit.df == approx([3.93598442356371])
-    # R's type = "lp" predictions at ages 40, 55.5, 70 and 82
     assert r.predict(fit, newdata={"age": [40, 55.5, 70, 82]}, type="lp") == approx(
         [-0.80252747513847, -0.051650689817932, 0.0639781587297657, 1.21067594676777]
     )
@@ -277,19 +252,16 @@ def test_pspline_combine_is_checked_as_in_r(lung, combine, message):
 
 @pytest.mark.parametrize("knots", ["c(40)", "40", "c(40, 60, 80)", "c(50, 50)", "c(80, 40)"])
 def test_pspline_boundary_knots_are_checked_as_in_r(lung, knots):
-    # R: "Invalid values for Boundary.knots" for each of these
     with pytest.raises(ValueError, match="Invalid values for Boundary.knots"):
         _coxph(f"Surv(time, status) ~ pspline(age, Boundary.knots = {knots})", lung)
 
 
 def test_pspline_scalar_boundary_knots_are_one_value(lung):
-    # pspline(lung$age, Boundary.knots = 40): "Invalid values for Boundary.knots"
     with pytest.raises(ValueError, match="Invalid values for Boundary.knots"):
         r.pspline(lung["age"], Boundary_knots=40)
 
 
 def test_pspline_without_penalty_is_an_ordinary_matrix_term(lung):
-    # coxph(Surv(time, status) ~ pspline(age, df = 4, penalty = FALSE) + sex, lung)
     fit = _coxph("Surv(time, status) ~ pspline(age, df = 4, penalty = FALSE) + sex", lung)
     assert fit.penalized is None
     assert fit.coef_names == (
@@ -307,8 +279,6 @@ def test_pspline_without_penalty_is_an_ordinary_matrix_term(lung):
 
 
 def test_pspline_without_penalty_can_be_in_an_interaction(lung):
-    # coxph(Surv(time, status) ~ sex + pspline(age, df = 2, nterm = 3, penalty = FALSE):sex,
-    #       lung)
     fit = _coxph(
         "Surv(time, status) ~ sex + pspline(age, df = 2, nterm = 3, penalty = FALSE):sex", lung
     )
@@ -326,18 +296,11 @@ def test_pspline_without_penalty_can_be_in_an_interaction(lung):
     "rhs", ["ridge(age, theta = 1):sex", "sex:pspline(age, df = 2)", "sex + frailty(inst):sex"]
 )
 def test_penalized_terms_are_refused_in_interactions(lung, rhs):
-    # coxph.R's message; R 3.8-12 stops before it with "missing value where TRUE/FALSE
-    # needed", because the penalty column's name matches no term label
     with pytest.raises(ValueError, match="^Penalty terms cannot be in an interaction$"):
         _coxph(f"Surv(time, status) ~ {rhs}", lung, na_action="na.omit")
 
 
-# --- survreg ---------------------------------------------------------------------------
-
-
 def test_survreg_fits_an_unpenalized_pspline_with_the_knots_before_subset(lung):
-    # survreg(Surv(time, status) ~ pspline(age, df = 2, nterm = 3, penalty = FALSE), lung,
-    #         subset = age > 50)
     fit = r.survreg(
         "Surv(time, status) ~ pspline(age, df = 2, nterm = 3, penalty = FALSE)",
         lung,
@@ -350,11 +313,9 @@ def test_survreg_fits_an_unpenalized_pspline_with_the_knots_before_subset(lung):
 
 
 def test_survreg_fits_ridge_and_pspline_terms_penalized(lung):
-    # survreg(Surv(time, status) ~ ridge(age, sex, theta = 1), lung)
     fit = r.survreg("Surv(time, status) ~ ridge(age, sex, theta = 1)", lung)
     assert fit.coefficients == approx([6.27390503073021, -0.0122117247372104, 0.380638679432984])
     assert fit.df == approx([0.995994322064926, 1.99215425102188, 0.9998740366961])
-    # survreg(Surv(time, status) ~ pspline(age, df = 3) + sex, lung)
     fit = r.survreg("Surv(time, status) ~ pspline(age, df = 3) + sex", lung)
     assert fit.coefficients[:2] == approx([6.24585597390229, -0.252583945887303])
     assert fit.df[1] == approx(3.06393485506937)
@@ -366,7 +327,6 @@ def test_survreg_fits_ridge_and_pspline_terms_penalized(lung):
         ("age + frailty(inst, df = 2)", "survreg does not support frailty terms"),
         ("age + frailty.gaussian(inst)", "survreg does not support frailty terms"),
         ("ridge(age, theta = 1) + frailty(inst)", "does not support frailty"),
-        # R reports that survreg does not support frailty terms
         ("sex + frailty(inst):sex", "Penalty terms cannot be in an interaction"),
     ],
 )

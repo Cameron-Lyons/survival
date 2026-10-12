@@ -21,8 +21,6 @@ test_that("selected Cox states retain counts for summaries and initial rows", {
     for (states in list("death", c("death", "pcm"), c("death", "(s0)", "death"))) {
       selected <- actual[groups, 2:1, states, drop = FALSE]
       expected <- reference[groups, 2:1, states, drop = FALSE]
-      # R leaves censor counts in the original state order. Correct only the
-      # metadata before asking its summary and survfit0 methods for references.
       expected$n.censor <- reference$n.censor[rows, states, drop = FALSE]
       expected$n.id <- reference$n.id[groups]
       for (initial in c(FALSE, TRUE)) {

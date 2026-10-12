@@ -51,8 +51,6 @@ test_that("predictions preserve stock row labels and intentionally unnamed resul
         info <- paste(name, action, type, se, if (is.null(data)) "stored" else nrow(data), new_action)
         result <- do.call(predict, c(list(actual),args))
         prediction_reference <- reference
-        # The penalized wrapper refuses survival before the supported ordinary
-        # prediction method; compare that method on the same fitted state.
         if (type == "survival" && inherits(reference, "coxph.penal")) class(prediction_reference) <- "coxph"
         if (name == "cox_sparse" && type == "terms") {
           prediction_reference$x <- reference$x[, "age", drop = FALSE]

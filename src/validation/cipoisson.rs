@@ -1,25 +1,14 @@
-//! Confidence limits for a Poisson rate.
-//!
-//! Port of R survival `R/cipoisson.R`: the exact (gamma quantile) and
-//! Anscombe limits, vectorised over `k`, `time` and `p` with R's recycling
-//! rule.  A missing `k` or a missing or non-positive `time` yields `NaN`
-//! limits (R returns `NA`; `summary.pyears` calls this with `time = 0`).
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{qgamma, qnorm};
 use pyo3::prelude::*;
 
-/// Which approximation to use for the limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CipoissonMethod {
-    /// Gamma-quantile limits (`qgamma(p, k)`, `qgamma(1 - p, k + 1)`).
     Exact,
-    /// Anscombe's square-root transformation.
     Anscombe,
 }
 
 impl CipoissonMethod {
-    /// R's `match.arg`: any unambiguous prefix of `"exact"` or `"anscombe"`.
     pub fn parse(name: &str) -> SurvivalResult<Self> {
         match name {
             value if !value.is_empty() && "exact".starts_with(value) => Ok(Self::Exact),
@@ -31,7 +20,7 @@ impl CipoissonMethod {
     }
 }
 
-/// Lower and upper limits, one pair per recycled input.
+#[doc = " Lower and upper limits, one pair per recycled input."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct CipoissonResult {
@@ -48,8 +37,6 @@ fn recycled(values: &[f64], length: usize, name: &str) -> SurvivalResult<Vec<f64
     Ok((0..length).map(|i| values[i % values.len()]).collect())
 }
 
-/// The limits of one Poisson count `k` observed over `time` at confidence
-/// level `p`: `NaN` for a missing `k` or a missing or non-positive `time`.
 pub(crate) fn cipoisson_one(k: f64, time: f64, p: f64, method: CipoissonMethod) -> (f64, f64) {
     if k.is_nan() || time.is_nan() || time <= 0.0 {
         return (f64::NAN, f64::NAN);
@@ -75,8 +62,6 @@ pub(crate) fn cipoisson_one(k: f64, time: f64, p: f64, method: CipoissonMethod) 
     (lower / time, upper / time)
 }
 
-/// Confidence limits for Poisson counts `k` observed over `time`, at
-/// confidence level `p` (R `cipoisson(k, time, p, method)`).
 pub fn cipoisson(
     k: &[f64],
     time: &[f64],
@@ -94,8 +79,6 @@ pub fn cipoisson(
             )));
         }
     }
-    // R lets a missing p through (the quantiles come back NA); anything else
-    // outside [0, 1] is rejected up front rather than by qgamma's NaN.
     for (index, &level) in p.iter().enumerate() {
         if !level.is_nan() && (!level.is_finite() || !(0.0..=1.0).contains(&level)) {
             return Err(SurvivalError::invalid_input(format!(
@@ -109,9 +92,9 @@ pub fn cipoisson(
     Ok(CipoissonResult { lower, upper })
 }
 
-/// Python entry point: `cipoisson(k, time=None, p=None, method="exact")`;
-/// `time` defaults to 1 and `p` to 0.95, and `k`, `time`, `p` recycle like
-/// R vectors.
+#[doc = " Python entry point: `cipoisson(k, time=None, p=None, method=\"exact\")`;"]
+#[doc = " `time` defaults to 1 and `p` to 0.95, and `k`, `time`, `p` recycle like"]
+#[doc = " R vectors."]
 #[pyfunction(name = "cipoisson")]
 #[pyo3(signature = (k, time=None, p=None, method="exact"))]
 pub fn cipoisson_py(
@@ -174,7 +157,6 @@ mod tests {
     #[test]
     #[allow(clippy::excessive_precision)]
     fn a_missing_count_gives_a_missing_row() {
-        // R: cipoisson(c(1, NA, 3), 2)
         let result = cipoisson(
             &[1.0, f64::NAN, 3.0],
             &[2.0],
@@ -187,7 +169,6 @@ mod tests {
         assert!(result.lower[1].is_nan() && result.upper[1].is_nan());
         assert_close(result.lower[2], 0.30933606144780079, 1e-15);
         assert_close(result.upper[2], 4.3836365348711617, 1e-14);
-        // R: cipoisson(0, 0)
         let (lower, upper) = cipoisson_one(0.0, 0.0, 0.95, CipoissonMethod::Exact);
         assert!(lower.is_nan() && upper.is_nan());
     }

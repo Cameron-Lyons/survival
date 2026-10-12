@@ -1,4 +1,3 @@
-//! Shared custom-density fixtures for the two AFT optimizers.
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::{dnorm, pnorm};
 use crate::regression::survreg_density::SurvregDensitySource;

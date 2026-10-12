@@ -1,71 +1,29 @@
-//! The `survreg` log-likelihood kernel: a port of `src/survregc1.c` from the
-//! CRAN `survival` package.  Given the current parameter vector it returns
-//! the log-likelihood, the score vector `u` and the observed information
-//! `imat`, and on request the outer-product approximation `JJ` that
-//! `survreg6.c` falls back on when `imat` is not positive definite.
-//!
-//! `survregc2.c`, the variant that evaluates a user-written density through
-//! an R callback, differs from `survregc1.c` only in where the density
-//! summary comes from. [`SurvregDensitySource`] supplies one batch of densities
-//! for custom implementations; built-ins keep their direct scalar kernels.
-//! Errors propagate through Newton steps, Fisher fallbacks and penalized line
-//! searches. (survregc2.c also
-//! indexes the linear predictor and the stratum scales of a model with a
-//! sparse term without the `nf` frailty offset; the shared sweep indexes
-//! them as survregc1.c does.)
-//!
-//! [`SurvregKernel::evaluate`] is the sweep of `survreg6.c`; the penalised
-//! `survreg7.c` calls [`SurvregKernel::evaluate_blocks`], which adds the
-//! sparse frailty term (`nf > 0`: a diagonal block of `nf` group effects)
-//! and keeps the C code's layout of the information, and
-//! [`SurvregKernel::loglik_at`], its log-likelihood-only `whichcase = 1`.
-
 use crate::error::SurvivalResult;
 use crate::regression::survreg_density::{SurvregDensitySource, check_density_batch};
 use crate::regression::survreg_distributions::{KernelCase, SurvregDistribution};
 use ndarray::{Array2, ArrayView2};
 
-/// `#define SMALL -200`: the log-likelihood contribution used when an
-/// observation lands off the probability scale (a wildly wrong `beta`);
-/// the value only has to trigger step halving in the caller.
 const SMALL: f64 = -200.0;
 
-/// Everything the kernel needs besides the parameter vector: the response on
-/// the fitting scale, the design matrix, weights, offset and strata.
 pub(crate) struct SurvregKernel<'a> {
-    /// Transformed lower time (`y[, 1]`).
     pub y1: &'a [f64],
-    /// Transformed upper time (`y[, 2]`), read only where `status == 3`.
     pub y2: &'a [f64],
-    /// Censoring code per observation: 0 right, 1 exact, 2 left, 3 interval.
     pub status: &'a [i32],
-    /// `n x nvar` design matrix; a view that is not in standard (row major)
-    /// layout is copied into one per evaluation.
     pub covariates: ArrayView2<'a, f64>,
     pub weights: &'a [f64],
     pub offset: &'a [f64],
-    /// Zero-based stratum of each observation (all zero without strata).
     pub strata: &'a [usize],
-    /// Number of `log(scale)` parameters being estimated: 0 for a fixed
-    /// scale, 1 without strata, the number of strata otherwise.
     pub nstrat: usize,
     pub distribution: &'a dyn SurvregDensitySource,
 }
 
-/// The kernel output for one parameter vector.
 pub(crate) struct SurvregLikelihood {
     pub loglik: f64,
-    /// Score vector, `nvar + nstrat` long.
     pub u: Vec<f64>,
-    /// Observed information (negative Hessian), `nvar2 x nvar2`.
     pub imat: Array2<f64>,
-    /// `JJ`, when the evaluation was asked for it.
     pub jj: Option<Array2<f64>>,
 }
 
-/// One observation's log-likelihood and its derivatives with respect to the
-/// linear predictor `eta` and `log(sigma)`: `g`, `dg = dg/d eta`,
-/// `ddg = d2g/d eta2`, `dsig = dg/d log sigma`, `ddsig`, `dsg` (cross).
 #[derive(Debug, Clone, Copy)]
 struct Contribution {
     g: f64,
@@ -77,7 +35,6 @@ struct Contribution {
 }
 
 impl Contribution {
-    /// The "off the probability scale" fallback of the C code.
     fn small(dg: f64, ddg: f64) -> Self {
         Self {
             g: SMALL,
@@ -89,7 +46,6 @@ impl Contribution {
         }
     }
 
-    /// `case 1` of `survregc1.c`: an exact observation.
     fn exact(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Density);
         Self::exact_from(funs, z, sz, sigma)
@@ -114,7 +70,6 @@ impl Contribution {
         }
     }
 
-    /// `case 0`: right censored.
     fn right_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
         Self::right_from(funs, z, sz, sigma)
@@ -129,7 +84,6 @@ impl Contribution {
         Self::censored(funs[1].ln(), temp, temp2, sz)
     }
 
-    /// `case 2`: left censored.
     fn left_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
         Self::left_from(funs, z, sz, sigma)
@@ -144,7 +98,6 @@ impl Contribution {
         Self::censored(funs[0].ln(), temp, temp2, sz)
     }
 
-    /// The derivative block shared by the two one-sided censoring cases.
     fn censored(g: f64, temp: f64, temp2: f64, sz: f64) -> Self {
         let dg = -temp;
         let dsig = -temp * sz;
@@ -158,7 +111,6 @@ impl Contribution {
         }
     }
 
-    /// `case 3`: interval censored between `z` and `zu`.
     fn interval_censored(distribution: &SurvregDistribution, z: f64, zu: f64, sigma: f64) -> Self {
         let funs = distribution.kernel(z, KernelCase::Distribution);
         let ufun = distribution.kernel(zu, KernelCase::Distribution);
@@ -166,7 +118,6 @@ impl Contribution {
     }
 
     fn interval_from(funs: [f64; 4], ufun: [f64; 4], z: f64, zu: f64, sigma: f64) -> Self {
-        // Differencing the tail that is small on both ends stops round-off.
         let temp = if z > 0.0 {
             funs[1] - ufun[1]
         } else {
@@ -188,12 +139,6 @@ impl Contribution {
         }
     }
 
-    /// Adds the observation's weighted score to `u` and its information to
-    /// the lower triangle of `imat`, and the outer product of its score to
-    /// the lower triangle of `jj` when that is given; the matrices are
-    /// `nvar2 x nvar2` (`nvar2 = u.len()`), row major.  `x` holds its
-    /// covariates and `scale` is the index of its `log(scale)` parameter,
-    /// `None` for a fixed scale.
     fn accumulate(
         &self,
         x: &[f64],
@@ -208,7 +153,6 @@ impl Contribution {
             let temp = self.dg * xi * w;
             u[i] += temp;
             let lower = i * nvar2..i * nvar2 + i + 1;
-            // With JJ, one loop updates both matrices, as in survregc1.c.
             match jj.as_deref_mut() {
                 None => {
                     for (m, &xj) in imat[lower].iter_mut().zip(x) {
@@ -240,30 +184,17 @@ impl Contribution {
     }
 }
 
-/// The sparse term of survregc1.c (`nf > 0`): the 0-based group of each
-/// row and the number of groups.
 pub(crate) struct SparseFrailty<'a> {
     pub group: &'a [usize],
     pub nf: usize,
 }
 
-/// survregc1.c's `whichcase = 0` output in survreg7's layout, reused across
-/// the evaluations of one fit.  With `nvar2 = nvar + nstrat` dense
-/// parameters, `hmat` and `jj` have `nvar2` rows and `nf + nvar2` columns
-/// (C's `imat[i][j]`, row `i` a dense parameter, the frailty columns first)
-/// and only their lower triangle is filled.
 pub(crate) struct BlockLikelihood {
-    /// The `beta` this evaluation was made at (before `survpenal` recentres
-    /// it).
     pub at: Vec<f64>,
     pub loglik: f64,
-    /// Score: frailties, `x` coefficients, `log(scale)`s.
     pub u: Vec<f64>,
-    /// The information (R's `imat`).
     pub hmat: Array2<f64>,
-    /// The sparse diagonal of the information.
     pub fdiag: Vec<f64>,
-    /// `JJ` and its sparse diagonal, valid only when `has_jj`.
     pub jj: Array2<f64>,
     pub jdiag: Vec<f64>,
     pub has_jj: bool,
@@ -284,8 +215,6 @@ impl BlockLikelihood {
     }
 }
 
-/// Density callbacks are evaluated once, before accumulation. Built-ins keep
-/// their allocation-free, case-specific scalar evaluation.
 enum Contributions<'a> {
     Builtin(&'a SurvregDistribution),
     Batch(Vec<Contribution>),
@@ -300,19 +229,10 @@ impl SurvregKernel<'_> {
         self.covariates.ncols()
     }
 
-    /// Number of parameters iterated over (`nvar + nstrat`).
     pub(crate) fn nvar2(&self) -> usize {
         self.nvar() + self.nstrat
     }
 
-    /// Log-likelihood, score and information at `beta` (`whichcase = 0`;
-    /// the log-likelihood-only `whichcase = 1` call of the C code is
-    /// always followed by a full evaluation at the same point, so it is not
-    /// reproduced), and `JJ` when `with_jj` is set.
-    ///
-    /// `beta` holds `nvar` coefficients followed by the `log(scale)` values:
-    /// one per stratum when they are estimated, or the fixed `log(scale)`
-    /// tacked on at position `nvar` when `nstrat == 0`.
     pub(crate) fn evaluate(
         &self,
         beta: &[f64],
@@ -359,8 +279,6 @@ impl SurvregKernel<'_> {
         })
     }
 
-    /// Row `person`'s log-likelihood and derivatives at the linear
-    /// predictor `eta` and scale `sigma`: the four censoring cases.
     fn contribution(
         &self,
         distribution: &SurvregDistribution,
@@ -381,9 +299,6 @@ impl SurvregKernel<'_> {
         }
     }
 
-    /// `survregc2` packs all lower endpoints first, then the interval upper
-    /// endpoints. Offset, scale stratum and sparse effects are applied before
-    /// the one callback invocation. Its errors stop the optimizer immediately.
     fn prepare_contributions(
         &self,
         beta: &[f64],
@@ -437,9 +352,6 @@ impl SurvregKernel<'_> {
         Ok(Contributions::Batch(rows))
     }
 
-    /// The linear predictor and scale of row `person` for survreg7's
-    /// `beta` (frailties, `x` coefficients, `log(scale)`s), in survregc1.c's
-    /// order: `sum(x * beta)`, then the offset, then the frailty.
     fn block_eta_sigma(
         &self,
         person: usize,
@@ -465,12 +377,6 @@ impl SurvregKernel<'_> {
         (eta, beta[nf + nvar + stratum].exp())
     }
 
-    /// survregc1.c with `whichcase = 0` for survreg7: the log-likelihood,
-    /// score and information at `beta` (`nf` frailties, `nvar`
-    /// coefficients, then the `log(scale)`s, or the fixed `log(scale)` when
-    /// `nstrat == 0`) into `out`, and `JJ` when `with_jj` (it costs about
-    /// 40% of the sweep). `O(n nvar2^2)` time; built-ins allocate no workspace,
-    /// while callbacks use linear endpoint, density and contribution buffers.
     pub(crate) fn evaluate_blocks(
         &self,
         beta: &[f64],
@@ -567,9 +473,6 @@ impl SurvregKernel<'_> {
         Ok(())
     }
 
-    /// survregc1.c with `whichcase = 1`: the log-likelihood alone at
-    /// `beta`, bit for bit the one [`Self::evaluate_blocks`] returns there.
-    /// `O(n nvar)`.
     pub(crate) fn loglik_at(
         &self,
         beta: &[f64],
@@ -594,18 +497,11 @@ impl SurvregKernel<'_> {
         Ok(loglik)
     }
 
-    /// `JJ` at `beta`: the sum of the squared score contributions, the
-    /// Fisher-scoring information `survreg6.c` uses when `imat` is not
-    /// positive definite.  `survregc1.c` accumulates it in every call, about
-    /// 40% of the `O(n p^2)` work, so the fit asks for it only while it
-    /// steps with it and otherwise evaluates `beta` again to get it.
     pub(crate) fn jj(&self, beta: &[f64]) -> SurvivalResult<Array2<f64>> {
         Ok(self.evaluate(beta, true)?.jj.expect("evaluated with JJ"))
     }
 }
 
-/// The symmetric `n x n` matrix whose lower triangle is that of `lower`
-/// (row major).
 fn symmetric_from_lower(n: usize, lower: Vec<f64>) -> Array2<f64> {
     let mut matrix = Array2::from_shape_vec((n, n), lower).expect("an n x n matrix");
     for i in 0..n {
@@ -717,11 +613,9 @@ mod tests {
     #[test]
     fn off_scale_observations_use_the_small_fallback() {
         let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
-        // An interval of zero width has probability zero.
         let c = Contribution::interval_censored(&weibull, 0.3, 0.3, 1.0);
         assert_eq!(c.g, SMALL);
         assert_eq!(c.dg, 1.0);
-        // Far in the upper tail the extreme value survival is exactly zero.
         let c = Contribution::right_censored(&weibull, 800.0, 800.0, 1.0);
         assert_eq!(c.g, SMALL);
     }
@@ -756,7 +650,6 @@ mod tests {
         assert_eq!(lik.u.len(), 3);
         assert_eq!(lik.imat.shape(), &[3, 3]);
         assert_eq!(jj.shape(), &[3, 3]);
-        // The information matrix is symmetric and, at these values, positive.
         for i in 0..3 {
             for j in 0..3 {
                 assert_close(lik.imat[[i, j]], lik.imat[[j, i]], 0.0);
@@ -764,8 +657,6 @@ mod tests {
             }
             assert!(lik.imat[[i, i]] > 0.0);
         }
-        // Score = sum of weighted per-observation gradients: check the
-        // log(scale) entry against a finite difference of the loglik.
         let h = 1e-6;
         let mut up = beta;
         up[2] += h;
@@ -818,8 +709,6 @@ mod tests {
                 assert_close(jj[[i, j]], expected[[i, j]], 1e-14);
             }
         }
-        // Accumulating JJ leaves the log-likelihood, score and information
-        // as they are without it.
         let without = kernel(0..5).evaluate(&beta, false).unwrap();
         let with = kernel(0..5).evaluate(&beta, true).unwrap();
         assert!(without.jj.is_none());
@@ -859,7 +748,6 @@ mod tests {
         assert_eq!(got.jj, expected.jj);
     }
 
-    /// Rows with all four censoring codes, two strata and three groups.
     struct BlockData {
         y1: Vec<f64>,
         y2: Vec<f64>,
@@ -960,8 +848,6 @@ mod tests {
 
     #[test]
     fn a_sparse_frailty_is_its_indicator_columns() {
-        // The sparse term's blocks equal those of the same model with the
-        // groups as dense indicator columns placed first.
         let data = block_data();
         let lognormal = SurvregDistribution::from_name("lognormal", None).unwrap();
         let frailty = SparseFrailty {

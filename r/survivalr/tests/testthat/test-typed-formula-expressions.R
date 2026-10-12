@@ -32,8 +32,6 @@ test_that("logical expressions retain R matrix types, contrasts and omitted rows
       actual_frame <- model.frame(actual)
       expected_frame <- model.frame(expected)
       expect_identical(row.names(actual_frame), row.names(expected_frame), info = info)
-      # Public bridge frames expose flattened response and raw source columns.
-      # Recovered logical rows may still have missing values in these sources.
       source_rows <- match(row.names(expected_frame), row.names(d))
       for (name in intersect(c("x", "a", "b", "g"), names(actual_frame))) {
         expect_identical(typeof(actual_frame[[name]]), typeof(d[[name]]), info = info)
@@ -62,7 +60,6 @@ test_that("typed logical offsets survive subset, prediction and serialization", 
            data = d, subset = rows, na.action = na.exclude, model = TRUE, x = TRUE)))
     expect_equal(model.matrix(actual), model.matrix(expected), tolerance = 2e-12)
     expected_lp <- predict(expected, newdata = newdata, type = "lp")
-    # Stock predict.survreg drops the new-data offset; derive it from its own frame.
     if (kind == "survreg") {
       expected_frame <- model.frame(delete.response(terms(expected)), newdata,
                                     na.action = na.pass, xlev = expected$xlevels)

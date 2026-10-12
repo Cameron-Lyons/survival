@@ -23,7 +23,6 @@ test_that("fresh model matrices honor global omission options", {
           .logical_matrix_compare(result$value,stock$value,info)
           expect_identical(is.na(result$value),is.na(stock$value),info=info)
           expect_identical(is.nan(result$value),is.nan(stock$value),info=info)
-          # Python domain warnings retain the expression context.
           expect_identical(sub(" in (log|sqrt)\\(.*\\)$","",result$warnings),stock$warnings,info=info)
         }
       }

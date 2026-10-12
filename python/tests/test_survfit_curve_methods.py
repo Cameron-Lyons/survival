@@ -36,11 +36,6 @@ NA = math.nan
 INF = math.inf
 
 
-# ---------------------------------------------------------------------------
-# Turnbull curves: d <- data.frame(l = c(1,2,3,4,5,6,2,7), r = c(1,NA,3,6,5,8,4,NA))
-# ---------------------------------------------------------------------------
-
-
 def _interval_data():
     return {"l": [1, 2, 3, 4, 5, 6, 2, 7], "r": [1, None, 3, 6, 5, 8, 4, None]}
 
@@ -73,7 +68,6 @@ def test_turnbull_survfit0_fills_in_what_r_derives():
         0,
     ]
     _close(fit0.std_err, se)
-    # R fills in cumhaz = -log(surv) and std.chaz = std.err (logse is taken as TRUE)
     _close(fit0.std_chaz, se)
     _close(
         fit0.cumhaz,
@@ -102,7 +96,6 @@ def test_turnbull_summary_matches_r():
         [8, 8, 8, 6, 4.645867825607064, 0.818407326871296, 5, 3, 7.5],
     )
     _close(summary.time, [1, 3, 3.5, 5, 5.5, 7.5])
-    # std.err is se(S) from the robust variance, read as se(log S): 0.1023 = 0.1169 * 0.875
     _close(
         summary.std_err,
         [
@@ -178,7 +171,6 @@ def test_turnbull_robust_false_gives_the_greenwood_error_of_log_surv():
 
 
 def test_turnbull_default_variance_follows_survfit_km_rule():
-    # l = c(1,2,3,5), r = c(NA,NA,3,NA): integer pseudo-weights, so not robust by default
     data = {"l": [1, 2, 3, 5], "r": [None, None, 3, None]}
 
     _close(_turnbull(data).std_err, [0, 0, 0.816496580927726, 0.816496580927726])
@@ -186,7 +178,6 @@ def test_turnbull_default_variance_follows_survfit_km_rule():
 
 
 def test_turnbull_start_time_keeps_intervals_ending_after_it():
-    # every row interval censored: R keeps y[, 2] >= start.time, so (2,4] stays and (1,2] goes
     data = {"l": [1, 4, 6, 2, 0], "r": [2, 6, 8, 4, 3]}
     fit = _turnbull(data, start_time=3)
 
@@ -195,7 +186,6 @@ def test_turnbull_start_time_keeps_intervals_ending_after_it():
     _close(fit.surv, [0.5, 0.25, 0])
     _close(fit.std_err, [0.5, 0.866025403784439, INF])
     _close(fit.n_risk, [4, 2, 1])
-    # R compares its placeholder 1 for exact and censored rows; here their times count
     assert _turnbull(start_time=3).n == [6]
 
 
@@ -203,11 +193,6 @@ def test_turnbull_refuses_a_cluster():
     data = {**_interval_data(), "cl": [1, 1, 2, 2, 3, 3, 4, 4]}
     with pytest.raises(ValueError, match="cluster is not supported for interval-censored data"):
         _turnbull(data, cluster="cl")
-
-
-# ---------------------------------------------------------------------------
-# survfit.coxph curves on lung
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -314,8 +299,6 @@ def test_stratified_cox_curves_match_r(lung):
 def test_stratified_cox_curves_for_newdata_rows_are_labelled_stratum_then_row(lung):
     curves = _cox_curves(lung, "Surv(time, status) ~ age + strata(sex)", newdata={"age": [50, 70]})
 
-    # R: quantile() gives a stratum x curve x probability array, summary() a table whose
-    # rows run over the strata first
     labels = ["sex=1, 1", "sex=2, 1", "sex=1, 2", "sex=2, 2"]
     quantiles = r.quantile_survfit(curves)
     assert quantiles.strata == labels
@@ -353,7 +336,6 @@ def test_cox_curves_from_a_start_time_match_r(lung):
     assert quantiles.quantile == [[218, 361, 613]]
     assert quantiles.lower == [[194, 320, 524]]
     assert quantiles.upper == [[269, 433, 705]]
-    # a probability of 0 reports start.time; the curve itself starts at min(0, time)
     assert r.quantile_survfit(curves, probs=[0, 0.5]).quantile == [[100, 361]]
     _close(r.survfit0(curves).time[:3], [0, 105, 107])
     _close(r.summary_survfit(curves, times=[50, 200]).surv, [1, 0.788389886647259])

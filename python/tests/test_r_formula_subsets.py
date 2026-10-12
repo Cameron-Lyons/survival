@@ -45,7 +45,7 @@ def test_missing_selections_preserve_response_coding_and_factor_metadata(storage
         assert frame.response.time == (3.0, 1.0, 3.0)
         assert frame.weights == [3, 1, 3]
         assert frame.na_action.rows == (2,)
-    restored = pickle.loads(pickle.dumps(frame.data))  # noqa: S301 - round-trip our own frame
+    restored = pickle.loads(pickle.dumps(frame.data))
     assert formula._parse_formula(frame.formula, restored)[0].event == frame.response.event
     for name in data:
         np.testing.assert_array_equal(data[name], before[name])

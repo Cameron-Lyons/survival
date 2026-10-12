@@ -155,7 +155,7 @@ def test_reports_preserve_input_and_return_independent_full_precision_columns(fi
     assert report.tables[0].values[0][3] >= 0
     report.tables[0].values[0][3] = -1
     assert pickle.dumps(summary) == original
-    assert pickle.loads(pickle.dumps(report)) == report  # noqa: S301 - this test's own bytes
+    assert pickle.loads(pickle.dumps(report)) == report
 
 
 def test_native_expected_summaries_keep_group_risk_columns():

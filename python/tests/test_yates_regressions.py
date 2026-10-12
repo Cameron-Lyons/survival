@@ -20,7 +20,7 @@ datasets = survival.datasets
 _core = importlib.import_module("survival._survival")
 
 CELLTYPES = ["squamous", "smallcell", "adeno", "large"]
-SEED = 20240601  # R: set.seed(20240601) before each simulated yates()
+SEED = 20240601
 
 
 def approx(values, rel=1e-8):
@@ -45,12 +45,7 @@ def _veteran(**extra):
     return data
 
 
-# --- model = FALSE -------------------------------------------------------------
-
-
 def test_yates_rebuilds_the_model_frame_of_a_default_fit():
-    # R: yates of celltype on the default (model = FALSE) fit of
-    # coxph(Surv(time, status) ~ celltype + karno + trt, veteran)
     fit = r.coxph("Surv(time, status) ~ celltype + karno + trt", _veteran())
     assert fit.model is None
     result = r.yates(fit, "celltype")
@@ -63,19 +58,13 @@ def test_yates_rebuilds_the_model_frame_of_a_default_fit():
     assert contrast_rows(result) == [("global", pytest.approx(17.5010845488993), 3)]
     assert fit.model is None
 
-    # R: the same with a data frame population, karno = c(40, 60, 80) and trt = c(1, 2, 1)
     frame = r.yates(fit, "celltype", population={"karno": [40, 60, 80], "trt": [1, 2, 1]})
     assert frame.estimate["pmm"] == approx(
         [-0.0874072411434579, 0.7375729467136725, 1.0665871727183085, 0.3072182228023532]
     )
 
 
-# --- aliased coefficients --------------------------------------------------------
-
-
 def test_yates_drops_aliased_coefficients():
-    # R: yates of celltype on coxph(Surv(time, status) ~ celltype + karno + k2, veteran)
-    # with k2 = 2 * karno aliased
     fit = r.coxph(
         "Surv(time, status) ~ celltype + karno + k2",
         _veteran(k2=lambda data: [2 * value for value in data["karno"]]),
@@ -94,7 +83,6 @@ def test_yates_drops_aliased_coefficients():
         [0.0919446849721694, 0.104121317453997, 0.0931885044374048, 0.0837686945700415]
     )
 
-    # R: the same with predict = "risk" after set.seed(20240601)
     risk = r.yates(fit, "celltype", predict="risk", options={"seed": SEED})
     assert risk.estimate["pmm"] == approx(
         [1.22125757009401, 2.49731342832946, 3.88690958132816, 1.69134830537271]
@@ -106,13 +94,10 @@ def test_yates_drops_aliased_coefficients():
 
 
 def test_yates_gives_na_for_levels_outside_the_row_space_of_the_design():
-    # R: coxph(Surv(time, status) ~ celltype + g + karno, veteran) with g the indicator of
-    # celltype "large", which aliases g
     fit = r.coxph(
         "Surv(time, status) ~ celltype + g + karno",
         _veteran(g=lambda data: [float(value == "large") for value in data["celltype"]]),
     )
-    # yates of celltype: every level is NA (g varies within each level in the data)
     result = r.yates(fit, "celltype")
     assert all(math.isnan(value) for value in result.estimate["pmm"] + result.estimate["std"])
     assert [(row.name, math.isnan(row.chisq), row.df) for row in result.test] == [
@@ -124,7 +109,6 @@ def test_yates_gives_na_for_levels_outside_the_row_space_of_the_design():
     pairwise = r.yates(fit, "celltype", test="pairwise")
     assert all(math.isnan(row.chisq) and row.df is None for row in pairwise.test)
 
-    # yates of karno at levels 50 and 70
     karno = r.yates(fit, "karno", levels=[50, 70])
     assert karno.estimate["pmm"] == approx([0.809107646088914, 0.187975011482542])
     assert karno.estimate["std"] == approx([0.316047949761309, 0.407669579771154])
@@ -132,12 +116,6 @@ def test_yates_gives_na_for_levels_outside_the_row_space_of_the_design():
 
 
 def test_yates_leaves_the_strata_out_of_the_design_with_an_aliased_coefficient():
-    # R's yates builds the population rows with model.matrix(Terms), whose strata(trt)
-    # column misaligns them with the coefficients: with g aliased it stops in qr.resid
-    # ("'qr' and 'y' must have the same number of rows").  The reference is R's
-    # computation on model.matrix(fit), without the strata column, for the same fit
-    # without g: C %*% coef(fit) - sum(fit$means * coef(fit)) with karno set to 50 and 70,
-    # sqrt(diag(C %*% vcov(fit) %*% t(C))) and the Wald test of their difference
     fit = r.coxph(
         "Surv(time, status) ~ celltype + g + karno + strata(trt)",
         _veteran(g=lambda data: [float(value == "large") for value in data["celltype"]]),
@@ -150,8 +128,6 @@ def test_yates_leaves_the_strata_out_of_the_design_with_an_aliased_coefficient()
 
 
 def test_yates_na_tests_are_those_that_use_a_non_estimable_level():
-    # R: coxph(Surv(time, status) ~ celltype * trt + karno) on veteran without the large-cell
-    # patients of treatment 2 (trt a factor), which aliases celltypelarge:trt2
     data = _veteran()
     keep = [
         not (cell == "large" and trt == 2)
@@ -166,7 +142,6 @@ def test_yates_na_tests_are_those_that_use_a_non_estimable_level():
     fit = r.coxph("Surv(time, status) ~ celltype * trt + karno", data)
     assert math.isnan(r.coef(fit)[-1])
 
-    # pairwise yates of celltype
     result = r.yates(fit, "celltype", test="pairwise")
     assert result.estimate["pmm"] == approx(
         [-0.151833090711596, 0.707940261538746, 1.068488110894715, math.nan]
@@ -191,8 +166,6 @@ def test_yates_na_tests_are_those_that_use_a_non_estimable_level():
     trt = r.yates(fit, "trt")
     assert trt.estimate["pmm"] == approx([0.373716617587144, math.nan])
 
-    # the same with predict = "risk" after set.seed(20240601): the non-estimable level keeps
-    # its simulated std and mvar entries
     risk = r.yates(fit, "celltype", predict="risk", test="pairwise", options={"seed": SEED})
     assert risk.estimate["pmm"] == approx(
         [1.02852169928166, 2.64992087743419, 3.46085420602894, math.nan]
@@ -208,12 +181,7 @@ def test_yates_na_tests_are_those_that_use_a_non_estimable_level():
     )
 
 
-# --- predict = "survival" --------------------------------------------------------
-
-
 def test_yates_predicts_restricted_mean_survival_as_r():
-    # R: yates of celltype with predict = "survival" after set.seed(20240601), on
-    # coxph(Surv(time, status) ~ celltype + karno + trt, veteran)
     fit = r.coxph("Surv(time, status) ~ celltype + karno + trt", _veteran())
     result = r.yates(fit, "celltype", predict="survival", options={"seed": SEED})
     assert result.estimate["pmm"] == approx(
@@ -226,8 +194,6 @@ def test_yates_predicts_restricted_mean_survival_as_r():
     assert result.cmat == []
     assert result.cmat_names == []
 
-    # the summary curves: R's surv rows start at time 0, one row ahead of its time vector;
-    # here row i is the curve at time[i] (R's row i + 1)
     summary = result.summary
     assert len(summary.time) == 97
     assert len(summary.surv) == 97
@@ -256,7 +222,6 @@ def test_yates_predicts_restricted_mean_survival_as_r():
     )
     assert summary.cumhaz[49] == approx([-math.log(value) for value in summary.surv[49]])
 
-    # R: the same with options = list(rmean = 365) and nsim = 50
     restricted = r.yates(
         fit, "celltype", predict="survival", options={"rmean": 365, "seed": SEED}, nsim=50
     )
@@ -268,7 +233,6 @@ def test_yates_predicts_restricted_mean_survival_as_r():
     )
     assert restricted.test[0].chisq == pytest.approx(33.1839742963497)
 
-    # R: the same with options = list(rmean = Inf) and nsim = 50, which equals the default
     unrestricted = r.yates(
         fit, "celltype", predict="survival", options={"rmean": math.inf, "seed": SEED}, nsim=50
     )
@@ -283,7 +247,6 @@ def test_yates_predicts_restricted_mean_survival_as_r():
 
 def test_yates_setup_errors_follow_r():
     fit = r.coxph("Surv(time, status) ~ celltype + karno + trt", _veteran())
-    # R: predict = "survival" on a stratified fit, and predict = "expected"
     stratified = r.coxph("Surv(time, status) ~ celltype + karno + strata(trt)", _veteran())
     with pytest.raises(ValueError, match="stratified models not yet supported"):
         r.yates(stratified, "celltype", predict="survival")
@@ -297,14 +260,10 @@ def test_yates_setup_errors_follow_r():
         r.yates(fit, "celltype", predict="risk", options={"rmean": 100})
     linear = r.yates(fit, "celltype").estimate
     assert r.yates(fit, "celltype", predict="lp").estimate == linear
-    # R: predict = NULL, which match.arg takes as "lp"
     assert r.yates(fit, "celltype", predict=None).estimate == linear
 
 
 def test_yates_model_uses_the_linear_predictor_for_other_predictions():
-    # R's yates passes predict= to yates_setup.default, whose argument is type, so it neither
-    # checks nor warns and gives the linear predictor (R: yates(lm(time ~ karno, veteran),
-    # "karno", levels = c(40, 60), predict = "risk") is silent)
     data = _veteran()
     model = r.YatesModel("time ~ karno", data, [-60.0, 3.0], [[400.0, -6.0], [-6.0, 0.1]])
     linear = r.yates(model, "karno", levels=[40, 60])
@@ -313,14 +272,11 @@ def test_yates_model_uses_the_linear_predictor_for_other_predictions():
         for predict in ("risk", "survival", None):
             other = r.yates(model, "karno", levels=[40, 60], predict=predict)
             assert other.estimate == linear.estimate
-    # -60 + 3 * karno, with variance (1, karno) V (1, karno)'
     assert linear.estimate["pmm"] == approx([60.0, 120.0])
     assert linear.estimate["std"] == approx([math.sqrt(80.0), math.sqrt(40.0)])
 
 
 def test_yates_model_drops_an_aliased_coefficient():
-    # R: yates of celltype on lm(time ~ celltype + karno + k2, veteran) with k2 = 2 * karno;
-    # the coefficients, vcov(fit, complete = FALSE) and sigma^2 are R's
     data = _veteran(k2=lambda data: [2 * value for value in data["karno"]])
     beta = [
         39.75722409970252,
@@ -461,11 +417,7 @@ def test_yates_array_boundaries_match_nested_lists(layout):
         ]
 
 
-# --- unused factor levels ----------------------------------------------------------
-
-
 def _lung_with_unused_level():
-    # R: lung's time and status with g alternating "a", "b", a factor with levels a, b, c
     lung = datasets.load_lung()
     n = len(lung["time"])
     return {
@@ -477,7 +429,6 @@ def _lung_with_unused_level():
 
 def test_unused_factor_levels_stay_as_aliased_columns():
     data = _lung_with_unused_level()
-    # R: coxph of g
     fit = r.coxph("Surv(time, status) ~ g", data)
     assert list(fit.coef_names) == ["gb", "gc"]
     assert r.coef(fit) == approx([0.383302234567895, math.nan])
@@ -486,7 +437,6 @@ def test_unused_factor_levels_stay_as_aliased_columns():
     assert r.predict(fit, newdata={"g": RFactor(["a", "b"], ["a", "b", "c"])}) == approx(
         [0.0, 0.383302234567895]
     )
-    # R: yates of g
     result = r.yates(fit, "g")
     assert result.estimate["g"] == ["a", "b", "c"]
     assert result.estimate["pmm"] == approx([0.0, 0.383302234567895, math.nan])
@@ -494,7 +444,6 @@ def test_unused_factor_levels_stay_as_aliased_columns():
     assert result.test[0].df is None
     assert result.cmat == [[0.0], [1.0], [0.0]]
 
-    # R: survreg of g
     reg = r.survreg("Surv(time, status) ~ g", data)
     assert r.coef(reg) == approx([6.160629273095066, -0.273915136202959, math.nan])
     assert_rows_close(
@@ -506,14 +455,11 @@ def test_unused_factor_levels_stay_as_aliased_columns():
             [0.000028130659140692, -0.000228308598940690, 0.0, 0.003868466061947127],
         ],
     )
-    # R: concordance of g
     concordance = r.concordance("Surv(time, status) ~ g", data)
     assert concordance.concordance == approx([0.437518736884181, 0.5])
 
 
 def test_yates_model_drops_unused_levels_as_lm_does():
-    # R: yates of g on lm(time ~ g), whose model.frame drops the unused level c
-    # (drop.unused.levels = TRUE); the coefficients, vcov and sigma^2 are R's
     data = _lung_with_unused_level()
     model = r.YatesModel(
         "time ~ g",
@@ -536,8 +482,6 @@ def test_yates_model_drops_unused_levels_as_lm_does():
 
 
 def test_a_subset_keeps_the_levels_it_leaves_unused():
-    # R: coxph of e = factor(ph.ecog) on lung with subset = ph.ecog < 3, which leaves
-    # level 3 unused
     lung = datasets.load_lung()
     lung["e"] = RFactor(lung["ph.ecog"], [0.0, 1.0, 2.0, 3.0])
     subset = [value is not None and value < 3 for value in lung["ph.ecog"]]
@@ -552,7 +496,6 @@ def test_a_subset_keeps_the_levels_it_leaves_unused():
             [0.0, 0.0, 0.0],
         ],
     )
-    # R: the same survreg fit
     reg = r.survreg("Surv(time, status) ~ e", lung, subset=subset)
     assert r.coef(reg) == approx(
         [6.320348687805493, -0.264727588941228, -0.670775060081751, math.nan]
@@ -560,8 +503,6 @@ def test_a_subset_keeps_the_levels_it_leaves_unused():
 
 
 def _nwtco_case_cohort_with_unused_level():
-    # R: nwtco's relapses plus subcohort, age in years, and h the factor of histol with
-    # levels FH, UH and an unused XX
     nwtco = datasets.load_nwtco()
     keep = [
         i
@@ -581,11 +522,8 @@ def _nwtco_case_cohort_with_unused_level():
 def test_cch_with_an_unused_level():
     data = _nwtco_case_cohort_with_unused_level()
     arguments = {"subcoh": "subcohort", "id": "seqno", "cohort_size": 4028}
-    # R: cch(Surv(edrel, rel) ~ h + age, ...) stops inside coxph ("missing value where
-    # TRUE/FALSE needed") on the NA initial value of the aliased hXX
     with pytest.raises(ValueError, match="init contains non-finite value NaN"):
         r.cch("Surv(edrel, rel) ~ h + age", data, **arguments)
-    # R: the same with method = "SelfPrentice": hXX is NA
     fit = r.cch("Surv(edrel, rel) ~ h + age", data, method="SelfPrentice", **arguments)
     assert fit.coef_names == ("hUH", "hXX", "age")
     assert fit.coefficients == approx([1.492705307615764, math.nan, 0.066043805308395])
@@ -595,7 +533,5 @@ def test_cch_with_an_unused_level():
 
 
 def test_aareg_with_an_unused_level_has_no_full_rank_time():
-    # R 3.8-12's aareg(Surv(time, status) ~ g) does not return on this design; the
-    # all-zero gc column leaves no time with a full-rank design
     with pytest.raises(ValueError, match="no Aalen model can be fit"):
         r.aareg("Surv(time, status) ~ g", _lung_with_unused_level())

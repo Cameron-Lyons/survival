@@ -177,7 +177,6 @@ def survdiff(
         _response_check(y)
         if aligned["group"] is None:
             raise ValueError("No groups to test")
-        # a bare vector has no variable name to label its levels with
         codes, levels = _curve_factor({"group": aligned["group"]}, len(y), shortlabel=True)
         strata = None
     else:

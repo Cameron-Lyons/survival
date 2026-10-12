@@ -78,8 +78,6 @@ def test_mutated_cell_lengths_are_rejected(field, totals, tcut):
 def test_zero_cell_tables_preserve_empty_and_margin_conventions(
     dims, expanded, cells, totals, tcut
 ):
-    # Stock survival 3.8-12 accepts the first three shapes with totals=True.
-    # The higher-dimensional cases preserve existing native data summaries.
     result = empty_summary(dims, totals=totals, tcut=tcut, rate=True, ci_r=True, ci_rr=True)
     count = cells if totals else 0
     assert result.dims == (expanded if totals else dims)

@@ -1,13 +1,8 @@
-//! Multistate summary rows and restricted mean time in each state.
-//! Mirrors `summary.survfitms` and `survmean2`, with one scan per curve.
-
 use super::survfit_summary::{RmeanOption, survfit0_aj, survfit0_aj_rows};
 use super::survfitaj::SurvfitAJResult;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_finite;
 
-/// State-major table rows (`n`, `nevent`, optionally `rmean`, `se(rmean)`)
-/// and truncation times. Within each state the curves vary fastest.
 pub type AJMeanTable = (Vec<Vec<f64>>, Vec<f64>, Vec<String>);
 
 pub fn survmean_aj(
@@ -19,12 +14,6 @@ pub fn survmean_aj(
     survmean_table(&fit0, 1, |i, _, state| fit0.pstate[i][state], scale, rmean)
 }
 
-/// `survmean2` of a multi-state Cox curve set (`survfit.coxphms`) whose
-/// counts and time grid are those of `fit`: `pstate(i, j, s)` is the
-/// probability of state `s` for newdata row `j` at row `i` of `fit`, and
-/// `p0` the curves' starting distributions.  The rows are those of
-/// `survfit0` (the `t0` rows take `p0`); the table's rows run over the
-/// strata fastest, then the `ndata` newdata rows, then the states.
 pub(crate) fn survmean_coxms(
     fit: &SurvfitAJResult,
     ndata: usize,
@@ -47,8 +36,6 @@ pub(crate) fn survmean_coxms(
     )
 }
 
-/// `survmean2` on `fit0`, a `survfit0` fit with `ndata` probability curves
-/// per curve of its counts, read by `pstate(row, data, state)`.
 fn survmean_table(
     fit0: &SurvfitAJResult,
     ndata: usize,
@@ -138,9 +125,6 @@ fn survmean_table(
     Ok((rows, ends, columns))
 }
 
-/// `survmean2`'s restricted mean time in `state` up to `end` for the rows
-/// `range` of one curve of a `survfit0_aj` fit: the area under the state's
-/// probability curve from the curve's first time to `end`.
 pub(crate) fn time_in_state(
     fit0: &SurvfitAJResult,
     range: std::ops::Range<usize>,
@@ -150,8 +134,6 @@ pub(crate) fn time_in_state(
     area_to(&fit0.time, range, end, |i| fit0.pstate[i][state])
 }
 
-/// The area under the step function `value(row)` on the rows `range` of
-/// `time`, from the first of them to `end`.
 fn area_to(
     time: &[f64],
     range: std::ops::Range<usize>,
@@ -171,13 +153,6 @@ fn area_to(
         .sum()
 }
 
-/// The rows `summary.survfitms` reports, for a fit `source` that is the
-/// `survfit0` of the curves when `times` are requested: `selection` are the
-/// rows whose probabilities and hazards it reports (R's `ssub` rows or
-/// `index1`), `risk_selection` those of `n.risk` (`None` past the end of a
-/// curve), `intervals` the rows whose counts it sums into each reported row,
-/// `output_times` the reported times and `sizes` the reported rows of each
-/// curve.
 struct SummaryIndex {
     selection: Vec<usize>,
     risk_selection: Vec<Option<usize>>,
@@ -186,7 +161,6 @@ struct SummaryIndex {
     sizes: Vec<usize>,
 }
 
-/// `times` sorted and made unique, after R's checks.
 fn summary_times(times: Option<&[f64]>) -> SurvivalResult<Option<Vec<f64>>> {
     times
         .map(|times| {
@@ -202,7 +176,6 @@ fn summary_times(times: Option<&[f64]>) -> SurvivalResult<Option<Vec<f64>>> {
         .transpose()
 }
 
-/// See [`SummaryIndex`]; `requested` are the [`summary_times`].
 fn summary_index(
     source: &SurvfitAJResult,
     requested: Option<&[f64]>,
@@ -253,9 +226,6 @@ fn summary_index(
     index
 }
 
-/// [`summary_index`]'s `selection` for the curves `fit`, in the encoding of
-/// [`survfit0_aj_rows`]: a row of `fit`, or `-1 - s` for the row at `t0`
-/// that `survfit0_aj` inserts into curve `s` (only when `times` are given).
 pub(crate) fn summary_rows(
     fit: &SurvfitAJResult,
     times: Option<&[f64]>,
@@ -280,8 +250,6 @@ pub(crate) fn summary_rows(
     })
 }
 
-/// Select step-function values and accumulate counts between reporting times.
-/// Risk counts use the next observation, probabilities use the preceding one.
 pub fn summary_survfit_aj(
     fit: &SurvfitAJResult,
     times: Option<&[f64]>,
@@ -291,11 +259,6 @@ pub fn summary_survfit_aj(
     summary_survfit_aj_with_counts(fit, times, censored, extend, true)
 }
 
-/// Select multistate summary rows, choosing how counts are reported at
-/// requested times. With `dosum`, counts accumulate since the preceding
-/// requested time; otherwise they come from the preceding observed row.
-/// Requested times are always sorted and deduplicated. When times are absent,
-/// `dosum` has no effect, matching R's `summary.survfitms`.
 pub fn summary_survfit_aj_with_counts(
     fit: &SurvfitAJResult,
     times: Option<&[f64]>,
@@ -366,8 +329,6 @@ pub fn summary_survfit_aj_with_counts(
     out.lower = source.lower.as_ref().map(|values| pick(values));
     out.upper = source.upper.as_ref().map(|values| pick(values));
     out.std_auc = source.std_auc.as_ref().map(|values| pick(values));
-    // These raw matrices have different time dimensions; summary rows do not
-    // represent a refitted model and must not retain stale influence arrays.
     out.influence_pstate = None;
     out.counts = None;
     Ok(out)
@@ -379,9 +340,6 @@ mod tests {
     use crate::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
 
     fn counting_fit() -> SurvfitAJResult {
-        // Stock survival 3.8-12:
-        // survfit(Surv(start, stop, factor(event, levels=c("censor", "a", "b")))
-        //         ~ group, d, id=id, istate=istate, entry=TRUE)
         let data = SurvfitAJData::try_new(
             Some(vec![0., 1., 0., 2., 0., 0., 3., 0.]),
             vec![1., 4., 2., 5., 3., 6., 6., 7.],
@@ -421,7 +379,6 @@ mod tests {
         let out =
             summary_survfit_aj_with_counts(&fit, Some(&[0., 2., 6., 8., 2.]), false, true, false)
                 .unwrap();
-        // summary(f, times=c(0,2,6,8,2), extend=TRUE, dosum=FALSE)
         assert_eq!(out.time, vec![0., 2., 6., 8., 0., 2., 6., 8.]);
         assert_eq!(out.strata, Some(vec![4, 4]));
         assert_eq!(
@@ -502,7 +459,6 @@ mod tests {
     fn requested_multistate_counts_accumulate_by_default() {
         let fit = counting_fit();
         let out = summary_survfit_aj(&fit, Some(&[0., 2., 6., 8.]), false, true).unwrap();
-        // summary(f, times=c(0,2,6,8), extend=TRUE, dosum=TRUE)
         assert_eq!(
             out.n_event,
             rows([

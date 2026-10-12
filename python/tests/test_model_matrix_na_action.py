@@ -23,7 +23,6 @@ def columns_as(data, container):
     if container == "pandas":
         import pandas as pd
 
-        # Float Series erase the distinction between source None and NaN.
         return {
             name: values
             if isinstance(values, RFactor)

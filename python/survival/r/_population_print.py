@@ -27,7 +27,6 @@ from ._types import ModelPrint, NamedMatrix, PyearsResult, SurvCheckResult, Yate
 
 
 def _total(values: Any) -> float:
-    # Traverse stored cells without copying or flattening a multidimensional table.
     if isinstance(values, (list, tuple)):
         return math.fsum(_total(value) for value in values)
     return float(values)
@@ -48,7 +47,6 @@ def print_pyears(x: PyearsResult) -> ModelPrint:
         "Total number of person-years tabulated: " + _r_format_number(statistics["pyears"], 7),
         "Total number of person-years off table: " + _r_format_number(x.offtable, 7),
     ]
-    # cat() inserts a separator before the original summary, which starts with a space.
     text = "" if x.summary is None else "Matches to the chosen rate table:\n   " + x.summary
     text += f"Observations in the data set: {x.observations}\n"
     lines += [line.rstrip() for line in text.splitlines()]
@@ -87,7 +85,6 @@ def print_survcheck(x: SurvCheckResult, *, width: Any = 80) -> ModelPrint:
         [list(row) for row in x.transitions.counts],
     )
     tables = {"transitions": transitions}
-    # R's table class prints both dimension titles, unlike a plain numeric matrix.
     lines += ["", "Transitions table:", *_table_lines(transitions, width, "from", "to"), ""]
     if x.events is not None:
         events = NamedMatrix(
@@ -196,7 +193,6 @@ def print_yates(
     count = max(map(len, columns), default=0)
     for column in columns:
         column.extend([""] * (count - len(column)))
-    # Only the shape is used by the character formatter; share its placeholder row.
     display = NamedMatrix([""] * count, names, [[0.0] * len(names)] * count)
     means = NamedMatrix(
         None,

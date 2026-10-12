@@ -1,8 +1,3 @@
-//! Global tests of a Cox model's coefficients: the likelihood ratio, Wald
-//! and score tests reported by R's `summary.coxph` (`R/summary.coxph.R`),
-//! with the Wald quadratic form computed like `coxph.wtest`
-//! (`src/coxph_wtest.c`: generalised Cholesky, redundant columns dropped).
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::{cholesky2, chsolve2};
@@ -10,11 +5,10 @@ use crate::internal::validation::{validate_finite, validate_length};
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-/// R's `coxph.wtest` default `toler.chol`.
 const WTEST_TOLERANCE: f64 = 1e-9;
 
-/// A chi-square test statistic with its degrees of freedom and upper-tail
-/// p-value.
+#[doc = " A chi-square test statistic with its degrees of freedom and upper-tail"]
+#[doc = " p-value."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct TestResult {
@@ -33,10 +27,6 @@ fn chi_square_result(statistic: f64, df: usize, test_name: &str) -> TestResult {
     }
 }
 
-/// Quadratic form `b' V^{-1} b` through R's `coxph.wtest`: the generalised
-/// Cholesky factorisation of `var` with tolerance `toler`, redundant
-/// (near-singular) columns contributing nothing.  Returns the statistic
-/// and the rank of `var`.
 fn quadratic_form(var: &[Vec<f64>], b: &[f64], toler: f64) -> SurvivalResult<(f64, usize)> {
     let n = b.len();
     validate_length(n, var.len(), "var rows")?;
@@ -59,8 +49,6 @@ fn quadratic_form(var: &[Vec<f64>], b: &[f64], toler: f64) -> SurvivalResult<(f6
     Ok((statistic, rank.unsigned_abs() as usize))
 }
 
-/// Likelihood ratio test `2 (loglik_full - loglik_reduced)` on `df`
-/// degrees of freedom (R's `logtest`).
 pub fn likelihood_ratio_test(
     loglik_full: f64,
     loglik_reduced: f64,
@@ -81,9 +69,6 @@ pub fn likelihood_ratio_test(
     ))
 }
 
-/// Wald test `(beta - init)' V^{-1} (beta - init)` on `length(beta)` degrees
-/// of freedom, as `coxph` stores in `fit$wald.test` and `summary.coxph`
-/// reports (`coef` and `var` restricted to the non-`NA` coefficients).
 pub fn wald_test(
     coef: &[f64],
     var: &[Vec<f64>],
@@ -105,10 +90,6 @@ pub fn wald_test(
     Ok(chi_square_result(statistic, coef.len(), "WaldTest"))
 }
 
-/// Score test `U' I^{-1} U` on `length(U)` degrees of freedom, `U` and `I`
-/// being the score vector and information matrix at the initial
-/// coefficients (R's `sctest`, computed by `coxfit6` on its first
-/// iteration).
 pub fn score_test(score: &[f64], information: &[Vec<f64>]) -> SurvivalResult<TestResult> {
     if score.is_empty() {
         return Err(SurvivalError::invalid_input("score must not be empty"));
@@ -123,8 +104,8 @@ pub fn lrt_test_py(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult
     Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df)?)
 }
 
-/// `wald_test(coef, var, init=None)`: `var` is the coefficient variance
-/// matrix as nested rows.
+#[doc = " `wald_test(coef, var, init=None)`: `var` is the coefficient variance"]
+#[doc = " matrix as nested rows."]
 #[pyfunction(name = "wald_test")]
 #[pyo3(signature = (coef, var, init=None))]
 pub fn wald_test_py(
@@ -146,8 +127,6 @@ mod tests {
 
     #[test]
     fn wald_test_uses_the_full_covariance() {
-        // beta' V^-1 beta with V = [[2, 0.5], [0.5, 1]], beta = (1, 2):
-        // V^-1 = [[4, -2], [-2, 8]] / 7  ->  (4 - 8 + 32) / 7 = 4
         let result = wald_test(&[1.0, 2.0], &[vec![2.0, 0.5], vec![0.5, 1.0]], None).unwrap();
         assert!((result.statistic - 4.0).abs() < 1e-12);
         assert_eq!(result.df, 2);

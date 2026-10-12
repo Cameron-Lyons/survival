@@ -1,25 +1,10 @@
 #!/usr/bin/env Rscript
-#
-# Generate the R reference fixtures consumed by
-#   python/tests/test_r_fixtures.py  and  src/tests/r_fixtures.rs
-#
-# Run from any directory:
-#   <renv>/bin/Rscript test/r/generate_fixtures.R [--check]
-#
-# Every fixture file is a JSON document with the schema described in
-# test/r/README.md.  The script is deterministic: no timestamps, and the one
-# Monte-Carlo computation (yates with predict = "risk") is seeded.  --check
-# regenerates a second copy into a scratch directory and fails unless the two
-# are byte-identical; R_FIXTURES_DIR overrides the output directory.
 
 suppressPackageStartupMessages({
   library(survival)
   library(jsonlite)
 })
 
-# ---------------------------------------------------------------------------
-# Paths and metadata
-# ---------------------------------------------------------------------------
 
 script_path <- function() {
   args <- commandArgs(trailingOnly = FALSE)
@@ -31,7 +16,6 @@ script_path <- function() {
 }
 
 script_dir <- dirname(script_path())
-# R_FIXTURES_DIR overrides the output directory (used by the --check run).
 fixture_dir <- Sys.getenv("R_FIXTURES_DIR", unset = file.path(script_dir, "fixtures"))
 dir.create(fixture_dir, showWarnings = FALSE, recursive = TRUE)
 self_check <- "--check" %in% commandArgs(trailingOnly = TRUE)
@@ -49,11 +33,7 @@ metadata <- list(
 
 cat("survival", metadata$survival_version, "/", R.version.string, "\n")
 
-# ---------------------------------------------------------------------------
-# JSON encoding helpers
-# ---------------------------------------------------------------------------
 
-# Numeric vector -> JSON array (always an array, even for length 1).
 jvec <- function(x) {
   x <- unname(x)
   if (is.factor(x)) {
@@ -69,8 +49,6 @@ jvec <- function(x) {
   if (length(x) == 0) {
     return(I(numeric(0)))
   }
-  # Guard against denormal garbage: none of the recorded quantities is
-  # legitimately that small (see clean_survfitms for the known source).
   x[!is.na(x) & abs(x) < 1e-300] <- 0
   if (all(is.finite(x))) {
     return(I(x))
@@ -88,7 +66,6 @@ jvec <- function(x) {
   })
 }
 
-# Matrix -> row-major nested arrays.
 jmat <- function(x) {
   x <- as.matrix(x)
   if (nrow(x) == 0) {
@@ -97,7 +74,6 @@ jmat <- function(x) {
   lapply(seq_len(nrow(x)), function(i) jvec(x[i, ]))
 }
 
-# Named vector -> JSON object.
 jnamed <- function(x) {
   if (is.null(names(x))) {
     stop("jnamed requires a named vector")
@@ -110,7 +86,6 @@ jnamed <- function(x) {
   out
 }
 
-# Matrix with dimnames -> {rownames, colnames, values}.
 jmat_named <- function(x) {
   x <- as.matrix(x)
   list(
@@ -120,12 +95,10 @@ jmat_named <- function(x) {
   )
 }
 
-# 3-d array -> list of matrices along the third dimension.
 jarray3 <- function(x) {
   lapply(seq_len(dim(x)[3]), function(k) jmat(x[, , k, drop = TRUE]))
 }
 
-# data.frame -> {columns: {name: values}, factors: {name: levels}}
 jframe <- function(df) {
   cols <- list()
   factors <- list()
@@ -151,7 +124,6 @@ jframe <- function(df) {
   list(nrow = nrow(df), columns = cols, factors = factors)
 }
 
-# Surv object -> matrix plus attributes.
 jsurv <- function(s) {
   out <- list(
     type = attr(s, "type"),
@@ -167,9 +139,6 @@ jsurv <- function(s) {
   out
 }
 
-# ---------------------------------------------------------------------------
-# survfit encoding
-# ---------------------------------------------------------------------------
 
 survfit_curve_fields <- c(
   "time", "n.risk", "n.event", "n.censor", "n.enter", "surv", "std.err",
@@ -187,14 +156,6 @@ split_survfit <- function(fit) {
   })
 }
 
-# survfitAJ's C code (src/survfitaj.c) zeroes only the first nstate slots of
-# the std.chaz accumulator, so when a curve has more transition types than
-# states its rows before the first event carry uninitialised memory in the
-# remaining columns (values differ between runs and machines).  The value
-# the code would produce had it been initialised is 0: no influence has
-# accumulated before the first event, and every later row is recomputed
-# from the (zeroed) influence matrix.  A row with no event yet is exactly a
-# row whose cumulative hazards are all zero.
 clean_survfitms <- function(fit) {
   if (inherits(fit, "survfitms") && !is.null(fit$std.chaz) && !is.null(fit$cumhaz)) {
     no_event_yet <- rowSums(as.matrix(fit$cumhaz) != 0) == 0
@@ -222,8 +183,6 @@ encode_curve_slice <- function(fit, index) {
   out
 }
 
-# survfit -> {n, strata: {name: size}, curves: [{name, time, n_risk, ...}],
-#             conf_type, conf_int, type, states, p0, transitions}
 jsurvfit <- function(fit) {
   fit <- clean_survfitms(fit)
   parts <- split_survfit(fit)
@@ -279,9 +238,6 @@ jquantile <- function(fit, probs = c(0.25, 0.5, 0.75)) {
        upper = wrap(q$upper))
 }
 
-# ---------------------------------------------------------------------------
-# Case registry
-# ---------------------------------------------------------------------------
 
 fixtures <- list()
 failures <- character(0)
@@ -293,7 +249,6 @@ add_case <- function(topic, name, inputs, expected, note = NULL) {
   invisible(NULL)
 }
 
-# Evaluate a case body, recording failures instead of aborting the run.
 run_case <- function(topic, name, body) {
   result <- tryCatch(
     {
@@ -310,7 +265,6 @@ run_case <- function(topic, name, body) {
   invisible(result)
 }
 
-# Inputs description helpers
 dataset_input <- function(dataset, rows = NULL, formula = NULL, args = list(),
                           factors = NULL) {
   out <- list(dataset = dataset)
@@ -321,9 +275,6 @@ dataset_input <- function(dataset, rows = NULL, formula = NULL, args = list(),
   out
 }
 
-# Inline (derived or synthetic) data frames are registered once per name and
-# written into the topic document's "data" section; cases refer to them by
-# "data_ref" so a frame shared by several cases is only stored once.
 inline_data <- list()
 register_data <- function(name, df) {
   inline_data[[name]] <<- df
@@ -371,9 +322,6 @@ factor_levels <- function(df, cols) {
   if (length(out) == 0) NULL else out
 }
 
-# ---------------------------------------------------------------------------
-# Datasets used
-# ---------------------------------------------------------------------------
 
 data(infert, package = "datasets")
 
@@ -385,7 +333,6 @@ flchain_rows <- seq_len(500)
 nafld_rows <- seq_len(1000)
 mgus2_rows <- seq_len(400)
 
-# Small synthetic sets ---------------------------------------------------------
 
 synthetic_ties <- register_data("synthetic_ties", data.frame(
   time = c(1, 1, 1, 2, 2, 3, 4, 4, 5, 6, 6, 6, 7, 8, 9, 9),
@@ -418,7 +365,6 @@ synthetic_interval_status <- register_data("synthetic_interval_status", data.fra
   status = c(3, 3, 2, 3, 1, 0, 3, 2, 3, 0)
 ))
 
-# mgus2 competing-risk data (survival vignette "compete")
 mgus2_cr <- within(mgus2, {
   etime <- ifelse(pstat == 0, futime, ptime)
   event <- factor(ifelse(pstat == 0, 2 * death, 1), 0:2,
@@ -426,7 +372,6 @@ mgus2_cr <- within(mgus2, {
 })
 mgus2_cr <- register_data("mgus2_cr", mgus2_cr[, c("id", "age", "sex", "etime", "event")])
 
-# Illness-death data derived from myeloid (survival vignette "multi")
 myeloid_ms <- local({
   data1 <- tmerge(myeloid[, 1:4], myeloid, id = id, death = event(futime, death),
                   sct = event(txtime), cr = event(crtime),
@@ -439,8 +384,6 @@ myeloid_ms <- local({
 })
 myeloid_ms <- register_data("myeloid_ms", myeloid_ms[myeloid_ms$id <= 120, ])
 
-# Small explicit multistate history with istate (subjects start in
-# different states, some transitions back).
 synthetic_mstate <- register_data("synthetic_mstate", data.frame(
   id = c(1, 1, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8),
   tstart = c(0, 3, 0, 2, 0, 0, 5, 0, 0, 4, 0, 0),
@@ -454,7 +397,6 @@ synthetic_mstate <- register_data("synthetic_mstate", data.frame(
   x = c(1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1)
 ))
 
-# jasa is a data.frame with Date columns; keep the numeric part for fixtures.
 jasa_num <- register_data("jasa_num", data.frame(
   futime = jasa$futime,
   fustat = jasa$fustat,
@@ -463,9 +405,6 @@ jasa_num <- register_data("jasa_num", data.frame(
   transplant = jasa$transplant
 ))
 
-# ---------------------------------------------------------------------------
-# datasets.json: checksums of the bundled datasets used by the fixtures
-# ---------------------------------------------------------------------------
 
 dataset_summary <- function(df) {
   cols <- lapply(names(df), function(nm) {
@@ -510,9 +449,6 @@ for (ds in c("lung", "aml", "ovarian", "veteran", "pbc", "kidney", "rats", "rats
   })
 }
 
-# ---------------------------------------------------------------------------
-# survfit: Kaplan-Meier and friends
-# ---------------------------------------------------------------------------
 
 km_expected <- function(fit, rmean = NULL, times = NULL, quantiles = TRUE) {
   out <- list(fit = jsurvfit(fit))
@@ -527,8 +463,6 @@ km_expected <- function(fit, rmean = NULL, times = NULL, quantiles = TRUE) {
   out
 }
 
-# Arguments given as a column name (id = "id") are resolved against the data
-# frame before the call; the fixture keeps the column name.
 resolve_column_args <- function(args, df, names = c("id", "cluster", "weights", "istate",
                                                      "subcoh", "strata")) {
   for (nm in intersect(names(args), names)) {
@@ -539,7 +473,6 @@ resolve_column_args <- function(args, df, names = c("id", "cluster", "weights", 
   args
 }
 
-# Resolve a case's data: either a bundled dataset or a registered inline frame.
 case_frame <- function(dataset, data_ref, rows) {
   df <- if (is.null(data_ref)) get(dataset) else inline_data[[data_ref]]
   if (!is.null(rows)) df <- df[rows, , drop = FALSE]
@@ -637,9 +570,6 @@ km_case("synthetic_timefix_false", NULL, "Surv(time, status) ~ 1", data_ref = "s
 km_case("lung_sex_ph_ecog", "lung", "Surv(time, status) ~ sex + ph.ecog", rows = lung_cc,
         quantiles = FALSE)
 
-# ---------------------------------------------------------------------------
-# survfit: Aalen-Johansen multistate
-# ---------------------------------------------------------------------------
 
 aj_case <- function(name, dataset, formula, data_ref = NULL, rows = NULL, args = list(),
                     times = NULL, influence = FALSE, note = NULL) {
@@ -689,9 +619,6 @@ register_data("synthetic_ties_mstate", within(synthetic_ties, {
 aj_case("synthetic_ties_influence", NULL, "Surv(time, event) ~ 1", data_ref = "synthetic_ties_mstate",
         influence = TRUE)
 
-# ---------------------------------------------------------------------------
-# survfit: interval censoring (Turnbull)
-# ---------------------------------------------------------------------------
 
 turnbull_expected <- function(fit) {
   list(
@@ -722,9 +649,6 @@ interval_case("interval_status_synthetic", "synthetic_interval_status",
 interval_case("interval2_synthetic_group", "synthetic_interval",
               "Surv(left, right, type = \"interval2\") ~ g", grouped = TRUE)
 
-# ---------------------------------------------------------------------------
-# survdiff
-# ---------------------------------------------------------------------------
 
 survdiff_expected <- function(sd) {
   list(
@@ -781,13 +705,7 @@ run_case("survdiff", "lung_one_sample_survexp_us", function() {
            note = "expect = survexp(time ~ 1, cohort=FALSE, survexp.us, year=2000-01-01)")
 })
 
-# ---------------------------------------------------------------------------
-# coxph
-# ---------------------------------------------------------------------------
 
-# Evaluate `expr`; on error return list(r_error = message) so a case can
-# record which aspects R itself cannot produce (e.g. score residuals with
-# the exact method).
 try_aspect <- function(expr) {
   tryCatch(expr, error = function(e) list(r_error = conditionMessage(e)))
 }
@@ -938,8 +856,6 @@ jconcordance <- function(cc) {
   out
 }
 
-# NB: use fit[["name"]] rather than fit$name for optional components so that
-# R's partial matching (fit$x -> fit$xlevels) cannot pick the wrong element.
 cox_core_expected <- function(fit) {
   null_model <- is.null(fit[["coefficients"]])
   out <- list(
@@ -965,12 +881,6 @@ cox_core_expected <- function(fit) {
   out
 }
 
-# The coxph fixtures are split over three topics that share case names:
-#   coxph             core fit quantities, martingale/deviance residuals,
-#                     concordance, summary tests, wald test, anova
-#   coxph_predict     basehaz, survfit(fit), survfit(fit, newdata), predict
-#   coxph_diagnostics all residual types, cox.zph, coxph.detail
-# `extra = TRUE` adds the larger survfit/zph variants to a handful of cases.
 cox_core_topic_expected <- function(fit, tt = FALSE) {
   out <- cox_core_expected(fit)
   if (is.null(fit[["coefficients"]])) {
@@ -978,8 +888,6 @@ cox_core_topic_expected <- function(fit, tt = FALSE) {
     return(out)
   }
   if (tt) {
-    # the per-observation quantities of a tt() fit refer to the expanded
-    # (time-varying) data set; only whole-fit quantities are recorded
     out$linear_predictors <- NULL
     out$summary <- jsummary_cox(fit)
     return(out)
@@ -1163,7 +1071,6 @@ cox_case("synthetic_delayed_x_exact", NULL, "Surv(entry, exit, status) ~ x",
 cox_case("synthetic_timefix_true", NULL, "Surv(time, status) ~ 1", data_ref = "synthetic_timefix",
          note = "null model; loglik only")
 
-# multiple-model anova and nested fits
 run_case("coxph", "anova_lung_nested", function() {
   f1 <- coxph(Surv(time, status) ~ age, lung)
   f2 <- coxph(Surv(time, status) ~ age + sex, lung)
@@ -1179,9 +1086,6 @@ run_case("coxph", "anova_lung_nested", function() {
                              p = jvec(a[["Pr(>|Chi|)"]]))))
 })
 
-# ---------------------------------------------------------------------------
-# coxph with penalised terms
-# ---------------------------------------------------------------------------
 
 penal_expected <- function(fit) {
   out <- cox_core_expected(fit)
@@ -1245,9 +1149,6 @@ penal_case("rats_frailty_gaussian_litter", "rats",
 penal_case("cgd_frailty_gamma_id", "cgd",
            "Surv(tstart, tstop, status) ~ treat + frailty(id)")
 
-# ---------------------------------------------------------------------------
-# survreg
-# ---------------------------------------------------------------------------
 
 jresiduals_survreg <- function(fit, types = c("response", "deviance", "dfbeta", "dfbetas",
                                               "working", "ldcase", "ldresp", "ldshape",
@@ -1416,7 +1317,6 @@ survreg_case("synthetic_ties_weibull", NULL, "Surv(time, status) ~ x + g",
              data_ref = "synthetic_ties", args = list(dist = "weibull"))
 survreg_case("lung_intercept_only_weibull", "lung", "Surv(time, status) ~ 1",
              args = list(dist = "weibull"), full = FALSE)
-# dsurvreg / psurvreg / qsurvreg samples
 run_case("survreg", "distribution_functions", function() {
   x <- c(0.5, 1, 2, 5, 10)
   p <- c(0.05, 0.25, 0.5, 0.75, 0.95)
@@ -1442,9 +1342,6 @@ run_case("survreg", "distribution_functions", function() {
   add_case("survreg", "distribution_functions", list(args = list()), out)
 })
 
-# ---------------------------------------------------------------------------
-# concordance
-# ---------------------------------------------------------------------------
 
 concordance_case <- function(name, dataset, formula, rows = NULL, args = list(), data_ref = NULL,
                              note = NULL) {
@@ -1505,9 +1402,6 @@ run_case("concordance", "coxph_survreg_fits", function() {
            note = "both = concordance(fit_age_sex, fit_age)")
 })
 
-# ---------------------------------------------------------------------------
-# aareg
-# ---------------------------------------------------------------------------
 
 aareg_case <- function(name, dataset, formula, rows = NULL, args = list(), dfbeta = FALSE) {
   run_case("aareg", name, function() {
@@ -1548,9 +1442,6 @@ aareg_case("lung_qrtol_taper", "lung", "Surv(time, status) ~ age + sex",
 aareg_case("kidney_age_sex", "kidney", "Surv(time, status) ~ age + sex")
 aareg_case("veteran_karno_celltype", "veteran", "Surv(time, status) ~ karno + celltype")
 
-# ---------------------------------------------------------------------------
-# cch on the nwtco case-cohort subset (from ?cch)
-# ---------------------------------------------------------------------------
 
 nwtco_cc <- local({
   subcoh <- nwtco$in.subcohort
@@ -1607,9 +1498,6 @@ cch_case("i_borgan", "I.Borgan", stratified = TRUE)
 cch_case("ii_borgan", "II.Borgan", stratified = TRUE)
 cch_case("prentice_age_only", "Prentice", formula = "Surv(edrel, rel) ~ age")
 
-# ---------------------------------------------------------------------------
-# clogit on infert (datasets package, embedded inline)
-# ---------------------------------------------------------------------------
 
 register_data("infert", infert[, c("education", "age", "parity", "induced", "case",
                                    "spontaneous", "stratum", "pooled.stratum")])
@@ -1642,9 +1530,6 @@ clogit_case("infert_spont_induced_pooled_exact", "case ~ spontaneous + induced +
             "exact")
 clogit_case("infert_age_spont_efron", "case ~ age + spontaneous + strata(stratum)", "efron")
 
-# ---------------------------------------------------------------------------
-# finegray
-# ---------------------------------------------------------------------------
 
 finegray_case <- function(name, data_ref, formula, rows = NULL, args = list(), cox_formula = NULL) {
   run_case("finegray", name, function() {
@@ -1677,9 +1562,6 @@ finegray_case("synthetic_ties_b_prefix", "synthetic_ties_mstate", "Surv(time, ev
 finegray_case("synthetic_ties_a_count", "synthetic_ties_mstate", "Surv(time, event) ~ x",
               args = list(etype = "a", count = "ncut"))
 
-# ---------------------------------------------------------------------------
-# survobrien
-# ---------------------------------------------------------------------------
 
 survobrien_case <- function(name, dataset, formula, rows = NULL, args = list()) {
   run_case("survobrien", name, function() {
@@ -1705,9 +1587,6 @@ survobrien_case("ovarian_age_ecog", "ovarian", "Surv(futime, fustat) ~ age + eco
 survobrien_case("lung_age_ph_karno_subset", "lung", "Surv(time, status) ~ age + ph.karno",
                 rows = lung_cc[1:60])
 
-# ---------------------------------------------------------------------------
-# yates
-# ---------------------------------------------------------------------------
 
 jyates <- function(y) {
   out <- list(
@@ -1725,7 +1604,6 @@ yates_case <- function(name, dataset, formula, term, rows = NULL, args = list(),
   run_case("yates", name, function() {
     df <- case_frame(dataset, NULL, rows)
     fit <- do.call(fun, c(list(formula = as.formula(formula), data = df), fit_args))
-    # predict = "risk" (non-linear scale) uses Monte-Carlo standard errors
     set.seed(20240601)
     y <- do.call(yates, c(list(fit = fit, term = term), args))
     expected <- jyates(y)
@@ -1759,9 +1637,6 @@ yates_case("veteran_celltype_lm", "veteran", "time ~ celltype + karno", "celltyp
 yates_case("veteran_celltype_predict_risk", "veteran", "Surv(time, status) ~ celltype + karno",
            "celltype", args = list(predict = "risk"))
 
-# ---------------------------------------------------------------------------
-# royston, brier
-# ---------------------------------------------------------------------------
 
 run_case("royston_brier", "lung_age_sex", function() {
   fit <- coxph(Surv(time, status) ~ age + sex, lung)
@@ -1808,9 +1683,6 @@ run_case("royston_brier", "pbc_trial_bili_edema", function() {
                 })))
 })
 
-# ---------------------------------------------------------------------------
-# rttright
-# ---------------------------------------------------------------------------
 
 rttright_case <- function(name, dataset, formula, rows = NULL, args = list(), data_ref = NULL) {
   run_case("rttright", name, function() {
@@ -1836,9 +1708,6 @@ rttright_case("synthetic_ties_g", NULL, "Surv(time, status) ~ g", data_ref = "sy
 rttright_case("synthetic_ties_mstate", NULL, "Surv(time, event) ~ 1", data_ref = "synthetic_ties_mstate",
               args = list(times = c(2, 5)))
 
-# ---------------------------------------------------------------------------
-# pseudo, residuals.survfit, survfit0
-# ---------------------------------------------------------------------------
 
 pseudo_case <- function(name, dataset, formula, times, rows = NULL, data_ref = NULL, args = list(),
                         types = c("pstate", "cumhaz", "rmst", "auc", "sojourn", "survival")) {
@@ -1881,9 +1750,6 @@ pseudo_case("synthetic_istate", NULL, "Surv(tstart, tstop, event) ~ 1", c(3, 6, 
 pseudo_case("cgd_counting_id", "cgd", "Surv(tstart, tstop, status) ~ 1", c(100, 250),
             args = list(id = "id"))
 
-# ---------------------------------------------------------------------------
-# survcheck
-# ---------------------------------------------------------------------------
 
 jsurvcheck <- function(sc) {
   list(
@@ -1932,9 +1798,6 @@ survcheck_case("cgd_counting", NULL, "Surv(tstart, tstop, status) ~ 1", args = l
 survcheck_case("heart_counting", NULL, "Surv(start, stop, event) ~ 1", args = list(id = "id"),
                dataset = "heart")
 
-# ---------------------------------------------------------------------------
-# survSplit, survcondense
-# ---------------------------------------------------------------------------
 
 survsplit_case <- function(name, dataset, formula, rows = NULL, args = list(), data_ref = NULL) {
   run_case("survSplit", name, function() {
@@ -1987,9 +1850,6 @@ register_data("cgd_split", local({
 survcondense_case("cgd_split_treat_age", "cgd_split", "Surv(tstart, tstop, status) ~ treat + age",
                   args = list(id = "id"))
 
-# ---------------------------------------------------------------------------
-# tmerge (cgd0 vignette example) and tdc/cumtdc/event/cumevent on a small set
-# ---------------------------------------------------------------------------
 
 run_case("tmerge", "cgd0_vignette", function() {
   newcgd <- tmerge(data1 = cgd0[, 1:13], data2 = cgd0, id = id, tstop = futime)
@@ -2056,9 +1916,6 @@ run_case("tmerge", "pbcseq_20_vignette", function() {
            list(frame = jframe(pbc2), tcount = jmat_named(attr(pbc2, "tcount"))))
 })
 
-# ---------------------------------------------------------------------------
-# neardate
-# ---------------------------------------------------------------------------
 
 run_case("neardate", "doc_example", function() {
   id1 <- c(1, 1, 2, 2, 2, 3, 4, 4, 5)
@@ -2077,9 +1934,6 @@ run_case("neardate", "doc_example", function() {
            expected)
 })
 
-# ---------------------------------------------------------------------------
-# tcut + pyears, survexp, ratetableDate
-# ---------------------------------------------------------------------------
 
 jpyears <- function(p) {
   wrap <- function(v) if (is.array(v) && length(dim(v)) == 1) jvec(v) else if (is.matrix(v)) jmat(v) else
@@ -2171,7 +2025,6 @@ run_case("pyears", "tcut_basis", function() {
            note = "a tcut object keeps the raw values; cutpoints/labels are attributes")
 })
 
-# survexp -------------------------------------------------------------------
 
 jsurvexp <- function(sx) {
   out <- list(time = jvec(sx$time), n = jvec(sx$n))
@@ -2284,10 +2137,6 @@ run_case("survexp", "survexp_us_table", function() {
                 )))
 })
 
-# ---------------------------------------------------------------------------
-# small utilities: cipoisson, bounded links, nsk, pspline basis, aeqSurv,
-# Surv types, statefig
-# ---------------------------------------------------------------------------
 
 run_case("utilities", "cipoisson", function() {
   k <- c(0, 1, 5, 10, 25, 100)
@@ -2415,18 +2264,9 @@ run_case("utilities", "statefig", function() {
                 layout_1_2_1 = jmat(s3), layout_1_2_1_column = jmat(s4)))
 })
 
-# ---------------------------------------------------------------------------
-# km: aggregate.survfit (population averages of survfit(coxfit, newdata))
-#
-# The consumer receives the curves of the survfit object as R stores them
-# (surv: time x data, pstate: time x data x state) rather than refitting the
-# Cox model, so the case records that input matrix next to the aggregate.
-# The file is km-aggregate_survfit.json.
-# ---------------------------------------------------------------------------
 
 aggregate_topic <- "km-aggregate_survfit"
 
-# by (a vector, or a named list of vectors) and FUN as recorded in the case.
 aggregate_case <- function(name, csurv, by = NULL, fun = NULL, note = NULL) {
   run_case(aggregate_topic, name, function() {
     agg <- if (is.null(fun)) aggregate(csurv, by = by) else aggregate(csurv, by = by, FUN = fun)
@@ -2443,7 +2283,6 @@ aggregate_case <- function(name, csurv, by = NULL, fun = NULL, note = NULL) {
     if (!is.null(agg$pstate)) {
       expected$pstate <- if (length(dim(agg$pstate)) == 3) jarray3(agg$pstate) else jmat(agg$pstate)
     }
-    # `$<- NULL` would drop the entry; keep it so the case records "no newdata"
     expected["newdata"] <- list(if (is.null(agg$newdata)) NULL else jframe(agg$newdata))
     add_case(aggregate_topic, name, list(args = args), expected, note)
   })
@@ -2471,12 +2310,6 @@ aggregate_case("mgus2_pstate_mean", mgus2_msurv, note = "multi-state fit on the 
 aggregate_case("mgus2_pstate_by", mgus2_msurv, by = c(1, 2, 1, 2),
                note = "multi-state fit on the first 400 rows of mgus2")
 
-# ---------------------------------------------------------------------------
-# survreg-extra (key: survreg): families, censoring types and options the
-# survreg topic leaves light -- extreme/t/logistic with left censoring, the
-# fixed-scale and strata paths with every residual and prediction type, an
-# offset, and the iteration limits (iter.max = 0 returns the starting values).
-# ---------------------------------------------------------------------------
 
 survreg_extra_case <- function(name, dataset, formula, rows = NULL, args = list(),
                                data_ref = NULL, newdata = NULL, full = TRUE, note = NULL) {
@@ -2535,13 +2368,6 @@ survreg_extra_case("interval2_synthetic_gaussian_g", NULL,
                    "Surv(left, right, type = \"interval2\") ~ g", data_ref = "synthetic_interval",
                    args = list(dist = "gaussian"), full = "light")
 
-# ---------------------------------------------------------------------------
-# dataprep: tmerge last-value-carried-forward (tmerge2's `k--`) -- a tdc
-# applied to subjects that already have several intervals, with update
-# times that miss some interval starts (na.rm dropping NA covariate rows,
-# or an event split from an earlier argument).  Written to
-# dataprep-tmerge.json.
-# ---------------------------------------------------------------------------
 
 register_data("tmerge_lvcf_base", data.frame(id = 1:3, futime = c(15, 12, 20),
                                              death = c(1, 0, 1)))
@@ -2590,10 +2416,6 @@ run_case("dataprep-tmerge", "pbcseq_20_chol_na", function() {
            note = "chol, ascites and hepato have NA rows in pbcseq; na.rm drops them so their values carry forward over the bili split")
 })
 
-# ---------------------------------------------------------------------------
-# validation: extra cases for survobrien, yates, anova, survcheck and the
-# survfit summaries (topic file validation-extra.json)
-# ---------------------------------------------------------------------------
 
 run_case("validation-extra", "survobrien_cgd_counting", function() {
   df <- cgd[cgd$id <= 40, ]
@@ -2663,8 +2485,6 @@ run_case("validation-extra", "survfit_lung_sex_rmean_individual", function() {
                 })))
 })
 
-# Turnbull with a jump point that ends the EM with zero mass: survfitKM
-# keeps the zero-weight pseudo-observation row (n.event = 0).
 register_data("synthetic_interval_dead_jump", data.frame(
   time = c(7, 12, 12, 12, 18, 24, 30),
   time2 = c(NA, NA, NA, NA, NA, 27, 33),
@@ -2680,8 +2500,6 @@ run_case("validation-extra", "turnbull_dead_jump", function() {
            note = "the jump at 15 (between the right-censored 12 and the left-censored 18) ends with zero EM mass")
 })
 
-# Two larger curves (a fixed draw of exponential times with random status
-# codes); curve "a" has a dead jump at 24.55 in the middle of the curve.
 register_data("synthetic_interval_dead_jump_groups", data.frame(
   time = c(4, 13.2, 5.7, 0.8, 9.5, 29.3, 6.3, 8.2, 23.8, 14.3, 26.9, 48.2, 1.9, 1.1,
            25.1, 6.2, 9.5, 12.4, 24.9, 7.4, 97.3, 13.3, 99.9, 4.5, 24.2, 14.4, 26.2,
@@ -2707,9 +2525,6 @@ run_case("validation-extra", "turnbull_dead_jump_groups", function() {
            note = "curve a has a dead jump at 24.55 (n.event = 0) before later events")
 })
 
-# ---------------------------------------------------------------------------
-# Write everything
-# ---------------------------------------------------------------------------
 
 for (topic in names(fixtures)) write_topic(topic)
 
@@ -2719,9 +2534,6 @@ if (length(failures) > 0) {
   quit(status = 1)
 }
 
-# --check: run the generator a second time into a scratch directory and
-# require byte-identical output, which catches uninitialised memory leaking
-# into a fixture (the values change between runs) and unseeded randomness.
 if (self_check) {
   check_dir <- tempfile("fixtures-check-")
   status <- system2(file.path(R.home("bin"), "Rscript"), shQuote(script_path()),

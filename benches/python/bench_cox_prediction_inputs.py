@@ -118,8 +118,6 @@ def main():
             for key, value in arrays.items():
                 np.testing.assert_allclose(value, reference[key], rtol=5e-14, atol=1e-15)
     np.savez(str(args.output) + ".npz", **arrays)
-    # ru_maxrss is bytes on macOS, KiB on Linux. This includes interpreter,
-    # NumPy, training data, input buffers, caches, temporary storage and results.
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     rss_mib = rss / (1024**2 if platform.system() == "Darwin" else 1024)
     Path(str(args.output) + ".json").write_text(

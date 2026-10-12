@@ -3,8 +3,6 @@ suppressPackageStartupMessages(library(survival))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/aft_rank_deficient_reference.json"
 
-# Preserve stock likelihood, Newton/Fisher steps, Cholesky rank handling and
-# methods. Correct only survreg.fit's division by sd=0 for nonbinary constants.
 fit_source <- paste(deparse(survival:::survreg.fit), collapse = "\n")
 needle <- "function(z) all(z == 0 | z == 1)"
 stopifnot(length(gregexpr(needle, fit_source, fixed = TRUE)[[1L]]) == 1L,
@@ -82,8 +80,6 @@ for (design in c("helmert_unused", "constant", "affine"))
     keep <- which(c(!is.na(coef(fit$value)), rep(TRUE, length(fit$value$scale) * (dist != "exponential"))))
     stopifnot(isTRUE(all.equal(fit$value$linear.predictors, reduced$value$linear.predictors, tolerance = 1e-7)),
       isTRUE(all.equal(unname(fit$value$var[keep, keep]), unname(reduced$value$var), tolerance = 1e-7)))
-    # Starting at the converged identified model bypasses R's bad scaling and
-    # independently exercises its native solver with the entire redundant design.
     initialized_args <- arguments
     initialized_args$init <- c(coef(reduced$value), 0,
       if (dist != "exponential") log(reduced$value$scale))

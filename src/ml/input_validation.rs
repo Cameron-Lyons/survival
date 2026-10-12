@@ -43,8 +43,6 @@ pub(crate) fn validate_deep_training_values(
     time: &[f64],
     status: &[i32],
 ) -> PyResult<()> {
-    // Training stores features in f32 tensors; inference instead uses f64.
-    // Check the converted value once, allowing ordinary rounding and underflow.
     for (index, &value) in x.iter().enumerate() {
         if !(value as f32).is_finite() {
             return Err(PyValueError::new_err(format!(
@@ -62,8 +60,6 @@ pub(crate) fn validate_prediction_input(x: &[f64], n_new: usize, n_vars: usize) 
     if x.len() != expected {
         return Err(PyValueError::new_err("x_new dimensions don't match"));
     }
-    // Zero-feature trees can have an empty input for any row count. Their
-    // outputs still need one entry per row for curves or optional event times.
     let output_row_size = size_of::<Vec<f64>>().max(size_of::<Option<f64>>());
     if n_new > (isize::MAX as usize) / output_row_size {
         return Err(PyValueError::new_err(

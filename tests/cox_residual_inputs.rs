@@ -1,7 +1,3 @@
-//! Standalone public Cox residual and score kernels reject mutated inputs.
-//! Numerical controls compute each event's risk set directly, independently
-//! of the optimized forward/backward sweeps used by the kernels.
-
 use ndarray::{Array2, ArrayView2, array};
 use std::collections::BTreeSet;
 use survival::core::{SurvResponse, schoenfeld_residuals};

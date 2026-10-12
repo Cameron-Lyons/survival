@@ -61,7 +61,6 @@ test_that("joint covariance rejects incompatible cluster memberships", {
   second <- coxph(Surv(time, status) ~ z, data, cluster = rep(1:3, each = 8))
   expect_error(concordance(first, second), "identical clustering")
   expect_error(concordance(second, first), "identical clustering")
-  # One explicit grouping replaces both fitted partitions.
   actual <- concordance(first, second, cluster = data$id, influence = 1)
   influences <- cbind(concordance(first, cluster = data$id, influence = 1)$dfbeta,
                       concordance(second, cluster = data$id, influence = 1)$dfbeta)

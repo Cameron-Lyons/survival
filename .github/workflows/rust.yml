@@ -11,8 +11,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTUP_TOOLCHAIN: 1.95.0
-  # Warnings are denied in CI only (not in .cargo/config.toml) so local
-  # iteration is not blocked while the gate is still enforced on every PR.
   RUSTFLAGS: -Dwarnings
 
 jobs:
@@ -28,8 +26,6 @@ jobs:
         with:
           python-version: '3.14'
 
-      # The `python` feature tests embed this interpreter and exercise the
-      # NumPy boundary types, so NumPy must be importable from it.
       - name: Install NumPy for the embedded-interpreter tests
         run: python -m pip install numpy
 
@@ -158,9 +154,6 @@ jobs:
               print(location)
           PY
 
-      # Frozen stock-R references require no R installation. Exercise the wheel's
-      # numerical results, ndarray conversions, formula types and callback/pickle
-      # paths on both supported platforms, beyond loading the shared library.
       - name: Run installed-wheel numerical tests
         working-directory: ${{ runner.temp }}
         shell: bash
@@ -243,8 +236,6 @@ jobs:
       - name: Run Python tests
         run: python -m pytest --import-mode=importlib python/tests/ -v
 
-  # Builds with the lean `extension-module` feature set (no `ml`), so this is
-  # the one run of the Python suite that exercises the no-ML skip paths.
   python-source-tree:
     name: Python Source Tree
     runs-on: ubuntu-latest
@@ -303,16 +294,10 @@ jobs:
       - name: Run Python tests against source-tree install
         run: .venv/bin/python -m pytest python/tests/ -v
 
-  # Regenerates test/r/fixtures with the exact survival version recorded in
-  # the fixture metadata and fails on any diff. This checks that the committed
-  # fixtures are reproducible, not that the crate matches R (that is what
-  # python/tests/test_r_fixtures.py and src/tests/r_fixtures.rs do).
   r-fixture-stability:
     name: R Fixture Stability
     runs-on: ubuntu-latest
     env:
-      # CRAN spelling of test/r/fixtures/*.json -> metadata.survival_version
-      # (packageVersion() reports it as 3.8.11).
       R_SURVIVAL_VERSION: '3.8-11'
     steps:
       - name: Checkout code
@@ -352,11 +337,6 @@ jobs:
       - name: Regenerate fixtures
         run: Rscript test/r/generate_fixtures.R
 
-      # The fixtures are single-line JSON, so `git diff` would print one
-      # unreadable line per file; compare_fixtures.py names the case and
-      # field of every differing value instead.  The tolerance absorbs
-      # last-ulp differences between builds of R (BLAS, libm); anything a
-      # survival release or generator edit changes is far larger.
       - name: Check for differences
         run: |
           if python3 test/r/compare_fixtures.py "$RUNNER_TEMP/committed-fixtures" test/r/fixtures --rtol 1e-9 --atol 1e-12; then
@@ -415,8 +395,6 @@ jobs:
       - name: Install Python extension
         run: .venv/bin/maturin develop --release --features extension-module,ml
 
-      # The bridge follows current response/status and multi-state label semantics.
-      # Historical numerical fixtures are regenerated separately with their own pin.
       - name: Install R bridge dependencies
         run: |
           rspm <- Sys.getenv("RSPM", unset = "")
@@ -547,8 +525,6 @@ jobs:
           python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \
             --rtol 0 --atol 0
 
-      # High-degree polynomial columns amplify BLAS rounding in R's QR.
-      # Keep this independent comparison separate from the established gate.
       - name: Regenerate ordered-factor contrast references
         run: |
           fixture_dir="$RUNNER_TEMP/current-stock-fixtures/ordered-factor"

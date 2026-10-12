@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-survival references for the entry reporting grid.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

@@ -30,9 +30,6 @@ def test_cox_survfit_baseline_handles_ties_weights_and_delayed_entry():
     assert result.hazard == pytest.approx([1.0 / 3.0, 1.0 / 6.0, 0.0])
     assert result.cumhaz == pytest.approx([1.0 / 3.0, 0.5, 0.5])
 
-    # survival:::agsurv(Surv(c(1, 2, 3), c(1, 1, 0)), matrix(0:2, ncol = 1),
-    #                   c(1, 0, 1), c(2, 1, 1), 1, 1): the zero-weight death at 2
-    # counts in ndeath but leaves the Kalbfleisch-Prentice increment at 1
     kp = survival.surv_analysis.cox_survfit_baseline(
         [[1.0, 1.0], [2.0, 1.0], [3.0, 0.0]],
         [[0.0], [1.0], [2.0]],
@@ -58,7 +55,6 @@ def test_cox_survfit_baseline_handles_ties_weights_and_delayed_entry():
 
 
 def test_step_values_at_reads_curves_like_summary_extend():
-    # a curve stepping to 0.9, 0.7, 0.4 at times 1, 3, 5 (1 before), read at unsorted times
     values = survival.surv_analysis.step_values_at(
         [1.0, 3.0, 5.0], [0.9, 0.7, 0.4], [6.0, 0.5, 3.0, 1.0], 1.0
     )
@@ -70,10 +66,6 @@ def test_step_values_at_reads_curves_like_summary_extend():
         survival.surv_analysis.step_values_at([1.0], [0.9, 0.7], [2.0], 1.0)
 
 
-# ---------------------------------------------------------------------------------------------
-# Kaplan-Meier family (survfitkm and its summaries), against R survival 3.8.11
-# ---------------------------------------------------------------------------------------------
-
 _KM_TIME = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 _KM_STATUS = [1, 1, 0, 1, 0, 1, 1, 0]
 
@@ -81,7 +73,6 @@ _KM_STATUS = [1, 1, 0, 1, 0, 1, 1, 0]
 def test_survfitkm_matches_r_survfit():
     fit = survival.surv_analysis.survfitkm(_KM_TIME, _KM_STATUS)
 
-    # survfit(Surv(time, status) ~ 1)
     assert isinstance(fit, survival.surv_analysis.SurvfitKMResult)
     assert fit.n == [8]
     assert fit.time == pytest.approx(_KM_TIME)
@@ -130,13 +121,11 @@ def test_survfitkm_weights_and_hazard_types_match_r():
     weighted = survival.surv_analysis.survfitkm(
         _KM_TIME, _KM_STATUS, weights=[1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0]
     )
-    # R: survfit with case weights w
     assert weighted.n_risk == pytest.approx([10, 9, 7, 6, 5, 3, 2, 1])
     assert weighted.surv[:2] == pytest.approx([0.9, 0.7])
     assert weighted.std_err[:2] == pytest.approx([0.10540925533894598, 0.20701966780270625])
 
     fleming = survival.surv_analysis.survfitkm(_KM_TIME, _KM_STATUS, stype=2, ctype=2)
-    # R: survfit with stype = 2, ctype = 2 (Fleming-Harrington)
     assert fleming.surv[:2] == pytest.approx([0.88249690258459546, 0.76501706144857473])
     assert fleming.cumhaz[:2] == pytest.approx([0.125, 0.26785714285714285])
 
@@ -156,7 +145,6 @@ def test_survfitkm_cluster_robust_variance_and_influence_match_r():
         [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [1, 1, 0, 1, 0, 1], cluster=[0, 0, 1, 1, 2, 2], influence=3
     )
 
-    # survfit(Surv(time, status) ~ 1, cluster = id, influence = TRUE)
     assert fit.surv == pytest.approx([5 / 6, 2 / 3, 2 / 3, 4 / 9, 4 / 9, 0.0])
     assert fit.std_err == pytest.approx(
         [0.1360828, 0.2721655, 0.2721655, 0.2771598, 0.2771598, 0.0], abs=1e-7
@@ -180,7 +168,6 @@ def test_survfitkm_delayed_entry_reverse_and_near_ties_match_r():
     delayed = survival.surv_analysis.survfitkm(
         [2.0, 4.0, 3.0, 5.0, 5.0], [1, 0, 1, 1, 0], start=[0.0, 0.0, 1.0, 2.0, 3.0]
     )
-    # survfit(Surv(start, stop, status) ~ 1)
     assert delayed.time == pytest.approx([2.0, 3.0, 4.0, 5.0])
     assert delayed.n_risk == pytest.approx([3.0, 3.0, 3.0, 2.0])
     assert delayed.n_event == pytest.approx([1.0, 1.0, 0.0, 1.0])
@@ -190,7 +177,6 @@ def test_survfitkm_delayed_entry_reverse_and_near_ties_match_r():
         [0.33333333333333331, 0.47140452079103168, 0.47140452079103168, 0.68718427093627676]
     )
 
-    # reverse = TRUE follows survfitkm.c: tied deaths leave the risk set before the censorings
     reverse = survival.surv_analysis.survfitkm(
         [1.0, 2.0, 2.0, 3.0, 4.0], [1, 0, 1, 0, 1], reverse=True
     )
@@ -199,7 +185,6 @@ def test_survfitkm_delayed_entry_reverse_and_near_ties_match_r():
     assert reverse.surv == pytest.approx([1.0, 2 / 3, 1 / 3, 1 / 3])
 
     near = survival.surv_analysis.survfitkm([1.0 + 5e-10, 2.0, 1.0], [1, 0, 1])
-    # aeqSurv folds the near tie
     assert near.time == pytest.approx([1.0, 2.0])
     assert near.n_risk == pytest.approx([3.0, 1.0])
     assert near.n_event == pytest.approx([2.0, 0.0])
@@ -212,7 +197,6 @@ def test_survfitkm_delayed_entry_reverse_and_near_ties_match_r():
 def test_survfitkm_strata_stack_curves_like_r():
     fit = survival.surv_analysis.survfitkm(_KM_TIME, _KM_STATUS, strata=[1, 1, 1, 1, 2, 2, 2, 2])
 
-    # survfit(Surv(time, status) ~ g)
     assert fit.strata == [4, 4]
     assert fit.strata_codes == [1, 2]
     assert fit.n == [4, 4]
@@ -224,7 +208,6 @@ def test_survfit_summaries_match_r():
     fit = survival.surv_analysis.survfitkm(_KM_TIME, _KM_STATUS)
 
     at_times = survival.surv_analysis.summary_survfit(fit, times=[0.0, 2.5, 5.0, 10.0])
-    # summary(fit, times = c(0, 2.5, 5, 10)) drops the time beyond the last follow-up
     assert at_times.time == pytest.approx([0.0, 2.5, 5.0])
     assert at_times.surv == pytest.approx([1.0, 0.75, 0.6])
     assert at_times.n_risk == pytest.approx([8.0, 6.0, 4.0])
@@ -237,7 +220,6 @@ def test_survfit_summaries_match_r():
     assert extended.surv == pytest.approx([1.0, 0.75, 0.6, 0.2])
 
     table = survival.surv_analysis.survmean(fit)
-    # summary(fit)$table
     assert isinstance(table, survival.surv_analysis.SurvmeanTable)
     assert (table.records, table.n_max, table.n_start, table.events) == ([8.0], [8.0], [8.0], [5.0])
     assert table.rmean == pytest.approx([5.175])
@@ -248,12 +230,10 @@ def test_survfit_summaries_match_r():
     assert table.end_time == pytest.approx([8.0])
 
     restricted = survival.surv_analysis.survmean(fit, rmean="6")
-    # summary(fit, rmean = 6)$table
     assert restricted.rmean == pytest.approx([4.575])
     assert restricted.se_rmean == pytest.approx([0.68832904558793684])
 
     quantiles = survival.surv_analysis.quantile_survfit(fit, probs=[0.25, 0.5, 0.75])
-    # R: quantile of the survfit object at 25/50/75%
     assert isinstance(quantiles, survival.surv_analysis.SurvfitQuantiles)
     assert quantiles.probs == pytest.approx([0.25, 0.5, 0.75])
     assert quantiles.quantile[0] == pytest.approx([3.0, 6.0, 7.0])
@@ -261,7 +241,6 @@ def test_survfit_summaries_match_r():
     assert all(math.isnan(value) for value in quantiles.upper[0])
 
     with_origin = survival.surv_analysis.survfit0(fit)
-    # survfit0(fit) prepends the time-0 row
     assert with_origin.time == pytest.approx([0.0, *_KM_TIME])
     assert with_origin.surv[:2] == pytest.approx([1.0, 0.875])
     assert with_origin.n_risk[:2] == pytest.approx([8.0, 8.0])
@@ -281,7 +260,6 @@ def test_survmean_and_quantile_curve_kernels_match_r():
         rmean="numeric",
         rmean_at=4.0,
     )
-    # summary(survfit(Surv(1:4, c(1,1,0,1)) ~ 1), rmean = 4)$table
     (row,) = rows
     assert isinstance(row, survival.validation.SurvfitSummaryRow)
     assert (row.records, row.n_max, row.events) == (4.0, 4.0, 3.0)
@@ -302,7 +280,6 @@ def test_survmean_and_quantile_curve_kernels_match_r():
 def test_pseudo_values_and_survfit_residuals_match_r():
     values = survival.surv_analysis.pseudo(_KM_TIME, _KM_STATUS, [2.0, 5.0])
 
-    # pseudo(survfit(Surv(time, status) ~ 1), times = c(2, 5))
     assert isinstance(values, survival.surv_analysis.SurvfitResid)
     assert values.id == list(range(8))
     assert values.curve == [0] * 8
@@ -333,7 +310,6 @@ def test_pseudo_values_and_survfit_residuals_match_r():
     )
 
     residuals = survival.surv_analysis.survfitresid(_KM_TIME, _KM_STATUS, [2.0, 5.0])
-    # R: residuals of the survfit object at times 2 and 5
     np.testing.assert_allclose(
         residuals.values[:3], [[-0.09375, -0.075], [-0.09375, -0.075], [0.03125, 0.025]]
     )
@@ -358,10 +334,6 @@ def test_pseudo_values_and_survfit_residuals_match_r():
         )
 
 
-# ---------------------------------------------------------------------------------------------
-# survdiff, survcheck, aggregate_survfit
-# ---------------------------------------------------------------------------------------------
-
 _SD_TIME = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0, 7.0]
 _SD_STATUS = [1, 1, 1, 0, 1, 0, 1, 1, 0]
 _SD_GROUP = [1, 1, 2, 1, 3, 2, 3, 2, 3]
@@ -370,7 +342,6 @@ _SD_GROUP = [1, 1, 2, 1, 3, 2, 3, 2, 3]
 def test_survdiff_matches_r():
     result = survival.surv_analysis.survdiff(_SD_TIME, _SD_STATUS, _SD_GROUP)
 
-    # survdiff(Surv(t, s) ~ g)
     assert isinstance(result, survival.surv_analysis.SurvDiffResult)
     assert result.n == [3, 3, 3]
     assert result.group_codes == [1, 2, 3]
@@ -398,7 +369,6 @@ def test_survdiff_matches_r():
     stratified = survival.surv_analysis.survdiff(
         _SD_TIME, _SD_STATUS, _SD_GROUP, strata=[1, 1, 1, 2, 2, 2, 1, 2, 1]
     )
-    # survdiff(Surv(t, s) ~ g + strata(st)): obs/exp are group x stratum
     np.testing.assert_allclose(stratified.obs, [[2.0, 0.0], [1.0, 1.0], [1.0, 1.0]])
     np.testing.assert_allclose(stratified.exp, [[0.9, 0.25], [0.7, 1.5], [2.4, 0.25]])
     assert stratified.chisq == pytest.approx(1.1151131290777976)
@@ -409,7 +379,6 @@ def test_survdiff_matches_r():
     one_sample = survival.surv_analysis.survdiff_one_sample(
         _SD_STATUS, [0.5, 0.3, 0.8, 0.4, 0.9, 0.2, 0.6, 0.7, 0.5]
     )
-    # survdiff(Surv(t, s) ~ offset(expected))
     assert one_sample.obs[0] == pytest.approx([6.0])
     assert one_sample.exp[0] == pytest.approx([6.3120004444308409])
     assert one_sample.chisq == pytest.approx(0.015422096082222288)
@@ -445,7 +414,6 @@ def test_survcheck_matches_r():
         time1=[0.0, 2.0, 0.0, 1.0, 0.0],
     )
 
-    # survcheck(Surv(t1, t2, state) ~ 1, id = id) on a two-state process
     assert isinstance(result, survival.validation.SurvCheckResult)
     assert result.states == ["(s0)", "a", "b"]
     transitions = result.transitions
@@ -486,7 +454,6 @@ def test_survcheck_matches_r():
 
 
 def test_aggregate_survfit_matches_r_aggregate():
-    # aggregate(survfit) collapses the data columns of a curve matrix within `by` groups
     surv = [[0.9, 0.8, 0.7], [0.5, 0.4, 0.3]]
     by = [survival.surv_analysis.GroupingFactor([0, 0, 1], ["a", "b"], name="grp")]
 
@@ -560,11 +527,6 @@ def test_life_table_public_api_and_validation():
         survival.validation.life_table([3.0], [1], [0.0, 2.0])
 
 
-# ---------------------------------------------------------------------------------------------
-# royston, brier, yates, anova, cipoisson, survobrien, hypothesis tests
-# ---------------------------------------------------------------------------------------------
-
-
 def _lung40_cox():
     """coxph(Surv(time, status) ~ age + sex, lung[1:40, ]) with R's status - 1 coding."""
     data = survival.datasets.load_lung()
@@ -581,7 +543,6 @@ def test_royston_matches_r():
     result = survival.validation.royston(
         fit.linear_predictors, time, status, fit.loglik, fit.nevent, 2
     )
-    # royston(fit): D, se(D), R.D, R.KO, R.N, C.GH
     assert isinstance(result, survival.validation.RoystonResult)
     assert result.d == pytest.approx(0.03981824901943797901)
     assert result.se_d == pytest.approx(0.25603657261269513468)
@@ -611,7 +572,6 @@ def test_brier_matches_r():
     phat = [(1.0 - curve_surv[position]).tolist() for position in positions]
 
     result = survival.validation.brier(time, status, times, phat)
-    # R: brier score of the Cox fit at 100, 200, 300
     assert isinstance(result, survival.validation.BrierResult)
     assert result.times == pytest.approx(times)
     assert result.brier == pytest.approx(
@@ -632,7 +592,6 @@ def test_yates_linear_predictor_matches_r():
     n = 40
     time = [float(t) for t in data["time"][:n]]
     status = [int(s) - 1 for s in data["status"][:n]]
-    # sex as a treatment contrast (R's factor coding), age at its mean 63.25
     x = [
         [float(a), 1.0 if s == 2 else 0.0]
         for a, s in zip(data["age"][:n], data["sex"][:n], strict=True)
@@ -649,7 +608,6 @@ def test_yates_linear_predictor_matches_r():
         fit.var,
         offset=-sum(m * b for m, b in zip(fit.means, fit.coefficients, strict=True)),
     )
-    # yates(coxph(Surv(time, status) ~ age + factor(sex)), ~ factor(sex), predict = "linear")
     assert isinstance(result, survival.validation.YatesResult)
     estimates = result.estimate
     assert all(isinstance(item, survival.validation.YatesEstimate) for item in estimates)
@@ -677,7 +635,6 @@ def test_anova_coxph_and_hypothesis_tests_match_r():
     loglik = [-108.52888024552935, -108.47379191989565, -108.44296072448500]
 
     anova = survival.validation.anova_coxph(loglik, [0.0, 1.0, 2.0], names=["NULL", "age", "sex"])
-    # anova(coxph(Surv(time, status) ~ age + sex))
     assert isinstance(anova, survival.validation.AnovaCoxphResult)
     assert anova.test == "Chisq"
     assert [row.name for row in anova.rows] == ["NULL", "age", "sex"]
@@ -709,7 +666,6 @@ def test_anova_coxph_and_hypothesis_tests_match_r():
 
 def test_cipoisson_and_survobrien_match_r():
     exact = survival.validation.cipoisson([0, 5, 20], time=[1.0, 2.0, 10.0])
-    # R: exact Poisson limits for counts 0, 5, 20 over 1, 2, 10 time units
     assert isinstance(exact, survival.validation.CipoissonResult)
     assert exact.lower == pytest.approx([0.0, 0.81174319505921044, 1.22165195854039443])
     assert exact.upper == pytest.approx(
@@ -722,7 +678,6 @@ def test_cipoisson_and_survobrien_match_r():
     expansion = survival.validation.survobrien(
         _SD_TIME, _SD_STATUS, [[0.5, 0.3, 0.8, 0.4, 0.9, 0.2, 0.6, 0.7, 0.5]]
     )
-    # survobrien(Surv(t, s) ~ x): one block of rows per event time (.id. = row + 1)
     assert isinstance(expansion, survival.validation.SurvObrienExpansion)
     assert expansion.row == [
         0,
@@ -1032,18 +987,12 @@ def test_rcll_public_apis_and_validation():
         survival.validation.rcll_single_time([0.9], [1.0], [1], float("nan"))
 
 
-# ---------------------------------------------------------------------------------------------
-# RMST family
-# ---------------------------------------------------------------------------------------------
-
-
 def test_rmst_family_matches_r_survmean():
     time = [1.0, 2.0, 3.0, 4.0]
     status = [1, 1, 0, 1]
     group = [0, 0, 1, 1]
 
     comparison = survival.validation.rmst_comparison(time, status, group, 4.0)
-    # summary(survfit(Surv(time, status) ~ group), rmean = 4)$table per group
     assert isinstance(comparison, survival.validation.RmstComparisonResult)
     assert comparison.tau == pytest.approx(4.0)
     first, second = comparison.groups
@@ -1063,7 +1012,6 @@ def test_rmst_family_matches_r_survmean():
         [1.0, 1.0, 3.0, 2.0, 2.0, 3.0], [1, 1, 0, 1, 0, 0], [0, 0, 0, 1, 1, 1], 2.0
     )
     assert nnt.time_horizon == pytest.approx(2.0)
-    # S_control(2) = 1/3, S_treated(2) = 2/3: ARR = 1/3, NNT = 3
     assert nnt.absolute_risk_reduction == pytest.approx(1 / 3)
     assert nnt.nnt == pytest.approx(3.0)
 

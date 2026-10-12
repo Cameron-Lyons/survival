@@ -1,12 +1,10 @@
-//! Validated, stateless access to the same searches used by the fitters.
-
 use super::control::{Control, PenaltyControlInput, PenaltyControlState};
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A reusable smoothing-parameter search. Each fit owns its returned state;
-/// the controller never retains coefficients, observations, or Python objects.
+#[doc = " A reusable smoothing-parameter search. Each fit owns its returned state;"]
+#[doc = " the controller never retains coefficients, observations, or Python objects."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", frozen, skip_from_py_object)]
 pub struct PenaltyController {
@@ -26,7 +24,6 @@ fn nonnegative(value: f64) -> bool {
 }
 
 impl PenaltyController {
-    /// Validate a controller configuration before starting a search.
     pub fn new(control: Control) -> SurvivalResult<Self> {
         let this = Self { control };
         this.validate()?;
@@ -105,25 +102,19 @@ impl PenaltyController {
         }
     }
 
-    /// History column names, in the order used by R's penalty controllers.
     pub fn columns(&self) -> &'static [&'static str] {
         self.control.history_columns()
     }
 
-    /// Whether the search needs the fitted degrees of freedom or Hessian trace.
     pub fn needs_df(&self) -> bool {
         self.control.needs_df()
     }
 
-    /// The initial theta and, for a df search, its known starting points.
     pub fn initial(&self) -> SurvivalResult<PenaltyControlState> {
         self.validate()?;
         Ok(self.control.initial())
     }
 
-    /// Propose the next theta from a caller-owned previous state and fit inputs.
-    /// Iterations are consecutive and one-based. An unusable numerical proposal
-    /// is an error, including R boundary cases that would return NA or NaN.
     pub fn step(
         &self,
         old: &PenaltyControlState,
@@ -187,8 +178,6 @@ impl PenaltyController {
                 }
         ) {
             require(input.loglik.is_finite(), "loglik must be finite")?;
-            // The shared correction uses a histogram indexed by event count.
-            // Limit public allocations to 80 MB, independently of caller data.
             require(
                 input
                     .events_by_group
@@ -254,9 +243,9 @@ mod python {
 
     #[pymethods]
     impl PenaltyController {
-        /// Methods: fixed, gamma, df, aic, gaussian. Init contains starting theta
-        /// values; a df search also requires target_df, thetas, dfs and guess.
-        /// Gamma correction accepts integer counts up to ten million per group.
+        #[doc = " Methods: fixed, gamma, df, aic, gaussian. Init contains starting theta"]
+        #[doc = " values; a df search also requires target_df, thetas, dfs and guess."]
+        #[doc = " Gamma correction accepts integer counts up to ten million per group."]
         #[new]
         #[pyo3(signature = (method, *, theta=None, eps=1e-5, init=None, target_df=None, thetas=None, dfs=None, guess=None, lower=0.0, upper=None, caic=false, gamma_correction=false))]
         #[allow(clippy::too_many_arguments)]
@@ -349,7 +338,7 @@ mod python {
             Ok(self.initial()?)
         }
 
-        /// Advance one fit iteration; inputs are copied before releasing the GIL.
+        #[doc = " Advance one fit iteration; inputs are copied before releasing the GIL."]
         #[pyo3(name = "step", signature = (old, iter, *, plik=0.0, loglik=0.0, neff=0.0, df=0.0, trh=0.0, events_by_group=None, coef=None))]
         #[allow(clippy::too_many_arguments)]
         fn py_step(

@@ -41,7 +41,6 @@ def _polynomial_basis(n: int) -> np.ndarray:
     rank = n
     for column in range(n):
         while column < rank and auxiliary[column] < original[column] * 1e-7:
-            # dqrdc2 cycles negligible columns to the right, retaining order.
             design[:, column:] = np.roll(design[:, column:], -1, axis=1)
             auxiliary[column:] = np.roll(auxiliary[column:], -1)
             original[column:] = np.roll(original[column:], -1)
@@ -69,8 +68,6 @@ def _polynomial_basis(n: int) -> np.ndarray:
         auxiliary[column] = vector[0]
         vector[0] = -length
 
-    # Applying Q to signs of the diagonal gives the normalized result without
-    # multiplying by large Vandermonde diagonal entries first.
     basis = np.diag(np.sign(np.diag(design)))
     for column in reversed(range(min(rank, n - 1))):
         if auxiliary[column] == 0.0:

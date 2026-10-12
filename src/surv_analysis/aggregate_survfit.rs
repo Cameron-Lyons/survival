@@ -1,12 +1,3 @@
-//! Population-averaged curves: the port of R's `aggregate.survfit`
-//! (`R/aggregate.survfit.R`).  A `survfit(coxfit, newdata)` object holds one
-//! curve per row of `newdata`, its `data` margin; the method summarises the
-//! `surv` (time x data) and `pstate` (time x data x state) columns within
-//! groups of that margin with `FUN` and drops the components that do not
-//! collapse (`std.err`, `std.cumhaz`, `lower`, `upper`, `conf.int`,
-//! `conf.type`, `logse`, `cumhaz`).  The remaining components of the object
-//! (`time`, `n.risk`, `strata`, ...) are unchanged and stay with the caller.
-
 use super::aggregate_arithmetic::{r_mean, r_row_mean, r_sum};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatArray3, FloatMatrix};
@@ -14,19 +5,14 @@ use crate::internal::validation::validate_length;
 use ndarray::{Array2, Array3};
 use pyo3::prelude::*;
 
-/// The `FUN` argument: the summary of one group's curve values at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AggregateFun {
-    /// R's omitted `FUN`: `rowMeans` for ungrouped survival, otherwise `mean`.
     #[default]
     DefaultMean,
-    /// Explicit `mean`: the population average, including residual refinement.
     Mean,
-    /// `median`; an even count averages the two middle values, as R.
     Median,
     Min,
     Max,
-    /// `sum`, the total of the group's values.
     Sum,
 }
 
@@ -44,8 +30,6 @@ impl AggregateFun {
         }
     }
 
-    /// The summary of `values`, which are reordered in place; an `NA`
-    /// (`NaN`) makes the summary `NA`, as R's built-in summaries do.
     fn apply(self, values: &mut [f64]) -> f64 {
         if matches!(self, Self::DefaultMean | Self::Mean) {
             return r_mean(values);
@@ -63,8 +47,6 @@ impl AggregateFun {
             Self::Median => {
                 let half = values.len() / 2;
                 let even = values.len().is_multiple_of(2);
-                // Select the middle value in linear time. For an even group,
-                // the maximum of the lower partition is the other middle.
                 let (lower, middle, _) = values.select_nth_unstable_by(half, f64::total_cmp);
                 if even {
                     let lower = lower
@@ -83,9 +65,9 @@ impl AggregateFun {
     }
 }
 
-/// One element of R's `by` list after `as.factor`: a level code per data
-/// column (`codes[j]` indexes `levels`) and, for a named list, the element's
-/// name.
+#[doc = " One element of R's `by` list after `as.factor`: a level code per data"]
+#[doc = " column (`codes[j]` indexes `levels`) and, for a named list, the element's"]
+#[doc = " name."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct GroupingFactor {
@@ -137,41 +119,38 @@ impl GroupingFactor {
     }
 }
 
-/// The `newdata` of the aggregated object: one row per group with the level
-/// label of every grouping variable.
+#[doc = " The `newdata` of the aggregated object: one row per group with the level"]
+#[doc = " label of every grouping variable."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[pyclass(from_py_object)]
 pub struct AggregateGroups {
-    /// The column names: the names of `by`, `Group.k` for an unnamed element
-    /// of a list, or the single column `aggregate` for a bare vector.
+    #[doc = " The column names: the names of `by`, `Group.k` for an unnamed element"]
+    #[doc = " of a list, or the single column `aggregate` for a bare vector."]
     #[pyo3(get)]
     pub names: Vec<String>,
-    /// `labels[group][column]`.
+    #[doc = " `labels[group][column]`."]
     #[pyo3(get)]
     pub labels: Vec<Vec<String>>,
 }
 
-/// The collapsed columns of the aggregated survfit object.
+#[doc = " The collapsed columns of the aggregated survfit object."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct AggregateSurvfitResult {
-    /// `surv[time][group]`; absent when the object had no `surv`.
+    #[doc = " `surv[time][group]`; absent when the object had no `surv`."]
     #[pyo3(get)]
     pub surv: Option<Vec<Vec<f64>>>,
-    /// `pstate[time][group][state]`; absent when the object had no `pstate`.
+    #[doc = " `pstate[time][group][state]`; absent when the object had no `pstate`."]
     #[pyo3(get)]
     pub pstate: Option<Vec<Vec<Vec<f64>>>>,
-    /// The group labels; `None` without `by` (or when every column falls
-    /// in one group), where R drops the group dimension and `newdata`.
+    #[doc = " The group labels; `None` without `by` (or when every column falls"]
+    #[doc = " in one group), where R drops the group dimension and `newdata`."]
     #[pyo3(get)]
     pub newdata: Option<AggregateGroups>,
 }
 
-/// The `data` margin of the object and the group of every column.
 struct Grouping {
-    /// The location of each input column in one contiguous group buffer.
     positions: Vec<usize>,
-    /// Group boundaries in that buffer, including the final end.
     bounds: Vec<usize>,
     n_groups: usize,
     newdata: Option<AggregateGroups>,
@@ -204,7 +183,6 @@ impl Grouping {
     }
 }
 
-/// The size of the data margin the two arrays share.
 fn data_margin(surv: Option<&Array2<f64>>, pstate: Option<&Array3<f64>>) -> SurvivalResult<usize> {
     match (surv, pstate) {
         (None, None) => Err(SurvivalError::invalid_input(
@@ -221,29 +199,19 @@ fn data_margin(surv: Option<&Array2<f64>>, pstate: Option<&Array3<f64>>) -> Surv
     }
 }
 
-/// `index <- match(tapply(by[[1]], by), sort(unique(...)))`: the group of
-/// every column, the first grouping variable varying fastest, renumbered
-/// without holes; plus the labels `aggregate.survfit` stores as `newdata`.
 fn grouping(by: &[GroupingFactor], n_data: usize) -> SurvivalResult<Grouping> {
     if by.is_empty() {
         return Ok(Grouping::new(vec![0; n_data], 1, None));
     }
     for factor in by {
         validate_length(n_data, factor.codes.len(), "by")?;
-        // The public fields can be constructed directly or changed after new().
         factor.validate_codes()?;
     }
     let (index, labels) = group_combinations(by, n_data);
     if labels.len() == 1 {
-        // all in one group: R drops back to the no-`by` case
         return Ok(Grouping::new(index, 1, None));
     }
 
-    // The labels: `levels(as.factor(by[[1]]))` for a bare vector (its
-    // levels are exactly the groups unless the factor carried unused
-    // levels, where R's newdata would have more rows than the curves have
-    // columns; the groups are listed here), the `aggregate` data frame of
-    // the combinations present otherwise.
     let names: Vec<String> = if by.len() == 1 && by[0].name.is_none() {
         vec!["aggregate".to_string()]
     } else {
@@ -264,11 +232,7 @@ fn grouping(by: &[GroupingFactor], n_data: usize) -> SurvivalResult<Grouping> {
     ))
 }
 
-/// Rank the observed factor combinations with the first variable fastest.
 fn group_combinations(by: &[GroupingFactor], n_data: usize) -> (Vec<usize>, Vec<Vec<String>>) {
-    // The tapply group: sum_k code_k * prod_{j < k} nlevels_j. Declared
-    // levels can make this product overflow even for only a few data columns;
-    // in that case order observed code tuples without materialising the product.
     let mut keys = vec![0usize; n_data];
     let mut stride = 1usize;
     for factor in by {
@@ -333,14 +297,12 @@ fn group_combinations_by_tuple(
     (index, labels)
 }
 
-/// Gather once, retaining original data order within each group.
 fn gather(grouping: &Grouping, column: impl Fn(usize) -> f64, scratch: &mut [f64]) {
     for (j, &position) in grouping.positions.iter().enumerate() {
         scratch[position] = column(j);
     }
 }
 
-/// Apply `fun` within each group to the `n_data` values `column(j)`.
 fn collapse<E>(
     grouping: &Grouping,
     fun: &mut impl FnMut(&mut [f64]) -> Result<f64, E>,
@@ -369,8 +331,6 @@ fn prepare_grouping(
     grouping(by, n_data)
 }
 
-/// Run reductions over the shared group layout. Python uses `PyErr` here so
-/// an exception from a callback reaches its caller without conversion.
 #[derive(Clone, Copy)]
 enum CurveComponent {
     Survival,
@@ -385,7 +345,6 @@ fn aggregate_curves<E>(
     fun: &mut impl FnMut(CurveComponent, &mut [f64]) -> Result<f64, E>,
     state_first: bool,
 ) -> Result<AggregateSurvfitResult, E> {
-    // apply(x$surv, 1, function(z) tapply(z, index, FUN))
     let surv = surv
         .map(|surv| {
             (0..surv.nrows())
@@ -410,7 +369,6 @@ fn aggregate_curves<E>(
                 .map(|_| vec![vec![0.0; n_state]; grouping.n_groups])
                 .collect();
             if state_first {
-                // R's apply(..., c(1, 3), ...) visits time before state changes.
                 for s in 0..n_state {
                     for (t, row) in result.iter_mut().enumerate() {
                         let values = collapse(
@@ -425,7 +383,6 @@ fn aggregate_curves<E>(
                     }
                 }
             } else {
-                // Stateless built-ins retain their more local traversal.
                 for (t, row) in result.iter_mut().enumerate() {
                     for s in 0..n_state {
                         let values = collapse(
@@ -450,11 +407,6 @@ fn aggregate_curves<E>(
     })
 }
 
-/// Port of `aggregate.survfit`: `surv` is the time x data matrix and
-/// `pstate` the time x data x state array of the object (the rows of every
-/// stratum stacked, as R stores them); `by` is empty for the plain average
-/// over all columns.  The group order is R's: the first grouping variable
-/// varies fastest and only the combinations present get a column.
 pub fn aggregate_survfit(
     surv: Option<&Array2<f64>>,
     pstate: Option<&Array3<f64>>,
@@ -482,13 +434,6 @@ pub fn aggregate_survfit(
     )
 }
 
-/// Aggregate with a custom scalar summary, using the same group layout and
-/// scratch buffer as the built-in reducers. The callback first receives each
-/// group's 1-based data indices, as R's validation call does. It then receives
-/// survival values in time/group order, followed by state probabilities in
-/// state/time/group order. Each slice retains original data-column order.
-/// A callback error stops evaluation immediately; `NaN` and infinities are
-/// valid summaries. Input arrays are never changed.
 pub fn aggregate_survfit_with(
     surv: Option<&Array2<f64>>,
     pstate: Option<&Array3<f64>>,
@@ -513,11 +458,11 @@ pub fn aggregate_survfit_with(
     )
 }
 
-/// Python binding of [`aggregate_survfit`], or [`aggregate_survfit_with`] for
-/// a callable receiving a fresh one-dimensional NumPy array per invocation.
-/// Named built-ins run detached; Python callbacks retain the GIL and their
-/// original exceptions. A callback must return a real numeric scalar or a
-/// numeric NumPy array containing one element.
+#[doc = " Python binding of [`aggregate_survfit`], or [`aggregate_survfit_with`] for"]
+#[doc = " a callable receiving a fresh one-dimensional NumPy array per invocation."]
+#[doc = " Named built-ins run detached; Python callbacks retain the GIL and their"]
+#[doc = " original exceptions. A callback must return a real numeric scalar or a"]
+#[doc = " numeric NumPy array containing one element."]
 #[cfg(feature = "python")]
 #[pyfunction(name = "aggregate_survfit")]
 #[pyo3(signature = (surv=None, pstate=None, by=None, fun=None, **_kwargs))]
@@ -558,8 +503,6 @@ pub fn aggregate_survfit_py(
     let grouping = prepare_grouping(surv.as_ref(), pstate.as_ref(), &by)?;
     let mut scratch = vec![0.0; grouping.positions.len()];
     gather(&grouping, |j| (j + 1) as f64, &mut scratch);
-    // Stock tapply evaluates every validation group before aggregate checks
-    // whether all its returns are numeric scalar summaries.
     let checked = grouping
         .bounds
         .windows(2)
@@ -612,8 +555,6 @@ fn python_scalar(value: &Bound<'_, PyAny>, numpy_number: &Bound<'_, PyAny>) -> P
     value.call_method0("item")?.extract::<f64>()
 }
 
-// The Rust-only shim has no Python objects to inspect. Keep its existing
-// named reducer wrapper so the module exports match both feature builds.
 #[cfg(not(feature = "python"))]
 pub fn aggregate_survfit_py(
     py: Python<'_>,
@@ -696,8 +637,6 @@ mod tests {
         };
         let surv = Array2::from_shape_fn((n, 5), |(j, t)| value(t, j, 0)).reversed_axes();
         let pstate = Array3::from_shape_fn((5, n, 3), |(t, j, s)| value(t, j, s));
-        // Uneven groups plus an unused declared level; member order is original
-        // data order even when the median routine permutes the scratch buffer.
         let codes: Vec<usize> = (0..n).map(|j| if j % 3 == 0 { 2 } else { j % 2 }).collect();
         let by = [GroupingFactor::try_new(
             codes.clone(),
@@ -758,7 +697,6 @@ mod tests {
         );
     }
 
-    // three times x four newdata rows, column by column
     fn surv() -> Array2<f64> {
         Array2::from_shape_vec(
             (4, 3),
@@ -771,7 +709,6 @@ mod tests {
     }
 
     fn by_ab() -> GroupingFactor {
-        // as.factor(c("b", "a", "b", "a"))
         GroupingFactor::try_new(
             vec![1, 0, 1, 0],
             vec!["a".to_string(), "b".to_string()],
@@ -795,7 +732,6 @@ mod tests {
 
     #[test]
     fn plain_average_matches_r() {
-        // aggregate(x)$surv
         let result = aggregate_survfit(Some(&surv()), None, &[], AggregateFun::Mean).unwrap();
         assert_rows_close(result.surv.as_ref().unwrap(), &[&[0.8375], &[0.7], &[0.5]]);
         assert!(result.pstate.is_none());
@@ -806,7 +742,6 @@ mod tests {
     fn grouped_summaries_match_r() {
         let surv = surv();
         let by = [by_ab()];
-        // aggregate(x, by = c("b", "a", "b", "a"))
         let mean = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Mean).unwrap();
         assert_rows_close(
             mean.surv.as_ref().unwrap(),
@@ -819,7 +754,6 @@ mod tests {
                 labels: vec![vec!["a".to_string()], vec!["b".to_string()]],
             }
         );
-        // FUN = median (two values per group: their average), max, min
         let median = aggregate_survfit(Some(&surv), None, &by, AggregateFun::Median).unwrap();
         assert_rows_close(
             median.surv.as_ref().unwrap(),
@@ -839,7 +773,6 @@ mod tests {
 
     #[test]
     fn two_grouping_variables_order_the_first_fastest() {
-        // aggregate(x, by = list(g = c("b","a","b","a"), h = c(1, 1, 2, 1)))
         let h = GroupingFactor::try_new(
             vec![0, 0, 1, 0],
             vec!["1".to_string(), "2".to_string()],
@@ -860,7 +793,6 @@ mod tests {
             newdata.labels,
             vec![vec!["a", "1"], vec!["b", "1"], vec!["b", "2"]]
         );
-        // an unnamed element of a list is `Group.k`
         let unnamed = aggregate_survfit(Some(&surv()), None, &[by_ab(), h], AggregateFun::Mean)
             .unwrap()
             .newdata
@@ -870,7 +802,6 @@ mod tests {
 
     #[test]
     fn a_single_group_drops_back_to_the_plain_average() {
-        // aggregate(x, by = c(2, 2, 2, 2))
         let by = GroupingFactor::try_new(vec![0; 4], vec!["2".to_string()], None).unwrap();
         let result = aggregate_survfit(Some(&surv()), None, &[by], AggregateFun::Mean).unwrap();
         assert_rows_close(result.surv.as_ref().unwrap(), &[&[0.8375], &[0.7], &[0.5]]);
@@ -879,8 +810,6 @@ mod tests {
 
     #[test]
     fn pstate_is_collapsed_per_state() {
-        // array(seq(0.01, by = 0.01, length.out = 36), c(3, 4, 3)): R fills
-        // the first index fastest
         let mut pstate = Array3::zeros((3, 4, 3));
         for s in 0..3 {
             for j in 0..4 {
@@ -936,8 +865,6 @@ mod tests {
                 vec![210., 212.],
             ]
         );
-        // The two groups borrow fixed disjoint portions of one buffer; it is
-        // reused for validation, survival rows and every state probability.
         for (call, &pointer) in buffers.iter().enumerate() {
             assert_eq!(pointer, buffers[call % 2]);
         }
@@ -998,8 +925,6 @@ mod tests {
     fn empty_time_and_state_axes_preserve_shapes_without_state_allocation() {
         let by =
             [GroupingFactor::try_new(vec![1, 0, 1], vec!["a".into(), "b".into()], None).unwrap()];
-        // The input contains no data. Its large state margin must never
-        // allocate a state-vector template when the time margin is empty.
         let pstate = Array3::from_shape_vec((0, 3, 1usize << 28), Vec::new()).unwrap();
         let named = aggregate_survfit(None, Some(&pstate), &by, AggregateFun::Sum).unwrap();
         assert!(named.pstate.unwrap().is_empty());

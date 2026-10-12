@@ -1,5 +1,3 @@
-# R evaluates a subset against the data and formula environment, then applies
-# ordinary R row indexing before the shared missing-data handling.
 .eval_formula_subset <- function(expr, missing_arg, formula, data, env) {
   if (isTRUE(missing_arg)) return(NULL)
   if (is.list(formula) && !inherits(formula, "formula")) formula <- formula[[1L]]
@@ -32,7 +30,6 @@
     NULL
   }
   if (is.null(labels)) labels <- as.character(seq_len(n))
-  # data.frame resolves character selectors before subsetting matrix columns.
   if (is.character(value)) value <- pmatch(value, labels, duplicates.ok = TRUE)
   selected <- matrix(seq_len(n), ncol = 1L)[value, 1L]
   if (anyNA(selected)) {

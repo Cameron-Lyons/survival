@@ -73,7 +73,6 @@ test_that("Yates baseline fields match shared Cox curves for R fits", {
   for (counting in c(FALSE,TRUE)) {
     formula <- if (counting) Surv(start,time,event)~x else Surv(time,event)~x
     fit <- survival::coxph(formula,d,ties="exact",model=TRUE)
-    # R's exact counting fitter leaves numeric method metadata and no class.
     if (counting) { class(fit) <- "coxph"; fit$method <- "exact" }
     .yb_compare(fit)
   }

@@ -1,13 +1,3 @@
-//! Residuals of a parametric survival fit: a port of
-//! `R/residuals.survreg.R` from the CRAN `survival` package.
-//!
-//! Every residual type derives from the same per-observation derivative
-//! matrix ([`survreg_deriv`], R's `deriv`): the log-likelihood `g` and its
-//! first and second derivatives with respect to the linear predictor and
-//! `log(scale)`, evaluated with the distribution's `density` function.
-//! `survreg.fit` uses the same derivatives (its `derfun`) for its starting
-//! values.
-
 use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
@@ -20,31 +10,30 @@ use crate::regression::survreg_distributions::{
 use ndarray::ArrayView1;
 use pyo3::prelude::*;
 
-/// The `type` argument of `residuals.survreg`.
+#[doc = " The `type` argument of `residuals.survreg`."]
 #[pyclass(eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvregResidType {
-    /// `itrans(center of the saturated model) - itrans(eta)`.
+    #[doc = " `itrans(center of the saturated model) - itrans(eta)`."]
     Response,
     Deviance,
-    /// Per-coefficient influence, one column per coefficient (plus one per
-    /// `Log(scale)` when `rsigma`).
+    #[doc = " Per-coefficient influence, one column per coefficient (plus one per"]
+    #[doc = " `Log(scale)` when `rsigma`)."]
     Dfbeta,
-    /// `Dfbeta` scaled by the coefficient standard errors.
+    #[doc = " `Dfbeta` scaled by the coefficient standard errors."]
     Dfbetas,
     Working,
-    /// Likelihood displacement from case deletion.
+    #[doc = " Likelihood displacement from case deletion."]
     Ldcase,
-    /// Likelihood displacement from a response perturbation.
+    #[doc = " Likelihood displacement from a response perturbation."]
     Ldresp,
-    /// Likelihood displacement from a shape (scale) perturbation.
+    #[doc = " Likelihood displacement from a shape (scale) perturbation."]
     Ldshape,
-    /// The raw derivative matrix `(g, dg, ddg, ds, dds, dsg)`.
+    #[doc = " The raw derivative matrix `(g, dg, ddg, ds, dds, dsg)`."]
     Matrix,
 }
 
 impl SurvregResidType {
-    /// The `type` choices of `residuals.survreg`, in R's order.
     const CHOICES: [(&'static str, Self); 9] = [
         ("response", Self::Response),
         ("deviance", Self::Deviance),
@@ -57,29 +46,26 @@ impl SurvregResidType {
         ("matrix", Self::Matrix),
     ];
 
-    /// `match.arg(type)`: an exact name or a unique prefix (see
-    /// `match_arg`).
     pub fn parse(name: &str) -> SurvivalResult<Self> {
         let index = match_arg(name, &Self::CHOICES.map(|(choice, _)| choice))?;
         Ok(Self::CHOICES[index].1)
     }
 
-    /// Whether R returns a matrix (one row per observation) for this type.
     pub fn is_matrix(self) -> bool {
         matches!(self, Self::Dfbeta | Self::Dfbetas | Self::Matrix)
     }
 }
 
-/// Residuals of a `survreg` fit.
+#[doc = " Residuals of a `survreg` fit."]
 #[pyclass(from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregResiduals {
     #[pyo3(get)]
     pub residual_type: SurvregResidType,
-    /// One row per observation (per group after `collapse`).  Vector-valued
-    /// types have a single column; `Dfbeta`/`Dfbetas` have one column per
-    /// coefficient followed by one per `Log(scale)` when `rsigma`; `Matrix`
-    /// has the columns `g, dg, ddg, ds, dds, dsg`.
+    #[doc = " One row per observation (per group after `collapse`).  Vector-valued"]
+    #[doc = " types have a single column; `Dfbeta`/`Dfbetas` have one column per"]
+    #[doc = " coefficient followed by one per `Log(scale)` when `rsigma`; `Matrix`"]
+    #[doc = " has the columns `g, dg, ddg, ds, dds, dsg`."]
     #[pyo3(get)]
     pub values: Vec<Vec<f64>>,
 }
@@ -96,17 +82,6 @@ impl SurvregResiduals {
     }
 }
 
-/// One row of R's `deriv` matrix, `cbind(g, dg, ddg, ds, dds, dsg)`: the
-/// log-likelihood of one observation and its derivatives with respect to
-/// `eta` (`dg`, `ddg`), `log(sigma)` (`ds`, `dds`) and the cross term
-/// (`dsg`).  `y1`, `y2` are on the transformed scale; `y2` is read only for
-/// an interval-censored (`status == 3`) row.
-///
-/// For interval-censored rows R's `residuals.survreg` gets the `log(sigma)`
-/// derivatives wrong (`ds` has the opposite sign and `dsg` lacks a `1/sigma`
-/// factor, which also corrupts `dds`); the formulas here are those of
-/// `survregc1.c`, which the fit itself uses, and agree with finite
-/// differences.  The other rows are exactly R's.
 pub(crate) fn survreg_deriv(
     distribution: &SurvregDistribution,
     y1: f64,
@@ -177,7 +152,6 @@ fn deriv_from_density(
     ]
 }
 
-/// Residual and initialization derivatives with one custom density call.
 pub(crate) fn survreg_derivatives(
     distribution: &SurvregDistribution,
     y1: &[f64],
@@ -215,12 +189,10 @@ pub(crate) fn survreg_derivatives(
         .collect())
 }
 
-/// R's `sign`: zero for zero (unlike `f64::signum`), NaN for NaN.
 fn r_sign(value: f64) -> f64 {
     if value == 0.0 { 0.0 } else { value.signum() }
 }
 
-/// `score %*% vv` for one row.
 fn row_times_matrix(score: &[f64], matrix: &[Vec<f64>]) -> Vec<f64> {
     (0..score.len())
         .map(|col| {
@@ -233,7 +205,6 @@ fn row_times_matrix(score: &[f64], matrix: &[Vec<f64>]) -> Vec<f64> {
         .collect()
 }
 
-/// `rowSums(score * (score %*% vv))`.
 fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
     row_times_matrix(score, matrix)
         .iter()
@@ -242,8 +213,6 @@ fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
         .sum()
 }
 
-/// A per-observation score row with the `Log(scale)` block appended in the
-/// observation's stratum column when `rsigma`.
 fn score_row(
     x: ArrayView1<'_, f64>,
     eta_part: f64,
@@ -261,8 +230,6 @@ fn score_row(
     row
 }
 
-/// `rowsum(rr, collapse)`: rows summed within each group, groups in
-/// increasing order of their code.
 fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<Vec<f64>>> {
     validate_length(rows.len(), collapse.len(), "collapse")?;
     let codes = collapse
@@ -274,12 +241,6 @@ fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<
     Ok(matrix_rows(&rowsum(rows.view(), &codes)))
 }
 
-/// `residuals.survreg(object, type, rsigma, collapse, weighted)`.
-///
-/// `rsigma` includes the `Log(scale)` derivatives in the influence types;
-/// it is ignored, as in R, when the scale was fixed.  `collapse` sums the
-/// rows within groups (R's `rowsum`) and `weighted` multiplies each row by
-/// its case weight first (a no-op when the fit had no weights).
 pub fn residuals_survreg(
     fit: &SurvregFit,
     residual_type: SurvregResidType,
@@ -291,7 +252,6 @@ pub fn residuals_survreg(
     let nvar = fit.nvar();
     let nstrata = fit.nstrata();
     let distribution = &fit.distribution;
-    // If the variance wasn't estimated then it has no error.
     let rsigma = rsigma && fit.variance_matrix.len() != nvar;
     let vv = fit
         .naive_variance_matrix
@@ -331,9 +291,6 @@ pub fn residuals_survreg(
                     (0..n)
                         .map(|i| {
                             let rr = working(i);
-                            // The saturated log-likelihood bounds `g`, so a
-                            // negative difference is rounding noise (R would
-                            // return NaN for it).
                             vec![r_sign(rr) * (2.0 * (saturated[i] - deriv[i][0])).max(0.0).sqrt()]
                         })
                         .collect()
@@ -523,7 +480,6 @@ mod tests {
             vec![0.2, 0.3, 3.0],
         ];
         let score = [2.0, 8.0, 5.0];
-        // score %*% vv = (2 + .8 + 1, .2 + 16 + 1.5, .4 + 2.4 + 15)
         assert_eq!(row_times_matrix(&score, &vv), vec![3.8, 17.7, 17.8]);
         assert_close(
             quadratic_form(&score, &vv),

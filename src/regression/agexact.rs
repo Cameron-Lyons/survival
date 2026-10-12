@@ -1,12 +1,3 @@
-//! `agexact.fit`: the exact partial likelihood for (start, stop] data, R
-//! survival's `R/agexact.fit.R` on top of `src/agexact.c`.
-//!
-//! The computation is the Newton-Raphson engine of `cox_optimizer` with
-//! `TieMethod::Exact` and entry times; this module keeps the C routine's
-//! calling convention (per-column centring, no case weights) as a typed
-//! function on a [`CoxphData`] and its Python binding.  `coxph_fit(method = "exact", entry =
-//! ...)` reaches the same engine and adds the `coxph` post-processing.
-
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::error::SurvivalResult;
 use crate::internal::matrix::matrix_rows;
@@ -17,43 +8,39 @@ use crate::regression::coxph::{CoxphData, nocenter_columns};
 use ndarray::Array1;
 use pyo3::prelude::*;
 
-/// What `agexact.c` returns.
+#[doc = " What `agexact.c` returns."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct AgexactFit {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
-    /// Column means subtracted before fitting (0 for `nocenter` columns).
+    #[doc = " Column means subtracted before fitting (0 for `nocenter` columns)."]
     #[pyo3(get)]
     pub means: Vec<f64>,
-    /// Score vector at the final coefficients.
+    #[doc = " Score vector at the final coefficients."]
     #[pyo3(get)]
     pub u: Vec<f64>,
-    /// Inverse information matrix.
+    #[doc = " Inverse information matrix."]
     #[pyo3(get)]
     pub var: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub loglik: [f64; 2],
     #[pyo3(get)]
     pub sctest: f64,
-    /// Rank of the information matrix, `0` when no iterations were run,
-    /// `1000` when the fit did not converge.
+    #[doc = " Rank of the information matrix, `0` when no iterations were run,"]
+    #[doc = " `1000` when the fit did not converge."]
     #[pyo3(get)]
     pub flag: i32,
     #[pyo3(get)]
     pub iter: usize,
 }
 
-/// Fitting controls of [`agexact_fit`] (`coxph.control` plus `init` and
-/// `nocenter`).
 #[derive(Debug, Clone)]
 pub struct AgexactOptions {
     pub init: Option<Vec<f64>>,
     pub iter_max: usize,
     pub eps: f64,
     pub toler_chol: f64,
-    /// Columns whose values all lie in this set are not centred
-    /// (`agexact.fit`'s `nocenter`; `None` centres every column).
     pub nocenter: Option<Vec<f64>>,
 }
 
@@ -69,9 +56,6 @@ impl Default for AgexactOptions {
     }
 }
 
-/// Port of `agexact.fit` (without the residuals, which `CoxPHFit` provides)
-/// on the data of a Cox fit, rows in any order.  Without entry times every
-/// interval starts at 0, as in R.
 pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<AgexactFit> {
     let n = data.n();
     let nvar = data.x.ncols();
@@ -120,7 +104,7 @@ pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<
     })
 }
 
-/// `agexact.fit(x, Surv(start, stop, event), strata, offset, init, control)`.
+#[doc = " `agexact.fit(x, Surv(start, stop, event), strata, offset, init, control)`."]
 #[pyfunction(name = "agexact")]
 #[pyo3(signature = (start, stop, event, x, offset=None, strata=None, init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
@@ -226,8 +210,6 @@ mod tests {
 
     #[test]
     fn rejects_case_weights_and_wrong_init_length() {
-        // agexact.fit: "Case weights are not supported for the exact method",
-        // "Wrong length for inital values".
         let mut data = tied_data(vec![0.0; 10]);
         data.weights = Some(vec![2.0; 10]);
         let err = agexact_fit(data, &AgexactOptions::default()).unwrap_err();
@@ -343,8 +325,6 @@ mod tests {
 
     #[test]
     fn tied_exact_fit_matches_reference() {
-        // R: coxph(Surv(start, stop, event) ~ x, ties = "exact",
-        //          control = coxph.control(eps = 1e-9, toler.chol = 1e-9))
         let result = agexact_fit(tied_data(vec![0.0; 10]), &options(20, None)).unwrap();
         for (actual, expected) in result
             .coefficients
@@ -383,7 +363,6 @@ mod tests {
             None,
             Some(vec![0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]),
         );
-        // R: coxph(Surv(start, stop, event) ~ x + strata(s), ties = "exact")
         let result = agexact_fit(data, &options(20, None)).unwrap();
         for (actual, expected) in result
             .coefficients
@@ -420,7 +399,6 @@ mod tests {
         assert_eq!(result.coefficients, vec![0.25, -0.15]);
         assert_eq!(result.iter, 0);
         assert_eq!(result.flag, 0);
-        // R: coxph(... ~ x + offset(off), ties = "exact", init = c(0.25, -0.15), iter.max = 0)
         assert_eq!(result.loglik[0], result.loglik[1]);
         assert_close(result.loglik[0], -9.337_812_385_162_364, 1e-10);
         assert_close(result.sctest, 1.695_251_548_863_118_8, 1e-10);
@@ -435,7 +413,6 @@ mod tests {
     fn one_iteration_from_nonzero_initial_values_matches_reference() {
         let offset = vec![0.1, -0.2, 0.05, 0.3, -0.1, 0.15, -0.25, 0.2, -0.05, 0.1];
         let result = agexact_fit(tied_data(offset), &options(1, Some(vec![0.25, -0.15]))).unwrap();
-        // R: as above with iter.max = 1
         for (actual, expected) in result
             .coefficients
             .iter()
@@ -517,9 +494,6 @@ mod tests {
             ]),
             None,
         );
-        // R survival 3.8-12, coxph(Surv(start, stop, event) ~ x1 + x2 +
-        // offset(off), ties = "exact", init = c(.25, -.15), iter.max = 0).
-        // Nine deaths in a ten-row risk set use the complementary moments.
         let result = agexact_fit(data, &options(0, Some(vec![0.25, -0.15]))).unwrap();
         assert_eq!(result.coefficients, vec![0.25, -0.15]);
         assert_close(result.loglik[0], -2.670_123_187_720_271, 1e-12);

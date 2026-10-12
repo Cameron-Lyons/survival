@@ -1,5 +1,3 @@
-//! Compact penalized AFT results on a prepared response.
-
 use super::{SurvpenalData, SurvpenalFit, SurvpenalOptions};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
@@ -12,8 +10,8 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Bare `survpenal.fit` components, with estimated log-scales in coefficients.
-/// No response, design, per-observation frailty indices or callbacks are retained.
+#[doc = " Bare `survpenal.fit` components, with estimated log-scales in coefficients."]
+#[doc = " No response, design, per-observation frailty indices or callbacks are retained."]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", skip_from_py_object)]
 pub struct SurvpenalFitResult {
@@ -53,7 +51,7 @@ pub struct SurvpenalFitResult {
     pub score: Vec<f64>,
     #[pyo3(get)]
     pub n: usize,
-    /// Number of dense design columns, excluding estimated scales.
+    #[doc = " Number of dense design columns, excluding estimated scales."]
     #[pyo3(get)]
     pub nvar: usize,
     #[pyo3(get)]
@@ -79,7 +77,6 @@ impl SurvpenalFitResult {
 }
 
 impl SurvpenalFitResult {
-    /// Fit without response transforms, Jacobian corrections or robust variance.
     pub fn fit(
         data: &SurvpenalData,
         distribution: &SurvregDistribution,
@@ -106,7 +103,7 @@ impl SurvpenalFitResult {
     }
 }
 
-/// Bare penalized AFT fit; columns and term assignments are zero-based.
+#[doc = " Bare penalized AFT fit; columns and term assignments are zero-based."]
 #[pyfunction]
 #[pyo3(signature = (data, distribution, penalties, pcols, assign=None, init=None, scale=0.0, control=None, nstrat=None))]
 #[allow(clippy::too_many_arguments)]

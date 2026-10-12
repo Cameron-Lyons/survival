@@ -55,7 +55,6 @@ def test_requested_rate_table_grid_matches_r(case, api, table):
         assert result.strata == case["expected"]["labels"]
 
     expected = case["expected"]
-    # Ordinary numerical equality would miss a changed sign of zero.
     assert [value.hex() for value in result.time] == [
         value.hex() for value in decode_times(expected["time"])
     ]
@@ -68,8 +67,6 @@ def test_requested_rate_table_grid_matches_r(case, api, table):
                 assert result.surv[index] == result.surv[index - 1]
                 assert result.n_risk[index] == result.n_risk[index - 1]
         if len(times) > 4:
-            # The subject followed through exactly 2 contributes at 2, and
-            # leaves before the adjacent representable request after 2.
             at_two = times.index(2.0)
             near_two = times.index(np.nextafter(2.0, np.inf))
             if case["formula"].startswith("time"):

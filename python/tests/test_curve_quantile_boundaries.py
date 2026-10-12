@@ -55,7 +55,6 @@ def probabilities(spec, arrays=False):
         values = [number(value) for value in values]
         return np.asarray(values) if arrays else values
     dtype = bool if kind == "logical" else str
-    # Empty logical/character vectors retain their type, as they do in R.
     return np.asarray(values, dtype=dtype) if arrays or not values else values
 
 
@@ -285,7 +284,6 @@ def dtype_values(name, empty):
 @pytest.mark.parametrize("empty", [True, False], ids=["empty", "nonempty"])
 def test_probability_dtype_table_matches_stock_r(case, empty):
     name, r_kind = case
-    # A nullable numeric column with no rows still represents numeric(0).
     if name == "pandas_nullable_missing" and empty:
         r_kind = "numeric"
     expected = REFERENCE["dtype_cases"][f"{r_kind}/{'empty' if empty else 'nonempty'}"]["expected"]
@@ -348,7 +346,6 @@ def test_native_curve_quantile_array_layouts_match_stock_r(case, layout, stacked
     else:
         actual = core.quantile_survfit(engine, **options)
     assert_quantiles(actual, case["expected"])
-    # Returned values remain owned when mutable source arrays are reused.
     if probs.flags.writeable:
         probs[:] = 0
     if stacked:
@@ -360,7 +357,6 @@ def test_native_curve_quantile_array_layouts_match_stock_r(case, layout, stacked
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32, np.int64])
 def test_stacked_numeric_dtypes_preserve_half_step_quantiles(dtype):
-    # A fully observed four-subject empirical curve has R's midpoint quantiles.
     times = np.asarray([1, 2, 3, 4], dtype=dtype)
     probabilities_ = np.asarray([0.25, 0.5, 0.75], dtype=np.float32)
     actual = core.quantile_survfit_curves(

@@ -13,7 +13,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 r = survival.r
-from survival.r._print import coefficient_matrix_lines, numeric_matrix_lines  # noqa: E402
+from survival.r._print import coefficient_matrix_lines, numeric_matrix_lines
 
 REFERENCE = json.loads((Path(__file__).parent / "fixtures/cox_report_reference.json").read_text())
 
@@ -139,7 +139,7 @@ def test_report_owns_full_precision_tables_and_statistics(fits):
     report.tables["coefficients"].values[0][0] = 999
     report.statistics["logtest"]["test"] = 999
     assert pickle.dumps(summary) == before
-    assert pickle.loads(pickle.dumps(report)) == report  # noqa: S301 - this test's own bytes
+    assert pickle.loads(pickle.dumps(report)) == report
     assert r.as_data_frame(r.print_coxph(fits("null"))) == {}
 
 

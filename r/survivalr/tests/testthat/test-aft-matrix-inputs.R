@@ -14,8 +14,6 @@ test_that("AFT matrices evaluate covariates after removing standalone strata", {
         expected <- .logical_matrix_capture(function() call(stock$value))
         result <- .logical_matrix_capture(function() call(actual$value))
         if(is.list(expected$value) && !is.null(expected$value$error)) {
-          # Failures compare their cause. Stock also warns before rejecting a
-          # numeric replacement for an ordinary factor; the port rejects it directly.
           if (grepl("not found", expected$value$error)) {
             column <- sub("object '([^']+)'.*", "\\1", expected$value$error)
             expect_match(result$value$error, paste0("column '", column, "' not found"), info = paste(info,input))

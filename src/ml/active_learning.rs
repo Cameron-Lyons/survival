@@ -544,8 +544,6 @@ fn obf_boundary(alpha: f64, info_fraction: f64) -> f64 {
 
 fn pocock_boundary(alpha: f64, _info_fraction: f64, n_looks: usize) -> f64 {
     let n_looks = n_looks as f64;
-    // Staying in log space keeps a subnormal alpha representable:
-    // R's qnorm(log(alpha) - log(2) - log(n_looks)/2, lower.tail = FALSE, log.p = TRUE).
     let log_probability = alpha.ln() - std::f64::consts::LN_2 - 0.5 * n_looks.ln();
     qnorm(log_probability, false, true)
 }
@@ -687,8 +685,6 @@ mod tests {
         assert!((power.power - 0.800_091_153_668_757_4).abs() < 2e-13);
         let sequential = group_sequential_analysis(50, 200, 1.5, 1, 4, alpha, 0.0, "obf").unwrap();
         assert!((sequential.efficacy_boundary - 76.970_816_671_134_67).abs() < 2e-12);
-        // R qnorm(log(alpha) - log(2) - 0.5 * log(n_looks),
-        // lower.tail = FALSE, log.p = TRUE), before alpha adjustment underflows.
         for (n_looks, expected) in [
             (1, 38.485_408_335_567_335),
             (4, 38.503_402_647_931_395),

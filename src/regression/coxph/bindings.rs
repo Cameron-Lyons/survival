@@ -1,5 +1,3 @@
-//! Python input/output adapters; numerical work stays in the Rust methods.
-
 use super::{
     Basehaz, CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxTermsPrediction, CoxphData,
     CoxphOptions, PredictReference, SurvfitOptions, default_assign,
@@ -16,7 +14,7 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 #[pymethods]
 impl CoxPrediction {
-    /// Independent writable float64 snapshots; absent errors remain None.
+    #[doc = " Independent writable float64 snapshots; absent errors remain None."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;
         use pyo3::types::PyDict;
@@ -36,7 +34,7 @@ impl CoxPrediction {
 #[cfg(feature = "python")]
 #[pymethods]
 impl CoxTermsPrediction {
-    /// Independent writable float64 matrices, including empty dimensions.
+    #[doc = " Independent writable float64 matrices, including empty dimensions."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let result = crate::internal::numpy_utils::prediction_matrix_arrays(
             py,
@@ -49,9 +47,6 @@ impl CoxTermsPrediction {
     }
 }
 
-/// Package owned Python buffers without scanning them under the GIL. The
-/// receiving Rust method validates the rows, including its missing-value policy.
-/// Extra row arguments without a design matrix are always an error.
 pub(crate) fn newdata_from_python(
     x: Option<FloatMatrix>,
     strata: Option<IntVec>,
@@ -78,7 +73,7 @@ pub(crate) fn newdata_from_python(
 
 #[pymethods]
 impl CoxPHFit {
-    /// Pickle and copy support (see `internal::pickle`).
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
         crate::internal::pickle::reduce(py, self)
@@ -109,14 +104,14 @@ impl CoxPHFit {
         self.hazard_ratios()
     }
 
-    /// `basehaz(fit, centered)`.
+    #[doc = " `basehaz(fit, centered)`."]
     #[pyo3(name = "basehaz", signature = (centered = true))]
     fn basehaz_py(&self, centered: bool) -> PyResult<Basehaz> {
         Ok(self.basehaz(centered)?)
     }
 
-    /// `predict(fit, newdata, type, se.fit, reference)` for the vector-valued
-    /// types `lp`, `risk`, `expected` and `survival`.
+    #[doc = " `predict(fit, newdata, type, se.fit, reference)` for the vector-valued"]
+    #[doc = " types `lp`, `risk`, `expected` and `survival`."]
     #[pyo3(signature = (r#type = "lp", newdata = None, new_strata = None, new_offset = None, new_time = None, new_entry = None, se_fit = false, reference = "strata", *, collapse = None))]
     #[allow(clippy::too_many_arguments)]
     fn predict(
@@ -154,8 +149,8 @@ impl CoxPHFit {
         })?)
     }
 
-    /// `predict(fit, type = "terms")`; `assign` lists the columns of each
-    /// term (default: one term per column).
+    #[doc = " `predict(fit, type = \"terms\")`; `assign` lists the columns of each"]
+    #[doc = " term (default: one term per column)."]
     #[pyo3(name = "predict_terms", signature = (newdata = None, new_strata = None, new_offset = None, se_fit = false, reference = "sample", assign = None, *, collapse = None))]
     #[allow(clippy::too_many_arguments)]
     fn predict_terms_py(
@@ -180,7 +175,7 @@ impl CoxPHFit {
         })?)
     }
 
-    /// `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`.
+    #[doc = " `survfit(fit, newdata, stype, ctype, se.fit, censor, start.time)`."]
     #[pyo3(name = "survfit", signature = (newdata = None, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
     #[allow(clippy::too_many_arguments)]
     fn survfit_py(
@@ -206,8 +201,8 @@ impl CoxPHFit {
         Ok(py.detach(|| self.survfit(newdata.as_ref(), options))?)
     }
 
-    /// Survival at requested times: a NumPy matrix of shape (n_times, n_rows).
-    /// Omit newdata to predict for the original training rows.
+    #[doc = " Survival at requested times: a NumPy matrix of shape (n_times, n_rows)."]
+    #[doc = " Omit newdata to predict for the original training rows."]
     #[pyo3(name = "predict_survival_at", signature = (times, newdata = None, new_strata = None, new_offset = None))]
     fn predict_survival_at_py(
         &self,
@@ -258,7 +253,7 @@ impl CoxPHFit {
         })?)
     }
 
-    /// `residuals(fit, type = "martingale", weighted, collapse)`.
+    #[doc = " `residuals(fit, type = \"martingale\", weighted, collapse)`."]
     #[pyo3(name = "martingale_residuals", signature = (weighted = false, collapse = None))]
     fn martingale_residuals_py(
         &self,
@@ -268,7 +263,7 @@ impl CoxPHFit {
         Ok(self.martingale_residuals(weighted, collapse.as_deref())?)
     }
 
-    /// `residuals(fit, type = "deviance", weighted, collapse)`.
+    #[doc = " `residuals(fit, type = \"deviance\", weighted, collapse)`."]
     #[pyo3(name = "deviance_residuals", signature = (weighted = false, collapse = None))]
     fn deviance_residuals_py(
         &self,
@@ -278,7 +273,7 @@ impl CoxPHFit {
         Ok(self.deviance_residuals(weighted, collapse.as_deref())?)
     }
 
-    /// `residuals(fit, type = "score", weighted, collapse)`.
+    #[doc = " `residuals(fit, type = \"score\", weighted, collapse)`."]
     #[pyo3(name = "score_residuals", signature = (weighted = false, collapse = None))]
     fn score_residuals_py(
         &self,
@@ -290,7 +285,7 @@ impl CoxPHFit {
         Ok(matrix_rows(&residuals))
     }
 
-    /// `residuals(fit, type = "dfbeta", weighted, collapse)`.
+    #[doc = " `residuals(fit, type = \"dfbeta\", weighted, collapse)`."]
     #[pyo3(name = "dfbeta", signature = (weighted = true, collapse = None))]
     fn dfbeta_py(
         &self,
@@ -302,7 +297,7 @@ impl CoxPHFit {
         Ok(matrix_rows(&dfbeta))
     }
 
-    /// `residuals(fit, type = "dfbetas", weighted, collapse)`.
+    #[doc = " `residuals(fit, type = \"dfbetas\", weighted, collapse)`."]
     #[pyo3(name = "dfbetas", signature = (weighted = true, collapse = None))]
     fn dfbetas_py(
         &self,
@@ -314,7 +309,7 @@ impl CoxPHFit {
         Ok(matrix_rows(&dfbetas))
     }
 
-    /// `residuals(fit, type = "schoenfeld", weighted)`.
+    #[doc = " `residuals(fit, type = \"schoenfeld\", weighted)`."]
     #[pyo3(name = "schoenfeld_residuals", signature = (weighted = false))]
     fn schoenfeld_residuals_py(
         &self,
@@ -324,7 +319,7 @@ impl CoxPHFit {
         Ok(py.detach(|| self.schoenfeld_residuals(weighted))?)
     }
 
-    /// `residuals(fit, type = "scaledsch", weighted)`.
+    #[doc = " `residuals(fit, type = \"scaledsch\", weighted)`."]
     #[pyo3(name = "scaled_schoenfeld_residuals", signature = (weighted = false))]
     fn scaled_schoenfeld_residuals_py(
         &self,
@@ -334,8 +329,8 @@ impl CoxPHFit {
         Ok(py.detach(|| self.scaled_schoenfeld_residuals(weighted))?)
     }
 
-    /// `residuals(fit, type = "partial", weighted, collapse)`; `assign`
-    /// lists the columns of each term (default: one term per column).
+    #[doc = " `residuals(fit, type = \"partial\", weighted, collapse)`; `assign`"]
+    #[doc = " lists the columns of each term (default: one term per column)."]
     #[pyo3(name = "partial_residuals", signature = (assign = None, weighted = false, collapse = None))]
     fn partial_residuals_py(
         &self,
@@ -350,7 +345,7 @@ impl CoxPHFit {
         Ok(matrix_rows(&residuals))
     }
 
-    /// `survfit(fit, newdata, id)` for time-dependent new data.
+    #[doc = " `survfit(fit, newdata, id)` for time-dependent new data."]
     #[pyo3(name = "survfit_individual", signature = (newdata, new_entry, new_time, id, new_strata = None, new_offset = None, stype = 2, ctype = None, se_fit = true, censor = true, start_time = None))]
     #[allow(clippy::too_many_arguments)]
     fn survfit_individual_py(
@@ -387,12 +382,12 @@ impl CoxPHFit {
     }
 }
 
-/// `coxph()` on explicit data: fits `Surv(time, status) ~ x` (or
-/// `Surv(entry, time, status) ~ x` when `entry` is given).
-///
-/// `nocenter` lists the values of a column that exempt it from centring
-/// (R's default `c(-1, 0, 1)` when omitted; an empty list centres every
-/// column, R's `nocenter = NULL`).  `cluster` requests the robust variance.
+#[doc = " `coxph()` on explicit data: fits `Surv(time, status) ~ x` (or"]
+#[doc = " `Surv(entry, time, status) ~ x` when `entry` is given)."]
+#[doc = ""]
+#[doc = " `nocenter` lists the values of a column that exempt it from centring"]
+#[doc = " (R's default `c(-1, 0, 1)` when omitted; an empty list centres every"]
+#[doc = " column, R's `nocenter = NULL`).  `cluster` requests the robust variance."]
 #[pyfunction]
 #[pyo3(signature = (time, status, x, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, cluster=None, robust=None))]
 #[allow(clippy::too_many_arguments)]

@@ -1,6 +1,3 @@
-//! Interval-censored data: a parametric regression and Turnbull's
-//! nonparametric survival estimate (R survival `R/survfitTurnbull.R`).
-
 use crate::data_prep::aeq_surv;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pnorm;
@@ -351,9 +348,6 @@ pub fn interval_censored_regression(
     })
 }
 
-/// Interval-censoring codes of R's `Surv(..., type = "interval")` status
-/// column: 0 right-censored at `time1`, 1 exact at `time1`, 2 left-censored
-/// at `time1`, 3 censored in `(time1, time2]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntervalStatus {
     Right,
@@ -376,35 +370,26 @@ impl IntervalStatus {
     }
 }
 
-/// Inputs of [`turnbull`]: an interval-censored response (`time1`,
-/// `time2`, `status` in R's `interval` coding; `time2` is ignored unless
-/// `status == 3`), optional case weights and grouping.  `se_fit` and
-/// `robust` are `survfitKM`'s: `robust = None` leaves the choice to R's
-/// rule, which turns the robust variance on for a curve whose
-/// pseudo-observation weights are not all integers.
 #[derive(Debug, Clone)]
 pub struct TurnbullInput<'a> {
     pub time1: &'a [f64],
     pub time2: &'a [f64],
     pub status: &'a [i32],
     pub weights: Option<&'a [f64]>,
-    /// One curve per distinct label, in sorted label order.
     pub group: Option<&'a [i32]>,
     pub conf_level: f64,
-    /// `"log"`, `"log-log"`, `"plain"`, `"logit"`, `"arcsin"` or `"none"`.
     pub conf_type: &'a str,
-    /// Apply R's `aeqSurv` near-tie rounding to the times first.
     pub timefix: bool,
     pub se_fit: bool,
     pub robust: Option<bool>,
 }
 
-/// One curve of [`TurnbullResult`]: the fields of the `survfit` object.
-/// `std_err` is the one `survfitKM` reports for the final EM step, which
-/// `survfitTurnbull` keeps as it is: the standard error of `surv` under the
-/// robust (infinitesimal jackknife) variance and of `log(surv)` otherwise.
-/// `std_err` is empty without `se_fit`, and so are the limits without
-/// `se_fit` or with `conf_type = "none"`.
+#[doc = " One curve of [`TurnbullResult`]: the fields of the `survfit` object."]
+#[doc = " `std_err` is the one `survfitKM` reports for the final EM step, which"]
+#[doc = " `survfitTurnbull` keeps as it is: the standard error of `surv` under the"]
+#[doc = " robust (infinitesimal jackknife) variance and of `log(surv)` otherwise."]
+#[doc = " `std_err` is empty without `se_fit`, and so are the limits without"]
+#[doc = " `se_fit` or with `conf_type = \"none\"`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct TurnbullCurve {
@@ -421,9 +406,9 @@ pub struct TurnbullCurve {
     pub iterations: usize,
 }
 
-/// R's `survfit` object for interval-censored data (`type = "interval"`).
-/// `fit` holds the curves stacked as `survfit0`, `summary.survfit` and
-/// `quantile.survfit` read them.
+#[doc = " R's `survfit` object for interval-censored data (`type = \"interval\"`)."]
+#[doc = " `fit` holds the curves stacked as `survfit0`, `summary.survfit` and"]
+#[doc = " `quantile.survfit` read them."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct TurnbullResult {
@@ -433,22 +418,14 @@ pub struct TurnbullResult {
     pub fit: SurvfitKMResult,
 }
 
-/// Convergence criterion of R's EM loop (`while (eps > .00005)`).
 const TURNBULL_EPS: f64 = 0.00005;
-/// R iterates without bound; this cap turns a stalled EM into an error.
 const TURNBULL_MAX_ITER: usize = 100_000;
 
-/// The jump points of the Turnbull estimate: every exact time plus the
-/// midpoint of every `( `-or-`[` bracket immediately followed by a `]`
-/// (R's `jtimes`), the left-censored observations below the smallest jump
-/// being promoted to exact times.  Returns `(jtimes, mintime, status)`.
 fn turnbull_jump_points(
     time1: &[f64],
     time2: &[f64],
     status: &mut [IntervalStatus],
 ) -> (Vec<f64>, f64) {
-    // stat2: 0 = "[" (exact), 1 = "]" (left / interval end), 2 = "(" (right /
-    // interval start); ties order as [, ], (.
     let mut brackets: Vec<(f64, u8)> = Vec::with_capacity(time1.len() * 2);
     for (i, &code) in status.iter().enumerate() {
         match code {
@@ -485,9 +462,6 @@ fn turnbull_jump_points(
     (jtimes, mintime)
 }
 
-/// The EM of R's `survfitTurnbull` `doit` function for one curve;
-/// `final_fit` holds the `survfitKM` arguments of the last EM step, the
-/// one whose standard errors and limits the curve reports.
 fn turnbull_curve(
     time1: &[f64],
     time2: &[f64],
@@ -505,8 +479,6 @@ fn turnbull_curve(
             "no exact or interval-censored observations: the curve has no jump points",
         ));
     }
-    // The real observations (exact and right-censored) precede the fake
-    // observations standing in for the jump points.
     let real: Vec<usize> = (0..n)
         .filter(|&i| matches!(status[i], IntervalStatus::Right | IntervalStatus::Exact))
         .collect();
@@ -532,7 +504,6 @@ fn turnbull_curve(
         )
     };
 
-    // wtmat: which jump points each left/interval observation covers.
     let (wtmat, lwt): (Vec<Vec<f64>>, Vec<f64>) = if censored.is_empty() {
         (vec![vec![1.0; njump]], vec![1.0])
     } else {
@@ -556,8 +527,6 @@ fn turnbull_curve(
         )
     };
 
-    // Starter curve: proportional to the number of intervals covering
-    // each jump point.
     let column_sums: Vec<f64> = (0..njump)
         .map(|j| wtmat.iter().map(|row| row[j]).sum())
         .collect();
@@ -588,7 +557,6 @@ fn turnbull_curve(
         if iter > TURNBULL_MAX_ITER {
             return Err(SurvivalError::not_converged(TURNBULL_MAX_ITER));
         }
-        // KM jumps at the jump points
         let mut previous = 1.0;
         let mut jumps: Vec<f64> = current_surv
             .iter()
@@ -598,7 +566,6 @@ fn turnbull_curve(
                 jump
             })
             .collect();
-        // Aitken acceleration every fifth iteration
         let aitken2 = aitken1.clone();
         aitken1 = jumps.iter().zip(&jump1).map(|(j, p)| j - p).collect();
         let jsave = jumps.clone();
@@ -619,7 +586,6 @@ fn turnbull_curve(
         jump2 = jump1;
         jump1 = jsave;
 
-        // Partition each left/interval observation over the jumps.
         let mut wt2 = vec![0.0; njump];
         for (row, &weight) in wtmat.iter().zip(&lwt) {
             let denominator: f64 = row.iter().zip(&jumps).map(|(w, j)| w * j).sum();
@@ -629,7 +595,6 @@ fn turnbull_curve(
         }
         let mut fit_weights: Vec<f64> = real.iter().map(|&i| weights[i]).collect();
         fit_weights.extend_from_slice(&wt2);
-        // R's doit builds tempy without aeqSurv, so times compare exactly.
         let km = survfitkm(
             &fit_data(fit_weights.clone())?,
             &SurvfitKMOptions {
@@ -672,12 +637,6 @@ fn turnbull_curve(
     })
 }
 
-/// The Kaplan-Meier curve as a right-continuous step function: the
-/// estimate at the last reported time `<= t`, or 1 before the first one.
-/// R's `survfitKM` reports every unique time, so `doit` can use
-/// `match(jtimes, tfit$time)`; the crate's engine reports no row for a
-/// time whose observations all carry zero weight, which happens as soon
-/// as the EM mass at a jump point rounds to 0.
 fn step_survival(km_time: &[f64], km_surv: &[f64], t: f64) -> f64 {
     match km_time.partition_point(|&u| u <= t) {
         0 => 1.0,
@@ -685,12 +644,6 @@ fn step_survival(km_time: &[f64], km_surv: &[f64], t: f64) -> f64 {
     }
 }
 
-/// The fitted curve over every unique observation time, as R's
-/// `survfitKM` reports it: a time the engine left out (all of its
-/// observations have zero weight) becomes a row with `n.event = n.censor
-/// = 0` that carries the survival, standard error and limits of the row
-/// before it and the weight still at risk.  `group`, `n` and `iterations`
-/// are left for the caller.
 fn with_zero_weight_times(
     km: &SurvfitKMResult,
     fit_time: &[f64],
@@ -738,8 +691,6 @@ fn with_zero_weight_times(
             at_risk = km.n_risk[next] - km.n_event[next] - km.n_censor[next];
             next += 1;
         } else {
-            // Nothing leaves the risk set here; before the first reported
-            // time the curve is still at its origin.
             curve.n_risk.push(at_risk);
             curve.n_event.push(0.0);
             curve.n_censor.push(0.0);
@@ -809,17 +760,11 @@ fn validate_turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<Vec<IntervalSt
     Ok(status)
 }
 
-/// Turnbull's nonparametric estimate for interval-censored data, one curve
-/// per group, as R's `survfit` computes it (`R/survfitTurnbull.R`): an EM
-/// with Aitken acceleration over a Kaplan-Meier fit to the exact and
-/// right-censored observations plus weighted pseudo-observations at the
-/// jump points.
 pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     let mut status = validate_turnbull(input)?;
     let n = input.time1.len();
     let conf_type = ConfType::parse(input.conf_type)?;
     let (time1, time2) = if input.timefix {
-        // aeqSurv over both time columns; a missing time2 stays missing.
         let mut all: Vec<f64> = input.time1.to_vec();
         let interval_rows: Vec<usize> = (0..n)
             .filter(|&i| status[i] == IntervalStatus::Interval)
@@ -834,7 +779,6 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     } else {
         (input.time1.to_vec(), input.time2.to_vec())
     };
-    // An interval (x, x] is an exact observation.
     for (i, code) in status.iter_mut().enumerate() {
         if *code == IntervalStatus::Interval && time1[i] == time2[i] {
             *code = IntervalStatus::Exact;
@@ -844,8 +788,6 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     let mut labels: Vec<i32> = input.group.map_or_else(|| vec![1], <[i32]>::to_vec);
     labels.sort_unstable();
     labels.dedup();
-    // doit's survfitKM calls get `se.fit`, `conf.int`, `conf.type` and,
-    // through `...`, `robust`; tempy is built without aeqSurv.
     let final_fit = SurvfitKMOptions {
         se_fit: input.se_fit,
         conf_int: input.conf_level,
@@ -879,11 +821,6 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     })
 }
 
-/// The curves as one `survfit` object, as `survfitTurnbull` stacks them
-/// (`strata` only for more than one curve), with what R's summaries assume
-/// of an object that has no `logse`, `cumhaz` or `t0`: `logse = TRUE`
-/// whatever variance `std_err` comes from, and the `cumhaz = -log(surv)`,
-/// `std.chaz = std.err` and `t0 = min(0, time)` that `survfit0` fills in.
 fn stacked_fit(
     curves: &[TurnbullCurve],
     conf_level: f64,
@@ -921,10 +858,10 @@ fn stacked_fit(
     })
 }
 
-/// Python entry point: `turnbull(time1, time2, status, weights=None,
-/// group=None, conf_level=0.95, conf_type="log", timefix=True,
-/// se_fit=True, robust=None)`; `status` uses R's `interval` coding (0
-/// right, 1 exact, 2 left, 3 interval).
+#[doc = " Python entry point: `turnbull(time1, time2, status, weights=None,"]
+#[doc = " group=None, conf_level=0.95, conf_type=\"log\", timefix=True,"]
+#[doc = " se_fit=True, robust=None)`; `status` uses R's `interval` coding (0"]
+#[doc = " right, 1 exact, 2 left, 3 interval)."]
 #[pyfunction(name = "turnbull")]
 #[pyo3(signature = (time1, time2, status, weights=None, group=None, conf_level=0.95, conf_type="log", timefix=true, se_fit=true, robust=None))]
 #[allow(clippy::too_many_arguments)]
@@ -994,8 +931,6 @@ mod tests {
     }
 
     fn synthetic_interval() -> (Vec<f64>, Vec<f64>, Vec<i32>) {
-        // Surv(left, right, type = "interval2") on the fixture data:
-        // left = 1 2 NA 4 5 3 6 NA 2 7, right = 3 4 2 6 5 NA 8 5 3 NA
         (
             vec![1.0, 2.0, 2.0, 4.0, 5.0, 3.0, 6.0, 5.0, 2.0, 7.0],
             vec![
@@ -1088,8 +1023,6 @@ mod tests {
         }
     }
 
-    /// `Surv(l, r, type = "interval2")` with l = c(1,2,3,4,5,6,2,7),
-    /// r = c(1,NA,3,6,5,8,4,NA) in the `interval` coding.
     fn eight_rows(robust: Option<bool>) -> TurnbullResult {
         let nan = f64::NAN;
         turnbull(&TurnbullInput {
@@ -1109,8 +1042,6 @@ mod tests {
 
     #[test]
     fn robust_follows_survfit_km() {
-        // R: survfit(Surv(l, r, type = "interval2") ~ 1, d, robust = ...)$std.err;
-        // the default is robust here, as the pseudo-weights are fractional
         let robust = [
             0.116925805875275,
             0.116925805875275,
@@ -1149,8 +1080,6 @@ mod tests {
             "lower",
         );
 
-        // l = c(1,2,3,5), r = c(NA,NA,3,NA): the pseudo-weights are integers,
-        // so R's default is the Greenwood variance
         let integer = |robust| {
             turnbull(&TurnbullInput {
                 time1: &[1.0, 2.0, 3.0, 5.0],
@@ -1234,11 +1163,6 @@ mod tests {
         }
     }
 
-    /// R 4.5.3 / survival 3.8.11: `survfit(Surv(t1, t2, status,
-    /// type = "interval") ~ 1)`.  The jump at 15 (midpoint of the
-    /// right-censored 12 and the left-censored 18) loses all of its mass
-    /// during the EM; R's `survfitKM` keeps the zero-weight row, the
-    /// crate's engine drops it.
     #[test]
     fn a_jump_point_with_zero_mass_stays_on_the_curve() {
         let nan = f64::NAN;
@@ -1321,11 +1245,6 @@ mod tests {
         );
     }
 
-    /// The same data plus three exact times after the dead jump, so the
-    /// dropped row is not the last one.  R (4.5.3 / survival 3.8.11) and
-    /// the port reach the same maximum through different rounding of the
-    /// Aitken steps on the flat likelihood, so the estimates only agree
-    /// to the EM's stopping tolerance; the curve's shape is exact.
     #[test]
     fn a_dead_jump_before_later_events_keeps_the_lookup_aligned() {
         let nan = f64::NAN;

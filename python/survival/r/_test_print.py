@@ -96,7 +96,6 @@ def _case_cohort_report(x: Mapping[str, Any], width: int, *, summary: bool) -> M
     table = NamedMatrix([row["name"] for row in rows], columns, values)
     tables["coefficients"] = table
     display = _rounded(table, 3) if summary else table
-    # R drops the coefficient name when its case-cohort fit has one column.
     if len(rows) == 1:
         display = NamedMatrix(["Value"] if summary else None, display.colnames, display.values)
     lines += ["", "Coefficients:", *numeric_matrix_lines(display, 7, width)]

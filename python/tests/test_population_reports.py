@@ -171,7 +171,7 @@ def test_report_ownership_and_dataframe_levels(objects):
     result.tables["tests"].values[0][0] = 999
     assert value.estimate == before
     assert result.estimates == before
-    assert pickle.loads(pickle.dumps(result)) == result  # noqa: S301 - own test data
+    assert pickle.loads(pickle.dumps(result)) == result
 
 
 @pytest.mark.parametrize("function", ["print_yates", "print_pyears", "print_survcheck"])

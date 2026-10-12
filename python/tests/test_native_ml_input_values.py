@@ -204,7 +204,6 @@ def test_native_tree_models_preserve_zero_features(name, route):
 def test_native_trees_accept_large_finite_features(name, route, large):
     x, n_obs, n_vars, time, status = _data()
     x[0] = large
-    # Constant trees exercise the input contract independently of split midpoint arithmetic.
     model = _fit(name, route, (x, n_obs, n_vars, time, status), _config(name, max_depth=0))
     prediction_x = [large, 0.2, -large, 0.3]
 

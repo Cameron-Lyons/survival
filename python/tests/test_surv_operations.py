@@ -146,13 +146,12 @@ def test_explicit_values_and_structural_comparisons_remain_available(case):
     assert x.equals(response(case))
     assert x.equals(copy.copy(x))
     assert x.equals(copy.deepcopy(x))
-    assert x.equals(pickle.loads(pickle.dumps(x)))  # noqa: S301
+    assert x.equals(pickle.loads(pickle.dumps(x)))
     assert not x.equals(None)
     assert not x.equals(x.as_matrix())
     assert len(x) == len(case["matrix"])
     expected = np.array(case["matrix"], dtype=float)
     np.testing.assert_equal(np.array(x.as_matrix(), dtype=float), expected)
-    # Mutating an extracted matrix cannot mutate the response.
     matrix = x.as_matrix()
     if matrix:
         matrix[0][0] = 99

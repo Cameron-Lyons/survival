@@ -189,7 +189,7 @@ def test_tables_are_independent_and_convert_to_frames(name, printer, objects):
     value = objects(name)
     before = value.coefficients if name == "Prentice" else copy.deepcopy(value)
     report = getattr(r, printer)(value)
-    restored = pickle.loads(pickle.dumps(report))  # noqa: S301 - this test's own bytes
+    restored = pickle.loads(pickle.dumps(report))
     assert restored == report
     table = report.tables[report.primary_table]
     frame = r.as_data_frame(report)

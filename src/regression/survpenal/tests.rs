@@ -1,9 +1,3 @@
-//! survpenal.fit against R 4.5.3 / survival 3.8-12 on the `kidney` data:
-//! `survreg(Surv(time, status) ~ ..., kidney)` with `ridge()`, `pspline()`
-//! and (through the alias `fr <- frailty`, which survreg() does not
-//! recognise by name) sparse `frailty()` terms.  The reference values come
-//! from R and are hard-coded; so are the 76 rows of `kidney`.
-
 use super::kernel::{Case, JjPenalty, add_penalty, ensure_jj, survreg7};
 use super::*;
 use crate::core::pspline::pspline_basis;
@@ -46,8 +40,6 @@ const ID: [f64; 76] = [
     34.0, 35.0, 35.0, 36.0, 36.0, 37.0, 37.0, 38.0, 38.0,
 ];
 
-/// Asserts `actual` is within `rtol` of `expected` relative to
-/// `max(|expected|, 1)`.
 fn close(actual: f64, expected: f64, rtol: f64, what: &str) {
     assert!(
         (actual - expected).abs() <= rtol * expected.abs().max(1.0),
@@ -66,8 +58,6 @@ fn all_close(actual: &[f64], expected: &[f64], rtol: f64, what: &str) {
     }
 }
 
-/// `pspline(age, df = 3)`: `nterm = round(2.5 * 3) = 8` intervals, cubic,
-/// the first basis column dropped.
 fn pspline_columns() -> Vec<Vec<f64>> {
     let lower = AGE.iter().copied().fold(f64::INFINITY, f64::min);
     let upper = AGE.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -102,8 +92,6 @@ fn frailty(distribution: FrailtyFamily, theta: Option<f64>) -> PenaltyTerm {
     .unwrap()
 }
 
-/// `kidney` with the design `columns` (an intercept first) and the model
-/// `terms`.
 fn kidney(
     columns: Vec<Vec<f64>>,
     terms: Vec<(Vec<usize>, Option<PenaltyTerm>)>,
@@ -132,7 +120,6 @@ fn kidney(
     SurvpenalData::try_new(survreg, terms).unwrap()
 }
 
-/// `~ ridge(age, sex, theta = 1)`.
 fn ridge_data() -> SurvpenalData {
     kidney(
         vec![AGE.to_vec(), SEX.to_vec()],
@@ -141,7 +128,6 @@ fn ridge_data() -> SurvpenalData {
     )
 }
 
-/// `~ sex + fr(id, ...)`.
 fn frailty_data(term: PenaltyTerm) -> SurvpenalData {
     kidney(
         vec![SEX.to_vec(), ID.to_vec()],
@@ -150,8 +136,6 @@ fn frailty_data(term: PenaltyTerm) -> SurvpenalData {
     )
 }
 
-/// `~ pspline(age, df = 3) + ...`: the basis in columns 1-10, `extra`
-/// columns after it.
 fn pspline_data(extra: Vec<Vec<f64>>, strata: bool) -> SurvpenalData {
     let basis = pspline_columns();
     let mut columns: Vec<Vec<f64>> = (0..10)
@@ -183,7 +167,6 @@ const RTOL: f64 = 1e-10;
 
 #[test]
 fn ridge_weibull_matches_r() {
-    // Takes a golden-section step.
     let fit = fit(&ridge_data(), "weibull", None);
     let survreg = &fit.survreg;
     all_close(
@@ -246,7 +229,6 @@ fn ridge_weibull_matches_r() {
 
 #[test]
 fn pspline_plus_sex_matches_r() {
-    // Takes golden-section steps.
     let fit = fit(&pspline_data(vec![SEX.to_vec()], false), "weibull", None);
     let survreg = &fit.survreg;
     assert_eq!(survreg.coefficients.len(), 13);
@@ -283,9 +265,6 @@ fn pspline_plus_sex_matches_r() {
 
 #[test]
 fn sparse_gamma_frailty_matches_r() {
-    // sex + fr(id): theta 0 flags the frailty at outer 1; Fisher steps, a
-    // clamped golden-section step and an abject failure at outer 2; the
-    // search is still running after outer.max = 10.
     let fit = fit(
         &frailty_data(frailty(FrailtyFamily::Gamma, None)),
         "weibull",
@@ -342,7 +321,6 @@ fn sparse_gamma_frailty_matches_r() {
 
 #[test]
 fn sparse_gaussian_frailty_matches_r() {
-    // fr(id, dist = "gauss", theta = 0.5): a clamped golden-section step.
     let fit = fit(
         &frailty_data(frailty(FrailtyFamily::Gaussian, Some(0.5))),
         "weibull",
@@ -421,8 +399,6 @@ fn pspline_with_scale_strata_matches_r() {
 
 #[test]
 fn a_far_start_converges_through_fisher_and_clamped_golden_steps() {
-    // init = c(3, 0.05, 1, -2): Fisher steps at inner 1-22, a golden step
-    // with the log-sigma clamp at 23, converged at 28.
     let fit = fit(&ridge_data(), "weibull", Some(vec![3.0, 0.05, 1.0, -2.0]));
     let survreg = &fit.survreg;
     all_close(
@@ -446,9 +422,6 @@ fn a_far_start_converges_through_fisher_and_clamped_golden_steps() {
 
 #[test]
 fn an_abject_failure_returns_the_failed_step_information() {
-    // init = c(6, 0, 0, -3): Fisher steps, a golden step at 18 and an
-    // abject failure at 19; the information of the failed step zeroes the
-    // sigma pivot, so the sigma df is 0/0.
     let fit = fit(&ridge_data(), "weibull", Some(vec![6.0, 0.0, 0.0, -3.0]));
     let survreg = &fit.survreg;
     let rtol = 1e-10;
@@ -484,8 +457,6 @@ fn an_abject_failure_returns_the_failed_step_information() {
     );
 }
 
-/// What `SurvpenalFit::fit` sets up before the outer loop, for driving
-/// `survreg7` directly: the response on the log scale and the dense design.
 struct Inner {
     distribution: SurvregDistribution,
     y1: Vec<f64>,
@@ -558,8 +529,6 @@ impl Inner {
     }
 }
 
-/// `JJ` built after the fact equals, bit for bit, `JJ` accumulated in the
-/// evaluation with the penalty added.
 fn assert_lazy_jj_is_eager(data: &SurvpenalData, beta: &[f64]) {
     let inner = Inner::new(data);
     let kernel = inner.kernel();
@@ -619,7 +588,6 @@ fn assert_lazy_jj_is_eager(data: &SurvpenalData, beta: &[f64]) {
 
 #[test]
 fn jj_built_for_a_fisher_step_is_the_eager_jj() {
-    // The first step from this far start is a Fisher step.
     let data = ridge_data();
     let beta = [3.0, 0.05, 1.0, -2.0];
     let inner = Inner::new(&data);
@@ -644,7 +612,6 @@ fn jj_built_for_a_fisher_step_is_the_eager_jj() {
     assert!(cholesky3(&mut lik.hmat, 0, &mut lik.fdiag, 1e-10) < 0);
     assert_lazy_jj_is_eager(&data, &beta);
 
-    // A sparse gamma frailty flagged at theta = 0, and one that is not.
     let mut beta: Vec<f64> = (0..38).map(|g| 0.01 * (g % 5) as f64 - 0.02).collect();
     beta.extend([4.8, 0.1, 0.1]);
     assert_lazy_jj_is_eager(&frailty_data(frailty(FrailtyFamily::Gamma, None)), &beta);
@@ -678,9 +645,6 @@ fn zero_iterations_return_the_start() {
 
 #[test]
 fn accepted_steps_never_lower_the_penalised_loglik() {
-    // survreg7 run for k iterations stops after its k-th accepted step, so
-    // the penalised log likelihood grows with k, through the Fisher and
-    // golden-section steps of both far starts and the abject failure.
     let data = ridge_data();
     let inner = Inner::new(&data);
     for (start, last) in [
@@ -775,7 +739,6 @@ fn invalid_requests_are_refused() {
         })
         .contains("Wrong length for inital values")
     );
-    // A sparse frailty has no robust variance, predictions or residuals.
     let sparse = frailty_data(frailty(FrailtyFamily::Gaussian, Some(0.5)));
     let error = SurvpenalFit::fit(
         &sparse,

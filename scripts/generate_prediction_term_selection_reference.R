@@ -98,7 +98,6 @@ for (name in names(specs)) {
       expected = record, raw = raw, correction = correction
     )
   }
-  # AFT ignores terms for other types; Cox validates them before prediction.
   for (type in if (spec[[1L]] == "survreg") c("lp", "quantile") else c("lp", "risk", "expected", "survival")) {
     options <- list(object = fit, newdata = nd, type = type, terms = -1, se.fit = TRUE)
     raw <- capture(function() {

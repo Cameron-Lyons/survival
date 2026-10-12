@@ -25,7 +25,6 @@ def test_cipoisson_matches_r():
         survival.validation.cipoisson([5], time=[1.0], method="anscombe").lower
     )
 
-    # R recycling of k over time
     vector = survival.validation.cipoisson([0, 5, 20], time=[1.0, 2.0, 10.0])
     assert vector.lower == pytest.approx([0.0, 0.81174319505921044, 1.22165195854039443])
     assert vector.upper == pytest.approx(
@@ -37,7 +36,6 @@ def test_cipoisson_matches_r():
 
 
 def test_cipoisson_supports_r_numeric_edge_cases():
-    # R: a degenerate confidence level of 0 collapses to the point estimate
     zero_level = survival.validation.cipoisson([1.2], time=[2.0], p=[0.0])
     assert (zero_level.lower[0], zero_level.upper[0]) == pytest.approx(
         (0.443968106737396, 0.938570591679505)
@@ -45,7 +43,6 @@ def test_cipoisson_supports_r_numeric_edge_cases():
     full_level = survival.validation.cipoisson([1.2], time=[1.0], p=[1.0])
     assert full_level.lower[0] == 0.0
     assert math.isinf(full_level.upper[0])
-    # time <= 0 gives NaN as in R
     nonpositive = survival.validation.cipoisson([1.2], time=[0.0])
     assert all(math.isnan(value) for value in (nonpositive.lower[0], nonpositive.upper[0]))
 
@@ -377,11 +374,6 @@ def test_finegray_regression_and_cif_validate_public_inputs():
         survival.regression.competing_risks_cif([1.0], [1], 1, confidence_level=1.0)
 
 
-# ---------------------------------------------------------------------------------------------
-# Rate tables, survexp, pyears (R survival 3.8.11 references)
-# ---------------------------------------------------------------------------------------------
-
-
 def _lung_like_positions(us):
     """R: match.ratetable of ages 50/60 (in days), sex 1/2 and two dates against survexp.us."""
     return population.match_ratetable(
@@ -405,10 +397,8 @@ def test_reference_ratetables_match_r():
     assert us.dimnames[2][:3] == ["1940", "1941", "1942"]
     assert us.cutpoints[0][:3] == pytest.approx([0.0, 365.25, 730.5])
     assert us.cutpoints[1] is None
-    # date cutpoints are days since 1970-01-01: 1940-01-01 = -10958
     assert us.cutpoints[2][:2] == pytest.approx([-10958.0, -10592.0])
     assert len(us.rates) == 110 * 2 * 81
-    # R: the survexp.us rates for a 50-year-old male in 2000 and a 60-year-old female in 2005
     assert us.rate([50, 0, 60]) == pytest.approx(1.5264926305778617e-05)
     assert us.rate([60, 1, 65]) == pytest.approx(1.9894143715387382e-05)
     assert us.rate([200, 0, 0]) is None
@@ -443,7 +433,6 @@ def test_ratetable_construction_and_lookup():
         [0.001, 0.002, 0.0005, 0.0015],
     )
 
-    # rates are column-major: rate(age index, sex index)
     assert table.rate([0, 0]) == pytest.approx(0.001)
     assert table.rate([1, 0]) == pytest.approx(0.002)
     assert table.rate([0, 1]) == pytest.approx(0.0005)
@@ -451,7 +440,6 @@ def test_ratetable_construction_and_lookup():
     assert table.rate([2, 0]) is None
     assert "sex has levels of: male female" in str(table)
 
-    # Ederer expected survival over one year: mean of exp(-rate * 365.25) over the two subjects
     expected = population.survexp(table, [[10 * 365.25, 1.0], [60 * 365.25, 2.0]], times=[365.25])
     assert expected.surv[0][0] == pytest.approx(
         (math.exp(-0.001 * 365.25) + math.exp(-0.0015 * 365.25)) / 2
@@ -462,7 +450,6 @@ def test_ratetable_construction_and_lookup():
 
 
 def test_ratetable_date_roundtrip_matches_r():
-    # ratetableDate(as.Date("2000-02-29")) = 11016 days since 1970-01-01
     assert population.ratetable_date(2000, 2, 29) == pytest.approx(11016.0)
     assert population.ratetable_date(1960) == pytest.approx(-3653.0)
 
@@ -481,14 +468,12 @@ def test_match_ratetable_and_survexp_match_r():
     matched = _lung_like_positions(us)
 
     assert isinstance(matched, population.MatchRatetableResult)
-    # one-based factor subscripts, continuous and date axes as given
     assert matched.r[0] == pytest.approx([18262.5, 1.0, 10957.0])
     assert matched.r[1] == pytest.approx([21915.0, 2.0, 12949.0])
     assert matched.cutpoints[0][:3] == pytest.approx([0.0, 365.25, 730.5])
 
     times = [365.25, 1826.25]
     ederer = population.survexp(us, matched.r, times=times)
-    # R: survexp with rmap on survexp.us at 1 and 5 years (Ederer)
     assert isinstance(ederer, population.SurvExpResult)
     assert ederer.time == pytest.approx(times)
     assert [row[0] for row in ederer.surv] == pytest.approx(
@@ -538,7 +523,6 @@ def test_pyears_and_summary_match_r():
         ratetable_positions=matched.r,
         scale=365.25,
     )
-    # R: pyears by sex with the survexp.us expected events, scale = 365.25
     assert isinstance(result, population.PyearsResult)
     assert result.pyears == pytest.approx([1.0, 5.0])
     assert result.n == pytest.approx([1.0, 1.0])
@@ -557,7 +541,6 @@ def test_pyears_and_summary_match_r():
         categories_data=[[18262.5, 1.0], [21915.0, 2.0]],
         scale=365.25,
     )
-    # R: pyears by tcut(age) and sex, no rate table; cells are column-major
     assert by_age.pyears == pytest.approx([1.0, 0.0, 0.0, 5.0])
     assert by_age.n == pytest.approx([1.0, 0.0, 0.0, 1.0])
     assert by_age.event == pytest.approx([1.0, 0.0, 0.0, 0.0])
@@ -577,7 +560,6 @@ def test_pyears_and_summary_match_r():
         rr=True,
         ci_rr=True,
     )
-    # R: summary of the pyears object with rate, ci.r, rr and ci.rr
     assert isinstance(summary, population.PyearsSummary)
     assert (summary.dims, summary.observations) == ([2], 2)
     assert summary.rate == pytest.approx([1.0, 0.0])
@@ -589,7 +571,6 @@ def test_pyears_and_summary_match_r():
     assert summary.total_events == pytest.approx(1.0)
     assert summary.total_pyears == pytest.approx(6.0)
 
-    # R: summary(by_age, rate = TRUE, ci.r = TRUE): the empty cells print ". - ."
     by_age_summary = population.summary_pyears(
         by_age.pyears, by_age.n, by_age.event, dims=by_age.dims, tcut=True, rate=True, ci_r=True
     )

@@ -1,4 +1,3 @@
-//! Custom-density coverage of the penalized AFT inner optimizer.
 use super::kernel::{Survreg7Fit, survreg7};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::penalized::penalty::CoxPenaltyTerms;
@@ -67,8 +66,6 @@ fn mixture_ridge_matches_r_survreg_and_independent_interval_optimizer() {
             }];
             let params = numbers(&expected["parameters"]);
             assert_eq!(fit.beta.len(), params.len());
-            // stats::optim uses numerical gradients, unlike survreg's
-            // analytic information. Its coefficients have lower precision.
             let tolerance = if intervals { 2e-6 } else { 1e-8 };
             for (&a, &b) in fit.beta.iter().zip(&params) {
                 close(a, b, tolerance);
@@ -84,8 +81,6 @@ fn mixture_ridge_matches_r_survreg_and_independent_interval_optimizer() {
 #[test]
 fn density_errors_propagate_from_every_penalized_evaluation() {
     let data = Data::reference();
-    // A far start exercises the fallback and line-search evaluations as
-    // well as the initial and accepted full evaluations.
     let start = vec![-2.0, 1.5, -1.0];
     let source = Mixture::default();
     let baseline = fit(&data.kernel(&source, 1), start.clone()).unwrap();

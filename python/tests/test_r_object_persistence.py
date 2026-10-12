@@ -9,7 +9,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-from survival.pybridge import _serialize_r_object, _unserialize_r_object  # noqa: E402
+from survival.pybridge import _serialize_r_object, _unserialize_r_object
 
 
 @pytest.mark.parametrize(

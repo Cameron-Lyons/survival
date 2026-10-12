@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Run from the repository root; Python tests consume the fixture without R.
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
 destination <- if (length(args)) args[[1L]] else

@@ -1,15 +1,3 @@
-//! Port of R's `cox_Rcallback.c`: evaluate a penalty closure and read back the
-//! `coxlist` it returns.
-//!
-//! `coxpenal.fit` (R `coxfit5.c`/`agfit5.c`) calls `cox_callback` once per
-//! Newton iteration for the sparse frailty term (`which == 1`, R's `coxlist1`)
-//! and once for the remaining penalised terms (`which == 2`, `coxlist2`). The
-//! Rust port (`regression::coxpenal`) evaluates its built-in penalties in
-//! Rust and reaches [`evaluate_penalty`] for a user-defined penalty
-//! (`PenaltyTerm::Callback`), adding the returned derivatives to the score
-//! and information matrix; the `#[pyfunction]` wrapper exists so the Python
-//! side can exercise the same contract directly.
-
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -33,11 +21,6 @@ fn float_item(coxlist: &Bound<'_, PyAny>, key: &str) -> PyResult<Vec<f64>> {
         })
 }
 
-/// Calls `fexpr(coef, which=which)` and reads the returned mapping.
-///
-/// The callback receives the coefficients as a NumPy array and may return
-/// lists, NumPy arrays or scalars for each entry; `penalty` is a number and
-/// `flag` a boolean or a sequence of booleans.
 pub(crate) fn evaluate_penalty(
     fexpr: &Bound<'_, PyAny>,
     which: i32,
@@ -88,7 +71,6 @@ pub(crate) fn cox_callback(
 
 #[cfg(test)]
 mod tests {
-    //! Needs an interpreter with NumPy: `PYO3_PYTHON` must point at one.
 
     use super::*;
     use std::ffi::CString;

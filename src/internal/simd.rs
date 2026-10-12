@@ -1,10 +1,3 @@
-//! Vectorisation-friendly reductions over `f64` slices.
-//!
-//! Each reduction keeps four independent accumulators so the compiler can
-//! emit packed instructions and the summation order is deterministic. This
-//! is the single implementation; `crate::simd_ops` re-exports the public
-//! subset under its historical `*_simd` names.
-
 const LANES: usize = 4;
 
 #[inline]
@@ -12,7 +5,6 @@ fn combine(accumulators: [f64; LANES]) -> f64 {
     (accumulators[0] + accumulators[1]) + (accumulators[2] + accumulators[3])
 }
 
-/// Sum of `data`; `0.0` for an empty slice.
 pub fn sum_f64(data: &[f64]) -> f64 {
     let mut accumulators = [0.0; LANES];
     let chunks = data.chunks_exact(LANES);
@@ -29,8 +21,6 @@ pub fn sum_f64(data: &[f64]) -> f64 {
     total
 }
 
-/// Dot product over the common prefix of `a` and `b`; `0.0` when either is
-/// empty.
 pub fn dot_product(a: &[f64], b: &[f64]) -> f64 {
     let n = a.len().min(b.len());
     let mut accumulators = [0.0; LANES];
@@ -54,7 +44,6 @@ pub fn sum_of_squares(values: &[f64]) -> f64 {
     dot_product(values, values)
 }
 
-/// Arithmetic mean; `0.0` for an empty slice.
 pub fn mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -66,7 +55,6 @@ pub fn subtract_scalar(values: &[f64], scalar: f64) -> Vec<f64> {
     values.iter().map(|&value| value - scalar).collect()
 }
 
-/// Unbiased (`n - 1`) sample variance; `0.0` when fewer than two values.
 pub fn variance(values: &[f64]) -> f64 {
     if values.len() < 2 {
         return 0.0;
@@ -92,7 +80,6 @@ mod tests {
         let b = vec![2.0, 3.0, 4.0, 5.0, 6.0];
         assert!((dot_product(&a, &b) - 70.0).abs() < 1e-10);
         assert_eq!(dot_product(&[], &[]), 0.0);
-        // Common-prefix semantics.
         assert!((dot_product(&a[..2], &b) - 8.0).abs() < 1e-10);
         assert!((sum_of_squares(&a) - 55.0).abs() < 1e-10);
     }

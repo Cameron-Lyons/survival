@@ -49,8 +49,6 @@ def test_matrix_curves_match_r(case, fitted_curves):
     assert actual.strata == expected["strata"]
     for name in ("time", "n_risk", "n_event", "pstate", "p0"):
         np.testing.assert_allclose(getattr(actual, name), expected[name], rtol=2e-12, atol=2e-14)
-    # R leaves n unrepeated for Cox prediction columns, even though the
-    # result now has one curve per (stratum, newdata row). Keep it aligned.
     assert actual.n == expected["n"] * (2 if case["kind"] == "cox" else 1)
     assert actual.std_err is None
     assert actual.n_id is None
@@ -109,7 +107,7 @@ def test_matrix_result_works_with_curve_methods():
     np.testing.assert_allclose(initial.pstate, [[1, 0, 0], *fit.pstate])
     with_time0 = r.survfit(_chain(), time0=True)
     np.testing.assert_allclose(with_time0.pstate, initial.pstate)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - bytes created in this test
+    restored = pickle.loads(pickle.dumps(fit))
     np.testing.assert_array_equal(restored.pstate, fit.pstate)
     assert r.as_data_frame(restored) == r.as_data_frame(fit)
 

@@ -1,21 +1,3 @@
-//! Penalised parametric models: R survival's `survpenal.fit`
-//! (`R/survpenal.fit.R`), the fitter behind `survreg()` when the formula has
-//! `ridge()` or `pspline()` terms, with the `survreg()` post-processing of
-//! `R/survreg.R` (the scale, `logcorrect`, `df.residual`, the robust
-//! variance), producing the `survreg.penal` object.
-//!
-//! The penalty terms, their `cfun`s, `coxpenal.df` and the outer loop are
-//! those of `coxpenal.fit` ([`crate::regression::penalized`]); [`kernel`] is
-//! the inner Newton iteration, `survreg7.c`.  The outer loop fits the
-//! intercept-only model for the starting scale and `n.eff`, removes a sparse
-//! frailty column from the design, iterates `survreg7` and the `cfun`s over
-//! `theta`, restarting each inner fit from the solution of the closest
-//! earlier `theta`, and computes the degrees of freedom and variances.
-//!
-//! The fitted model is also kept as a [`SurvregFit`], so that `predict()`
-//! and `residuals()` of a `survreg.penal` object come from the same code as
-//! for an unpenalised one (R's `NextMethod()`).
-
 #[cfg(test)]
 mod density_tests;
 mod kernel;
@@ -47,14 +29,9 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Validated inputs of a penalised parametric fit.  `survreg.covariates`
-/// holds every design column, including the single column of group codes
-/// of a sparse frailty term.
 #[derive(Debug, Clone)]
 pub struct SurvpenalData {
     pub survreg: SurvregData,
-    /// The model terms in formula order; every column belongs to exactly
-    /// one term and at least one term is penalised.
     pub terms: Vec<ModelTerm>,
 }
 
@@ -66,71 +43,57 @@ impl SurvpenalData {
     }
 }
 
-/// `survreg()`'s `init`, `scale`, `control` and `robust`.
 #[derive(Debug, Clone, Default)]
 pub struct SurvpenalOptions {
-    /// Starting values: the `nvar` dense coefficients (completed with the
-    /// intercept-only fit's `log(scale)`s), those plus the `log(scale)`s,
-    /// or all of them after the frailties.
     pub init: Option<Vec<f64>>,
-    /// A fixed scale (`0` estimates it).
     pub scale: f64,
     pub control: SurvregControl,
-    /// The robust (dfbeta sandwich) variance; implied by a cluster.
     pub robust: bool,
 }
 
-/// A fitted penalised parametric model (R's `survreg.penal` object).
+#[doc = " A fitted penalised parametric model (R's `survreg.penal` object)."]
 #[pyclass(module = "survival._survival", skip_from_py_object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurvpenalFit {
-    /// The fit as a `survreg` object: coefficients (`NaN` where aliased,
-    /// then the `log(scale)`s), `var`, the log likelihoods, the linear
-    /// predictors, `sum(df)` and `n - sum(df)`.
     pub survreg: SurvregFit,
-    /// `H^{-1} I H^{-1}` for the dense coefficients and scales.
     pub var2: Array2<f64>,
-    /// Outer iterations and total inner iterations.
+    #[doc = " Outer iterations and total inner iterations."]
     #[pyo3(get)]
     pub iter: [usize; 2],
-    /// Outer iterations whose inner loop did not converge (with
-    /// `iter.max > 1`); R means to warn about them but never does.
+    #[doc = " Outer iterations whose inner loop did not converge (with"]
+    #[doc = " `iter.max > 1`); R means to warn about them but never does."]
     #[pyo3(get)]
     pub inner_failures: Vec<usize>,
-    /// Effective degrees of freedom of each term of `assign2`.
+    #[doc = " Effective degrees of freedom of each term of `assign2`."]
     #[pyo3(get)]
     pub df: Vec<f64>,
-    /// `c(0, P)`: the penalty of the final fit.
+    #[doc = " `c(0, P)`: the penalty of the final fit."]
     #[pyo3(get)]
     pub penalty: [f64; 2],
-    /// Per model term: 0 ordinary, 1 penalised, 2 sparse.
     pub pterms: Vec<u8>,
-    /// R's `assign2`: the columns of each term in the dense design (a
-    /// sparse term keeps its original column), then the `log(scale)`s when
-    /// they are estimated (R's `sigma` term).
+    #[doc = " R's `assign2`: the columns of each term in the dense design (a"]
+    #[doc = " sparse term keeps its original column), then the `log(scale)`s when"]
+    #[doc = " they are estimated (R's `sigma` term)."]
     #[pyo3(get)]
     pub assign2: Vec<Vec<usize>>,
     #[pyo3(get)]
     pub history: Vec<PenaltyHistory>,
-    /// The fitted frailties of a sparse term (`frail`), the diagonal of
-    /// their variance (`fvar`) and the 0-based group of each observation.
+    #[doc = " The fitted frailties of a sparse term (`frail`), the diagonal of"]
+    #[doc = " their variance (`fvar`) and the 0-based group of each observation."]
     #[pyo3(get)]
     pub frail: Option<Vec<f64>>,
     #[pyo3(get)]
     pub fvar: Option<Vec<f64>>,
     #[pyo3(get)]
     pub frail_index: Option<Vec<usize>>,
-    /// `n.eff`, the effective sample size the `aic` searches use.
+    #[doc = " `n.eff`, the effective sample size the `aic` searches use."]
     #[pyo3(get)]
     pub n_eff: f64,
-    /// `fit$u`: the penalised score, frailties first.
+    #[doc = " `fit$u`: the penalised score, frailties first."]
     #[pyo3(get)]
     pub score: Vec<f64>,
 }
 
-/// R's `sd$variance(temp^2)` for `n.eff`: the variance of the standard
-/// distribution, where the `t` family's `variance(df)` receives the squared
-/// mean scale as its degrees of freedom (survpenal.fit.R:402, kept).
 fn neff_variance(distribution: &SurvregDistribution, scale2: f64) -> SurvivalResult<f64> {
     match distribution.family {
         SurvregFamily::T => Ok(scale2 / (scale2 - 2.0)),
@@ -149,9 +112,6 @@ fn neff_variance(distribution: &SurvregDistribution, scale2: f64) -> SurvivalRes
     }
 }
 
-/// The inputs of `coxpenal.df` for an inner fit: the penalty of the dense
-/// terms padded with zero rows and columns for the `log(scale)`s
-/// (survpenal.fit.R:480-494).
 fn term_df(
     fit: &Survreg7Fit,
     hdiag: &[f64],
@@ -196,7 +156,6 @@ struct SurvpenalEngineResult {
 }
 
 impl SurvpenalFit {
-    /// Full model construction after the shared penalized fitting engine.
     pub fn fit(
         data: &SurvpenalData,
         distribution: &SurvregDistribution,
@@ -205,8 +164,6 @@ impl SurvpenalFit {
         Self::fit_with_nstrata(data, distribution, options, None)
     }
 
-    /// Fits with an explicit scale-stratum count, retaining unused strata.
-    /// `None` infers the count from the largest observed stratum code.
     pub fn fit_with_nstrata(
         data: &SurvpenalData,
         distribution: &SurvregDistribution,
@@ -320,11 +277,9 @@ impl SurvpenalFit {
         let offset = survreg_data.offset.clone().unwrap_or_else(|| vec![0.0; n]);
         let strata = survreg_data.strata.clone().unwrap_or_else(|| vec![0; n]);
         let response = fitting_response(survreg_data, distribution, &weights)?;
-        // The number of scales to estimate.
         let nstrat2 = if scale > 0.0 { 0 } else { nstrata };
 
         let (pterms, sparse_term, shape) = penalty_shape(model_terms);
-        // Remove the sparse term's column from the design.
         let (xx, mut assign2, frailx, nfrail) =
             drop_sparse_column(survreg_data.design().view(), model_terms);
         let nvar = xx.ncols();
@@ -349,8 +304,6 @@ impl SurvpenalFit {
         let need_df = terms.iter().any(|term| term.needs_df());
         let mut composer = Composer::new(terms, nfrail, nvar, shape.full_imat, true);
 
-        // The intercept-only fit gives the starting scale, the first
-        // log likelihood and the "effective n".
         let fit0 = intercept_only_fit(
             distribution,
             &response,
@@ -363,8 +316,6 @@ impl SurvpenalFit {
             eps,
             tol_chol,
         )?;
-        // Empty scale strata have zero covariance rows. They contain no
-        // information about the effective sample size or the typical scale.
         let mut observed = vec![false; nstrata];
         for &stratum in &strata {
             observed[stratum] = true;
@@ -391,7 +342,6 @@ impl SurvpenalFit {
         let n_eff = neff_variance(distribution, mean_scale * mean_scale)? * information;
         composer.neff = n_eff;
 
-        // Starting values: frailties, dense coefficients, log(scale)s.
         let mut init = match &options.init {
             Some(init) => {
                 validate_finite(init, "init")?;
@@ -414,7 +364,6 @@ impl SurvpenalFit {
                 start
             }
             None => {
-                // fit0's intercept goes on the first dense column.
                 let mut start = vec![0.0; nfrail + nvar];
                 if nvar > 0 {
                     start[nfrail] = fit0.beta[0];
@@ -423,7 +372,6 @@ impl SurvpenalFit {
                 start
             }
         };
-        // The scales form the last term of assign2, so that df covers them.
         if nstrat2 > 0 {
             assign2.push((nvar..nvar2).collect());
         }
@@ -443,7 +391,6 @@ impl SurvpenalFit {
             .as_deref()
             .map(|group| SparseFrailty { group, nf: nfrail });
 
-        // The outer loop over theta.
         let mut iter = 0;
         let mut iter2 = 0;
         let mut inner_failures = Vec::new();
@@ -465,16 +412,11 @@ impl SurvpenalFit {
             )?;
             iter = outer;
             iter2 += fit.iter;
-            // survreg7.c:453 means to flag an inner fit that ran out of
-            // iterations (or failed) when iter.max > 1.
             if !fit.converged && control.iter_max > 1 {
                 inner_failures.push(outer);
             }
             theta_save.push(thetas);
             coef_save.push(fit.beta.clone());
-            // An infinite penalty made the C code set hdiag = 1 in
-            // self-defence; those coefficients are zero and so is their
-            // variance.
             let mut hdiag = fit.hdiag.clone();
             if nfrail > 0 && composer.coxlist1.flag[0] {
                 hdiag[..nfrail].fill(0.0);
@@ -510,8 +452,6 @@ impl SurvpenalFit {
             if done {
                 break;
             }
-            // Starting values for the next iteration: the solution of the
-            // closest earlier theta.
             let next: Vec<f64> = composer.terms.iter().map(|term| term.state.theta).collect();
             init.clone_from(&coef_save[closest_saved(&theta_save, &next)]);
         }
@@ -521,8 +461,6 @@ impl SurvpenalFit {
             None => term_df(&fit, &hdiag, &assign2, shape, &composer, sparse_term)?,
         };
 
-        // The coefficients (NaN where aliased), the linear predictors
-        // (aliased columns count 0) and the scales.
         let mut coefficients = fit.beta[nfrail..nfrail + nvar2].to_vec();
         for i in 0..nvar {
             if hdiag[nfrail + i] == 0.0 {
@@ -586,13 +524,10 @@ impl SurvpenalFit {
         })
     }
 
-    /// `df.residual`: `n - sum(df)`.
     pub fn df_residual(&self) -> f64 {
         self.survreg.df_residual
     }
 
-    /// `predict.survreg.penal` and `residuals.survreg.penal` refuse a sparse
-    /// frailty model with `message`.
     fn check_not_sparse(&self, message: &str) -> SurvivalResult<()> {
         if self.frail.is_some() {
             return Err(SurvivalError::invalid_input(message.to_string()));
@@ -603,7 +538,7 @@ impl SurvpenalFit {
 
 #[pymethods]
 impl SurvpenalFit {
-    /// Pickle metadata and, for custom distributions, their callable state.
+    #[doc = " Pickle metadata and, for custom distributions, their callable state."]
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
         let distribution = &self.survreg.distribution;
@@ -631,8 +566,8 @@ impl SurvpenalFit {
             .into_pyobject(py)
     }
 
-    /// The fit as a `SurvregFit` (a copy: a formula-level fit holds this
-    /// and its own `SurvregModelResult.fit`).
+    #[doc = " The fit as a `SurvregFit` (a copy: a formula-level fit holds this"]
+    #[doc = " and its own `SurvregModelResult.fit`)."]
     #[getter(survreg)]
     fn survreg_getter(&self) -> SurvregFit {
         self.survreg.clone()
@@ -676,7 +611,7 @@ impl SurvpenalFit {
         self.survreg.scale.clone()
     }
 
-    /// `1 + nstrata` when the scales were estimated, else 1.
+    #[doc = " `1 + nstrata` when the scales were estimated, else 1."]
     #[getter]
     fn idf(&self) -> usize {
         1 + self.survreg.coefficients.len() - self.survreg.nvar()
@@ -692,8 +627,8 @@ impl SurvpenalFit {
         self.survreg.linear_predictors.clone()
     }
 
-    /// `predict(object, ...)` as for a `SurvregFit`; R refuses a sparse
-    /// frailty model.
+    #[doc = " `predict(object, ...)` as for a `SurvregFit`; R refuses a sparse"]
+    #[doc = " frailty model."]
     #[pyo3(name = "predict")]
     #[pyo3(signature = (newdata=None, predict_type="response", se_fit=false, p=None, offset=None, strata=None, assign=None, terms=None))]
     #[allow(clippy::too_many_arguments)]
@@ -723,8 +658,8 @@ impl SurvpenalFit {
         )
     }
 
-    /// `residuals(object, ...)` as for a `SurvregFit`; R refuses a sparse
-    /// frailty model (its message, typo included).
+    #[doc = " `residuals(object, ...)` as for a `SurvregFit`; R refuses a sparse"]
+    #[doc = " frailty model (its message, typo included)."]
     #[pyo3(name = "residuals")]
     #[pyo3(signature = (residual_type="response", rsigma=true, collapse=None, weighted=false))]
     fn residuals_py(
@@ -752,13 +687,13 @@ impl SurvpenalFit {
     }
 }
 
-/// `survreg()`'s penalty branch on explicit data (survreg.R:203-293 with
-/// `survpenal.fit`): `penalties[i]` applies to the columns `pcols[i]` of
-/// `data.covariates`; `assign` lists the columns of every model term (each
-/// `pcols` entry must be one of them) and defaults to the penalised groups
-/// plus one term per remaining column, in column order.  A sparse frailty
-/// term is a single column of group codes.  The response is untransformed,
-/// as for `survreg_fit`.
+#[doc = " `survreg()`'s penalty branch on explicit data (survreg.R:203-293 with"]
+#[doc = " `survpenal.fit`): `penalties[i]` applies to the columns `pcols[i]` of"]
+#[doc = " `data.covariates`; `assign` lists the columns of every model term (each"]
+#[doc = " `pcols` entry must be one of them) and defaults to the penalised groups"]
+#[doc = " plus one term per remaining column, in column order.  A sparse frailty"]
+#[doc = " term is a single column of group codes.  The response is untransformed,"]
+#[doc = " as for `survreg_fit`."]
 #[pyfunction]
 #[pyo3(signature = (data, distribution, penalties, pcols, assign=None, init=None, scale=0.0, control=None, robust=None, nstrat=None))]
 #[allow(clippy::too_many_arguments)]
@@ -792,7 +727,7 @@ pub fn survpenal_fit(
     })?)
 }
 
-/// Rebuilds a pickled [`SurvpenalFit`] from its `__reduce__` state.
+#[doc = " Rebuilds a pickled [`SurvpenalFit`] from its `__reduce__` state."]
 #[cfg(feature = "python")]
 #[pyfunction(name = "_survpenal_fit_from_state")]
 #[pyo3(signature = (state, distribution=None))]

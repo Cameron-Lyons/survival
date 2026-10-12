@@ -1,7 +1,5 @@
 """Keep logical fixture values distinct from numbers in the stock-R gate."""
 
-# The CI helper suite runs with the standard library alone.
-# ruff: noqa: PT009, PT027
 from __future__ import annotations
 
 import importlib.util

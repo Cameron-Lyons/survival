@@ -89,7 +89,7 @@ def test_factor_types_and_retained_output(kind):
     assert fit.influence_surv[0] is None
     assert fit.influence_surv[2] is None
     assert fit.influence_surv[4] is None
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(fit))
     np.testing.assert_allclose(restored.influence_surv[1].values, fit.influence_surv[1].values)
     assert not restored.influence_surv[1].values.flags.writeable
     fit.n[1] = 100

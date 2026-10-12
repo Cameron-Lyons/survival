@@ -1,5 +1,3 @@
-//! Public population kernels recheck mutable rate tables before indexed work.
-
 use ndarray::{Array2, array};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use survival::SurvivalResult;
@@ -97,7 +95,6 @@ fn population_boundaries_reject_tables_mutated_after_construction() {
         let mut changed = table();
         mutate(&mut changed);
         let label = format!("mutation {case}");
-        // 25 mutations through eight checked entry points: 200 invalid calls.
         invalid(&label, || changed.validate());
         invalid(&label, || changed.validate_positions(&positions));
         invalid(&label, || changed.match_levels(1, &["male".into()]));
@@ -136,7 +133,6 @@ fn population_boundaries_reject_tables_mutated_after_construction() {
                 1.0,
             )
         });
-        // Reporting must also stay safe when only some attributes remain.
         assert!(catch_unwind(AssertUnwindSafe(|| changed.to_string())).is_ok());
     }
 }
@@ -189,7 +185,6 @@ fn extreme_groups_and_public_rate_or_alignment_indices_stay_bounded() {
     invalid("US alignment names", || {
         align_us_year_axis(&missing_age, &mut array![[0.0, 1.0, 0.0]])
     });
-    // A table without a US-year axis performs no position arithmetic.
     align_us_year_axis(&rt, &mut array![[f64::NAN, f64::INFINITY]]).unwrap();
 }
 
@@ -197,8 +192,6 @@ fn extreme_groups_and_public_rate_or_alignment_indices_stay_bounded() {
 fn weighted_person_years_and_cohorts_match_independent_hazard_integrals() {
     let rt = table();
     let positions = array![[9.0, 1.0], [0.0, 2.0]];
-    // The first subject spends one day at .1 then one at .2; the second
-    // spends one day at .3. The cohort loses its second member after day one.
     let first_mean = ((-0.1f64).exp() + (-0.3f64).exp()) / 2.0;
     for conditional in [false, true] {
         let fit = survexp_fit(
@@ -271,8 +264,6 @@ fn weighted_person_years_and_cohorts_match_independent_hazard_integrals() {
             near(result.expected.unwrap()[0], expected);
         }
     }
-    // The low-level fit has always skipped finite nonpositive follow-up,
-    // while the higher-level survexp validates its response separately.
     let skipped =
         survexp_fit(&[0], &array![[0.0, 1.0]], Some(&[-1.0]), &[1.0], false, &rt).unwrap();
     assert_eq!(skipped.n[[0, 0]], 0);
@@ -280,12 +271,8 @@ fn weighted_person_years_and_cohorts_match_independent_hazard_integrals() {
 }
 
 #[test]
-#[allow(clippy::excessive_precision)] // Keep the stock R reference decimals verbatim.
+#[allow(clippy::excessive_precision)]
 fn builtin_sparse_groups_and_date_types_match_stock_r() {
-    // survival 3.8-12, survival:::survexp.fit(group=c(1L,3L), x,
-    // y=c(365,180), times=c(0,100,365), death=FALSE/TRUE, ratetable).
-    // x: ages c(40,60)*365.25, sexes c(1,2), year 2000-01-01;
-    // survexp.usr additionally has race c(1,2).
     for (rt, expected) in [
         (
             survexp_us_table(),

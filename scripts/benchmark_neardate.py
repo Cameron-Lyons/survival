@@ -68,7 +68,6 @@ def main() -> None:
                 for _ in range(args.warmup):
                     fn(ids, ids, *dates, best=best)
             samples: dict[str, list[float]] = {name: [] for name in functions}
-            # Alternate order to avoid always favoring the same implementation.
             for repeat in range(args.repeat):
                 order = list(functions)
                 if repeat % 2:

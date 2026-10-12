@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete Yates setup calls; model fitting and prediction are outside timing.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from ._surv import Surv, Surv2
 
 
-# _core class re-exports.
 FineGrayOutput = _core.FineGrayOutput
 RateTable = _core.RateTable
 TcutResult = _core.TcutResult
@@ -68,7 +67,6 @@ class _StrataSpec:
 
 @dataclass(frozen=True)
 class _InteractionTerm:
-    # Factor order controls labels; term identity is independent of that order.
     factors: tuple[_CovariateTerm, ...] = field(compare=False)
     _identity: frozenset[_CovariateTerm] = field(init=False, repr=False)
 
@@ -185,7 +183,6 @@ class _PenaltyDesignTerm:
     combine: tuple[int, ...] | None = None
     report: Callable[..., Any] | None = None
     controller_history: Callable[[], Any] | None = None
-    # Basis labels can differ from the fitted coefficient labels (e.g. ps(x)3).
     matrix_names: tuple[str, ...] = ()
     contrast_metadata: dict[str, Any] | None = None
 
@@ -223,8 +220,6 @@ class _FormulaDesign:
     intercept: bool = False
     variables: tuple[_CovariateTerm, ...] = ()
     variable_labels: tuple[str, ...] = ()
-    # model.matrix records contrasts for logical offsets even though they
-    # contribute no design columns; model.offset uses their numeric values.
     logical_offsets: tuple[str, ...] = ()
 
 
@@ -302,7 +297,6 @@ class AaregModelResult:
     model: dict[str, Any] | None = None
     x: list[list[float]] | None = None
     y: Surv | None = None
-    # attr(terms, "term.labels"): the formula's terms, which labels.aareg returns
     term_labels: tuple[str, ...] = ()
     na_action: NaAction | None = None
 
@@ -547,7 +541,6 @@ class SurvExpResult:
 
         if self.surv and isinstance(self.surv[0], list):
             return [[negative_log(value) for value in row] for row in self.surv]
-        # The result contract is homogeneous: a vector or a matrix, never mixed rows.
         return [negative_log(value) for value in cast(list[float], self.surv)]
 
 
@@ -818,8 +811,6 @@ class CoxSurvfitResult:
 
     @property
     def has_data_margin(self) -> bool:
-        # aggregate() keeps its native one-column storage but removes the
-        # data margin when it has no grouped newdata labels.
         if self.logse is None and self.newdata is None:
             return False
         ndim = getattr(self.surv, "ndim", None)
@@ -1041,7 +1032,6 @@ class SurvfitMultiStateResult:
     call: SurvfitCall = field(default_factory=SurvfitCall)
     model: dict[str, Any] | None = field(default=None, repr=False)
     engine: _core.SurvfitAJResult | None = field(default=None, repr=False, compare=False)
-    # the states before `fit[, states]` selected some (R's oldstate)
     oldstate: tuple[str, ...] | None = None
     clabel: str | None = None
     na_action: NaAction | None = None
@@ -1155,7 +1145,6 @@ class SummarySurvfitCoxmsResult:
     rmean_endtime: list[float] | None
     states: list[str]
     newdata: dict[str, list[Any]] | None = field(repr=False)
-    # The conditional cutoff uses the same scaled time units as `time`.
     start_time: float | None = None
     strata_levels: list[str] | None = None
 
@@ -1185,8 +1174,6 @@ class SummarySurvfitResult:
     states: list[str] | None = None
     n_transition: list[list[float]] | None = None
     type: str | None = None
-    # Retain empty groups and the cutoff for detailed reports. `start_time`
-    # is in the same scaled time units as the summary's `time` column.
     start_time: float | None = None
     strata_levels: list[str] | None = None
 
@@ -1319,11 +1306,6 @@ class SurvDiffResult:
 
 
 SurvfitConfidenceIntervalResult = _core.ConfidenceBands
-
-
-# ---------------------------------------------------------------------------
-# Results of the R functions in ``_misc``: survcheck, brier, yates, pspline, statefig.
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

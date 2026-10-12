@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Rebuild raw-response and rate-array print references with R survival.
 suppressPackageStartupMessages(library(survival))
 
 suppressPackageStartupMessages(library(jsonlite))

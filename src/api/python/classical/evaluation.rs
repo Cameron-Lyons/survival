@@ -36,7 +36,7 @@ fn concordance_options(
     })
 }
 
-/// R's `concordancefit` for right-censored data.
+#[doc = " R's `concordancefit` for right-censored data."]
 #[pyfunction(name = "concordancefit")]
 #[pyo3(signature = (survival, x, weights=None, strata=None, cluster=None, timewt="n", ymin=None, ymax=None, influence=0, ranks=false, reverse=false, timefix=true, keepstrata=10, std_err=true))]
 #[allow(clippy::too_many_arguments)]
@@ -73,7 +73,7 @@ fn concordancefit_py(
     })?)
 }
 
-/// R's `concordancefit` for (start, stop] data.
+#[doc = " R's `concordancefit` for (start, stop] data."]
 #[pyfunction(name = "concordancefit_counting")]
 #[pyo3(signature = (counting, x, weights=None, strata=None, cluster=None, timewt="n", ymin=None, ymax=None, influence=0, ranks=false, reverse=false, timefix=true, keepstrata=10, std_err=true))]
 #[allow(clippy::too_many_arguments)]
@@ -110,7 +110,7 @@ fn concordancefit_counting_py(
     })?)
 }
 
-/// `coxscore2`: score residuals (`n x p`) of a right-censored Cox model.
+#[doc = " `coxscore2`: score residuals (`n x p`) of a right-censored Cox model."]
 #[pyfunction(name = "coxscore2")]
 #[pyo3(signature = (survival, covariates, score, weights=None, strata=None, ties="efron"))]
 fn coxscore2_py(
@@ -137,7 +137,7 @@ fn coxscore2_py(
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
 
-/// `agscore3`: score residuals (`n x p`) of a Cox model on (start, stop] data.
+#[doc = " `agscore3`: score residuals (`n x p`) of a Cox model on (start, stop] data."]
 #[pyfunction(name = "agscore3")]
 #[pyo3(signature = (counting, covariates, score, weights=None, strata=None, ties="efron"))]
 fn agscore3_py(
@@ -164,7 +164,7 @@ fn agscore3_py(
     Ok(resid.outer_iter().map(|row| row.to_vec()).collect())
 }
 
-/// `coxscho`: Schoenfeld residuals of a right-censored Cox model.
+#[doc = " `coxscho`: Schoenfeld residuals of a right-censored Cox model."]
 #[pyfunction(name = "schoenfeld_residuals")]
 #[pyo3(signature = (survival, covariates, score, weights=None, strata=None, ties="efron"))]
 fn schoenfeld_residuals_py(
@@ -190,7 +190,7 @@ fn schoenfeld_residuals_py(
     })?)
 }
 
-/// `coxscho`: Schoenfeld residuals of a Cox model on (start, stop] data.
+#[doc = " `coxscho`: Schoenfeld residuals of a Cox model on (start, stop] data."]
 #[pyfunction(name = "schoenfeld_residuals_counting")]
 #[pyo3(signature = (counting, covariates, score, weights=None, strata=None, ties="efron"))]
 fn schoenfeld_residuals_counting_py(

@@ -1,37 +1,27 @@
-//! R's `totimeline` (`R/fromtimeline.R`), the reverse of `surv2counting`:
-//! turn counting-process rows `(time1, time2, state)` into timeline rows.
-//! A subject with `k` intervals yields `k + 1` rows: its entry time with
-//! the initial state, then the end of every interval with its outcome.
-//! R ships this function as an untested draft; the row bookkeeping here
-//! follows it, with the initial state supplied by the caller.
-
 use super::id_value::{IdValue, SubjectId};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 
-/// Timeline rows.
+#[doc = " Timeline rows."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct TotimelineResult {
-    /// Zero-based input row that supplies the time and state.
+    #[doc = " Zero-based input row that supplies the time and state."]
     #[pyo3(get)]
     pub time_row: Vec<usize>,
-    /// Zero-based input row that supplies the covariates (a subject's last
-    /// row is repeated for its final time point).
+    #[doc = " Zero-based input row that supplies the covariates (a subject's last"]
+    #[doc = " row is repeated for its final time point)."]
     #[pyo3(get)]
     pub covariate_row: Vec<usize>,
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// State at `time`: `istate` on a subject's first row, the interval's
-    /// outcome otherwise (0 for censored).
+    #[doc = " State at `time`: `istate` on a subject's first row, the interval's"]
+    #[doc = " outcome otherwise (0 for censored)."]
     #[pyo3(get)]
     pub state: Vec<i32>,
 }
 
-/// Convert counting-process rows to timeline rows.  Rows of a subject
-/// must be consecutive and in time order; `istate` is the state each row
-/// starts in (only the first row of a subject is used).
 pub fn totimeline<I: SubjectId>(
     id: &[I],
     time1: &[f64],
@@ -75,7 +65,7 @@ pub fn totimeline<I: SubjectId>(
     Ok(out)
 }
 
-/// Python entry point of [`totimeline`].
+#[doc = " Python entry point of [`totimeline`]."]
 #[pyfunction(name = "totimeline")]
 pub fn totimeline_py(
     id: Vec<IdValue>,

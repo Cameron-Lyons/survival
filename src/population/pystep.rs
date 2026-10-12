@@ -1,25 +1,9 @@
-//! Port of R survival's `src/pystep.c`: how long a subject stays in the
-//! current cell of a multi-way table before crossing a cutpoint, and the
-//! linear index of that cell.  Shared by `pyears1` and `pyears3b`.
-
-/// The time spent in the current cell and where that cell is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PystepResult {
-    /// Time spent in the cell (or off the table when `index` is `None`).
     pub time: f64,
-    /// Linear (column-major) index of the cell, `None` when off table.
     pub index: Option<usize>,
 }
 
-/// One dimension of the table as `pystep` sees it.
-///
-/// `factors[i]` is 1 for a factor dimension and 0 for a continuous one, R's
-/// `rfac` for a table with a `type` attribute (`RateTable::factor_flags`);
-/// the C code's interpolation of the `rfac > 1` year axis of old-style
-/// tables is not ported.  For `edge == false` the cutpoints of a continuous
-/// dimension hold one extra upper limit (`dims[i] + 1` values) and time
-/// outside them is reported off table; for `edge == true` the table extends
-/// infinitely at both ends.
 pub struct PystepTable<'a> {
     pub factors: &'a [i32],
     pub dims: &'a [usize],
@@ -27,9 +11,6 @@ pub struct PystepTable<'a> {
     pub edge: bool,
 }
 
-/// `pystep(nc, index, index2, wt, data, fac, dims, cuts, step, edge)` without
-/// the `index2` and `wt` outputs of the old-style year interpolation: the time
-/// until the next cutpoint (at most `step`) and the cell it is spent in.
 pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult {
     let mut index = 0usize;
     let mut stride = 1usize;
@@ -44,14 +25,12 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
             let mut j = cuts[..dim].partition_point(|&cut| data[i] >= cut);
 
             if j == 0 {
-                // Less than the first cutpoint.
                 let temp = cuts[0] - data[i];
                 if !table.edge && temp > shortfall {
                     shortfall = temp.min(step);
                 }
                 max_time = max_time.min(temp);
             } else if j == dim {
-                // Beyond the last cutpoint.
                 if !table.edge {
                     let temp = cuts[j] - data[i];
                     if temp <= 0.0 {
@@ -83,12 +62,6 @@ pub fn pystep(table: &PystepTable<'_>, data: &[f64], step: f64) -> PystepResult 
     }
 }
 
-/// `pystep(table, data, f64::INFINITY)` for an `edge == true` table, also
-/// giving the cutpoint that ends the cell along each dimension in `limits`
-/// (`INFINITY` past the last cutpoint and for a factor).  While every
-/// `data[i] < limits[i]` the cell is unchanged and `pystep`'s time is the
-/// least `limits[i] - data[i]`, so a subject moving through the cell needs no
-/// new search of the cutpoints.
 pub fn pystep_cell(table: &PystepTable<'_>, data: &[f64], limits: &mut [f64]) -> PystepResult {
     debug_assert!(table.edge);
     let mut index = 0usize;

@@ -43,10 +43,6 @@ from ._coerce import (
 from ._surv_ops import _SurvivalOperations
 from ._types import _MISSING, StrataFactor, Timeline
 
-# ---------------------------------------------------------------------------
-# Surv
-# ---------------------------------------------------------------------------
-
 
 def _normalize_surv_type(value: Any) -> str:
     """R's ``match.arg(type)`` for ``Surv`` (``"mstate"`` accepted, deprecated in R)."""
@@ -303,7 +299,7 @@ class Surv(_SurvivalOperations):
         elif surv_type == "interval2":
             time, time2, status = _interval2_columns(time, args[1])
             surv_type = "interval"
-        else:  # interval
+        else:
             status = _interval_status(args[2])
             if len(status) != nn:
                 raise ValueError("Time and status are different lengths")
@@ -344,7 +340,6 @@ class Surv(_SurvivalOperations):
         """Owned, complete status codes for kernels that cannot accept missing rows."""
         if None in self.event:
             raise ValueError("missing values in the response")
-        # Surv normalizes observed statuses to integers during construction.
         return list(cast(tuple[int, ...], self.event))
 
     def as_matrix(self) -> list[list[Any]]:
@@ -481,7 +476,6 @@ def _missing_rows(x: Surv | Surv2) -> np.ndarray:
     missing = np.zeros(len(x), dtype=bool)
     for column in columns:
         if column is not None:
-            # float() of None is NaN here, so the status column's NA shows too
             missing |= np.isnan(np.array(column, dtype=np.float64))
     return missing
 
@@ -606,9 +600,6 @@ def _apply_surv_na_action(
     return response.subset(keep), filtered, sorted(missing)
 
 
-# --- helpers other modules build on ------------------------------------------
-
-
 def _survreg_response_arrays(
     response: Surv,
 ) -> tuple[list[float], list[float], list[float] | None]:
@@ -631,11 +622,6 @@ def _survreg_response_arrays(
             list(response.time2 or ()),
         )
     raise NotImplementedError("survreg supports right, left, and interval Surv responses")
-
-
-# ---------------------------------------------------------------------------
-# strata and cluster
-# ---------------------------------------------------------------------------
 
 
 def _strata_iterator(values: Any) -> Any:
@@ -784,11 +770,6 @@ def cluster(x: _T) -> _T:
     formula, where ``cluster(id)`` names the groups of a robust variance."""
 
     return x
-
-
-# ---------------------------------------------------------------------------
-# Surv2 and the timeline conversions
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, init=False, eq=False)

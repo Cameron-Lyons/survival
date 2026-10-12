@@ -110,7 +110,6 @@ def test_callback_batches_levels_and_runs_once_per_draw():
     close(actual.estimate["pmm"], point)
     simulated = np.array([logistic(batch).reshape(3, -1).mean(axis=1) for batch in batches[1:]])
     close(actual.mvar, np.cov(simulated, rowvar=False))
-    # The point estimate averages the response at fitted coefficients.
     assert not np.allclose(actual.estimate["pmm"], simulated.mean(axis=0))
 
 
@@ -142,11 +141,11 @@ def test_results_release_model_and_callback_and_roundtrip():
     del value, link
     gc.collect()
     assert all(ref() is None for ref in refs)
-    restored = pickle.loads(pickle.dumps(result))  # noqa: S301 - own round-trip data
+    restored = pickle.loads(pickle.dumps(result))
     assert restored.estimate == result.estimate
     assert restored.mvar == result.mvar
     value = replace(model(case), family={"linkinv": logistic})
-    restored_model = pickle.loads(pickle.dumps(value))  # noqa: S301
+    restored_model = pickle.loads(pickle.dumps(value))
     assert fit(case, restored_model).estimate == result.estimate
 
 

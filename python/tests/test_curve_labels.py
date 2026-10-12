@@ -41,7 +41,7 @@ def test_current_r_curve_labels(case):
     cox = r.coxph(f"{response}~x", data, id="id", iter_max=0)
     compare_table(cox.transitions, case["cox"])
     compare_table(r.survfit(cox, newdata={"x": [0.25, 0.75]}).transitions, case["prediction"])
-    for converted in (r.survfit0(curve), pickle.loads(pickle.dumps(curve))):  # noqa: S301
+    for converted in (r.survfit0(curve), pickle.loads(pickle.dumps(curve))):
         assert converted.clabel == case["label"]
         compare_table(converted.transitions, case["curve"]["transitions"])
     for part in survival.r_api._survfit_strata_curves(curve).values():
@@ -55,7 +55,6 @@ def test_numeric_survcheck_uses_current_censor_label():
 
 
 def test_grouped_counting_curves_retain_internal_events():
-    # R 3.8-12's grouped time grid accidentally omits these internal events.
     y = r.Surv([0, 2, 0, 3, 0, 4, 0, 5], [2, 5, 3, 6, 4, 7, 5, 8], [0, 1, 1, 0, 0, 1, 1, 0])
     fit = r.survfit(y, group=["a"] * 4 + ["b"] * 4, id=[1, 1, 2, 2, 3, 3, 4, 4])
     assert fit.time == [3, 5, 6, 5, 7, 8]

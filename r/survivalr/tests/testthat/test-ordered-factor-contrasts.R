@@ -92,7 +92,6 @@ test_that("explicit factor contrasts and configured defaults override polynomial
     expected <- fit("survival")
     nd <- d[c(3L, 1L, 2L), ]
     .ordered_factor_compare(actual, expected, nd)
-    # R serialization retains both fitted coding and source class metadata.
     restored <- unserialize(serialize(actual, NULL))
     .ordered_factor_compare(restored, expected, nd)
   }

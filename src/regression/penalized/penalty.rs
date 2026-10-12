@@ -1,21 +1,3 @@
-//! The penalty terms of a penalised Cox model: R survival's `ridge()`
-//! (`R/ridge.R`), `pspline()` (the penalty side of `R/pspline.R`; the basis
-//! is `core::pspline_basis`) and `frailty()` (`R/frailty.R`,
-//! `R/frailty.gamma.R`, `R/frailty.gaussian.R`, `R/frailty.t.R`).
-//!
-//! Each R term is a `coxph.penalty` object carrying a `pfun` (the penalty
-//! and its first two derivatives at the current coefficients, evaluated once
-//! per Newton iteration), a `cfun` (the outer-loop rule that chooses the
-//! next smoothing parameter `theta`, see [`super::control`]), the `cparm`
-//! and `pparm` those functions read, and the `diag`/`sparse` flags telling
-//! `coxpenal.fit` how the second derivative is stored.  [`PenaltyTerm`]
-//! holds that information as data; [`PenaltyTerm::evaluate`] is the `pfun`.
-//!
-//! With the `python` feature a user-defined penalty can be supplied as a
-//! Python callable ([`PenaltyTerm::Callback`]) following the contract of
-//! `cox_callback`: it returns the C-level `coxlist` (R's `cox_Rcallback.c`)
-//! for its coefficients.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::lgammafn;
 use ndarray::Array2;
@@ -24,37 +6,36 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "python")]
 use std::sync::Arc;
 
-/// What a penalty function hands back for one call, R's `coxlist1`/`coxlist2`.
-///
-/// Lengths are the penalty function's responsibility, exactly as in R, where
-/// `coxpenal.fit` checks them before the C code reads the buffers: `coef` and
-/// `first` have one entry per penalised coefficient, `second` holds either the
-/// diagonal (`p` entries) or the full matrix (`p * p` entries, column-major),
-/// and `flag` has one entry (`which == 1`) or one per coefficient.
-///
-/// The signs are the C code's: `first` and `penalty` are the negatives of
-/// the term's derivative and penalty (`coxpenal.fit` negates the `pfun`
-/// values so that the kernel can add them to the score and the log
-/// likelihood), and `coef` holds the coefficients after any recentring.
+#[doc = " What a penalty function hands back for one call, R's `coxlist1`/`coxlist2`."]
+#[doc = ""]
+#[doc = " Lengths are the penalty function's responsibility, exactly as in R, where"]
+#[doc = " `coxpenal.fit` checks them before the C code reads the buffers: `coef` and"]
+#[doc = " `first` have one entry per penalised coefficient, `second` holds either the"]
+#[doc = " diagonal (`p` entries) or the full matrix (`p * p` entries, column-major),"]
+#[doc = " and `flag` has one entry (`which == 1`) or one per coefficient."]
+#[doc = ""]
+#[doc = " The signs are the C code's: `first` and `penalty` are the negatives of"]
+#[doc = " the term's derivative and penalty (`coxpenal.fit` negates the `pfun`"]
+#[doc = " values so that the kernel can add them to the score and the log"]
+#[doc = " likelihood), and `coef` holds the coefficients after any recentring."]
 #[pyclass(module = "survival._survival", frozen, get_all, skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoxPenaltyTerms {
-    /// Coefficients after any recentring the penalty function applied.
+    #[doc = " Coefficients after any recentring the penalty function applied."]
     pub coef: Vec<f64>,
-    /// First derivative of the penalty.
+    #[doc = " First derivative of the penalty."]
     pub first: Vec<f64>,
-    /// Second derivative of the penalty, diagonal or full.
+    #[doc = " Second derivative of the penalty, diagonal or full."]
     pub second: Vec<f64>,
-    /// The penalty's contribution to the log-likelihood.
+    #[doc = " The penalty's contribution to the log-likelihood."]
     pub penalty: f64,
-    /// "Force this term to zero" flags.
+    #[doc = " \"Force this term to zero\" flags."]
     pub flag: Vec<bool>,
 }
 
 crate::internal::pickle::picklable!(CoxPenaltyTerms);
 
 impl CoxPenaltyTerms {
-    /// R's initial `coxlist1`/`coxlist2`: zeros, nothing flagged.
     pub(crate) fn zeros(p: usize, second_len: usize, flags: usize) -> Self {
         Self {
             coef: vec![0.0; p],
@@ -66,51 +47,30 @@ impl CoxPenaltyTerms {
     }
 }
 
-/// The value of a term's `pfun` at one set of coefficients (R's
-/// `list(recenter, first, second, penalty, flag)`), on the R side of the
-/// sign convention: `penalty` is subtracted from the log likelihood and
-/// `first` is its gradient.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PenaltyValue {
-    /// The coefficients after the term recentred them (`coef - recenter`),
-    /// or the input coefficients when the term does not recentre.
     pub coef: Vec<f64>,
-    /// Gradient of the penalty; unused (and stale in R) when `flag` is set.
     pub first: Vec<f64>,
-    /// The diagonal (length `p`, or a single value R recycles) or the full
-    /// column-major matrix (`p * p`) of second derivatives.
     pub second: Vec<f64>,
     pub penalty: f64,
-    /// `TRUE` forces the term's coefficients to zero this iteration (a
-    /// frailty with `theta = 0`, a `pspline` with `theta >= 1`).
     pub flag: bool,
 }
 
-/// How `pspline()` chooses its smoothing parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PsplineMethod {
-    /// `theta` given: no calibration (`0 < theta < 1`).
     Fixed(f64),
-    /// Calibrate `theta` to the target degrees of freedom
-    /// (`frailty.controldf`).
     Df(f64),
-    /// Minimise the AIC (`df = 0` or `method = "aic"`, `frailty.controlaic`).
     Aic,
 }
 
-/// The distribution of a `frailty()` term (R's `distribution` argument).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FrailtyFamily {
     Gamma,
     Gaussian,
-    /// Student t with `tdf` degrees of freedom (`frailty.t(tdf = )`).
     T(f64),
 }
 
 impl FrailtyFamily {
-    /// `frailty(distribution = )`: R's `pmatch(distribution, c("gamma",
-    /// "gaussian", "t"))`, an exact name or an unambiguous prefix of one;
-    /// anything else names a missing `frailty.<distribution>` function.
     pub fn parse(name: &str, tdf: f64) -> SurvivalResult<Self> {
         let families = [Self::Gamma, Self::Gaussian, Self::T(tdf)];
         let exact = families.into_iter().find(|family| family.r_name() == name);
@@ -128,7 +88,6 @@ impl FrailtyFamily {
         })
     }
 
-    /// The R distribution name.
     pub fn r_name(self) -> &'static str {
         match self {
             Self::Gamma => "gamma",
@@ -138,18 +97,12 @@ impl FrailtyFamily {
     }
 }
 
-/// How a `frailty()` term chooses its variance `theta`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrailtyMethod {
-    /// Gamma only: the EM-equivalent profile likelihood (`frailty.controlgam`).
     Em,
-    /// Gaussian only: REML (`frailty.controlgauss`).
     Reml,
-    /// Minimise the (corrected) AIC (`frailty.controlaic`).
     Aic,
-    /// Calibrate to a target degrees of freedom (`frailty.controldf`).
     Df,
-    /// `theta` given.
     Fixed,
 }
 
@@ -185,79 +138,44 @@ impl FrailtyMethod {
     }
 }
 
-/// `ridge(..., theta, df = nvar/2, eps = .1, scale = TRUE)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RidgePenalty {
-    /// A fixed `theta`; `None` calibrates to `df`.
     pub theta: Option<f64>,
-    /// Target degrees of freedom; `None` is R's default `nvar / 2`.
     pub df: Option<f64>,
     pub eps: f64,
-    /// Scale the penalty of each column by its variance (`pparm`).
     pub scale: bool,
-    /// The column variances R's `ridge()` computes in `model.frame`, over
-    /// each column's non-missing values before `subset` and `na.action`;
-    /// `None` takes them from the rows fitted.
     pub scale_values: Option<Vec<f64>>,
 }
 
-/// The penalty side of `pspline(x, df = 4, theta, nterm = 2.5 * df, eps = .1,
-/// method, intercept = FALSE, ...)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PsplinePenalty {
     pub method: PsplineMethod,
-    /// Number of interior knot intervals; with the degree it sets the
-    /// basis size (`nterm + degree`, minus the dropped intercept column).
     pub nterm: usize,
-    /// Whether the basis keeps its first column (R's `intercept = TRUE`).
     pub intercept: bool,
     pub eps: f64,
 }
 
-/// `frailty(x, distribution, sparse, theta, df, eps, method, tdf, ...)`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrailtyPenalty {
     pub distribution: FrailtyFamily,
     pub method: FrailtyMethod,
-    /// The variance of the random effect (`method = "fixed"`).
     pub theta: Option<f64>,
-    /// Target degrees of freedom (`method = "df"`); the search starts from
-    /// `3 * df / n` (R's `guess`).
     pub df: Option<f64>,
-    /// Convergence tolerance of the outer iteration; `None` is R's fallback
-    /// to `sqrt(coxph.control()$eps)` (the `eps2` entry `coxpenal.fit`
-    /// appends to every `cparm`, reached through partial matching when the
-    /// term itself sets no `eps`, as `frailty.gaussian` never does).
     pub eps: Option<f64>,
-    /// Use the corrected AIC for `method = "aic"` (`caic = TRUE`).
     pub caic: bool,
-    /// Sparse handling: the term is a single column of group codes fitted
-    /// through the frailty kernel; otherwise its columns are the indicator
-    /// matrix of the groups.
     pub sparse: bool,
-    /// Starting values of `theta` for the `em` and `reml` searches (R's
-    /// `init` passed through `...`).
     pub init: Option<Vec<f64>>,
-    /// The `n` of the `df` guess: R's `length(unclass(x))`, the model-frame
-    /// rows before `subset` and `na.action`; `None` is the rows fitted.
     pub n: Option<usize>,
 }
 
-/// A user-defined penalty evaluated in Python (the `cox_callback` contract):
-/// `fexpr(coef, which=which)` returns the C-level `coxlist` for the term's
-/// coefficients.  `theta` is the callable's own business, so the outer loop
-/// treats the term as fixed.
 #[cfg(feature = "python")]
 #[derive(Debug, Clone)]
 pub struct CallbackPenalty {
     pub fexpr: Arc<Py<PyAny>>,
-    /// `second` is the diagonal (`true`) or the full matrix.
     pub diag: bool,
     pub sparse: bool,
 }
 
-/// One penalised term of the model: which R penalty it is and its arguments.
-/// A callback has no serde form: `CoxPenalty` pickles its callable instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PenaltyTerm {
     Ridge(RidgePenalty),
@@ -272,9 +190,6 @@ pub enum PenaltyTerm {
 }
 
 impl PenaltyTerm {
-    /// `ridge(..., theta, df, eps, scale)`: exactly one of `theta` and `df`
-    /// may be given; `scale_values` are the column variances of the model
-    /// frame (see [`RidgePenalty::scale_values`]).
     pub fn ridge(
         theta: Option<f64>,
         df: Option<f64>,
@@ -296,10 +211,6 @@ impl PenaltyTerm {
         }))
     }
 
-    /// `pspline(df, theta, nterm, eps, method)` argument resolution: `theta`
-    /// fixes the smoothing parameter, `df = 0` or `method = "aic"` switches
-    /// to the AIC search (with `nterm = 15` and `eps = 1e-5` unless given),
-    /// otherwise `theta` is calibrated to `df` (`nterm = round(2.5 * df)`).
     pub fn pspline(
         df: f64,
         theta: Option<f64>,
@@ -350,12 +261,6 @@ impl PenaltyTerm {
         }))
     }
 
-    /// `frailty(x, distribution, sparse, theta, df, eps, method, tdf, caic,
-    /// init)`: the argument checks of `frailty.gamma`, `frailty.gaussian`
-    /// and `frailty.t`.  `method = None` is R's missing `method`: `theta`
-    /// gives `fixed`, `df` gives `df` (`aic` for `df = 0` outside the gamma
-    /// family), else the family's default.  `n` is the length of `x` (see
-    /// [`FrailtyPenalty::n`]).
     #[allow(clippy::too_many_arguments)]
     pub fn frailty(
         distribution: FrailtyFamily,
@@ -436,9 +341,6 @@ impl PenaltyTerm {
                 "Cannot give both a df and theta argument",
             ));
         }
-        // The R defaults of `eps`: 1e-5 for the gamma and t families, 0.1
-        // for their `df` method when eps was not given; frailty.gaussian
-        // has no eps argument at all.
         let eps = match distribution {
             FrailtyFamily::Gaussian => eps,
             _ => Some(eps.unwrap_or(if method == FrailtyMethod::Df {
@@ -460,7 +362,6 @@ impl PenaltyTerm {
         }))
     }
 
-    /// The term is fitted through the sparse frailty kernel.
     pub fn is_sparse(&self) -> bool {
         match self {
             Self::Ridge(_) | Self::Pspline(_) => false,
@@ -472,7 +373,6 @@ impl PenaltyTerm {
         }
     }
 
-    /// R's `diag` attribute: the second derivative is a diagonal.
     pub fn is_diagonal(&self) -> bool {
         match self {
             Self::Ridge(_) | Self::Frailty(_) => true,
@@ -484,7 +384,6 @@ impl PenaltyTerm {
         }
     }
 
-    /// The R function the term comes from.
     pub fn r_name(&self) -> &'static str {
         match self {
             Self::Ridge(_) => "ridge",
@@ -495,9 +394,6 @@ impl PenaltyTerm {
         }
     }
 
-    /// The term's `pparm` for its design columns (`x`, `n x p`): the column
-    /// variances of a scaled `ridge` (the model frame's when given, else
-    /// those of `x`), the difference-penalty matrix of a `pspline`.
     pub(crate) fn pparm(&self, x: &Array2<f64>) -> SurvivalResult<Pparm> {
         Ok(match self {
             Self::Ridge(term) if term.scale => match &term.scale_values {
@@ -513,7 +409,6 @@ impl PenaltyTerm {
                     x.columns()
                         .into_iter()
                         .map(|column| {
-                            // R's var(): the n - 1 denominator.
                             let n = column.len() as f64;
                             let mean = column.sum() / n;
                             column.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0)
@@ -526,9 +421,6 @@ impl PenaltyTerm {
         })
     }
 
-    /// The term's `pfun` at `coef` for the smoothing parameter `theta`
-    /// (R's `n.eff` argument is unused by every built-in penalty); `which`
-    /// (1 sparse, 2 dense) is handed to a callback penalty.
     #[cfg_attr(not(feature = "python"), expect(unused_variables))]
     pub(crate) fn evaluate(
         &self,
@@ -589,7 +481,6 @@ impl PenaltyTerm {
                     .map(|i| (0..p).map(|j| dmat[(i, j)] * coef[j]).sum())
                     .collect();
                 let quad: f64 = coef.iter().zip(&dcoef).map(|(b, d)| b * d).sum();
-                // R's c(dmat * lambda): column-major.
                 let second = (0..p)
                     .flat_map(|j| (0..p).map(move |i| (i, j)))
                     .map(|(i, j)| dmat[(i, j)] * lambda)
@@ -631,8 +522,6 @@ impl PenaltyTerm {
                         )
                     }
                     FrailtyFamily::T(tdf) => {
-                        // Scale constant squared of the density, then one
-                        // Newton-Raphson step towards the centring MLE.
                         let sig = theta * (tdf - 2.0) / tdf;
                         let denom = tdf * sig;
                         let (mut num, mut den) = (0.0, 0.0);
@@ -685,8 +574,6 @@ impl PenaltyTerm {
                     )
                 })
                 .map_err(|err| SurvivalError::computation(err.to_string()))?;
-                // The callback speaks the C-level convention; the
-                // composition in `coxpenal.fit` re-applies the negation.
                 let flag = terms.flag.iter().any(|f| *f);
                 Ok(PenaltyValue {
                     coef: terms.coef,
@@ -700,25 +587,17 @@ impl PenaltyTerm {
     }
 }
 
-/// A term's `pparm`: the extra argument of its `pfun`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Pparm {
     None,
-    /// `ridge(scale = TRUE)`: the variance of each column.
     Scale(Vec<f64>),
-    /// `pspline`: the second-difference penalty matrix `D'D`.
     Dmat(Array2<f64>),
 }
 
-/// `pspline`'s penalty matrix for `ncols` design columns: `D'D` for the
-/// second-difference operator over the full basis (`ncols + 1` functions
-/// when the intercept column was dropped), with the intercept row and
-/// column removed.
 fn difference_penalty(ncols: usize, intercept: bool) -> Array2<f64> {
     let nvar = if intercept { ncols } else { ncols + 1 };
     let mut dmat = Array2::zeros((nvar, nvar));
     if nvar >= 3 {
-        // Row r of D is (1, -2, 1) at columns r, r + 1, r + 2.
         for r in 0..nvar - 2 {
             let weights = [1.0, -2.0, 1.0];
             for (i, wi) in weights.iter().enumerate() {
@@ -763,7 +642,6 @@ mod tests {
         assert_eq!(out.second, vec![2.0]);
         assert!(PenaltyTerm::ridge(Some(1.0), Some(2.0), 0.1, true, None).is_err());
 
-        // The model frame's variances replace those of the fitted columns.
         let framed = PenaltyTerm::ridge(Some(2.0), None, 0.1, true, Some(vec![3.0, 0.5])).unwrap();
         assert_eq!(framed.pparm(&x).unwrap(), Pparm::Scale(vec![3.0, 0.5]));
         let short = PenaltyTerm::ridge(Some(2.0), None, 0.1, true, Some(vec![3.0])).unwrap();
@@ -781,7 +659,6 @@ mod tests {
         let Pparm::Dmat(dmat) = term.pparm(&x).unwrap() else {
             panic!("dmat")
         };
-        // Full 5 x 5 D'D with the first row/column dropped.
         assert_eq!(dmat.shape(), &[4, 4]);
         assert_eq!(dmat[(0, 0)], 5.0);
         assert_eq!(dmat[(0, 1)], -4.0);
@@ -934,7 +811,6 @@ mod tests {
             FrailtyFamily::parse("t", 7.0).unwrap(),
             FrailtyFamily::T(7.0)
         );
-        // Ambiguous prefixes and other cases name a missing function, as in R.
         for name in ["g", "ga", "Gamma", "", "weibull"] {
             let message = FrailtyFamily::parse(name, 5.0).unwrap_err().to_string();
             assert!(message.contains(&format!("Function 'frailty.{name}' not found")));

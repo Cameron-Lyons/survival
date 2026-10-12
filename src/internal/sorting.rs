@@ -1,16 +1,3 @@
-//! Canonical index-sort helpers.
-//!
-//! Each function returns row indices rather than moving the data, so
-//! several parallel vectors can be reordered together.  Ordering is
-//! `f64::total_cmp`, so `NaN` never panics and sorts after `+inf` (before
-//! `-inf` when descending); ties keep their original order (stable), which
-//! is what R's `order()` does.
-//!
-//! The sorts work on `(value, row)` pairs rather than on an index vector:
-//! the keys sit next to each other in memory, which is several times faster
-//! than an indirect comparison sort at a million rows, and the row breaks
-//! ties, so an unstable sort gives the stable order.
-
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -34,23 +21,14 @@ fn ascending(a: &(f64, usize), b: &(f64, usize)) -> Ordering {
     a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1))
 }
 
-/// `keep[order(values[keep])]` for increasing rows `keep`: the rows of
-/// `keep` in ascending order of `values`, ties in row order.  `parallel`
-/// splits the sort itself over threads; a caller sorting several subsets
-/// at once parallelises over the subsets instead.
 pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
     sort_pairs(keep.iter().copied(), values, parallel, ascending)
 }
 
-/// Indices that order `values` ascending; ties keep input order. This is
-/// R's `order(values)` (zero-based).
 pub(crate) fn sorted_indices_by(values: &[f64]) -> Vec<usize> {
     sort_pairs(0..values.len(), values, true, ascending)
 }
 
-/// Indices that order `time` descending; ties keep input order. This is the
-/// traversal order of the Cox partial likelihood (`coxfit6.c` walks from the
-/// largest time down so risk sets accumulate).
 pub(crate) fn descending_time_indices(time: &[f64]) -> Vec<usize> {
     sort_pairs(0..time.len(), time, true, |a, b| {
         b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1))

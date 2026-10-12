@@ -111,7 +111,6 @@ def make_data(n: int, seed: int) -> pd.DataFrame:
     group = rng.integers(0, 3, size=n)
     event = rng.exponential(size=n) / np.exp(0.5 * x1 - 0.3 * x2 + 0.2 * x3)
     censor = rng.exponential(scale=2.0, size=n)
-    # a coarse grid so ties are common, as in real data
     time_ = np.round(np.minimum(event, censor), 2) + 0.01
     status = (event <= censor).astype(np.int64)
     return pd.DataFrame(
@@ -171,7 +170,7 @@ def r_timings(rscript: str, csv_path: Path, repeat: int) -> dict[str, dict[str, 
         handle.write(R_SCRIPT)
         script = handle.name
     try:
-        proc = subprocess.run(  # noqa: S603 - fixed interpreter, generated script
+        proc = subprocess.run(
             [rscript, "--vanilla", script, str(csv_path), str(repeat)],
             capture_output=True,
             text=True,

@@ -1,42 +1,22 @@
-//! Column-typed parsing of the bundled R `survival` datasets.
-//!
-//! Every dataset is embedded as the CSV produced from R's data frame and
-//! described by a [`Dataset`] entry whose schema records R's storage mode
-//! for each column, so the Python dictionaries round-trip R's types:
-//! `integer` -> `int`, `double` -> `float`, `factor`/`character`/`Date` ->
-//! `str` (dates as ISO-8601 `YYYY-MM-DD`), `logical` -> `bool`, and `NA` ->
-//! `None` in every column. Doubles are written as the shortest decimal that a
-//! correctly rounded parser (such as `str::parse::<f64>`) reads back as the
-//! identical double, so every value is a bit-exact copy of R's.
-
 use super::parser::{Field, parse_header, split_line};
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-/// R storage mode of a dataset column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ColType {
-    /// R `double`.
     Float,
-    /// R `integer`.
     Int,
-    /// R `factor`, `character`, or `Date` (formatted `YYYY-MM-DD`).
     Str,
-    /// R `logical`.
     Bool,
 }
 
-/// One bundled dataset: its R name, embedded CSV text, and column schema in
-/// R's column order.
 pub(crate) struct Dataset {
-    /// The name used by R, e.g. `rhDNase`.
     pub(crate) name: &'static str,
     pub(crate) csv: &'static str,
     pub(crate) schema: &'static [(&'static str, ColType)],
 }
 
-/// A parsed column; `None` marks R's `NA`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Column {
     Float(Vec<Option<f64>>),
@@ -95,7 +75,6 @@ impl Column {
     }
 }
 
-/// A column-oriented copy of an R data frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DataFrame {
     pub(crate) columns: Vec<(&'static str, Column)>,
@@ -120,7 +99,6 @@ impl DataFrame {
 }
 
 impl Dataset {
-    /// Parse the embedded CSV into typed columns following the schema.
     pub(crate) fn parse(&self) -> SurvivalResult<DataFrame> {
         let mut lines = self.csv.lines();
         let header = lines
@@ -168,8 +146,6 @@ impl Dataset {
         Ok(DataFrame { columns })
     }
 
-    /// Build the Python dictionary mapping each column name, in R's column
-    /// order, to its list of values.
     pub(crate) fn to_pydict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let frame = self.parse()?;
         let dict = PyDict::new(py);

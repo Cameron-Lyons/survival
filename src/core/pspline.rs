@@ -1,23 +1,15 @@
-//! The P-spline basis of R's `pspline()` term (survival 3.8-12,
-//! `pspline.R`): `nterm + degree` B-splines on equally spaced knots that
-//! extend `degree` steps beyond each boundary knot, evaluated with
-//! `spline.des`; beyond the boundary the basis is continued linearly,
-//! `f(edge) + (x - edge) f'(edge)`.  The difference penalty, the smoothing
-//! parameter search and the `combine` argument live at the R level
-//! (`pspline.R`, `coxpenal.fit`) and are not ported here.
-
 use crate::core::bspline::spline_design;
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 
-/// The full (intercept-included) P-spline basis and its knots.
+#[doc = " The full (intercept-included) P-spline basis and its knots."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct PsplineBasis {
-    /// `n x (nterm + degree)` basis rows; a missing `x` gives a `NaN` row.
+    #[doc = " `n x (nterm + degree)` basis rows; a missing `x` gives a `NaN` row."]
     #[pyo3(get)]
     pub basis: Vec<Vec<f64>>,
-    /// The `nterm + 2 * degree + 1` equally spaced knots.
+    #[doc = " The `nterm + 2 * degree + 1` equally spaced knots."]
     #[pyo3(get)]
     pub knots: Vec<f64>,
     #[pyo3(get)]
@@ -28,10 +20,6 @@ pub struct PsplineBasis {
     pub boundary_knots: (f64, f64),
 }
 
-/// `pspline(x, nterm, degree, Boundary.knots)` without the penalty
-/// attributes.  `boundary_knots` may be equal only when every observed `x`
-/// equals it (a constant covariate), in which case the middle basis
-/// function is 1 as in R.
 pub fn pspline_basis(
     x: &[f64],
     nterm: usize,
@@ -149,7 +137,6 @@ mod tests {
         for (actual, expected) in out.basis[3][8..].iter().zip(expected_right) {
             assert!((actual - expected).abs() < 1e-12);
         }
-        // At the boundary knots the basis is the B-spline value itself.
         assert!((out.basis[1][0] - 1.0 / 6.0).abs() < 1e-12);
         assert!((out.basis[1][1] - 2.0 / 3.0).abs() < 1e-12);
         assert!((out.basis[1][2] - 1.0 / 6.0).abs() < 1e-12);

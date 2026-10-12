@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Compact stock-R checks for independent competing-risk uncertainty and its fallbacks.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

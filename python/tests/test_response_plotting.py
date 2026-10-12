@@ -137,8 +137,6 @@ def test_graphics_dispatch_coordinates_match_r(case, pyplot):
             )
     expected = [call for call in case["expected"]["calls"] if call["x"]]
     assert len(calls) == len(expected)
-    # R draws censor marks before confidence lines; Matplotlib adds them after.
-    # Compare coordinates in their original order within each artist kind.
     calls.sort(key=lambda call: call["kind"])
     expected.sort(key=lambda call: call["kind"])
     for actual, wanted in zip(calls, expected, strict=True):

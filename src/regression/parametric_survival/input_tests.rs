@@ -313,7 +313,6 @@ fn aft_ignored_upper_endpoints_and_unused_strata_remain_supported() {
         assert_eq!(actual.coefficients, expected.coefficients);
         assert_eq!(actual.loglik, expected.loglik);
     }
-    // Preserve the constructor's existing equal-endpoint semantics.
     input.time2.as_mut().unwrap()[0] = input.time[0];
     input.validate().unwrap();
 }

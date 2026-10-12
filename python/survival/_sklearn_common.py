@@ -77,8 +77,6 @@ def check_array(
     if array.ndim > 0 and array.shape[0] == 0:
         raise ValueError("X must contain at least one sample")
 
-    # NumPy complex scalars in object arrays can also lose their imaginary part
-    # when cast to float64. Check before conversion to avoid that data loss.
     if np.iscomplexobj(array):
         raise ValueError("X must contain only real feature values")
     if array.dtype.kind == "O":
@@ -124,8 +122,6 @@ def _validate_survival_data(
 
     real_values = y_array.dtype.kind in "biuf"
     if y_array.dtype.kind == "O":
-        # Keep ordinary object arrays fast while admitting exact numeric types
-        # such as Decimal and Fraction without first rounding them to float64.
         basic_real_types = (int, float, bool, np.bool_)
         real_values = all(
             type(value) in basic_real_types
@@ -138,8 +134,6 @@ def _validate_survival_data(
     if not real_values:
         raise ValueError("y must contain only real numeric values")
 
-    # Check the original values: both integer casts and float64 casts can turn
-    # invalid event indicators into an exact 0 or 1.
     raw_status = y_array[:, 1]
     try:
         binary_status = ((raw_status == 0) | (raw_status == 1)).all()

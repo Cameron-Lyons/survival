@@ -1,11 +1,3 @@
-//! The outer-loop pieces `coxpenal.fit` (`R/coxpenal.fit.R`) and
-//! `survpenal.fit` (`R/survpenal.fit.R`) share, in the order both functions
-//! use them: the model terms and their checks, `pterms`/`ptype`, the removal
-//! of a sparse frailty column from the design, the penalised terms' `pparm`,
-//! `cfun` and first `theta`, the penalty callbacks `f.expr1`/`f.expr2` with
-//! their persistent `coxlist1`/`coxlist2`, the `cfun` calls after each inner
-//! fit, the restart from the closest earlier `theta` and the `history`.
-
 use super::control::{Control, ControlInput, ControlState};
 use super::df::TermDf;
 use super::penalty::{
@@ -17,18 +9,12 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// One model term: its design columns (R's `assign` entry) and, for a
-/// penalised term, its penalty (`pcols`/`pattr`).
 #[derive(Debug, Clone)]
 pub struct ModelTerm {
     pub columns: Vec<usize>,
     pub penalty: Option<PenaltyTerm>,
 }
 
-/// The model terms of a design with `ncol` columns from R's `pcols`
-/// (the columns of each penalised term), `pattr` (their penalties) and
-/// `assign` (the columns of every term; by default the penalised groups
-/// plus one term per remaining column, in column order).
 pub(crate) fn model_terms(
     ncol: usize,
     penalties: Vec<PenaltyTerm>,
@@ -66,9 +52,6 @@ pub(crate) fn model_terms(
     Ok(terms)
 }
 
-/// The checks of the model terms against a design with `ncol` columns:
-/// every column belongs to exactly one term, at least one term is
-/// penalised, and there is at most one sparse term, of a single column.
 pub(crate) fn validate_terms(ncol: usize, terms: &[ModelTerm]) -> SurvivalResult<()> {
     let mut owner = vec![None; ncol];
     for (t, term) in terms.iter().enumerate() {
@@ -115,56 +98,46 @@ pub(crate) fn validate_terms(ncol: usize, terms: &[ModelTerm]) -> SurvivalResult
     Ok(())
 }
 
-/// The search history of one penalised term (`fit$history[[i]]`).
+#[doc = " The search history of one penalised term (`fit$history[[i]]`)."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object)]
 pub struct PenaltyHistory {
-    /// Index of the model term.
+    #[doc = " Index of the model term."]
     #[pyo3(get)]
     pub term: usize,
-    /// The last theta the search proposed (the fit used the previous one
-    /// when the search stopped).
+    #[doc = " The last theta the search proposed (the fit used the previous one"]
+    #[doc = " when the search stopped)."]
     #[pyo3(get)]
     pub theta: f64,
     #[pyo3(get)]
     pub done: bool,
-    /// One row per outer iteration (plus the known starting points of a
-    /// `df` search), columns named by `columns`.
+    #[doc = " One row per outer iteration (plus the known starting points of a"]
+    #[doc = " `df` search), columns named by `columns`."]
     #[pyo3(get)]
     pub history: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub columns: Vec<String>,
-    /// The corrected log likelihood of a gamma frailty (`c.loglik`).
+    #[doc = " The corrected log likelihood of a gamma frailty (`c.loglik`)."]
     #[pyo3(get)]
     pub c_loglik: Option<f64>,
-    /// `frailty.controldf`'s bisection counter.
+    #[doc = " `frailty.controldf`'s bisection counter."]
     #[pyo3(get)]
     pub half: Option<i64>,
 }
 
 crate::internal::pickle::picklable!(PenaltyHistory);
 
-/// R's `cox_callback`: evaluates the penalty functions at `coef` (which the
-/// callback may recentre in place) and returns the C-level `coxlist` —
-/// `first` and `penalty` already negated, `second` diagonal or full.
-/// `which` is 1 for the sparse frailty term and 2 for the dense terms.
 pub(crate) trait PenaltyCallback {
     fn call(&mut self, which: i32, coef: &mut [f64]) -> SurvivalResult<&CoxPenaltyTerms>;
 }
 
-/// The terms present, R's `ptype`: 1 or 3 with a sparse term, 2 or 3 with
-/// dense penalised terms.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PenaltyShape {
     pub sparse: bool,
     pub dense: bool,
-    /// The dense second derivative is a full matrix (R's `full.imat`,
-    /// `pdiag`), else a diagonal.
     pub full_imat: bool,
 }
 
-/// `pterms` (per model term: 0 ordinary, 1 penalised, 2 sparse), the
-/// position of the sparse term and the [`PenaltyShape`].
 pub(crate) fn penalty_shape(terms: &[ModelTerm]) -> (Vec<u8>, Option<usize>, PenaltyShape) {
     let pterms: Vec<u8> = terms
         .iter()
@@ -187,10 +160,6 @@ pub(crate) fn penalty_shape(terms: &[ModelTerm]) -> (Vec<u8>, Option<usize>, Pen
     (pterms, sparse_term, shape)
 }
 
-/// Removes the sparse term's column from the design `x`: the dense design,
-/// R's `assign2` (the columns of each term in it; the sparse term keeps its
-/// original column), the 0-based group of every row
-/// (`match(x, sort(unique(x)))`) and the number of groups.
 #[allow(clippy::type_complexity)]
 pub(crate) fn drop_sparse_column(
     x: ArrayView2<'_, f64>,
@@ -233,28 +202,18 @@ pub(crate) fn drop_sparse_column(
     }
 }
 
-/// A penalised term with its fit-time state: `pparm`, `cfun`, the current
-/// `theta` and the search state.
 pub(crate) struct TermState<'a> {
-    /// Position in the data's `terms`.
     pub index: usize,
     pub term: &'a PenaltyTerm,
-    /// Columns in the dense design (empty for the sparse term).
     pub columns: Vec<usize>,
     pub pparm: Pparm,
     pub control: Control,
     pub state: ControlState,
-    /// Events per group (frailty terms).
     pub events_by_group: Vec<f64>,
     #[cfg(feature = "python")]
     callback_state: Option<super::callbacks::CallbackState>,
 }
 
-/// The penalised terms of `terms` with their `pparm`, `cfun` and first
-/// `theta` (the `cfun(parms, iter = 0)` calls).  `xx` is the dense design,
-/// `assign2` its columns per term, `frailx`/`nfrail` the sparse groups,
-/// `status` the event codes the frailty `cfun`s sum per group and `eps2`
-/// the fallback tolerance `sqrt(eps)` R appends to every `cparm`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_term_states<'a>(
     terms: &'a [ModelTerm],
@@ -282,7 +241,6 @@ pub(crate) fn build_term_states<'a>(
                 Some(frailx) if penalty.is_sparse() => frailx.iter().map(|&g| g as i64).collect(),
                 _ => (0..n)
                     .map(|i| {
-                        // c(group %*% 1:ncol(group)) for an indicator matrix.
                         x_term
                             .row(i)
                             .iter()
@@ -330,23 +288,17 @@ pub(crate) fn build_term_states<'a>(
     Ok(states)
 }
 
-/// The penalty callbacks `f.expr1`/`f.expr2` with their persistent
-/// `coxlist1`/`coxlist2`.
 pub(crate) struct Composer<'a> {
     pub terms: Vec<TermState<'a>>,
     pub neff: f64,
     pub sparse: Option<usize>,
     pub full_imat: bool,
-    /// survpenal.fit's `f.expr1` zeroes `first` and `second` of a flagged
-    /// sparse term; coxpenal.fit's keeps the previous values.
     pub zero_flagged_sparse: bool,
     pub coxlist1: CoxPenaltyTerms,
     pub coxlist2: CoxPenaltyTerms,
 }
 
 impl<'a> Composer<'a> {
-    /// R's initial `coxlist1` (`nfrail` groups) and `coxlist2` (`nvar`
-    /// dense coefficients, a full or diagonal second derivative).
     pub(crate) fn new(
         terms: Vec<TermState<'a>>,
         nfrail: usize,
@@ -429,11 +381,6 @@ impl PenaltyCallback for Composer<'_> {
                     return Err(SurvivalError::computation("Length error in coxlist2"));
                 }
                 if self.full_imat {
-                    // R's tmat[pen.col, pen.col] <- second fills the block
-                    // column-major, recycling a diagonal-only vector (an R
-                    // quirk kept for fidelity: such a term combined with a
-                    // full-matrix term gets its diagonal replicated across
-                    // the block).
                     for col in 0..p {
                         for row in 0..p {
                             list.second[pen_col[col] * nvar + pen_col[row]] =
@@ -454,9 +401,6 @@ impl PenaltyCallback for Composer<'_> {
     }
 }
 
-/// The `cfun` and `cparm` of a term; `ncols` is the number of design
-/// columns of the term, `n` the number of observations and `eps2` R's
-/// fallback tolerance `sqrt(control$eps)`.
 pub(crate) fn control_of(
     term: &PenaltyTerm,
     ncols: usize,
@@ -549,7 +493,6 @@ pub(crate) fn control_of(
     Ok(control)
 }
 
-/// `tapply(status, group, sum)`: events per group in ascending group order.
 pub(crate) fn events_by_group(groups: &[i64], status: &[i32]) -> Vec<f64> {
     let mut sums = BTreeMap::new();
     for (&g, &s) in groups.iter().zip(status) {
@@ -558,11 +501,6 @@ pub(crate) fn events_by_group(groups: &[i64], status: &[i32]) -> Vec<f64> {
     sums.into_values().collect()
 }
 
-/// The `cfun` calls after outer iteration `outer`: each term gets `plik`
-/// (the likelihood without the penalty), `loglik` (with it), `neff`, its
-/// df and trace from `df` (when the `cfun`s need them) and its
-/// coefficients (`fbeta` for the sparse term, its columns of `beta_dense`
-/// otherwise).  Returns whether every search is done.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn update_controls(
     terms: &mut [TermState<'_>],
@@ -614,9 +552,6 @@ pub(crate) fn update_controls(
     Ok(done)
 }
 
-/// The saved fit whose `theta` is closest to `next` (squared distance),
-/// the first of equally close ones: R's
-/// `min((1:iter)[howclose == min(howclose)])`.
 pub(crate) fn closest_saved(theta_save: &[Vec<f64>], next: &[f64]) -> usize {
     let mut which = 0;
     let mut best = f64::INFINITY;
@@ -630,7 +565,6 @@ pub(crate) fn closest_saved(theta_save: &[Vec<f64>], next: &[f64]) -> usize {
     which
 }
 
-/// The fit's `history`: every penalised term's search.
 pub(crate) fn histories(terms: &[TermState<'_>]) -> Vec<PenaltyHistory> {
     terms
         .iter()

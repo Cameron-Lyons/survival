@@ -86,9 +86,6 @@ def test_training_rejects_zero_rows(name, route):
 
 @pytest.mark.parametrize(("name", "route"), FIT_ROUTES)
 def test_training_rejects_row_dimension_overflow(name, route):
-    # On the previous release this product wraps to zero, then the short time
-    # vector fails safely. Requiring the overflow error proves shape validation
-    # happens before any potentially enormous training allocation.
     with pytest.raises(ValueError, match="overflow|too large"):
         _fit(name, route, [], OVERFLOW_HALF, 2, [1.0, 2.0], [1, 0])
 

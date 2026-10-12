@@ -1,24 +1,16 @@
-//! R's `neardate` (`R/neardate.R`): for every row of one data set, the
-//! row of a second data set with the same identifier and the closest date
-//! on or after (`best = "after"`) or on or before (`best = "prior"`) it.
-
 use super::id_value::{IdValue, SubjectId};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-/// R's `best` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NeardateBest {
-    /// The closest date on or after the query date.
     After,
-    /// The closest date on or before the query date.
     Prior,
 }
 
 impl NeardateBest {
-    /// `match.arg(best)`: a unique prefix of `"after"` or `"prior"`.
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value {
             v if !v.is_empty() && "after".starts_with(v) => Ok(Self::After),
@@ -30,10 +22,6 @@ impl NeardateBest {
     }
 }
 
-/// Zero-based row of data set 2 matched to each row of data set 1, `None`
-/// where there is no match (R's `nomatch`).  Missing dates (`NaN`) in
-/// either set never match.  Among tied dates R keeps the first row for
-/// `after` and the last row for `prior`.
 pub fn neardate<I: SubjectId>(
     id1: &[I],
     y1: &[f64],
@@ -44,8 +32,6 @@ pub fn neardate<I: SubjectId>(
     validate_length(id1.len(), y1.len(), "y1")?;
     validate_length(id2.len(), y2.len(), "y2")?;
 
-    // Rows of data set 2 with a usable date, grouped by id and sorted by
-    // date (stable, so ties keep data order).
     let mut by_id: HashMap<I::Key, Vec<(f64, usize)>> = HashMap::new();
     for (row, (id, &date)) in id2.iter().zip(y2).enumerate() {
         if !date.is_nan() {
@@ -89,7 +75,7 @@ pub fn neardate<I: SubjectId>(
         .collect())
 }
 
-/// Python entry point of [`neardate`].
+#[doc = " Python entry point of [`neardate`]."]
 #[pyfunction(name = "neardate")]
 #[pyo3(signature = (id1, y1, id2, y2, best="after"))]
 pub fn neardate_py(
@@ -106,7 +92,6 @@ pub fn neardate_py(
 mod tests {
     use super::*;
 
-    /// The example from `?neardate`, with R's one-based answers.
     fn doc_example() -> (Vec<i64>, Vec<f64>, Vec<i64>, Vec<f64>) {
         (
             vec![1, 1, 2, 2, 2, 3, 4, 4, 5],

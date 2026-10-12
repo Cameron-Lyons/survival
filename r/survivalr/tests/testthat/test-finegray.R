@@ -5,7 +5,6 @@
     wt = rep(c(1, 2, 3), length.out = n), id = seq_len(n))
 }
 
-# The delay test in stock R indexes unsorted rows by positions in the sorted data.
 .fg_reference <- function() {
   fun <- survival::finegray
   code <- paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")
@@ -73,7 +72,6 @@ test_that("prepared Fine-Gray numerics match R across randomized strata and dela
     data$group <- factor(sample(letters[1:3], n, replace = TRUE))
     counting <- seed %% 2L == 0L
     data$start <- sample(0:2, n, replace = TRUE)
-    # An early censoring activates the delayed-entry correction for late subjects.
     data$time[1] <- 1
     data$start[1] <- 0
     data$event[1] <- "censor"
@@ -82,7 +80,6 @@ test_that("prepared Fine-Gray numerics match R across randomized strata and dela
     actual <- tryCatch(finegray(formula, data, id = id, weights = wt, count = "added"), error = identity)
     expected <- tryCatch(reference(formula, data, id = id, weights = wt, count = "added"), error = identity)
     if (inherits(actual, "error")) {
-      # Stock R divides by zero on some delayed-entry curves; the port rejects it.
       expect_match(conditionMessage(actual), "censoring probability is zero")
       expect_true(inherits(expected, "error") || any(!is.finite(expected$fgwt)))
     } else {

@@ -32,7 +32,6 @@ for (.evaluated_kind in c("coxph", "survreg")) for (.evaluated_rhs in .evaluated
           info <- paste(kind, rhs, named, cached, action, input)
           if (is.list(expected$value) && !is.null(expected$value$error)) {
             expect_identical(length(result$value$error), 1L, info = info)
-            # Python missing-column errors carry the column name and cause.
             cause <- if (grepl("not found", expected$value$error) ||
               expected$value$error == "number of variables != number of variable names")
               "not found" else expected$value$error

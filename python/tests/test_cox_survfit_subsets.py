@@ -59,8 +59,6 @@ def _check_fields(result, expected):
         else:
             values = np.asarray(actual, dtype=float)
             reference = _array(spec)
-            # An empty time margin is encoded by [] and its column count is
-            # retained in colnames; nonempty matrices retain their full shape.
             if not values.size and not reference.size:
                 continue
             np.testing.assert_allclose(
@@ -96,7 +94,7 @@ def test_selected_fields_dimensions_and_metadata_match_stock(case):
     result = _selected(case)
     _check_curve(result, case["expected"])
     np.testing.assert_array_equal(source.surv, original)
-    _check_curve(pickle.loads(pickle.dumps(result)), case["expected"])  # noqa: S301 - local data
+    _check_curve(pickle.loads(pickle.dumps(result)), case["expected"])
 
 
 @pytest.mark.parametrize(

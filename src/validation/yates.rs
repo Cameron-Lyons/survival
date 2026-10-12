@@ -1,23 +1,3 @@
-//! Population marginal means (Yates' weighted means) and their tests.
-//!
-//! Port of R survival `R/yates.R` (`yates`, `estfun`, `testfun`, `qform`,
-//! `gsolve`, `nafun`, `cmatrix`'s contrast matrices and the prediction
-//! functions of `yates_setup.coxph`).  R builds one model matrix per level of
-//! the term of interest over the chosen population (`population = "data"`,
-//! `"factorial"`, `"sas"` or a data frame).  Building those model matrices
-//! needs the formula machinery (`model.matrix`, factor levels, `xlevels`) and
-//! stays with the caller.  [`population_means`] averages them into R's
-//! contrast matrix `Cmat`; [`yates_estimable`] flags, for a fit with aliased
-//! coefficients, the levels outside the row space of the fit's design;
-//! [`yates`] evaluates `Cmat %*% beta` with variance `Cmat V Cmat'` and the
-//! contrast tests; [`yates_simulate`] averages a nonlinear prediction
-//! (Cox risk/survival or an external GLM inverse link) over the population
-//! and estimates its variance from simulated coefficients.
-//!
-//! For a Cox model the caller passes `Cmat` restricted to the non-aliased
-//! coefficient columns (R drops the intercept, strata and `NA` columns) and
-//! the offset `-sum(fit$means * beta)` that recentres the predictions.
-
 use std::collections::HashSet;
 
 use crate::error::{SurvivalError, SurvivalResult};
@@ -33,14 +13,10 @@ mod rng;
 mod sgtt;
 pub use sgtt::{YatesSgttInput, YatesSgttResult, yates_sgtt, yates_sgtt_py};
 
-/// Which contrasts of the population marginal means to test (R `test`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum YatesTest {
-    /// All levels equal to the last one (one chi-square on `k - 1` df).
     Global,
-    /// Every pair of levels, one test each.
     Pairwise,
-    /// Every level against the mean of all levels, one test each.
     Mean,
 }
 
@@ -60,42 +36,34 @@ impl YatesTest {
     }
 }
 
-/// Inputs of [`yates`].
 #[derive(Debug, Clone)]
 pub struct YatesInput<'a> {
-    /// Population-averaged design rows, one per level of the term, over the
-    /// coefficient columns (R's `Cmat`).
     pub cmat: &'a [Vec<f64>],
     pub beta: &'a [f64],
-    /// Variance matrix of `beta`.
     pub vmat: &'a [Vec<f64>],
-    /// Added to every estimate (`-sum(fit$means * beta)` for `coxph`, 0
-    /// otherwise).
     pub offset: f64,
-    /// Residual variance of a linear model, which adds R's `ss` column.
     pub sigma2: Option<f64>,
-    /// Levels whose estimate is estimable (see [`yates_estimable`]); `None` for all.
     pub estimable: Option<&'a [bool]>,
     pub test: YatesTest,
 }
 
-/// One tested contrast: R's `test` matrix row.
+#[doc = " One tested contrast: R's `test` matrix row."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesContrast {
     pub name: String,
-    /// `NaN` for a contrast that uses a non-estimable level (R's `NA`).
+    #[doc = " `NaN` for a contrast that uses a non-estimable level (R's `NA`)."]
     pub chisq: f64,
-    /// `None` for a contrast that uses a non-estimable level (R's `NA`).
+    #[doc = " `None` for a contrast that uses a non-estimable level (R's `NA`)."]
     pub df: Option<usize>,
-    /// Sum of squares (`chisq * sigma2`), linear models only.
+    #[doc = " Sum of squares (`chisq * sigma2`), linear models only."]
     pub ss: Option<f64>,
 }
 
 crate::internal::pickle::picklable!(YatesContrast);
 
-/// One level's population marginal mean and standard error (R's
-/// `estimate` data frame); `pmm` is `NaN` for a non-estimable level.
+#[doc = " One level's population marginal mean and standard error (R's"]
+#[doc = " `estimate` data frame); `pmm` is `NaN` for a non-estimable level."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct YatesEstimate {
@@ -103,44 +71,42 @@ pub struct YatesEstimate {
     pub std: f64,
 }
 
-/// The survival curves of `predict = "survival"` (R's `summary` component):
-/// the simulated mean survival of each level at every time of the baseline
-/// curve, one row per time and one column per level.
+#[doc = " The survival curves of `predict = \"survival\"` (R's `summary` component):"]
+#[doc = " the simulated mean survival of each level at every time of the baseline"]
+#[doc = " curve, one row per time and one column per level."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct YatesCurves {
     pub surv: Vec<Vec<f64>>,
-    /// `-log(surv)`.
+    #[doc = " `-log(surv)`."]
     pub cumhaz: Vec<Vec<f64>>,
-    /// Standard deviation of the simulated survival over `surv`.
+    #[doc = " Standard deviation of the simulated survival over `surv`."]
     pub std_err: Vec<Vec<f64>>,
     pub lower: Vec<Vec<f64>>,
     pub upper: Vec<Vec<f64>>,
 }
 
-/// R's `yates` object.
+#[doc = " R's `yates` object."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct YatesResult {
     pub estimate: Vec<YatesEstimate>,
     pub test: Vec<YatesContrast>,
-    /// Variance matrix of the marginal means (R `mvar`): over the estimable
-    /// levels on the linear predictor scale, over every level for a
-    /// simulated prediction; empty when no level is estimable.
+    #[doc = " Variance matrix of the marginal means (R `mvar`): over the estimable"]
+    #[doc = " levels on the linear predictor scale, over every level for a"]
+    #[doc = " simulated prediction; empty when no level is estimable."]
     pub mvar: Vec<Vec<f64>>,
-    /// R's `Cmat`; empty for a simulated prediction or when no level is
-    /// estimable.
+    #[doc = " R's `Cmat`; empty for a simulated prediction or when no level is"]
+    #[doc = " estimable."]
     pub cmat: Vec<Vec<f64>>,
-    /// The curves of `predict = "survival"`.
+    #[doc = " The curves of `predict = \"survival\"`."]
     pub summary: Option<YatesCurves>,
-    /// Simulation means for a custom predictor with multiple columns.
+    #[doc = " Simulation means for a custom predictor with multiple columns."]
     pub prediction_mean: Option<Vec<Vec<f64>>>,
-    /// Sample variances matching `prediction_mean` (R's `mvar2`).
+    #[doc = " Sample variances matching `prediction_mean` (R's `mvar2`)."]
     pub prediction_variance: Option<Vec<Vec<f64>>>,
 }
 
-/// Average the rows of each level's model matrix, optionally with case
-/// weights (R's `meanfun`): `Cmat[i, ] = colMeans(xmatlist[[i]])`.
 pub fn population_means(
     xmatlist: &[Vec<Vec<f64>>],
     weights: Option<&[f64]>,
@@ -172,14 +138,6 @@ pub fn population_means(
     Ok(cmat)
 }
 
-/// R's estimability check of `yates` for a fit with aliased coefficients.
-///
-/// The columns of `t(unique(X))`, with a leading row of ones when
-/// `intercept` (R's `cbind(1, Xu)` for a Cox model, whose population rows
-/// carry the intercept column), span the estimable linear combinations.  A
-/// level is estimable when every row of its population model matrix lies in
-/// that span: every `abs(qr.resid(qr(t(Xu)), t(xmat)))` is below
-/// `sqrt(.Machine$double.eps)`.
 pub fn yates_estimable(
     xmatlist: &[Vec<Vec<f64>>],
     x: &[Vec<f64>],
@@ -189,13 +147,11 @@ pub fn yates_estimable(
         return Err(SurvivalError::invalid_input("x must have rows"));
     };
     let width = first.len() + usize::from(intercept);
-    // unique(X): the first occurrence of every distinct row, in order
     let mut seen = HashSet::with_capacity(x.len());
     let mut columns = Vec::new();
     for row in x {
         validate_length(first.len(), row.len(), "x columns")?;
         validate_finite(row, "x")?;
-        // `+ 0.0` makes -0 and 0 the same row, as R's comparison does
         let key: Vec<u64> = row.iter().map(|value| (value + 0.0).to_bits()).collect();
         if seen.insert(key) {
             let mut column = Vec::with_capacity(width);
@@ -223,8 +179,6 @@ pub fn yates_estimable(
         .collect()
 }
 
-/// Eigen-decomposition of a symmetric matrix by cyclic Jacobi rotations;
-/// returns the eigenvalues and the eigenvectors as columns of `v`.
 fn symmetric_eigen(matrix: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
     let n = matrix.len();
     let mut a: Vec<Vec<f64>> = matrix.to_vec();
@@ -279,9 +233,6 @@ fn symmetric_eigen(matrix: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
     ((0..n).map(|i| a[i][i]).collect(), v)
 }
 
-/// R's `qform`: `b' V^- b` with the generalised inverse of `gsolve` (the
-/// singular-value decomposition with values below `sqrt(eps)` times the
-/// largest set to zero), and the rank as degrees of freedom.
 fn quadratic_form(var: &[Vec<f64>], b: &[f64]) -> (f64, usize) {
     let (values, vectors) = symmetric_eigen(var);
     let largest = values.iter().copied().fold(f64::MIN, f64::max);
@@ -320,14 +271,12 @@ fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
         .collect()
 }
 
-/// R's `estfun`: estimates `C beta` and their variance `C V C'`.
 fn estimates(cmat: &[Vec<f64>], beta: &[f64], vmat: &[Vec<f64>]) -> (Vec<f64>, Vec<Vec<f64>>) {
     let estimate = cmat.iter().map(|row| dot_product(row, beta)).collect();
     let var = matrix_product(&matrix_product(cmat, vmat), &transpose(cmat));
     (estimate, var)
 }
 
-/// R's `testfun`: the chi-square test of `contrast %*% Cmat %*% beta = 0`.
 fn contrast_test(
     name: &str,
     contrast: &[Vec<f64>],
@@ -347,7 +296,6 @@ fn contrast_test(
     }
 }
 
-/// The contrast matrices of R's `cmatrix` for `nlev` levels.
 fn contrasts(test: YatesTest, nlev: usize) -> SurvivalResult<Vec<(String, Vec<Vec<f64>>)>> {
     match test {
         YatesTest::Global => {
@@ -388,7 +336,6 @@ fn contrasts(test: YatesTest, nlev: usize) -> SurvivalResult<Vec<(String, Vec<Ve
     }
 }
 
-/// `beta` finite and `vmat` a finite `p x p` matrix.
 fn validate_coefficients(beta: &[f64], vmat: &[Vec<f64>]) -> SurvivalResult<()> {
     let p = beta.len();
     validate_finite(beta, "beta")?;
@@ -418,8 +365,6 @@ fn validate(input: &YatesInput<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Population marginal means of the levels of a term, their standard
-/// errors, variance matrix and the requested contrast tests.
 pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
     validate(input)?;
     let nlev = input.cmat.len();
@@ -449,7 +394,6 @@ pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
     let test = contrasts(input.test, nlev)?
         .into_iter()
         .map(|(name, contrast)| {
-            // nafun: a contrast touching a non-estimable level is NA
             let uses_missing =
                 (0..nlev).any(|j| !estimable[j] && contrast.iter().any(|row| row[j] != 0.0));
             if uses_missing {
@@ -485,25 +429,11 @@ pub fn yates(input: &YatesInput<'_>) -> SurvivalResult<YatesResult> {
     })
 }
 
-/// What [`yates_simulate`] predicts for each population row: the prediction
-/// functions of R's `yates_setup.coxph` and `yates_setup.glm`.
 #[derive(Clone, Copy)]
 pub enum YatesPredictor<'a> {
-    /// `predict = "risk"`: `exp(eta)`.
     Risk,
-    /// A vectorized external inverse link. It receives one linear predictor
-    /// per population row and returns one response per row. Called once at
-    /// the fitted coefficients and once per draw, with all levels batched.
     Response(&'a (dyn Fn(&[f64]) -> SurvivalResult<Vec<f64>> + Sync)),
-    /// A vectorized prediction method returning one or more columns per
-    /// population row. The first column supplies estimates and tests;
-    /// simulation means and variances of all columns are available to a
-    /// caller's summary method. The column count must remain constant.
     Custom(&'a (dyn Fn(&[f64]) -> SurvivalResult<Array2<f64>> + Sync)),
-    /// `predict = "survival"`: the curve `exp(-exp(eta) * cumhaz)` of the
-    /// baseline `survfit(fit, censor = FALSE)` (`time`, `cumhaz`) from time 0
-    /// on, preceded by its mean restricted to `rmean`.  `conf_int` is the
-    /// baseline's confidence level, which the summary curves use.
     Survival {
         time: &'a [f64],
         cumhaz: &'a [f64],
@@ -534,37 +464,23 @@ impl std::fmt::Debug for YatesPredictor<'_> {
     }
 }
 
-/// Inputs of [`yates_simulate`].
 #[derive(Debug, Clone)]
 pub struct YatesSimulation<'a> {
-    /// One model matrix per level over the non-aliased coefficient columns.
-    /// Cox inputs omit the intercept; external GLMs retain their intercept.
     pub xmatlist: &'a [Vec<Vec<f64>>],
     pub beta: &'a [f64],
     pub vmat: &'a [Vec<f64>],
-    /// `fit$means` of the coefficients: every linear predictor is
-    /// `x %*% b - sum(means * b)`.
     pub means: &'a [f64],
-    /// Levels whose estimate is estimable (see [`yates_estimable`]); `None` for all.
     pub estimable: Option<&'a [bool]>,
     pub predictor: YatesPredictor<'a>,
     pub nsim: usize,
-    /// Seed of R's generator (`set.seed`), so the draws are R's `rnorm`.
     pub seed: u32,
     pub test: YatesTest,
 }
 
-/// A [`YatesPredictor`] ready to evaluate: the risk, or the restricted mean
-/// followed by the survival curve from time 0 on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Prediction {
     Risk,
-    /// `cumhaz = c(0, baseline$cumhaz)`; `widths = c(diff(c(0, pmin(rmean,
-    /// baseline$time))), 0)` weight the curve into the restricted mean.
-    Survival {
-        cumhaz: Vec<f64>,
-        widths: Vec<f64>,
-    },
+    Survival { cumhaz: Vec<f64>, widths: Vec<f64> },
 }
 
 impl Prediction {
@@ -618,7 +534,6 @@ impl Prediction {
         }
     }
 
-    /// Adds the prediction at linear predictor `eta` to `out`.
     fn accumulate(&self, eta: f64, out: &mut [f64]) {
         let risk = eta.exp();
         match self {
@@ -635,8 +550,6 @@ impl Prediction {
         }
     }
 
-    /// Each level's prediction averaged over its population rows (R's
-    /// `rowsum(predfun(eta), index) / n1`) at coefficients `coef`.
     fn population(&self, xmatlist: &[Vec<Vec<f64>>], means: &[f64], coef: &[f64]) -> Vec<Vec<f64>> {
         let center = dot_product(means, coef);
         xmatlist
@@ -656,8 +569,8 @@ impl Prediction {
     }
 }
 
-/// Prepared nonlinear Cox Yates prediction. Baseline work is done once; evaluating
-/// N predictors allocates only the N-by-output-width result matrix.
+#[doc = " Prepared nonlinear Cox Yates prediction. Baseline work is done once; evaluating"]
+#[doc = " N predictors allocates only the N-by-output-width result matrix."]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(frozen, module = "survival._survival", skip_from_py_object)]
 pub struct YatesPrediction {
@@ -671,9 +584,6 @@ impl YatesPrediction {
         })
     }
 
-    /// One row per eta. Risk has one column; survival has restricted mean,
-    /// time-zero survival, then one column per original baseline time.
-    /// Nonfinite eta values follow floating-point exponential arithmetic.
     pub fn evaluate(&self, eta: &[f64]) -> Array2<f64> {
         let mut output = Array2::zeros((eta.len(), self.prediction.width()));
         for (&value, mut row) in eta.iter().zip(output.rows_mut()) {
@@ -748,9 +658,6 @@ fn validate_simulation(input: &YatesSimulation<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// R's `Rmat`: the symmetric square root `V diag(sqrt(d)) V'` of the
-/// coefficient variance, which turns standard normal draws into draws with
-/// that variance.
 fn covariance_root(vmat: &[Vec<f64>]) -> SurvivalResult<Vec<Vec<f64>>> {
     let (values, vectors) = symmetric_eigen(vmat);
     let largest = values.iter().copied().fold(0.0_f64, f64::max);
@@ -776,17 +683,8 @@ fn covariance_root(vmat: &[Vec<f64>]) -> SurvivalResult<Vec<Vec<f64>>> {
         .collect())
 }
 
-/// Population marginal means of a nonlinear prediction (R's `yates` with a
-/// `yates_setup` prediction function): the prediction at `beta` averaged
-/// over each level's population rows, the variance of the first prediction
-/// (the risk, or the restricted mean survival) estimated from `nsim`
-/// coefficient vectors drawn from `N(beta, vmat)`, and its tests.
-///
-/// As in R, a non-estimable level's `pmm` is `NaN` while its `std` and
-/// `mvar` entries keep their simulated values; a test that uses it is `NA`.
 pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult> {
     yates_simulate_with_draws(input, |nsim, p| {
-        // R's matrix(rnorm(nsim * p), nrow = nsim) fills draws by column.
         let mut rng = rng::RNormal::new(input.seed);
         let mut z = vec![vec![0.0; p]; nsim];
         for j in 0..p {
@@ -798,11 +696,6 @@ pub fn yates_simulate(input: &YatesSimulation<'_>) -> SurvivalResult<YatesResult
     })
 }
 
-/// Simulate with standard-normal draws supplied by the caller. The provider
-/// receives `(nsim, number_of_coefficients)` once, after the point prediction
-/// and before simulated predictions. This lets an R caller preserve its RNG
-/// kind, global state, and random draws made by a custom prediction method.
-/// The seed in `input` is unused on this path.
 pub fn yates_simulate_with_draws(
     input: &YatesSimulation<'_>,
     normal_draws: impl FnOnce(usize, usize) -> SurvivalResult<Vec<Vec<f64>>>,
@@ -815,8 +708,6 @@ pub fn yates_simulate_with_draws(
     let root = covariance_root(input.vmat)?;
     let nlev = input.xmatlist.len();
     let p = input.beta.len();
-    // Reuse the predictor buffer across inverse-link calls. The built-in
-    // paths continue reducing each row directly into its population mean.
     let mut eta = Vec::new();
     let mut population = |coef: &[f64]| -> SurvivalResult<Vec<Vec<f64>>> {
         if matches!(
@@ -882,8 +773,6 @@ pub fn yates_simulate_with_draws(
         validate_length(p, row.len(), "normal draws columns")?;
         validate_finite(row, "normal draws")?;
     }
-    // running means and sums of squared deviations of every prediction, and
-    // the co-moments of the first prediction across levels
     let mut mean = vec![vec![0.0; width]; nlev];
     let mut squares = vec![vec![0.0; width]; nlev];
     let mut comoment = vec![vec![0.0; nlev]; nlev];
@@ -959,10 +848,6 @@ pub fn yates_simulate_with_draws(
     Ok(result)
 }
 
-/// R's `summary` function of `yates_setup.coxph`: from the simulation means
-/// and variances of each level's curve (the columns after the restricted
-/// mean and the time-0 value), `surv`, `chaz = -log(surv)`,
-/// `std.err = std / surv` and the limits `exp(-(chaz -/+ z * std))`.
 fn survival_curves(
     nlevel: usize,
     ntime: usize,
@@ -991,9 +876,6 @@ fn survival_curves(
     }
 }
 
-/// Convert population means and variances of prepared survival predictions
-/// to curves at the baseline times. Drop restricted mean and time zero,
-/// and recompute cumulative hazard, correcting R's summary metadata defects.
 pub fn yates_survival_summary(
     mean: ArrayView2<'_, f64>,
     variance: ArrayView2<'_, f64>,
@@ -1028,8 +910,8 @@ pub fn yates_survival_summary_py(
     Ok(py.detach(|| yates_survival_summary(mean.view(), variance.view(), conf_int))?)
 }
 
-/// Python entry point: `yates(cmat, beta, vmat, offset=0.0, sigma2=None,
-/// estimable=None, test="global")`.
+#[doc = " Python entry point: `yates(cmat, beta, vmat, offset=0.0, sigma2=None,"]
+#[doc = " estimable=None, test=\"global\")`."]
 #[pyfunction(name = "yates")]
 #[pyo3(signature = (cmat, beta, vmat, offset=0.0, sigma2=None, estimable=None, test="global"))]
 #[allow(clippy::too_many_arguments)]
@@ -1055,8 +937,6 @@ pub fn yates_py(
     Ok(py.detach(|| yates(&input))?)
 }
 
-/// Runs [`yates_simulate`] without the GIL; R names the tests of a
-/// simulated prediction after the term instead of `global`.
 fn simulate_py(
     py: Python<'_>,
     input: &YatesSimulation<'_>,
@@ -1104,7 +984,7 @@ fn simulate_py(
     Ok(result)
 }
 
-/// Python entry point for `predict = "risk"`: see [`yates_simulate`].
+#[doc = " Python entry point for `predict = \"risk\"`: see [`yates_simulate`]."]
 #[pyfunction(name = "yates_risk")]
 #[pyo3(signature = (xmatlist, beta, vmat, means, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1136,7 +1016,7 @@ pub fn yates_risk_py(
     simulate_py(py, &input, term, normal_draws)
 }
 
-/// Simulate an external GLM's vectorized response, without refitting it.
+#[doc = " Simulate an external GLM's vectorized response, without refitting it."]
 #[cfg(feature = "python")]
 #[pyfunction(name = "yates_response")]
 #[pyo3(signature = (xmatlist, beta, vmat, inverse_link, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
@@ -1190,8 +1070,8 @@ pub fn yates_response_py(
     simulate_py(py, &input, term, normal_draws)
 }
 
-/// Simulate an external prediction method returning a matrix, with all
-/// population rows batched once at the fit and once per coefficient draw.
+#[doc = " Simulate an external prediction method returning a matrix, with all"]
+#[doc = " population rows batched once at the fit and once per coefficient draw."]
 #[cfg(feature = "python")]
 #[pyfunction(name = "yates_predict")]
 #[pyo3(signature = (xmatlist, beta, vmat, predict, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
@@ -1243,8 +1123,8 @@ pub fn yates_predict_py(
     simulate_py(py, &input, term, normal_draws)
 }
 
-/// Python entry point for `predict = "survival"`: see [`yates_simulate`];
-/// `time` and `cumhaz` are the baseline `survfit(fit, censor = FALSE)`.
+#[doc = " Python entry point for `predict = \"survival\"`: see [`yates_simulate`];"]
+#[doc = " `time` and `cumhaz` are the baseline `survfit(fit, censor = FALSE)`."]
 #[pyfunction(name = "yates_survival")]
 #[pyo3(signature = (xmatlist, beta, vmat, means, time, cumhaz, rmean, conf_int=0.95, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
@@ -1285,8 +1165,8 @@ pub fn yates_survival_py(
     simulate_py(py, &input, term, normal_draws)
 }
 
-/// Python entry point for [`population_means`]: `xmatlist` is a list of
-/// model matrices (nested rows), one per level.
+#[doc = " Python entry point for [`population_means`]: `xmatlist` is a list of"]
+#[doc = " model matrices (nested rows), one per level."]
 #[pyfunction(name = "yates_population_means")]
 #[pyo3(signature = (xmatlist, weights=None))]
 pub fn population_means_py(
@@ -1298,7 +1178,7 @@ pub fn population_means_py(
     Ok(py.detach(|| population_means(&xmatlist, weights.as_deref()))?)
 }
 
-/// Python entry point for [`yates_estimable`]: `x` is the fit's model matrix.
+#[doc = " Python entry point for [`yates_estimable`]: `x` is the fit's model matrix."]
 #[pyfunction(name = "yates_estimable")]
 #[pyo3(signature = (xmatlist, x, intercept=false))]
 pub fn yates_estimable_py(
@@ -1387,7 +1267,6 @@ mod tests {
         let (stat, df) = quadratic_form(&[vec![2.0, 0.0], vec![0.0, 4.0]], &[2.0, 2.0]);
         assert!((stat - 3.0).abs() < 1e-12);
         assert_eq!(df, 2);
-        // rank-one matrix: only the projected component counts
         let (stat, df) = quadratic_form(&[vec![1.0, 1.0], vec![1.0, 1.0]], &[1.0, 1.0]);
         assert!((stat - 1.0).abs() < 1e-12);
         assert_eq!(df, 1);
@@ -1395,8 +1274,6 @@ mod tests {
 
     #[test]
     fn marginal_means_and_global_test_follow_r() {
-        // Two-level factor plus a covariate: Cmat rows are the level's
-        // dummy with the covariate at its population mean.
         let cmat = vec![vec![0.0, 3.0], vec![1.0, 3.0]];
         let beta = [0.5, 0.2];
         let vmat = vec![vec![0.04, 0.01], vec![0.01, 0.02]];
@@ -1412,12 +1289,10 @@ mod tests {
         .unwrap();
         assert!((result.estimate[0].pmm - 0.0).abs() < 1e-12);
         assert!((result.estimate[1].pmm - 0.5).abs() < 1e-12);
-        // var of row 0 = 9 * 0.02 = 0.18
         assert!((result.estimate[0].std - 0.18f64.sqrt()).abs() < 1e-12);
         assert_eq!(result.test.len(), 1);
         assert_eq!(result.test[0].name, "global");
         assert_eq!(result.test[0].df, Some(1));
-        // contrast (1, -1): difference -0.5, variance 0.04
         assert!((result.test[0].chisq - 0.25 / 0.04).abs() < 1e-9);
         assert_eq!(result.mvar.len(), 2);
     }
@@ -1459,7 +1334,6 @@ mod tests {
                 .all(|t| t.chisq.is_nan() && t.df.is_none())
         );
         assert_eq!(partial.mvar.len(), 2);
-        // R keeps no mvar or Cmat when no level is estimable
         let none = yates(&YatesInput {
             estimable: Some(&[false, false, false]),
             ..mean
@@ -1483,8 +1357,6 @@ mod tests {
 
     #[test]
     fn estimable_levels_lie_in_the_row_space() {
-        // design rows (a, b) with b = 2a: with the Cox intercept, only rows
-        // (1, a, 2a) are estimable
         let x = vec![vec![1.0, 2.0], vec![2.0, 4.0], vec![1.0, 2.0]];
         let xmatlist = vec![
             vec![vec![1.0, 3.0, 6.0]],
@@ -1525,7 +1397,6 @@ mod tests {
         assert!(result.test[0].df.is_some());
         assert!(result.test[1].df.is_none() && result.test[2].df.is_none());
         assert!(result.cmat.is_empty() && result.summary.is_none());
-        // exp(eta) at beta averaged over the rows: eta = x b - sum(means * b) = -0.2, -0.4
         let point = ((-0.2f64).exp() + (-0.4f64).exp()) / 2.0;
         assert!((result.estimate[0].pmm - point).abs() < 1e-12);
     }
@@ -1554,7 +1425,6 @@ mod tests {
             test: YatesTest::Global,
         })
         .unwrap();
-        // widths 1, 1, 1, 0 over the curve 1, S(1), S(2), S(4)
         let mean = 1.0 + (-0.1f64).exp() + (-0.3f64).exp();
         assert!((result.estimate[0].pmm - mean).abs() < 1e-12);
         let summary = result.summary.unwrap();

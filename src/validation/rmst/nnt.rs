@@ -1,8 +1,3 @@
-//! Number needed to treat at a time horizon from two Kaplan-Meier curves
-//! (no R counterpart): the absolute risk reduction `S_1(t) - S_0(t)`
-//! with Greenwood variances, and its reciprocal.  The horizon is binned
-//! with the times (`aeqSurv`) before the curves are read.
-
 use super::kaplan_meier;
 use crate::data_prep::aeq_times;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -10,7 +5,7 @@ use crate::internal::dist::qnorm;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-/// Absolute risk reduction and number needed to treat at `time_horizon`.
+#[doc = " Absolute risk reduction and number needed to treat at `time_horizon`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct NNTResult {
@@ -23,8 +18,6 @@ pub struct NNTResult {
     pub time_horizon: f64,
 }
 
-/// Kaplan-Meier survival at `at` and its Greenwood variance
-/// (`S(t)^2 * var(log S(t))`; 0 once the curve has reached 0).
 fn survival_at(time: &[f64], status: &[i32], at: f64) -> SurvivalResult<(f64, f64)> {
     let mut fixed = time.to_vec();
     fixed.push(at);
@@ -46,8 +39,6 @@ fn survival_at(time: &[f64], status: &[i32], at: f64) -> SurvivalResult<(f64, f6
     }
 }
 
-/// Number needed to treat comparing the second group (treated) with the
-/// first (control) of `group`'s sorted labels.
 pub fn number_needed_to_treat(
     time: &[f64],
     status: &[i32],
@@ -137,7 +128,6 @@ mod tests {
         let status = [1, 1, 1, 0, 1, 0, 0, 0];
         let group = [0, 0, 0, 0, 1, 1, 1, 1];
         let result = number_needed_to_treat(&time, &status, &group, 4.5, 0.95).unwrap();
-        // control: S(4.5) = 0.25; treated: S(4.5) = 1 -> ARR = 0.75
         assert!((result.absolute_risk_reduction - 0.75).abs() < 1e-12);
         assert!((result.nnt - 4.0 / 3.0).abs() < 1e-12);
         assert!(result.arr_ci_lower < result.absolute_risk_reduction);

@@ -20,7 +20,6 @@
 }
 
 .origin_quantile_bare_groups <- function(captured, actual_fit) {
-  # Split KM curves retain the bridge's public bare-level names.
   if (!is.list(actual_fit) || inherits(actual_fit, "python.builtin.object")) return(captured)
   labels <- names(actual_fit)
   if (is.list(captured$value)) {

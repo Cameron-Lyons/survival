@@ -1,4 +1,3 @@
-//! Shared outcome preparation across multiple concordance predictors.
 use ndarray::Array2;
 use survival::concordance::{ConcordanceOptions, TimeWeight, concordancefit};
 use survival::core::SurvResponse;

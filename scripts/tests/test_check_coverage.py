@@ -1,8 +1,5 @@
 """Exercise the coverage gate with valid and malformed producer output."""
 
-# This suite runs with the standard library alone, before building the extension.
-# ruff: noqa: PT009, PT027
-
 from __future__ import annotations
 
 import argparse

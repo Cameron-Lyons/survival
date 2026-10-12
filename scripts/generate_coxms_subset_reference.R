@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Regenerate with R 4.5.3 / survival 3.8-12.
 library(survival)
 library(jsonlite)
 args <- commandArgs(trailingOnly = TRUE)
@@ -49,16 +48,12 @@ for (stratified in c(FALSE, TRUE)) {
     if (conditional) options <- c(options, list(start.time = 3, p0 = c(.6, .4, 0)))
     source <- do.call(survfit, options)
     for (states in list(3L, c(3L, 1L), c(3L, 2L, 3L))) {
-      # Reverse strata and prediction rows as well; one case retains one stratum.
       groups <- if (!stratified) 1L else if (length(states) == 1L) 2L else 2:1
       rows <- if (stratified) unlist(lapply(groups, function(i) {
         seq_len(source$strata[i]) + sum(source$strata[seq_len(i - 1L)])
       })) else seq_along(source$time)
       selected <- source[groups, c(3, 1), states, drop = FALSE]
       raw_censor <- selected$n.censor
-      # [.survfitms leaves n.censor in the original state order and does not
-      # subset n.id. Keep raw counts for the compatibility record, then align
-      # only these metadata fields before asking stock R for summary rows.
       selected$n.censor <- source$n.censor[rows, states, drop = FALSE]
       selected$n.id <- source$n.id[groups]
       summaries <- list()
@@ -72,15 +67,10 @@ for (stratified in c(FALSE, TRUE)) {
         result <- do.call(summary, c(list(object = selected), settings))
         raw_table <- result$table
         raw_summary_censor <- result$n.censor
-        # survmean2 recycles nevent in the wrong order for several strata and
-        # prediction rows. Compute that column directly from selected counts.
         sizes <- if (is.null(selected$strata)) length(selected$time) else selected$strata
         ends <- cumsum(sizes)
         starts <- c(1L, head(ends, -1L) + 1L)
         if (mode %in% c("events", "none")) {
-          # summary.survfitms drops the censor matrix to its first column when
-          # joining several strata without requested times. Accumulate each
-          # state's counts independently between the selected event rows.
           result$n.censor <- do.call(rbind, lapply(seq_along(sizes), function(g) {
             rows <- starts[g]:ends[g]
             kept <- which(rowSums(selected$n.event[rows, , drop = FALSE]) > 0)

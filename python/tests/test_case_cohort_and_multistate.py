@@ -13,11 +13,6 @@ regression = survival.regression
 surv_analysis = survival.surv_analysis
 
 
-# ---------------------------------------------------------------------------------------------
-# clogit = coxph(Surv(rep(1, n), case) ~ x + strata(stratum), ties = "exact")
-# ---------------------------------------------------------------------------------------------
-
-
 def _clogit(case, x, stratum):
     return regression.coxph_fit(
         [1.0] * len(case), case, [[v] for v in x], strata=stratum, method="exact"
@@ -27,7 +22,6 @@ def _clogit(case, x, stratum):
 def test_conditional_logistic_regression_is_a_stratified_exact_cox_fit():
     fit = _clogit([1, 0, 1, 0], [2.0, 1.0, 3.0, 1.0], [0, 0, 1, 1])
 
-    # both matched pairs are perfectly separated: the exact partial likelihood diverges
     assert fit.method == regression.TieMethod.Exact
     assert fit.nevent == 2
     assert fit.coefficients[0] > 5.0
@@ -55,11 +49,6 @@ def test_conditional_logistic_regression_uses_strata():
 
     assert matched.coefficients != pytest.approx(pooled.coefficients)
     assert matched.loglik[1] != pytest.approx(pooled.loglik[1])
-
-
-# ---------------------------------------------------------------------------------------------
-# cch on the nwtco case-cohort subset (?cch), age in years as the only covariate
-# ---------------------------------------------------------------------------------------------
 
 
 def _nwtco_case_cohort():
@@ -91,7 +80,6 @@ def test_cch_fit_matches_r(method, coef, var):
         data["stop"], data["status"], data["x"], data["subcohort"], data["id"], 4028, method=method
     )
 
-    # cch(Surv(edrel, rel) ~ age, subcoh = ~subcohort, id = ~seqno, cohort.size = 4028)
     assert isinstance(fit, regression.CchFitResult)
     assert fit.method == method
     assert fit.coefficients == pytest.approx([coef])
@@ -123,7 +111,6 @@ def test_cch_borgan_fit_matches_r(method, coef, var):
         method=method,
     )
 
-    # cch(..., stratum = ~stratum, cohort.size = c("1" = 3622, "2" = 406))
     assert fit.method == method
     assert fit.coefficients == pytest.approx([coef])
     assert fit.var[0] == pytest.approx([var])
@@ -157,18 +144,13 @@ def test_cch_validates_inputs():
         )
 
 
-# ---------------------------------------------------------------------------------------------
-# survfitaj = survfit(Surv(time, state) ~ 1) for multi-state responses
-# ---------------------------------------------------------------------------------------------
-
 _AJ_TIME = [1.0, 2.0, 2.0, 3.0, 4.0, 5.0]
-_AJ_STATE = [1, 2, 0, 1, 2, 0]  # 0 censored, 1 = "a", 2 = "b"
+_AJ_STATE = [1, 2, 0, 1, 2, 0]
 
 
 def test_survfitaj_competing_risks_match_r():
     fit = surv_analysis.survfitaj(_AJ_TIME, _AJ_STATE, ["a", "b"])
 
-    # survfit(Surv(time, factor(state, levels = c("cens", "a", "b"))) ~ 1)
     assert isinstance(fit, surv_analysis.SurvfitAJResult)
     assert fit.states == ["(s0)", "a", "b"]
     assert fit.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -218,11 +200,6 @@ def test_survfitaj_weights_cluster_and_influence_match_r():
         influence=True,
     )
 
-    # survfit(Surv(time, state) ~ 1, weights = w, cluster = cl, influence = TRUE) with the rows
-    # in this order: cluster 1 = {(1, a, w=2), (2, b)}, cluster 2 = {(2, censored), (3, a)},
-    # cluster 3 = {(4, b, w=2), (5, censored)}.  Which cluster owns the time-2 "b" event is
-    # decided by the row order of the two tied rows (see the next test), so every value below
-    # is R's for exactly _AJ_STATE.
     assert [row[0] for row in fit.n_risk] == pytest.approx([8.0, 6.0, 4.0, 3.0, 1.0])
     np.testing.assert_allclose(
         fit.pstate,
@@ -246,7 +223,6 @@ def test_survfitaj_weights_cluster_and_influence_match_r():
     )
     (influence,) = fit.influence_pstate
     assert isinstance(influence, surv_analysis.SurvfitAJInfluence)
-    # influence.pstate[cluster, time, state]: three clusters x five times x three states
     np.testing.assert_allclose(
         influence.values,
         [
@@ -276,11 +252,6 @@ def test_survfitaj_weights_cluster_and_influence_match_r():
 
 
 def test_survfitaj_cluster_influence_follows_the_row_order_of_tied_times_like_r():
-    # Rows 2 and 3 are tied at time 2: one is the "b" event, the other is censored.  R (and
-    # this port) attribute the event's influence to the cluster of the row that carries it, so
-    # transposing the two rows moves the event from cluster 1 to cluster 2 and changes the
-    # robust variance from time 2 on.  Both orderings are R 3.8.11's survfit(..., cluster = cl,
-    # influence = TRUE) output for the unweighted data.
     cluster = [1, 1, 2, 2, 3, 3]
 
     fit = surv_analysis.survfitaj(_AJ_TIME, _AJ_STATE, ["a", "b"], cluster=cluster, influence=True)
@@ -303,11 +274,11 @@ def test_survfitaj_cluster_influence_follows_the_row_order_of_tied_times_like_r(
         ],
     )
 
-    swapped_state = [1, 0, 2, 1, 2, 0]  # the "b" event now sits in cluster 2's row
+    swapped_state = [1, 0, 2, 1, 2, 0]
     swapped = surv_analysis.survfitaj(
         _AJ_TIME, swapped_state, ["a", "b"], cluster=cluster, influence=True
     )
-    np.testing.assert_allclose(swapped.pstate, fit.pstate)  # the estimate itself is unchanged
+    np.testing.assert_allclose(swapped.pstate, fit.pstate)
     np.testing.assert_allclose(
         swapped.std_err,
         [
@@ -339,7 +310,6 @@ def test_survfitaj_counting_process_with_initial_states_matches_r():
         istate_levels=["a", "b"],
     )
 
-    # survfit(Surv(start, stop, state) ~ 1, id = id, istate = istate)
     assert fit.states == ["a", "b"]
     assert fit.time == pytest.approx([2.0, 3.0, 4.0, 5.0, 6.0])
     np.testing.assert_allclose(

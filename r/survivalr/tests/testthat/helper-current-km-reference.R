@@ -1,8 +1,3 @@
-# survival 3.8-12's multi-group counting branch builds its C time grid from
-# terminal intervals only, omitting events on internal intervals. Its single-
-# group branch correctly includes both events and terminal intervals. Use that
-# same condition here for the recurrent-event reference; leave the installed
-# namespace and all estimation kernels unchanged.
 reference_survfit_complete_event_grid <- local({
   ns <- asNamespace("survival")
   km <- get("survfitKM", ns)

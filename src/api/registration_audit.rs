@@ -1,13 +1,3 @@
-//! Test-time scan of `src/` that fails when a `#[pyclass]` or `#[pyfunction]`
-//! declared anywhere in the crate is not registered by a file under
-//! `src/api/python/`, or when two declarations share a Python name.
-//!
-//! The scan is textual so it runs in every feature configuration, including
-//! `--no-default-features`, where the PyO3 attributes are no-ops. It
-//! recognises the three registration forms used by the binding files:
-//! `m.add_class::<Name>()`, `wrap_pyfunction!(name, m)` and the
-//! `register_classes!`/`register_functions!` lists.
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,8 +17,6 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Index just past the raw string literal whose `r` is at `start`, if one
-/// starts there (`r"..."`, `r#"..."#`, ...).
 fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start + 1;
     let mut hashes = 0;
@@ -49,8 +37,6 @@ fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-/// Index just past the char literal starting at `start`, if one starts there
-/// (`'"'`, `'\\''`, `'\\u{7f}'`); lifetimes and labels are left alone.
 fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
     let close = if bytes.get(start + 1) == Some(&b'\\') {
         start + 2 + bytes[start + 2..].iter().position(|b| *b == b'\'')?
@@ -60,9 +46,6 @@ fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
     (bytes.get(close) == Some(&b'\'')).then_some(close + 1)
 }
 
-/// Removes `//` and `/* */` comments and blanks the contents of string and
-/// char literals, so a `#[pyclass]` quoted in a comment or literal is not a
-/// declaration.
 fn strip_comments_and_literals(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out = String::with_capacity(source.len());
@@ -121,7 +104,6 @@ fn strip_comments_and_literals(source: &str) -> String {
     out
 }
 
-/// Index just past the group that starts at `open` (which must be `[` or `(`).
 fn skip_group(source: &str, open: usize) -> usize {
     let bytes = source.as_bytes();
     let (open_byte, close_byte) = match bytes[open] {
@@ -160,9 +142,6 @@ fn ident_at(source: &str, i: usize) -> &str {
     &source[i..end]
 }
 
-/// Names of the items that carry `#[<attribute>...]` and are introduced by one
-/// of `keywords` (after any further attributes and a visibility). Macro
-/// templates (`$name`) are skipped.
 fn declared(source: &str, attribute: &str, keywords: &[&str]) -> Vec<String> {
     let marker = format!("#[{attribute}");
     let mut names = Vec::new();
@@ -209,8 +188,6 @@ fn last_segment(path: &str) -> String {
         .to_string()
 }
 
-/// Names registered by `add_class::<..>`, `wrap_pyfunction!(..)` and the
-/// `register_classes!`/`register_functions!` lists.
 fn registered(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     for (marker, terminator) in [("add_class::<", '>'), ("wrap_pyfunction!(", ',')] {

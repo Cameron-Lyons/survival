@@ -43,8 +43,6 @@ def _influence_variance(
     if isinstance(values, np.ndarray):
         if values.ndim != 3 or values.shape[1:] != (width, times):
             raise ValueError("dfbeta must be group by coefficient by unique event time")
-        # Basic slicing preserves the original cube. Bound the finite-value
-        # check too; otherwise even a boolean group-by-time array can be large.
         block_size = max(1, 131072 // keep)
         for col, source in enumerate(selected):
             for start in range(0, len(values), block_size):
@@ -53,8 +51,6 @@ def _influence_variance(
                     raise ValueError("dfbeta must contain finite values")
                 variance[:, col] += np.einsum("gt,gt->t", part, part)
         return variance
-    # About 1 MiB of floating-point input per block. Lists already hold the
-    # fitted influences, so converting the entire cube would duplicate it.
     block_size = max(1, 131072 // max(1, keep * len(selected)))
     for start in range(0, len(values), block_size):
         block = []
@@ -120,7 +116,6 @@ def aareg_plot_data(
         lower, upper = estimate - 1.96 * error, estimate + 1.96 * error
     times = np.r_[0.0, time[ends]]
     if np.any(time[ends] == 0):
-        # Keep the last value at zero, including its event, for every matrix.
         times, estimate = times[1:], estimate[1:]
         if error is not None and lower is not None and upper is not None:
             error, lower, upper = error[1:], lower[1:], upper[1:]

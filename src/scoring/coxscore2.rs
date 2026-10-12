@@ -1,12 +1,3 @@
-//! Score residuals of a right-censored Cox model.
-//!
-//! `coxscore2_sorted` ports `coxscore2.c` (survival 3.8-12, the O(np)
-//! version of April 2023): the residual of observation `i` is
-//! `sum_t (x_i - xbar(t)) dM_i(t)`, accumulated with running totals of the
-//! cumulative hazard and of `sum xbar(t) dLambda(t)`.  [`coxscore2`] does
-//! what `residuals.coxph` does around it: sort with
-//! `order(strata, time, -status)`, run the kernel, restore input order.
-
 use crate::core::strata_order::order_within_strata;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::SurvivalData;
@@ -15,11 +6,6 @@ use crate::regression::TieMethod;
 use crate::scoring::validate_score_inputs;
 use ndarray::{Array2, ArrayView2};
 
-/// Score residuals (`n x p`, input order) for right-censored data.
-///
-/// `covariates` is the `n x p` design matrix, `score` is `exp(eta)` and the
-/// residual is unweighted (R multiplies by the case weights afterwards when
-/// `weighted = TRUE`).  As in R, an exact fit has no score residuals.
 pub fn coxscore2(
     survival: &SurvivalData,
     covariates: ArrayView2<'_, f64>,
@@ -46,9 +32,6 @@ pub fn coxscore2(
     ))
 }
 
-/// `residuals.coxph`'s score step on validated, unsorted rows: sort with
-/// `order(strata, time, -status)`, run [`coxscore2_sorted`] and restore the
-/// input order.
 pub(crate) fn coxscore2_rows(
     time: &[f64],
     status: &[i32],
@@ -91,8 +74,6 @@ pub(crate) fn coxscore2_rows(
     resid
 }
 
-/// `coxscore2.c` on data sorted by stratum and ascending time within
-/// stratum.  `strata` are labels (the C code compares them directly).
 pub(crate) fn coxscore2_sorted(
     time: &[f64],
     status: &[i32],
@@ -118,7 +99,6 @@ pub(crate) fn coxscore2_sorted(
     let mut stratastart = n - 1;
     let mut currentstrata = strata[n - 1];
 
-    // `i` walks from the last row down to -1, in spurts of tied times.
     let mut i = n as isize - 1;
     while i >= 0 {
         let newtime = time[i as usize];
@@ -136,7 +116,6 @@ pub(crate) fn coxscore2_sorted(
             let risk = score[row] * weights[row];
             denom += risk;
             for j in 0..nvar {
-                // Future accumulated risk that new entries must not get.
                 resid[[row, j]] = score[row] * (covar[[row, j]] * cumhaz - xhaz[j]);
                 a[j] += risk * covar[[row, j]];
             }
@@ -150,10 +129,6 @@ pub(crate) fn coxscore2_sorted(
             }
             i -= 1;
         }
-        // The C code relies on the deaths being sorted first within a tied
-        // time (rows `group_start..group_start + deaths`); scanning the
-        // status of the whole tie group instead gives the same result for
-        // any order of the ties.
         let group_start = (i + 1) as usize;
         let group_end = group_start + group_size;
         let death_rows = || (group_start..group_end).filter(|&k| status[k] == 1);
@@ -170,13 +145,6 @@ pub(crate) fn coxscore2_sorted(
                     }
                 }
             } else {
-                // Efron: the deaths are charged ahead for the part of the
-                // hazard increment they should not receive at the end of
-                // the stratum.  coxscore2.c adds, for each death k,
-                // sum_dd (x_k - xbar_dd) (1/deaths + score_k hazard_dd
-                // downwt_dd); the sums over dd are accumulated first
-                // (mh1, mh2, mh3, as agscore3.c does) so the deaths are
-                // visited once.
                 meanwt /= deaths;
                 let mut mh1 = 0.0;
                 mh2.fill(0.0);
@@ -204,7 +172,6 @@ pub(crate) fn coxscore2_sorted(
         }
 
         if i < 0 || strata[i as usize] != currentstrata {
-            // End of a stratum: final term for every observation in it.
             for k in group_start..=stratastart {
                 for j in 0..nvar {
                     resid[[k, j]] += score[k] * (xhaz[j] - covar[[k, j]] * cumhaz);
@@ -232,8 +199,6 @@ mod tests {
         SurvivalData::try_new(time, status).unwrap()
     }
 
-    /// Direct O(n^2) evaluation of `sum_t (x_i - xbar(t)) dM_i(t)` for the
-    /// Breslow approximation, one covariate, no ties.
     fn naive_breslow(time: &[f64], status: &[i32], x: &[f64], score: &[f64]) -> Vec<f64> {
         let n = time.len();
         let mut resid = vec![0.0; n];
@@ -281,9 +246,6 @@ mod tests {
 
     #[test]
     fn score_residuals_sum_to_the_score_vector() {
-        // At the true maximum the score residuals sum to the score vector,
-        // which is zero; away from it they sum to U(beta).  With beta = 0
-        // (unit scores) U = sum over deaths of (x - xbar).
         let time = vec![1.0, 1.0, 2.0, 3.0, 3.0, 4.0];
         let status = vec![1, 1, 0, 1, 1, 1];
         let covar = array![
@@ -321,9 +283,6 @@ mod tests {
 
     #[test]
     fn efron_ties_match_r_with_weights() {
-        // R: coxph(Surv(time, status) ~ x1 + x2, weights = w, ties = "efron",
-        //    init = c(0.3, -0.2), iter.max = 0); residuals(fit, type = "score").
-        // Tie groups of 3 and 2 deaths, each with a censored row.
         let time = vec![2.0, 2.0, 2.0, 2.0, 3.0, 5.0, 5.0, 5.0, 7.0, 8.0];
         let status = vec![1, 1, 0, 1, 1, 1, 0, 1, 1, 0];
         let x1: [f64; 10] = [0.5, -1.2, 0.3, 1.1, -0.4, 0.8, 1.5, -0.7, 0.2, -1.0];

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete calls: model-frame preparation, baseline construction and cohort output.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

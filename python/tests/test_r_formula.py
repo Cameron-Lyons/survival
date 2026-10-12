@@ -20,9 +20,6 @@ def _term_name(term):
     return r_formula._covariate_term_name(term)
 
 
-# --- tokenizer ------------------------------------------------------------------
-
-
 def test_tokenizer_respects_parentheses_backticks_and_quotes():
     assert r_formula._split_top_level("a:log(b, c):`d:e`", ":") == ["a", "log(b, c)", "`d:e`"]
     assert r_formula._split_top_level_token("a %in% (b %in% c)", "%in%") == ["a", "(b %in% c)"]
@@ -106,8 +103,6 @@ def test_term_expansion_follows_r_model_formulae():
     ],
 )
 def test_expression_literals_and_quoted_symbols_keep_their_meaning(rhs, label, values):
-    # Stock R's model.matrix keeps string punctuation inside the logical
-    # expression, deparses its strings with double quotes, and quotes symbols.
     data = {
         "time": [1, 2, 3, 4],
         "status": [1, 1, 1, 0],
@@ -131,9 +126,6 @@ def test_formula_term_cache_returns_independent_terms():
     third = r_formula._split_terms("group + strata(x1) + offset(x2)", None)
     assert [term.column for term in third.covariates] == ["group"]
     assert third.strata == ["x1"]
-
-
-# --- responses -----------------------------------------------------------------
 
 
 def test_response_spec_covers_surv_plain_and_empty_left_hand_sides():
@@ -173,7 +165,6 @@ def test_model_frame_builds_the_response_and_row_aligned_arguments():
     assert mf.offset == pytest.approx([1.0 + value for value in data["x2"]])
     assert mf.terms.strata == ["group"]
     variables = dict(r_formula._model_variables(mf))
-    # the strata() term is a factor; a character strata variable gets R's short labels
     assert list(variables.pop("strata(group)")) == ["A"] * 4 + ["B"] * 4
     assert variables == {"x1": data["x1"], "offset(x2)": data["x2"]}
     groups = r_formula._model_strata(mf)
@@ -231,7 +222,6 @@ def test_arithmetic_responses_and_call_terms_evaluate_against_data():
 
 
 def test_formula_arithmetic_and_transforms_follow_r_ieee_results():
-    # R: a / b, a ^ b, log() and sqrt() give Inf/NaN (log and sqrt warn) instead of failing
     data = {
         "a": [1.0, -1.0, 1.0, 0.0, -10.0, -10.0, 0.0, -1.0, 2.0, 0.5],
         "b": [0.0, 0.0, -0.0, 0.0, 401.0, 400.0, -1.0, 0.5, 0.5, -2000.0],
@@ -258,17 +248,14 @@ def test_formula_arithmetic_and_transforms_follow_r_ieee_results():
 def test_a_bare_comparison_is_a_logical_term_like_r():
     lung = survival.datasets.load_lung()
     cox = survival.r.coxph("Surv(time, status) ~ age > 60", lung)
-    # R: coef(coxph(Surv(time, status) ~ age > 60, lung))
     assert survival.r.coef(cox) == pytest.approx([0.21615449288090741], rel=1e-8)
     aft = survival.r.survreg("Surv(time, status) ~ ph.karno >= 80", lung)
-    # R: coef(survreg(Surv(time, status) ~ ph.karno >= 80, lung))
     assert survival.r.coef(aft) == pytest.approx(
         [5.79599489682293534, 0.32884103311911272], rel=1e-8
     )
 
 
 def test_a_comparison_mixed_with_other_terms_needs_i():
-    # R parses ~ age > 60 + sex as the single term age > (60 + sex)
     lung = survival.datasets.load_lung()
     with pytest.raises(ValueError, match="wrapped in I"):
         survival.r.coxph("Surv(time, status) ~ age > 60 + sex", lung)

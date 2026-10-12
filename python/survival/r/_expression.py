@@ -573,8 +573,6 @@ def _comparison_values(
         )
 
     if left_factor and right_factor and left.ordered != right.ordered:
-        # R's group dispatch falls back to the integer codes when the two
-        # operands choose different methods, even for equality comparisons.
         left_method = "Ops.ordered" if left.ordered else "Ops.factor"
         right_method = "Ops.ordered" if right.ordered else "Ops.factor"
         _warn_outside_package(
@@ -593,8 +591,6 @@ def _comparison_values(
         factor_levels = levels(ordered)
         if left_factor and right_factor and levels(right) != factor_levels:
             raise ValueError("level sets of factors are different")
-        # A nonfactor operand is matched against the ordered levels. Unknown
-        # labels become missing rather than taking a lexical ordering.
         left_values, right_values = codes(left, factor_levels), codes(right, factor_levels)
     return _ExpressionVector(
         (compare(a, operator, b) for a, b in zip(left_values, right_values, strict=True)),
@@ -615,8 +611,6 @@ def _evaluate_expression(
 
     def evaluate(node: _ExpressionNode) -> _ExpressionVector:
         if n == 0 and not node.columns:
-            # R computes constant subexpressions before recycling to an empty
-            # vector, so their warnings survive an empty model frame.
             return _evaluate_expression(node, 1, source, transform, compare, divide, power).take(())
         operator = node.value
         if node.kind == "column":

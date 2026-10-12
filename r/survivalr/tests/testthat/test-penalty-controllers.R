@@ -8,13 +8,11 @@ penalty_matrix_data <- function() {
 check_penalty_fit <- function(args, label) {
   actual <- do.call(survpenal.fit, args)
   expected <- do.call(survival::survpenal.fit, args)
-  # Preserve the existing offset/alias corrections in the shared Rust solver.
   if (is.null(expected$frail) && !is.null(args$offset)) {
     expected$linear.predictors <- expected$linear.predictors + args$offset
   }
   expect_equal(names(actual), names(expected), info = label)
   for (name in names(expected)) {
-    # Use an absolute tolerance for scores and penalties near zero.
     comparison <- all.equal(actual[[name]], expected[[name]], tolerance = 4e-7, scale = 1)
     expect_true(isTRUE(comparison), info = paste(label, name, paste(comparison, collapse = "; ")))
   }
@@ -179,8 +177,6 @@ test_that("sparse-first penalties preserve dense column labels and term ordering
                               theta = .4, sparse = TRUE)
   ridge <- survival::ridge(data$x[, 2], theta = 1, scale = FALSE)
   attr(ridge, "varname") <- "penalized age"
-  # Stock R misindexes a dense penalty after removing an earlier sparse column.
-  # Use its equivalent dense-first layout as the numerical reference.
   reference <- list(x = cbind(Intercept = 1, age = data$x[, 2], group = frailty),
                     y = data$y, weights = NULL, offset = seq(.1, 1.2, length.out = 12),
                     init = NULL, controlvals = survival::survreg.control(), dist = "gaussian",

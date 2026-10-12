@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock survival values for population boundary ownership tests.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -143,8 +142,6 @@ scalar_weights <- list()
 for (data_frame in c(FALSE, TRUE)) for (count in c(1L, 4L)) {
     data <- if (data_frame) data.frame(unused = 1:4) else list(unused = 1:4)
     weights <- rep(1, count)
-    # Stock scalar rate entries reach the native kernel unexpanded at n > 1.
-    # Use explicit external vectors there: the independent oracle for broadcast.
     rate_age <- rep(14610, count)
     rate_sex <- rep(1, count)
     rate_year <- rep(as.Date("2000-01-01"), count)

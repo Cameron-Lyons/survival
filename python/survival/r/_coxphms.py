@@ -79,13 +79,7 @@ from ._types import (
     _PenaltyDesignTerm,
 )
 
-# survcheck2's flags, the names coxph.control's survcheckallow may list
 SURVCHECK_FLAGS = ("overlap", "gap", "jump", "teleport")
-
-
-# ---------------------------------------------------------------------------
-# the result
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -105,28 +99,20 @@ class _MsData:
 
     x: np.ndarray
     x_names: tuple[str, ...]
-    # 1-based position in the model terms of each column of x
     x_assign: tuple[int, ...]
     means: tuple[float, ...]
-    # 1-based current state and target state (0 when censored) of each row
     istate: np.ndarray
     endpoint: np.ndarray
-    # the istate argument's values, which survcheck2 read
     istate_values: Any
     id: np.ndarray
     weights: np.ndarray | None
     offset: np.ndarray | None
-    # the codes of each strata() term (-1 missing), and the transitions each stratifies
     strata_terms: tuple[np.ndarray, ...]
     strata_use: np.ndarray
-    # the 0-based transition of each stacked row, and each transition's reference
-    # transition (1-based) when its baseline is proportional to another's, else 0
     hazard: np.ndarray
     phbaseline: tuple[int, ...]
-    # the user strata (strata(mf[stangle$vars], shortlabel = TRUE)); -1 missing
     strata: np.ndarray | None
     strata_levels: tuple[str, ...]
-    # rownames(mf) of every row before the na.action (after subset)
     row_labels: tuple[str, ...]
 
 
@@ -167,11 +153,6 @@ class CoxphmsModel(CoxphModel):
         if codes is None:
             return None
         return [None if code < 0 else self.ms.strata_levels[code] for code in codes]
-
-
-# ---------------------------------------------------------------------------
-# parsecovar1: the formula list
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -258,7 +239,6 @@ def _lhs_value(text: str, names: Sequence[str]) -> Any:
         return _lhs_value(text[1:-1], names)
     colons = [idx for idx, char in _top_level(text) if char == ":"]
     if colons:
-        # a:b, R's `:` being left associative
         left = _lhs_value(text[: colons[-1]], names)
         right = _lhs_value(text[colons[-1] + 1 :], names)
         if not (isinstance(left, tuple) and isinstance(right, tuple)) or not left or not right:
@@ -359,7 +339,6 @@ def _formula_list(formulas: Sequence[Any], statedata: Any | None) -> _FormulaLis
     for line in lines:
         if any(isinstance(term, _ModelClusterTerm) for term in _split_terms(line.rhs).model_terms):
             raise ValueError("cluster() terms are only allowed in the first formula of a list")
-    # the term labels of each line; a removal ("- x") adds none
     added = [
         term
         for line in lines
@@ -368,11 +347,6 @@ def _formula_list(formulas: Sequence[Any], statedata: Any | None) -> _FormulaLis
     ]
     master = f"{response} ~ {' + '.join([dformula_rhs, *added])}"
     return _FormulaList(master, dformula_rhs, tuple(lines), columns)
-
-
-# ---------------------------------------------------------------------------
-# parsecovar2 / parsecovar3
-# ---------------------------------------------------------------------------
 
 
 def _term_key(term: _FormulaModelTerm) -> Any:
@@ -494,12 +468,10 @@ def _parsecovar2(
         s1 = np.array([pair[0] - 1 for pair in pairs])
         s2 = np.array([pair[1] - 1 for pair in pairs])
         rindex = [1 + t for t in _termmatch(_model_terms(line.rhs), allterm)]
-        # R's update(dformula, ~ . + rhs): the default terms the line removes
         joiner = " " if line.rhs.lstrip().startswith("-") else " + "
         kept = {1 + t for t in _termmatch(_model_terms(dformula_rhs + joiner + line.rhs), allterm)}
         for row in (row for row in dformula_terms if row not in kept):
             tmap[row, s1, s2] = 0
-        # "~ -1 + (rhs)" has an intercept when the line asks for its own baseline
         if _split_terms("-1 + " + line.rhs).intercept:
             rindex = [0, *rindex]
         if rindex:
@@ -509,8 +481,6 @@ def _parsecovar2(
         if line.shared and len(pairs) > 1:
             tmap[0, s1[1:], s2[1:]] = -dmap[0, s1[0], s2[0]]
 
-    # the observed transitions: rows with any count (censoring included) and the
-    # columns that are states
     counts = np.array(transitions.values, dtype=float)
     keep_rows = counts.sum(axis=1) > 0
     keep_cols = np.array([name in states for name in transitions.colnames])
@@ -520,13 +490,12 @@ def _parsecovar2(
     indx2 = np.array(
         [states.index(name) for name, k in zip(transitions.colnames, keep_cols, strict=True) if k]
     )
-    # a shared hazard credits each of its transitions with all of its events
     baseline = tmap[0][np.ix_(indx1, indx2)]
     for value in np.unique(baseline):
         cells = baseline == value
         if cells.sum() > 1:
             t2[cells] = t2[cells].sum()
-    tcol, trow = np.nonzero(t2.T > 0)  # the cells in column-major order
+    tcol, trow = np.nonzero(t2.T > 0)
     tmap2 = tmap[:, indx1[trow], indx2[tcol]]
     labels = tuple(f"{indx1[i] + 1}:{indx2[j] + 1}" for i, j in zip(trow, tcol, strict=True))
 
@@ -581,11 +550,6 @@ def _parsecovar3(tmap: np.ndarray, x_assign: Sequence[int], phbaseline: np.ndarr
         row += 1
     values = np.unique(np.concatenate([[0], cmap.ravel()]))
     return np.searchsorted(values, cmap).astype(np.int64)
-
-
-# ---------------------------------------------------------------------------
-# the fit
-# ---------------------------------------------------------------------------
 
 
 def _survcheckallow(value: Any) -> tuple[str, ...]:
@@ -811,7 +775,6 @@ def fit_multistate(
     state_index = [states.index(state) + 1 for state in y.states]
     endpoint = np.array([0 if e == 0 else state_index[e - 1] for e in events], dtype=np.int32)
 
-    # the model terms in R's order (attr(Terms, "factors")) and each X column's term
     allterm_terms = sorted(
         (
             term
@@ -995,11 +958,6 @@ def fit_multistate(
     )
 
 
-# ---------------------------------------------------------------------------
-# coef.coxphms / vcov.coxphms
-# ---------------------------------------------------------------------------
-
-
 def coef_coxphms(fit: CoxphmsModel, *, matrix: bool = False) -> Any:
     """R's ``coef.coxphms``: the coefficients, or with ``matrix`` a matrix shaped like
     ``cmap`` holding each transition's coefficient of each covariate (0 where it has
@@ -1036,10 +994,6 @@ def vcov_coxphms(fit: CoxphmsModel, *, complete: bool = True, matrix: bool = Fal
         blocks[label] = NamedMatrix(rownames, rownames, block.tolist())
     return blocks
 
-
-# ---------------------------------------------------------------------------
-# predict.coxphms
-# ---------------------------------------------------------------------------
 
 _PREDICT_INCOMPLETE = "predict.coxphms not complete for type expected, survival and terms"
 
@@ -1120,11 +1074,6 @@ def predict_coxphms(
     return NamedMatrix(rownames, list(fit.cmap.colnames), values.tolist())
 
 
-# ---------------------------------------------------------------------------
-# residuals.coxphms
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class CoxphmsSchoenfeldResiduals:
     """``residuals(fit, type = "schoenfeld" | "scaledsch")`` of a multi-state fit: one
@@ -1163,7 +1112,6 @@ def _collapse_groups(
         if by_level:
             declared = _categories(collapse)
     if declared is None:
-        # every missing value is the one NA group (NaNs never compare equal)
         missing = [_is_missing_value(value) for value in values]
         keys = [None if miss else value for value, miss in zip(values, missing, strict=True)]
         codes = _unique_codes(keys) - 1
@@ -1266,7 +1214,6 @@ def residuals_coxphms(
             codes, nrow = rindex, fit.n
         else:
             codes, nrow = groups[0][rindex], len(groups[1])
-        # the engine sums the stacked rows by code, in increasing code order
         summed = np.asarray(method(weighted=weighted_value, collapse=codes.tolist()))
         values = np.zeros((nrow, len(colnames)))
         values[np.unique(codes)] = summed.reshape(-1, len(colnames))
@@ -1279,11 +1226,6 @@ def residuals_coxphms(
         rows = _pad_rows(rows, excluded)
         rownames = None if rownames is None else _fitted_row_labels(fit, padded=True)
     return NamedMatrix(rownames, colnames, rows)
-
-
-# ---------------------------------------------------------------------------
-# cox.zph / coxph.detail on the stacked data
-# ---------------------------------------------------------------------------
 
 
 def _zph_assign(fit: CoxphmsModel) -> list[tuple[str, list[int]]]:
@@ -1313,11 +1255,6 @@ def _stacked_strata_labels(codes: Sequence[int]) -> list[str]:
     (R's integer stacker strata)."""
 
     return [str(int(code) + 1) for code in codes]
-
-
-# ---------------------------------------------------------------------------
-# survfit.coxphms
-# ---------------------------------------------------------------------------
 
 
 def _as_frame_columns(newdata: Any) -> dict[str, list[Any]]:
@@ -1453,7 +1390,6 @@ def survfit_coxphms(
     time0_value = _normalize_bool_option(time0, "time0")
     p0_value = None if p0 is None else _float_vector(p0, "p0")
 
-    # the rows of the curves: none with a missing user stratum, none ending by start.time
     y = fit.y
     time = np.asarray(y.time, dtype=np.float64)
     keep = np.ones(len(time), dtype=bool) if ms.strata is None else ms.strata >= 0
@@ -1463,8 +1399,6 @@ def survfit_coxphms(
             raise ValueError("start.time has removed all observations")
         survfit_start = start
     else:
-        # survfitAJ's start.time <- min(Y[, 2], 0): the status column of right-censored
-        # data, the stop time of counting-process data
         survfit_start = 0.0 if y.start is None else min(0.0, float(time.min()))
     rows = np.flatnonzero(keep)
     subset = len(rows) < len(time)

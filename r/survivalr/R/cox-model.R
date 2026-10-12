@@ -1,5 +1,3 @@
-# Prepare fitted R Cox data for the shared numerical kernels. Formula terms,
-# contrasts and retained model frames remain R's responsibility.
 .cox_fixed_design <- function(fit, frame, training = FALSE) {
   stored <- fit[["x"]]
   design <- if (training && !is.null(stored)) stored else stats::model.matrix(fit, frame)
@@ -43,8 +41,6 @@
   x <- if (design || (curve && !is.null(fit$frail))) {
     .cox_fixed_design(fit, frame, training = TRUE)
   } else NULL
-  # Individual predictions retain fitted frailty in the training risk sets;
-  # the default survfit baseline excludes frailty, matching the Cox curve API.
   risk <- if (curve && !is.null(fit$frail)) {
     exp(drop(x %*% beta) + (if (is.null(offset)) 0 else offset) - center)
   } else exp(fit$linear.predictors - offset_mean)
@@ -55,8 +51,6 @@
     beta = beta, center = center, risk = risk, strata = groups, strata_terms = strata_terms)
 }
 
-# Event-time baseline at the model's centering point. This is the retained
-# survfit object needed by Yates summaries, including uncertainty and labels.
 .cox_yates_baseline <- function(fit) {
   input <- .cox_model_data(fit, design = TRUE, curve = TRUE)
   if (nlevels(input$strata) > 1L) stop("stratified models not yet supported", call. = FALSE)

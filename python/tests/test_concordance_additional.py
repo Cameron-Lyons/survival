@@ -26,7 +26,6 @@ def data():
 def test_concordancefit_matches_r_default(data):
     fit = core.concordancefit(*data)
 
-    # concordance(Surv(time, status) ~ x): (C + Tx/2) / (C + D + Tx)
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
     assert fit.var[0] == pytest.approx([0.029478458049886618])
@@ -50,7 +49,6 @@ def test_concordancefit_without_standard_errors_only_counts(data):
 def test_concordancefit_case_weights_match_r(data):
     fit = core.concordancefit(*data, weights=core.Weights(W))
 
-    # R concordance with case weights w
     assert fit.concordance == pytest.approx([0.64615384615384619])
     assert _counts(fit) == pytest.approx((19.0, 9.5, 4.0, 2.0, 0.0))
     assert fit.var[0] == pytest.approx([0.020554798501453028])
@@ -102,7 +100,6 @@ def test_concordancefit_time_weights_match_r(data, timewt, concordance, counts, 
 def test_concordancefit_ymax_truncates_pairs(data):
     fit = core.concordancefit(*data, ymax=3.0)
 
-    # R concordance with ymax = 3
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((7.0, 7.0, 3.0, 0.0, 0.0))
     assert fit.var[0] == pytest.approx([0.020761245674740487])
@@ -112,7 +109,6 @@ def test_concordancefit_ymax_truncates_pairs(data):
 def test_concordancefit_strata_keeps_per_stratum_counts(data):
     fit = core.concordancefit(*data, strata=[1, 1, 1, 1, 2, 2, 2, 2])
 
-    # concordance(Surv(time, status) ~ x + strata(g))
     assert fit.concordance == pytest.approx([0.61111111111111116])
     assert fit.count_strata == [1, 2]
     assert _counts(fit, 0) == pytest.approx((3.0, 1.0, 1.0, 0.0, 0.0))
@@ -124,7 +120,6 @@ def test_concordancefit_strata_keeps_per_stratum_counts(data):
 def test_concordancefit_cluster_uses_grouped_jackknife_variance(data):
     fit = core.concordancefit(*data, cluster=[1, 1, 2, 2, 3, 3, 4, 4])
 
-    # concordance(Surv(time, status) ~ x + cluster(id)): counts unchanged, var collapsed by id
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
     assert fit.var[0] == pytest.approx([0.0034013605442176865])
@@ -166,13 +161,11 @@ def test_concordancefit_timefix_groups_near_tied_event_times():
     x = core.CovariateMatrix([0.9, 0.1, 0.5, 0.2], 4, 1)
 
     fixed = core.concordancefit(near, x)
-    # aeqSurv folds the near-tie; equals concordance(Surv(c(1, 1, 2, 3), status) ~ x)
     assert fixed.concordance == pytest.approx([0.4])
     assert _counts(fixed) == pytest.approx((2.0, 3.0, 0.0, 1.0, 0.0))
     assert fixed.var[0] == pytest.approx([0.0864])
 
     raw = core.concordancefit(near, x, timefix=False)
-    # without timefix the pair is ordered: one more discordant pair, no tied time
     assert raw.concordance == pytest.approx([1 / 3])
     assert _counts(raw) == pytest.approx((2.0, 4.0, 0.0, 0.0, 0.0))
 
@@ -183,7 +176,6 @@ def test_concordancefit_several_predictors_share_one_variance_matrix(data):
 
     fit = core.concordancefit(survival_data, x)
 
-    # concordance(Surv(time, status) ~ x + w)
     assert fit.concordance == pytest.approx([0.5, 0.38095238095238093])
     assert _counts(fit, 0) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
     assert _counts(fit, 1) == pytest.approx((6.0, 11.0, 4.0, 1.0, 0.0))
@@ -201,7 +193,6 @@ def test_concordancefit_counting_matches_r():
     x = core.CovariateMatrix([0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 0.2, 0.8], 8, 1)
 
     plain = core.concordancefit_counting(counting, x)
-    # concordance(Surv(start, stop, status) ~ x)
     assert plain.concordance == pytest.approx([0.44444444444444442])
     assert _counts(plain) == pytest.approx((4.0, 5.0, 0.0, 0.0, 0.0))
     assert plain.var[0] == pytest.approx([0.018289894833104711])

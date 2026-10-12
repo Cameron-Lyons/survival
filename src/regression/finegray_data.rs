@@ -1,29 +1,23 @@
-//! R's `src/finegray.c`: the interval expansion behind `finegray()`.  A
-//! row to extend (a competing event on a subject's last row) keeps its
-//! interval up to the next time of the censoring curve and gains a row for
-//! each later interval of the curve that is kept, weighted by the curve's
-//! probability relative to the row's own.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{BoolVec, FloatVec};
 use crate::internal::validation::validate_finite;
 use pyo3::prelude::*;
 
-/// The expanded data; every vector has one entry per output row.
+#[doc = " The expanded data; every vector has one entry per output row."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct FineGrayOutput {
-    /// One-based row of the input each output row came from (R's `row`).
+    #[doc = " One-based row of the input each output row came from (R's `row`)."]
     #[pyo3(get)]
     pub row: Vec<usize>,
     #[pyo3(get)]
     pub start: Vec<f64>,
     #[pyo3(get)]
     pub end: Vec<f64>,
-    /// The probability weight, 1 except on the added intervals.
+    #[doc = " The probability weight, 1 except on the added intervals."]
     #[pyo3(get)]
     pub wt: Vec<f64>,
-    /// 0 on a row's own interval, `k` on its `k`-th added one.
+    #[doc = " 0 on a row's own interval, `k` on its `k`-th added one."]
     #[pyo3(get)]
     pub add: Vec<usize>,
 }
@@ -31,7 +25,7 @@ pub struct FineGrayOutput {
 #[cfg(feature = "python")]
 #[pymethods]
 impl FineGrayOutput {
-    /// Independent writable NumPy snapshots for bulk conversion.
+    #[doc = " Independent writable NumPy snapshots for bulk conversion."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;
         let result = pyo3::types::PyDict::new(py);
@@ -52,9 +46,6 @@ impl FineGrayOutput {
     }
 }
 
-/// `finegray.c`: the `(tstart, tstop]` rows, the censoring curve (the
-/// interval that ends at `ctime[j]` has probability `cprob[j]`), which rows
-/// to `extend` and which curve intervals to `keep`.
 pub fn finegray(
     tstart: &[f64],
     tstop: &[f64],
@@ -66,9 +57,6 @@ pub fn finegray(
     validate_finegray_inputs(tstart, tstop, ctime, cprob, extend, keep)?;
     let ncut = ctime.len();
     let kept: Vec<usize> = (0..ncut).filter(|&idx| keep[idx]).collect();
-    // Each row's curve interval (the first `ctime >= tstop`) and its first
-    // later kept interval; a row that is not extended adds nothing.  The
-    // added rows divide by the probability of that interval.
     let plans: Vec<(usize, usize)> = tstop
         .iter()
         .zip(extend)
@@ -112,7 +100,6 @@ pub fn finegray(
             out.end.push(tstop[i]);
             continue;
         }
-        // Extended to the end of its interval, then one row per kept one.
         out.end.push(ctime[cut]);
         for (iadd, &idx) in kept[first_kept..].iter().enumerate() {
             out.row.push(i + 1);
@@ -173,7 +160,7 @@ fn validate_finegray_inputs(
     Ok(())
 }
 
-/// Python entry point of [`finegray`].
+#[doc = " Python entry point of [`finegray`]."]
 #[pyfunction(name = "finegray")]
 pub fn finegray_py(
     py: Python<'_>,

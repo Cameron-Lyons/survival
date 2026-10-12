@@ -57,9 +57,6 @@ from ._formula import (
 from ._surv import Surv, Surv2
 from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation, _SurvResponseSpec
 
-# ---------------------------------------------------------------------------
-# tcut, neardate, lvcf, nostutter
-# ---------------------------------------------------------------------------
 
 _NEARDATE_TIME_UNITS = {
     "D": 86_400 * 10**18,
@@ -133,8 +130,6 @@ def _neardate_date_vectors(y1: Any, y2: Any) -> tuple[list[float], list[float]]:
     if array1 is not None and array2 is not None:
         return array1.astype(float, copy=False).tolist(), array2.astype(float, copy=False).tolist()
 
-    # ndarray.tolist() converts nanosecond datetime64 values to integers and
-    # loses their date type, so retain their scalars for exact common ranking.
     vectors = [
         [None if np.ma.is_masked(value) else value for value in values]
         if isinstance(values, np.ndarray) and values.ndim == 1 and values.dtype.kind == "M"
@@ -159,7 +154,6 @@ def _neardate_date_vectors(y1: Any, y2: Any) -> tuple[list[float], list[float]]:
     dates = [value for value in chain.from_iterable(vectors) if not _is_missing_value(value)]
     key: Callable[[Any], Any]
     if character:
-        # R's c(y1, y2) promotes a numeric/character pair to character.
         key = _as_character
     elif all(isinstance(value, date | np.datetime64) for value in dates):
         key = _neardate_calendar_key
@@ -198,8 +192,6 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
-    # R's match() pairs a missing id with a missing id, so such rows stay in both sets
-    # (their answer is NA whatever nomatch says); rows of set 2 without a date go.
     missing1 = [_is_missing_value(value) for value in id1_values]
     id1_labels = [
         "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
@@ -244,9 +236,6 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
     missing = [_is_missing_value(value) for value in values]
     source = _core.lvcf(id_values, missing, times)
     if first and _categories(x) is None:
-        # A missing row refers to itself only when it is the subject's first
-        # observation. Reuse the native ordering (including missing times last)
-        # instead of sorting the same rows again in Python.
         initial_missing = [
             row for row, origin in enumerate(source) if row == origin and missing[row]
         ]
@@ -281,11 +270,6 @@ def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[An
     return [censor if flag else value for flag, value in zip(replaced, values, strict=True)]
 
 
-# ---------------------------------------------------------------------------
-# aeqSurv
-# ---------------------------------------------------------------------------
-
-
 _SurvT = TypeVar("_SurvT", Surv, Surv2)
 
 
@@ -314,11 +298,6 @@ def aeqSurv(x: _SurvT, tolerance: Any | None = None) -> _SurvT:
         result = _core.aeq_surv(list(x.time), list(x.time2), tolerance_value)
         return x.replace_times(time=result.time, time2=result.time2 or [])
     return x.replace_times(time=_core.aeq_surv(list(x.time), None, tolerance_value).time)
-
-
-# ---------------------------------------------------------------------------
-# survSplit
-# ---------------------------------------------------------------------------
 
 
 def _surv_argument_name(argument: str) -> str | None:
@@ -502,7 +481,6 @@ def survSplit(
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
             added_id = True
-    # a character id names a data column, which the model frame subsets with the rows
     id_column = idname if added_id or idname in names else None
     mf = model_frame(
         formula,
@@ -512,16 +490,12 @@ def survSplit(
         id=id_values if idname is None else id_column,
         timeline=True,
     )
-    # R only invents the id column for right-censored (time, status) data
     if added_id and (not isinstance(mf.response, Surv) or mf.response.type != "right"):
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
-    # a Surv2 timeline keeps its (time, event) form: cut rows are inserted into it
     timeline = isinstance(mf.response, Surv2)
     split = _split_kernel(mf.response, cut_values, zero_value, timefix, mf.id if timeline else None)
     rows = split.row
-    # R's rightdot: with ``~ .`` and no rows dropped the data itself is split, so
-    # every column keeps its place
     if formula.partition("~")[2].strip() == "." and mf.n == _data_row_count(data):
         newdata = _split_frame(_data_columns(data, "data"), rows)
     else:
@@ -537,8 +511,6 @@ def survSplit(
     states = () if mf.response is None else mf.response.states
     time_name, time2_name, event_name = _surv_argument_names(mf)
     if isinstance(mf.response, Surv2):
-        # the Surv2 arguments that are variable names name the columns, whatever
-        # start and event say
         start = time_name or start or "tstart"
         event = time2_name or event or "event"
     elif mf.response is None or mf.response.ncol == 2:
@@ -597,11 +569,6 @@ def _split_extras(
     if added is not None:
         newdata[_output_name(added, "added")] = split.censor
     return newdata
-
-
-# ---------------------------------------------------------------------------
-# fromtimeline
-# ---------------------------------------------------------------------------
 
 
 def fromtimeline(
@@ -679,11 +646,6 @@ def _timeline_response_names(spec: _SurvResponseSpec, counting: bool) -> list[st
     else:
         names = [time_name or "tstart"]
     return [*names, event_name or "status"]
-
-
-# ---------------------------------------------------------------------------
-# survcondense
-# ---------------------------------------------------------------------------
 
 
 def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
@@ -766,11 +728,6 @@ def survcondense(
         response.states, [response.event[row] for row in keep]
     )
     return output
-
-
-# ---------------------------------------------------------------------------
-# rttright
-# ---------------------------------------------------------------------------
 
 
 def _rttright_survcheck(response: Surv, id_values: Sequence[Any]) -> None:
@@ -870,10 +827,6 @@ def rttright(
         return [list(row) for row in result.weights]
     return [row[0] for row in result.weights]
 
-
-# ---------------------------------------------------------------------------
-# tmerge
-# ---------------------------------------------------------------------------
 
 _TMERGE_COUNT_NAMES = (
     "early",
@@ -1098,7 +1051,6 @@ def _storage_mode(values: Sequence[Any] | None) -> str:
 
 
 _CENSOR_VALUES = {"logical": False, "integer": 0, "double": 0.0, "character": ""}
-# R's coercion order: combining two modes gives the later one
 _STORAGE_MODES = ("logical", "integer", "double", "character")
 
 
@@ -1233,7 +1185,6 @@ def _tdc_values(step: Any, argument: _TmergeArgument, prior: list[Any] | None) -
             return [0 if source is None else 1 for source in sources]
         default, mode = _tdc_default(argument)
         if mode != argument.mode and None in sources:
-            # R converts the whole variable only when some interval takes the default
             values = [_as_mode(value, mode) for value in values]
         return [default if source is None else values[source] for source in sources]
     if values is None:
@@ -1255,7 +1206,6 @@ def _event_values(
     for row, source, value in zip(step.event_row, step.event_source, step.event_value, strict=True):
         if argument.kind == "cumevent":
             if argument.numeric is not None and math.isnan(argument.numeric[source]):
-                # R's newvar[indx2[keep]] <- yinc[keep] stops on the NA that yinc != 0 puts in keep
                 raise ValueError(
                     f"argument {argument.name} has a missing cumevent increment at an event time"
                 )

@@ -1,57 +1,27 @@
-//! `src/survreg7.c`: the penalised Newton-Raphson iteration of a
-//! parametric model, with `src/survpenal.c`, which adds the penalty to the
-//! log likelihood, the score and the information.
-//!
-//! Each step is a Newton step on the penalised information, or a Fisher
-//! step on `JJ` when that is not positive definite; a step that lowers the
-//! penalised log likelihood is replaced by eight rounds of a golden-section
-//! search along it (after capping any drop in a `log(scale)` at -1.1), and
-//! the iteration stops when the search finds no improvement.  The
-//! information keeps the sparse-plus-dense layout of
-//! [`crate::regression::penalized::cholesky3`], so a frailty with `nf`
-//! groups costs `O(nvar2 (nf + nvar2))` memory.  `JJ` is only needed by a
-//! Fisher step, so it is computed only then, at the point the failed
-//! information was evaluated.
-
 use crate::error::SurvivalResult;
 use crate::regression::penalized::cholesky3::{chinv3, cholesky3, chsolve3, finish_factors};
 use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use crate::regression::survregc1::{BlockLikelihood, SparseFrailty, SurvregKernel};
 use ndarray::Array2;
 
-/// What `survreg7` returns (R's `fit`).
 pub(super) struct Survreg7Fit {
-    /// `fit$coef`: frailties, `x` coefficients, `log(scale)`s (and the
-    /// trailing fixed `log(scale)` when the scale is fixed).
     pub beta: Vec<f64>,
-    /// `fit$iter`: the converging iteration, `maxiter + 1` when the budget
-    /// ran out, or the iteration of an abject failure of the search.
     pub iter: usize,
-    /// The relative-change test passed (R's intended `flag != 1000`, which
-    /// survreg7.c:460 overwrites with the rank).
     pub converged: bool,
-    /// `fit$loglik`: the penalised log likelihood on the fitting scale.
     pub loglik: f64,
-    /// `fit$penalty`: the sum of the `coxlist` penalties (C's sign, `-P`).
     pub penalty: f64,
-    /// `fit$u`: the penalised score.
     pub u: Vec<f64>,
-    /// `fit$hmat`, `fit$hinv` and `fit$hdiag` after [`finish_factors`].
     pub hmat: Array2<f64>,
     pub hinv: Array2<f64>,
     pub hdiag: Vec<f64>,
 }
 
-/// survpenal.c's `whichcase`: a full evaluation, or the log likelihood
-/// alone during the golden-section search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Case {
     Full,
     LoglikOnly,
 }
 
-/// What `add_penalty(Case::Full)` added to `JJ` and its sparse diagonal,
-/// kept so that a Fisher step can build `JJ` after the fact.
 #[derive(Default)]
 pub(super) struct JjPenalty {
     sparse_flag: bool,
@@ -59,12 +29,6 @@ pub(super) struct JjPenalty {
     second2: Vec<f64>,
 }
 
-/// `survpenal.c`: evaluates the sparse (`f.expr1`) and dense (`f.expr2`)
-/// penalties at `beta` and returns their sum.  A full evaluation writes the
-/// recentred coefficients back into `beta` and adds the derivatives to
-/// `lik`; a flagged (infinite) penalty sets its score to zero and its
-/// information to the identity instead.  The composer's `coxlist`s are
-/// updated either way, as R's `f.expr`s reassign them.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn add_penalty(
     case: Case,
@@ -148,9 +112,6 @@ pub(super) fn add_penalty(
     Ok(penalty)
 }
 
-/// The dense penalty's second derivative added to `matrix` as survpenal.c
-/// does: the diagonal, or the full `nvar x nvar` block read row by row
-/// (survpenal.c:109-116; the matrix is symmetric).
 fn add_dense_second(
     matrix: &mut Array2<f64>,
     nf: usize,
@@ -173,10 +134,6 @@ fn add_dense_second(
     }
 }
 
-/// `JJ` and its sparse diagonal at the point `lik` was evaluated (`lik.at`,
-/// before the penalty recentred the coefficients), with the penalty terms
-/// of that evaluation replayed: bit for bit what an evaluation with `JJ`
-/// would have given.
 pub(super) fn ensure_jj(
     kernel: &SurvregKernel<'_>,
     frailty: Option<&SparseFrailty<'_>>,
@@ -210,8 +167,6 @@ pub(super) fn ensure_jj(
     Ok(())
 }
 
-/// The penalised log likelihood at `beta + u * x`, written into `trial`
-/// (the whichcase = 1 calls of survreg7.c's golden-section search).
 #[allow(clippy::too_many_arguments)]
 fn loglik_along(
     kernel: &SurvregKernel<'_>,
@@ -243,11 +198,6 @@ fn loglik_along(
     Ok(loglik + penalty)
 }
 
-/// `survreg7`: iterates from `beta` (see [`Survreg7Fit::beta`] for the
-/// layout) for at most `maxiter` steps.  R's quirks are kept: the relative
-/// change of the penalised log likelihood is the only convergence test,
-/// after an abject failure of the search the returned information is that
-/// of the failed step, and `maxiter = 0` returns the start with `iter = 1`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn survreg7(
     kernel: &SurvregKernel<'_>,
@@ -266,8 +216,6 @@ pub(super) fn survreg7(
     let mut lik = BlockLikelihood::new(nf, nvar + nstrat);
     let mut scratch = None;
     let mut jj_penalty = JjPenalty::default();
-    // A fixed log(scale) tacked onto the end of beta is copied to newbeta
-    // as well (survreg7.c:196).
     let mut newbeta = beta.clone();
     let mut step = vec![0.0; nvar3];
 
@@ -288,8 +236,6 @@ pub(super) fn survreg7(
     let mut iter = 1;
     let mut converged = false;
     while iter <= maxiter {
-        // A Newton-Raphson step, or a Fisher step when the information is
-        // not positive definite.
         let flag = cholesky3(&mut lik.hmat, nf, &mut lik.fdiag, tol_chol);
         step.copy_from_slice(&lik.u);
         if flag < 0 {
@@ -325,10 +271,6 @@ pub(super) fn survreg7(
         }
 
         if newlk < loglik {
-            // Eight steps of a golden-section search over beta + x u, after
-            // limiting any shrinkage of a sigma to a -1.1 change in
-            // log(sigma).  x1 is the left end of the search, x2 and x3 the
-            // middle, x4 the right end; first bracket the maximum.
             for i in 0..nvar3 {
                 step[i] = newbeta[i] - beta[i];
             }
@@ -371,14 +313,12 @@ pub(super) fn survreg7(
             let mut y2 = along(x2, &mut newbeta, &mut lik, callback, &mut jj_penalty)?;
             for _ in 0..8 {
                 if y3 > y2 {
-                    // Toss away the interval from x1 to x2.
                     x1 = x2;
                     x2 = x3;
                     x3 = 0.618 * x4 + 0.382 * x1;
                     y2 = y3;
                     y3 = along(x3, &mut newbeta, &mut lik, callback, &mut jj_penalty)?;
                 } else {
-                    // Toss away the interval from x3 to x4.
                     x4 = x3;
                     x3 = x2;
                     x2 = 0.618 * x1 + 0.382 * x4;
@@ -387,10 +327,8 @@ pub(super) fn survreg7(
                 }
             }
             if !(y2 > loglik || y3 > loglik) {
-                // Abject failure.
                 break;
             }
-            // Success: keep the better point and its derivatives.
             let x = if y2 > y3 { x2 } else { x3 };
             for i in 0..nvar3 {
                 newbeta[i] = beta[i] + step[i] * x;
@@ -409,7 +347,6 @@ pub(super) fn survreg7(
             newlk = lik.loglik + newpen;
         }
 
-        // newbeta is an improvement: keep it.
         beta[..nvar3].copy_from_slice(&newbeta[..nvar3]);
         usave.copy_from_slice(&lik.u);
         loglik = newlk;
@@ -417,7 +354,6 @@ pub(super) fn survreg7(
         iter += 1;
     }
 
-    // The rank this returns is R's fit$flag, which survpenal.fit never reads.
     cholesky3(&mut lik.hmat, nf, &mut lik.fdiag, tol_chol);
     let mut hmat = lik.hmat;
     let mut hinv = hmat.clone();

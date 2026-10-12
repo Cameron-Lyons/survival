@@ -1,11 +1,3 @@
-//! dataprep: fixture checks for the data-preparation and population
-//! kernels (`neardate`, `aeqSurv`, `tcut`, `pyears`, `survexp` and the
-//! rate tables, `tmerge`, `survSplit`, `survcondense`, `rttright`).
-//!
-//! The R-level bookkeeping these functions do before reaching the kernels
-//! (formula evaluation, data-frame assembly) is reproduced here just far
-//! enough for the fixture cases.
-
 use super::*;
 use crate::data_prep::{
     NeardateBest, Repeated, RttrightInput, SurvSplitResponse, TmergeBase, TmergeKind,
@@ -19,12 +11,10 @@ use crate::population::{
 };
 use ndarray::Array2;
 
-/// Numeric column of a frame.
 fn column(frame: &Frame, name: &str) -> Result<Vec<f64>, String> {
     frame.get(name)?.numeric(name)
 }
 
-/// Zero-based codes of a column's levels (R's `as.numeric(factor(x)) - 1`).
 fn level_codes(frame: &Frame, name: &str) -> Result<(Vec<usize>, Vec<String>), String> {
     let col = frame.get(name)?;
     let levels = col.levels();
@@ -40,7 +30,6 @@ fn level_codes(frame: &Frame, name: &str) -> Result<(Vec<usize>, Vec<String>), S
     Ok((codes, levels))
 }
 
-/// Parse `c(a, b, c)`, optionally followed by `* factor`.
 fn r_numeric_vector(expr: &str) -> Result<Vec<f64>, String> {
     let (inner, factor) = match expr.split_once(") *") {
         Some((head, factor)) => (
@@ -64,7 +53,6 @@ fn r_numeric_vector(expr: &str) -> Result<Vec<f64>, String> {
         .collect()
 }
 
-/// Parse `as.Date(c("1995-01-01", ...))` into days since 1970.
 fn r_date_vector(expr: &str) -> Result<Vec<f64>, String> {
     let inner = expr
         .trim()
@@ -86,7 +74,6 @@ fn r_date_vector(expr: &str) -> Result<Vec<f64>, String> {
         .collect()
 }
 
-/// Split the top-level arguments of `f(a, b, c)`.
 fn call_arguments(term: &str, function: &str) -> Option<Vec<String>> {
     let inner = term
         .trim()
@@ -115,8 +102,6 @@ fn call_arguments(term: &str, function: &str) -> Option<Vec<String>> {
     Some(args)
 }
 
-/// The right-hand-side terms of a formula, split on top-level `+` only
-/// (a `+` inside a call or a string belongs to the term).
 fn formula_terms(formula: &str) -> Vec<String> {
     let rhs = formula.split_once('~').map_or("", |(_, rhs)| rhs);
     let mut terms = Vec::new();
@@ -141,7 +126,6 @@ fn formula_terms(formula: &str) -> Vec<String> {
     terms.into_iter().filter(|t| !t.is_empty()).collect()
 }
 
-/// Evaluate `name` or `name + constant`.
 fn arithmetic_column(frame: &Frame, expr: &str) -> Result<Vec<f64>, String> {
     if let Some((name, offset)) = expr.split_once('+') {
         let offset: f64 = offset
@@ -166,10 +150,6 @@ fn arithmetic_column(frame: &Frame, expr: &str) -> Result<Vec<f64>, String> {
     column(frame, expr.trim())
 }
 
-// ---------------------------------------------------------------------------
-// neardate
-// ---------------------------------------------------------------------------
-
 #[test]
 fn r_fixtures_neardate() {
     let mut report = Report::new("neardate");
@@ -189,7 +169,6 @@ fn r_fixtures_neardate() {
                 let id2: Vec<i64> = nums(&args["id2"])?.into_iter().map(|v| v as i64).collect();
                 let out = neardate(&id1, &nums(&args["y1"])?, &id2, &nums(&args["y2"])?, best)
                     .map_err(|err| format!("neardate: {err}"))?;
-                // R returns 1-based row numbers, and `nomatch` where there is none.
                 let actual: Vec<f64> = out
                     .iter()
                     .map(|idx| idx.map_or(nomatch, |i| i as f64 + 1.0))
@@ -201,10 +180,6 @@ fn r_fixtures_neardate() {
     }
     report.finish();
 }
-
-// ---------------------------------------------------------------------------
-// aeqSurv (utilities topic)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn r_fixtures_aeqsurv() {
@@ -254,11 +229,6 @@ fn r_fixtures_aeqsurv() {
     report.finish();
 }
 
-// ---------------------------------------------------------------------------
-// pyears and tcut
-// ---------------------------------------------------------------------------
-
-/// One right-hand-side term of a `pyears` formula as a category dimension.
 struct PyearsTerm {
     factor: i32,
     dim: usize,
@@ -269,7 +239,6 @@ struct PyearsTerm {
 
 fn pyears_term(term: &str, frame: &Frame) -> Result<PyearsTerm, String> {
     if let Some(args) = call_arguments(term, "cut") {
-        // R's cut(): right-closed intervals (a, b], labelled "(a,b]".
         let values = arithmetic_column(frame, &args[0])?;
         let breaks = r_numeric_vector(&args[1])?;
         let labels: Vec<String> = breaks
@@ -333,7 +302,6 @@ fn pyears_term(term: &str, frame: &Frame) -> Result<PyearsTerm, String> {
     })
 }
 
-/// The `rmap = list(age = agedays, ...)` argument as `match_ratetable` columns.
 fn rmap_columns(rmap: &str, frame: &Frame) -> Result<(Vec<String>, Vec<RatetableColumn>), String> {
     let args = call_arguments(rmap, "list").ok_or("rmap is not a list()")?;
     let n = frame.nrow();
@@ -361,8 +329,6 @@ fn ratetable_by_name(name: &str) -> Result<&'static RateTable, String> {
     }
 }
 
-/// Compare a column-major table against the fixture's row-major encoding
-/// (a vector for one dimension, nested rows for two).
 fn assert_table(
     actual: &[f64],
     dims: &[usize],
@@ -517,8 +483,6 @@ fn r_fixtures_pyears() {
         };
         let data_frame = is_true(&case["args"]["data.frame"]);
         if data_frame {
-            // The data.frame output keeps the cells with person-years, in
-            // column-major order.
             let keep: Vec<usize> = (0..out.pyears.len())
                 .filter(|&c| out.pyears[c] > 0.0)
                 .collect();
@@ -609,7 +573,6 @@ fn r_fixtures_pyears() {
                 {
                     return Err(format!("dim: {:?} != {dims:?}", out.dims));
                 }
-                // JSON objects do not keep R's order: match terms by name.
                 let formula = text(&case["formula"]).unwrap_or("");
                 for (term, term_text) in terms.iter().zip(formula_terms(formula)) {
                     let labels = dimnames
@@ -630,10 +593,6 @@ fn r_fixtures_pyears() {
     }
     report.finish();
 }
-
-// ---------------------------------------------------------------------------
-// survexp, ratetableDate, and the census tables
-// ---------------------------------------------------------------------------
 
 #[test]
 fn r_fixtures_survexp() {
@@ -745,7 +704,6 @@ fn r_fixtures_survexp() {
                             .collect();
                         table.rate(&index).unwrap_or(f64::NAN)
                     };
-                    // The fixture stores 15 significant digits.
                     assert_scalar(
                         at(&["0", "male", "1990"]),
                         num(&sample["age0_male_1990"])?,
@@ -885,7 +843,6 @@ fn r_fixtures_survexp() {
             "time",
             nums(&expected["time"]).and_then(|e| assert_vec(&out.time, &e, 1e-12, "time")),
         );
-        // n is the column-major flattening of the ntime x ngroup matrix.
         let n_groups = out.surv.first().map_or(1, Vec::len);
         let n_flat: Vec<f64> = (0..n_groups)
             .flat_map(|g| out.n_risk.iter().map(move |row| row[g]))
@@ -918,19 +875,12 @@ fn r_fixtures_survexp() {
     report.finish();
 }
 
-// ---------------------------------------------------------------------------
-// tmerge
-// ---------------------------------------------------------------------------
-
-/// The state R's `tmerge` keeps in `newdata`: which row of the base data
-/// each row came from, the interval, and the variables tmerge created.
 #[derive(Clone)]
 struct TmergeData {
     row: Vec<usize>,
     id: Vec<f64>,
     start: Vec<f64>,
     stop: Vec<f64>,
-    /// Created variables (numeric; NaN for NA) and whether they are events.
     variables: Vec<(String, Vec<f64>, bool)>,
 }
 
@@ -971,7 +921,6 @@ impl TmergeData {
         }
     }
 
-    /// Apply one `name = kind(time, value)` argument, as R's loop does.
     fn apply(
         &mut self,
         name: &str,
@@ -990,7 +939,6 @@ impl TmergeData {
         )
     }
 
-    /// [`Self::apply`] with explicit `tmerge` options (`na.rm`, `delay`).
     fn apply_with(
         &mut self,
         name: &str,
@@ -1060,8 +1008,6 @@ impl TmergeData {
     }
 }
 
-/// Compare a `TmergeData` against a fixture frame: base columns through
-/// the row map, the interval, and the created variables.
 fn check_tmerge_frame(
     data: &TmergeData,
     base: &Frame,
@@ -1115,11 +1061,8 @@ fn check_tcount(tcount: &[Vec<usize>], expected: &Value, path: &str) -> Result<(
     assert_matrix(&actual, &matrix(&expected["values"])?, 0.0, path)
 }
 
-/// The three stages of the cgd0 vignette and its tcount rows.
 type CgdSteps = (TmergeData, TmergeData, TmergeData, Vec<Vec<usize>>);
 
-/// R's first `tmerge` call: `data1` rows with `(tstart, tstop)`; without
-/// `tstop` the first event time of each id sets the range.
 fn tmerge_first_call(
     base: &Frame,
     id: &[f64],
@@ -1221,7 +1164,6 @@ fn r_fixtures_tmerge() {
                     let lab = column(&long, "lab")?;
                     let infection = column(&long, "infection")?;
                     let mut tcount = Vec::new();
-                    // death = event(futime, death): the first call, range from the event.
                     let mut d1 = tmerge_first_call(&base, &id, Some(&column(&base, "futime")?))?;
                     d1.apply(
                         "death",
@@ -1401,7 +1343,6 @@ fn r_fixtures_tmerge() {
     report.finish();
 }
 
-/// `tcount` rows as a `TmergeData` so the aspects of a case share one type.
 fn tcount_data(tcount: &[Vec<usize>]) -> TmergeData {
     TmergeData {
         row: Vec::new(),
@@ -1421,8 +1362,6 @@ fn tcount_data(tcount: &[Vec<usize>]) -> TmergeData {
     }
 }
 
-/// Record every aspect of a `dataprep-tmerge` case: frames are compared
-/// against the base data, `tcount*` aspects against the tcount matrix.
 fn record_tmerge_steps(
     report: &mut Report,
     name: &str,
@@ -1455,9 +1394,6 @@ fn record_tmerge_steps(
     }
 }
 
-/// Last value carried forward across a subject's later intervals
-/// (tmerge2's `k--`): tdc arguments whose update times miss some interval
-/// starts, after an event split and with NA rows dropped by `na.rm`.
 #[test]
 fn r_fixtures_dataprep_tmerge() {
     let mut report = Report::new("dataprep-tmerge");
@@ -1628,10 +1564,6 @@ fn r_fixtures_dataprep_tmerge() {
     report.finish();
 }
 
-// ---------------------------------------------------------------------------
-// survSplit
-// ---------------------------------------------------------------------------
-
 #[test]
 fn r_fixtures_survsplit() {
     let mut report = Report::new("survSplit");
@@ -1645,7 +1577,6 @@ fn r_fixtures_survsplit() {
             let formula = text(&case["formula"]).ok_or("no formula")?;
             let lhs = formula.split('~').next().ok_or("formula without ~")?.trim();
             let surv = call_arguments(lhs, "Surv").ok_or("response is not Surv()")?;
-            // Multi-state status: factor codes with 0 = censor.
             let status_name = surv.last().ok_or("empty Surv")?;
             let status: Vec<f64> = match frame.get(status_name)? {
                 Column::Num(_) => status_column(status_name, &frame)?
@@ -1685,8 +1616,6 @@ fn r_fixtures_survsplit() {
             if out.row.len() != nrow {
                 return Err(format!("{} rows, expected {nrow}", out.row.len()));
             }
-            // R names the output columns after the Surv() variables, except
-            // that (time, status) data gets a new "tstart".
             let default_start = start_name.as_deref().unwrap_or("tstart");
             let out_start_name = text(&args["start"]).unwrap_or(default_start);
             let out_stop_name = text(&args["end"]).unwrap_or(&stop_name);
@@ -1723,7 +1652,6 @@ fn r_fixtures_survsplit() {
                     .as_array()
                     .is_some_and(|items| items.iter().any(Value::is_string))
                 {
-                    // A factor status column: map the labels back to codes.
                     level_codes_of_labels(&frame, status_name, &names_of(values))?
                 } else {
                     nums(values)?
@@ -1737,7 +1665,6 @@ fn r_fixtures_survsplit() {
     report.finish();
 }
 
-/// Codes of `labels` within the levels of a frame's string column.
 fn level_codes_of_labels(frame: &Frame, name: &str, labels: &[&str]) -> Result<Vec<f64>, String> {
     let levels = frame.get(name)?.levels();
     labels
@@ -1751,10 +1678,6 @@ fn level_codes_of_labels(frame: &Frame, name: &str, labels: &[&str]) -> Result<V
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// survcondense
-// ---------------------------------------------------------------------------
 
 #[test]
 fn r_fixtures_survcondense() {
@@ -1774,7 +1697,6 @@ fn r_fixtures_survcondense() {
             let start = column(&frame, &surv[0])?;
             let stop = column(&frame, &surv[1])?;
             let status = column(&frame, &surv[2])?;
-            // The covariates (and id) decide what may merge; the status does not.
             let terms = rhs_terms(formula);
             let mut signature: Vec<Vec<String>> = vec![Vec::new(); frame.nrow()];
             for term in terms.iter().chain(std::iter::once(&id_name.to_string())) {
@@ -1813,7 +1735,6 @@ fn r_fixtures_survcondense() {
                 } else if col_name == event_name {
                     out.keep.iter().map(|&k| status[k]).collect()
                 } else if col_name == "1" {
-                    // R names the id column after the first id value (a do.call quirk).
                     out.keep.iter().map(|&k| id[k] as f64).collect()
                 } else {
                     match frame.get(col_name)? {
@@ -1837,10 +1758,6 @@ fn r_fixtures_survcondense() {
     }
     report.finish();
 }
-
-// ---------------------------------------------------------------------------
-// rttright
-// ---------------------------------------------------------------------------
 
 #[test]
 fn r_fixtures_rttright() {
@@ -1900,10 +1817,6 @@ fn r_fixtures_rttright() {
     }
     report.finish();
 }
-
-// ---------------------------------------------------------------------------
-// Surv2 timeline data: no fixture topic yet, so a documented round trip.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn surv2counting_round_trip_holds_for_the_fixture_datasets() {

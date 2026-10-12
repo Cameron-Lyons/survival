@@ -1,5 +1,3 @@
-# Formulas and covariate classes stay in R; Rust prepares censoring/entry curves
-# and expands intervals, returning source rows for the fitted model frame.
 .finegray_array <- function(value) if (is.null(value)) NULL else array(value)
 
 finegray <- function(formula, data, weights, subset, na.action = na.pass,

@@ -70,14 +70,10 @@ def parse_report(report: str) -> dict[str, Measurement]:
             parents = []
             continue
         if not parents:
-            # Cargo status messages, if redirected to stdout, are outside tables.
             continue
 
         node = _NODE.fullmatch(line)
         if node is None:
-            # Divan may print throughput and allocation statistics underneath a
-            # measured leaf. They have no branch marker and no sampling counts.
-            # A damaged timing row must not be mistaken for an annotation.
             annotation = line.rsplit("│", 5)
             if (
                 len(annotation) == 6
@@ -124,7 +120,6 @@ def parse_report(report: str) -> dict[str, Measurement]:
             raise ValueError(f"line {line_number}: duplicate benchmark {identity!r}")
         measurements[identity] = Measurement(median_ns, samples, iterations)
         suites[parents[0]] += 1
-        # Measured leaves can have later siblings; they never become parents.
         parents = parents[:depth]
 
     if not measurements:

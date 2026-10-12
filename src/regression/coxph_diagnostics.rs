@@ -1,18 +1,3 @@
-//! Residuals of a fitted Cox model: R survival's `residuals.coxph()`
-//! (`R/residuals.coxph.R`) on top of the package's residual kernels.
-//!
-//! * martingale — `residuals::coxmart` / `residuals::agmart`
-//!   (`coxmart.c`, `agmart3.c`);
-//! * score — `scoring::coxscore2` / `scoring::agscore3`
-//!   (`coxscore2.c`, `agscore3.c`);
-//! * schoenfeld — `core::coxscho` (`coxscho.c`);
-//! * deviance, dfbeta, dfbetas, scaledsch and partial are the algebra of
-//!   `residuals.coxph` on top of those, including the `weighted` and
-//!   `collapse` arguments.
-//!
-//! The kernels take the fit's rows in the caller's order and sort as
-//! `residuals.coxph` does (`order(strata, time, -status)`).
-
 use crate::core::coxscho::coxscho;
 use crate::core::strata_order::rowsum;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -24,7 +9,6 @@ use crate::scoring::coxscore2::coxscore2_rows;
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-/// The residual types of `residuals.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoxResidualType {
     Martingale,
@@ -54,39 +38,35 @@ impl CoxResidualType {
         }
     }
 
-    /// R's default for `weighted`: `TRUE` for dfbeta and dfbetas only.
     pub fn default_weighted(self) -> bool {
         matches!(self, Self::Dfbeta | Self::Dfbetas)
     }
 }
 
-/// Schoenfeld (or scaled Schoenfeld) residuals: one row per death, in
-/// (stratum, time) order.
+#[doc = " Schoenfeld (or scaled Schoenfeld) residuals: one row per death, in"]
+#[doc = " (stratum, time) order."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SchoenfeldResiduals {
-    /// Death times (the row names of R's matrix).
+    #[doc = " Death times (the row names of R's matrix)."]
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Stratum code of each death (absent for an unstratified fit).
+    #[doc = " Stratum code of each death (absent for an unstratified fit)."]
     #[pyo3(get)]
     pub strata: Option<Vec<i32>>,
-    /// Original row index of each death.
+    #[doc = " Original row index of each death."]
     #[pyo3(get)]
     pub rows: Vec<usize>,
     #[pyo3(get)]
     pub residuals: Vec<Vec<f64>>,
 }
 
-/// A residual vector or matrix, the value of [`CoxPHFit::residuals`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Residuals {
     Vector(Vec<f64>),
     Matrix(Array2<f64>),
 }
 
-/// `exp(lp)` with `coxph.fit`'s overflow guard: near-infinite coefficients
-/// are shifted so the largest score is representable.
 pub(crate) fn risk_scores(lp: &[f64]) -> Vec<f64> {
     let log_max = f64::MAX.ln();
     let max_lp = lp.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -99,7 +79,6 @@ pub(crate) fn risk_scores(lp: &[f64]) -> Vec<f64> {
 }
 
 impl CoxPHFit {
-    /// Stratum labels for the kernels: the fit's codes, or one stratum.
     fn kernel_strata(&self) -> std::borrow::Cow<'_, [i32]> {
         match &self.strata {
             Some(strata) => std::borrow::Cow::Borrowed(strata),
@@ -108,10 +87,6 @@ impl CoxPHFit {
     }
 }
 
-/// Martingale residuals at the linear predictors `lp` (`coxmart.c`,
-/// `agmart3.c`; the Breslow form for the exact method, as `coxmart2.c`).
-/// Right-censored rows are taken in the fit's (stratum, time) order, as
-/// `coxph.fit` hands its `sorted` rows to `coxmart`.
 pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
     let risk = risk_scores(lp);
     let strata = fit.kernel_strata();
@@ -137,8 +112,6 @@ pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
     }
 }
 
-/// Score residuals (`n x nvar`) at the linear predictors `lp`
-/// (`coxscore2.c`, `agscore3.c`).
 pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Array2<f64>> {
     fit.method.reject_exact("score")?;
     let risk = risk_scores(lp);
@@ -166,9 +139,6 @@ pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<A
     })
 }
 
-/// `residuals.coxph`'s finishing steps for a matrix: multiply the rows by
-/// the case weights (`weighted`) and sum them by cluster (`collapse`,
-/// R's `rowsum`).
 pub(crate) fn collapse_rows(
     rows: &Array2<f64>,
     weights: Option<&[f64]>,
@@ -206,8 +176,6 @@ impl CoxPHFit {
         weighted.then_some(self.weights.as_slice())
     }
 
-    /// Score residuals at `lp` times the model variance, weighted and
-    /// collapsed as requested (`residuals(type = "dfbeta")`).
     pub(crate) fn dfbeta_matrix(
         &self,
         lp: &[f64],
@@ -223,7 +191,6 @@ impl CoxPHFit {
         ))
     }
 
-    /// `residuals(fit, type = "martingale", weighted, collapse)`.
     pub fn martingale_residuals(
         &self,
         weighted: bool,
@@ -237,7 +204,6 @@ impl CoxPHFit {
         ))
     }
 
-    /// `residuals(fit, type = "deviance", weighted, collapse)`.
     pub fn deviance_residuals(
         &self,
         weighted: bool,
@@ -256,7 +222,6 @@ impl CoxPHFit {
             .collect())
     }
 
-    /// `residuals(fit, type = "score", weighted, collapse)`.
     pub fn score_residuals(
         &self,
         weighted: bool,
@@ -270,14 +235,11 @@ impl CoxPHFit {
         ))
     }
 
-    /// `residuals(fit, type = "dfbeta", weighted, collapse)`.
     pub fn dfbeta(&self, weighted: bool, collapse: Option<&[i32]>) -> SurvivalResult<Array2<f64>> {
         self.check_collapse(collapse)?;
         self.dfbeta_matrix(&self.linear_predictors, weighted, collapse)
     }
 
-    /// `residuals(fit, type = "dfbetas", weighted, collapse)`: the dfbeta
-    /// residuals scaled by the coefficients' standard errors.
     pub fn dfbetas(&self, weighted: bool, collapse: Option<&[i32]>) -> SurvivalResult<Array2<f64>> {
         let mut dfbetas = self.dfbeta(weighted, collapse)?;
         let vv = self.naive_var.as_ref().unwrap_or(&self.var);
@@ -288,9 +250,6 @@ impl CoxPHFit {
         Ok(dfbetas)
     }
 
-    /// `residuals(fit, type = "schoenfeld", weighted)`: the residuals of the
-    /// deaths (`coxscho.c`) in (stratum, time) order; `weighted`
-    /// multiplies each row by its case weight.
     pub fn schoenfeld_residuals(&self, weighted: bool) -> SurvivalResult<SchoenfeldResiduals> {
         self.method.reject_exact("schoenfeld")?;
         let risk = risk_scores(&self.linear_predictors);
@@ -320,8 +279,6 @@ impl CoxPHFit {
         })
     }
 
-    /// `residuals(fit, type = "scaledsch", weighted)`: `rr %*% vv * ndead +
-    /// coef`.
     pub fn scaled_schoenfeld_residuals(
         &self,
         weighted: bool,
@@ -346,9 +303,6 @@ impl CoxPHFit {
         Ok(schoenfeld)
     }
 
-    /// `residuals(fit, type = "partial", weighted, collapse)`: the
-    /// martingale residuals plus the term predictions, one column per term
-    /// of `assign`.
     pub fn partial_residuals(
         &self,
         assign: &[Vec<usize>],
@@ -368,10 +322,6 @@ impl CoxPHFit {
         Ok(collapse_rows(&partial, None, collapse))
     }
 
-    /// `residuals(fit, type, weighted, collapse)` for a type chosen at run
-    /// time.  `assign` (the columns of each term, default one term per
-    /// column) only matters for `partial`; `weighted` defaults per type as
-    /// in R.
     pub fn residuals(
         &self,
         kind: CoxResidualType,
@@ -380,8 +330,6 @@ impl CoxPHFit {
         assign: Option<&[Vec<usize>]>,
     ) -> SurvivalResult<Residuals> {
         let weighted = weighted.unwrap_or(kind.default_weighted());
-        // One row per death and a column per coefficient, `0 x nvar` without
-        // deaths.
         let death_matrix = |residuals: SchoenfeldResiduals| {
             Array2::from_shape_vec(
                 (residuals.residuals.len(), self.nvar()),
@@ -467,8 +415,6 @@ mod tests {
 
     #[test]
     fn counting_score_residuals_match_r_for_weights_strata_and_ties() {
-        // R: coxph(Surv(start, stop, status) ~ x1 + x2 + strata(g), weights,
-        //    init = c(0.2, -0.1), iter.max = 0); residuals(type = "score")
         let entry = Some(vec![0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.0]);
         let cases = [
             (
@@ -557,7 +503,6 @@ mod tests {
         assert_eq!(schoenfeld.time, vec![2.0, 2.0, 4.0, 3.0, 5.0]);
         assert_eq!(schoenfeld.rows, vec![0, 1, 3, 5, 6]);
         assert_eq!(schoenfeld.strata, Some(vec![0, 0, 0, 1, 1]));
-        // Within a stratum the Schoenfeld residuals sum to the score.
         let scaled = model.scaled_schoenfeld_residuals(false).unwrap();
         assert_eq!(scaled.residuals.len(), 5);
         let weighted = model.schoenfeld_residuals(true).unwrap();
@@ -566,9 +511,6 @@ mod tests {
 
     #[test]
     fn schoenfeld_matrix_without_deaths_keeps_one_column_per_coefficient() {
-        // R: coxph(Surv(t, rep(0, 8)) ~ x1 + x2, init = c(0.2, -0.1),
-        //    iter.max = 0); dim(residuals(fit, "schoenfeld")) is 0 2, and
-        //    likewise for "scaledsch".
         let x = Array2::from_shape_vec(
             (8, 2),
             vec![

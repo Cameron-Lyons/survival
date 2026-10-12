@@ -57,7 +57,6 @@ def _tables(
         return [NamedMatrix([""] * len(values), columns, values.tolist())], [None]
     if len(groups) != len(values):
         raise ValueError("strata must have one label per summary time")
-    # One pass through labels avoids rescanning the full matrix for each group.
     indices: dict[str, list[int]] = {label: [] for label in levels or ()}
     for row, label in enumerate(groups):
         indices.setdefault(label, []).append(row)

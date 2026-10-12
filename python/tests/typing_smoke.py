@@ -153,19 +153,15 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.aggregate_survfit(curves), r.CoxSurvfitResult)
     assert_type(r.print_survfit(curves), r.SurvfitPrint)
     assert_type(r.print_summary_survfit(r.summary_survfit(curves)), r.SurvivalTablePrint)
-    # were ``survival`` unresolvable, --ignore-missing-imports would make every r.* above
-    # Any and those assertions vacuous; this one, against a concrete type, would still fail
     assert_type(r.cluster(data["inst"]), list[Any])
 
 
-# Prepared Fine–Gray numerics and bulk snapshots.
 finegray_prepared: _survival.FineGrayOutput = _survival.finegray_expand(
     [1.0, 2.0], [1, 2], strata=[10, 10]
 )
 finegray_source: list[int] = finegray_prepared.row
 finegray_arrays: dict[str, Any] = finegray_prepared.to_arrays()
 
-# Person-years cell tables preserve list getters and expose owned array snapshots.
 pyears_cells: _survival.PyearsResult = _survival.pyears([1.0, 2.0], scale=1.0)
 pyears_snapshots: dict[str, Any] = pyears_cells.to_arrays()
 

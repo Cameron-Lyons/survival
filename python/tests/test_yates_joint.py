@@ -63,8 +63,6 @@ def test_joint_yates_matches_r(case):
 
 
 def test_joint_yates_keeps_requested_factor_order():
-    # R 3.8-12 assigns the formula's factor levels to the request's columns
-    # positionally and fails here with "infinite or missing values in 'x'".
     fit = model(REFERENCE["cases"][0])
     forward = r.yates(fit, "a + b")
     reverse = r.yates(fit, "b + a")
@@ -80,8 +78,6 @@ def test_joint_yates_keeps_requested_factor_order():
 
 
 def test_joint_risk_global_test_has_one_name():
-    # R 3.8-12 gives its one-row test two row names and errors. The Rust
-    # contrast kernel already tests all combinations jointly.
     fit = model(next(case for case in REFERENCE["cases"] if case["name"] == "cox_risk"))
     result = r.yates(fit, "a+b", predict="risk", nsim=100, options={"seed": 123})
     difference = np.eye(6)[:5]
@@ -94,8 +90,6 @@ def test_joint_risk_global_test_has_one_name():
 
 
 def test_numeric_selection_includes_the_last_fitted_term():
-    # R 3.8-12's numeric bound is exclusive, accidentally rejecting the last
-    # term (and every numeric selector in a one-term model).
     case = REFERENCE["cases"][0]
     fit = model(case)
     expected = r.yates(fit, "a:b")

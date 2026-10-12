@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Stock survival only: exclude callback-density interval/sparse cases with known C bugs.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -23,7 +22,6 @@ add <- function(name, dist = "extreme", design = x, y = cbind(time, status),
         else { d <- spec$distribution; spec$distribution <- NULL
             do.call(frailty, c(list(rep(1:3, 4), distribution = d), spec)) }
         attrs <- attributes(value)
-        # Prepared Python penalties carry names through the design, not varname.
         attrs$varname <- NULL
         attrs
     }, specs, pcols)

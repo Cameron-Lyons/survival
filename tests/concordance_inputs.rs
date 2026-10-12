@@ -1,5 +1,3 @@
-//! Concordance checks public response fields before ordering or sweeping rows.
-
 use ndarray::Array2;
 use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;

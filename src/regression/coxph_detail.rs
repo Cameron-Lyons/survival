@@ -1,65 +1,52 @@
-//! `coxph.detail()`: the per-death-time pieces of a Cox fit, a port of R
-//! survival's `R/coxph.detail.R` and `src/coxdetail.c`.
-//!
-//! For every unique death time (within stratum, ascending) it returns the
-//! number of deaths and of subjects at risk, the hazard increment and its
-//! variance, the weighted risk-set mean of each covariate, the score vector
-//! contribution and the information-matrix contribution, so that
-//! `colSums(score)` and `apply(imat, 1:2, sum)` are the fit's score and
-//! information at the fitted coefficients.  One backward sweep per stratum
-//! ([`StratumSweep`]) replaces `coxdetail.c`'s `O(deaths x n)` rescan; its
-//! running risk set restarts from zero whenever it empties.
-
 use crate::core::risk_sweep::StratumSweep;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::CoxPHFit;
 use pyo3::prelude::*;
 
-/// `coxph.detail(fit)`: one entry per unique death time.
+#[doc = " `coxph.detail(fit)`: one entry per unique death time."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxphDetail {
     #[pyo3(get)]
     pub time: Vec<f64>,
-    /// Number of deaths (unweighted).
+    #[doc = " Number of deaths (unweighted)."]
     #[pyo3(get)]
     pub nevent: Vec<usize>,
-    /// Number of subjects at risk (unweighted).
+    #[doc = " Number of subjects at risk (unweighted)."]
     #[pyo3(get)]
     pub nrisk: Vec<usize>,
-    /// Hazard increment.
+    #[doc = " Hazard increment."]
     #[pyo3(get)]
     pub hazard: Vec<f64>,
-    /// Increment of the variance of the cumulative hazard.
+    #[doc = " Increment of the variance of the cumulative hazard."]
     #[pyo3(get)]
     pub varhaz: Vec<f64>,
-    /// Weighted risk-set size `sum w * exp(lp)` (`wtrisk`).
+    #[doc = " Weighted risk-set size `sum w * exp(lp)` (`wtrisk`)."]
     #[pyo3(get)]
     pub wtrisk: Vec<f64>,
-    /// Weighted number of deaths (`nevent.wt`).
+    #[doc = " Weighted number of deaths (`nevent.wt`)."]
     #[pyo3(get)]
     pub nevent_wt: Vec<f64>,
-    /// Weighted risk-set means of the covariates (`ntime x nvar`).
+    #[doc = " Weighted risk-set means of the covariates (`ntime x nvar`)."]
     #[pyo3(get)]
     pub means: Vec<Vec<f64>>,
-    /// Score-vector contribution of each death time (`ntime x nvar`).
+    #[doc = " Score-vector contribution of each death time (`ntime x nvar`)."]
     #[pyo3(get)]
     pub score: Vec<Vec<f64>>,
-    /// Information-matrix contribution of each death time
-    /// (`ntime x nvar x nvar`).
+    #[doc = " Information-matrix contribution of each death time"]
+    #[doc = " (`ntime x nvar x nvar`)."]
     #[pyo3(get)]
     pub imat: Vec<Vec<Vec<f64>>>,
-    /// Stratum code of each death time (absent for an unstratified fit).
+    #[doc = " Stratum code of each death time (absent for an unstratified fit)."]
     #[pyo3(get)]
     pub strata: Option<Vec<i32>>,
-    /// `riskmat = TRUE`: `n x ntime`, 1 when the row is at risk at the
-    /// death time (rows in the fit's order).
+    #[doc = " `riskmat = TRUE`: `n x ntime`, 1 when the row is at risk at the"]
+    #[doc = " death time (rows in the fit's order)."]
     #[pyo3(get)]
     pub riskmat: Option<Vec<Vec<i32>>>,
 }
 
-/// Port of `coxph.detail` / `coxdetail.c`.
 #[allow(clippy::needless_range_loop)]
 pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail> {
     if fit.method == TieMethod::Exact {
@@ -69,17 +56,10 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
     }
     let nvar = fit.nvar();
     let efron = fit.method == TieMethod::Efron;
-    // coxdetail.c centres the covariates at the fit's means (0 for the
-    // nocenter columns) and adds them back to the reported means, so the
-    // second moments do not cancel for covariates with a large mean.
     let mut x = fit.x.clone();
     for (mut column, &center) in x.columns_mut().into_iter().zip(&fit.means) {
         column -= center;
     }
-    // Risk scores `exp(lp)` as in coxdetail.c, except that a stratum whose
-    // largest linear predictor lies beyond +-200 (agfit4.c's recentring
-    // threshold) is shifted by it so `exp` neither overflows nor underflows;
-    // the outputs built on the denominator are scaled back.
     let mut risk = vec![0.0; fit.n];
     let shift: Vec<f64> = fit
         .sorted
@@ -141,7 +121,6 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                 .collect();
             let mut info = vec![vec![0.0; nvar]; nvar];
             for j in 0..d {
-                // Breslow keeps the full risk set for every tied death.
                 let step = if efron { j } else { 0 };
                 let d2 = death.efron_denom(step);
                 haz += meanwt / d2;
@@ -173,7 +152,6 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
             imat.push(info);
             strata.push(fit.sorted.codes[stratum]);
         });
-        // The sweep runs backwards; R lists death times ascending.
         time[first..].reverse();
         nevent[first..].reverse();
         nrisk[first..].reverse();
@@ -215,7 +193,7 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
     })
 }
 
-/// `coxph.detail(fit, riskmat)` on a fitted model.
+#[doc = " `coxph.detail(fit, riskmat)` on a fitted model."]
 #[pyfunction(name = "coxph_detail")]
 #[pyo3(signature = (fit, riskmat = false))]
 pub fn coxph_detail_py(fit: &CoxPHFit, riskmat: bool) -> PyResult<CoxphDetail> {
@@ -256,9 +234,6 @@ mod tests {
             assert_eq!(detail.time, vec![1.0, 2.0, 4.0, 6.0]);
             assert_eq!(detail.nevent, vec![1, 2, 2, 1]);
             assert_eq!(detail.nrisk, vec![8, 7, 4, 1]);
-            // The score contributions sum to the fitted score (zero at the
-            // solution) and the information contributions to the inverse
-            // of the variance.
             for i in 0..2 {
                 let total: f64 = detail.score.iter().map(|row| row[i]).sum();
                 assert!((total - fit.first[i]).abs() < 1e-8, "{method:?}: {total}");
@@ -281,7 +256,6 @@ mod tests {
                     assert!((value - fit.var[(i, k)]).abs() < 1e-8);
                 }
             }
-            // Hazard increments integrate to the Breslow/Efron baseline.
             let basehaz = fit.basehaz(true).unwrap();
             let mut cumulative = 0.0;
             for (g, h) in detail.hazard.iter().enumerate() {
@@ -300,9 +274,6 @@ mod tests {
         }
     }
 
-    /// 11 (start, stop] rows whose risk scores span many orders of
-    /// magnitude, at R's coefficients (`iter.max = 0`), with `shift` added
-    /// to the first covariate.
     fn counting_fit_at_r_coefficients(shift: f64) -> CoxPHFit {
         let time = vec![15.0, 4.0, 25.0, 8.0, 18.0, 6.0, 9.0, 14.0, 11.0, 64.0, 19.0];
         let entry = vec![9.0, 2.0, 5.0, 1.0, 14.0, 3.0, 7.0, 6.0, 3.0, 39.0, 2.0];
@@ -352,8 +323,6 @@ mod tests {
 
     #[test]
     fn detail_of_counting_data_keeps_small_risk_sets_exact() {
-        // R 3.8-12: coxph.detail(coxph(Surv(st, t, s) ~ x1 + x2, init =
-        // c(-2.729510672, 2.391046607), iter.max = 0, timefix = FALSE)).
         let detail = coxph_detail(&counting_fit_at_r_coefficients(0.0), false).unwrap();
         assert_eq!(
             detail.time,
@@ -399,8 +368,6 @@ mod tests {
 
     #[test]
     fn detail_centres_the_covariates_at_the_fit_means() {
-        // R 3.8-12 on the same data with x1 + 1e6 (coxdetail.c subtracts
-        // the fit's means before summing).
         let detail = coxph_detail(&counting_fit_at_r_coefficients(1e6), false).unwrap();
         let imat = &detail.imat[4];
         assert_close(imat[0][0], 0.029075474044559, 1e-8);

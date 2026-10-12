@@ -1,12 +1,3 @@
-//! Person-years tabulation: a port of R survival's `src/pyears1.c` (with
-//! `src/pyears2.c` as its no-rate-table case) and of the data side of
-//! `R/pyears.R` that runs after `model.frame`.
-//!
-//! Follow-up time is split across the cells of the observed table (factor
-//! or `tcut` categories) and, when a rate table is supplied, the expected
-//! number of events or expected person-years in each cell are accumulated
-//! from the table's hazards.  Cells are stored in R's column-major order.
-
 use std::borrow::Cow;
 
 use super::match_ratetable::align_us_year_axis_validated;
@@ -18,15 +9,8 @@ use crate::internal::validation::{validate_finite, validate_length, validate_non
 use ndarray::Array2;
 use pyo3::prelude::*;
 
-/// Round-off protection of `pyears1.c`: events are counted in the last
-/// cell that received person-years, so a follow-up that ends exactly on a
-/// boundary must not spill into the next cell.
 const EPS_FRACTION: f64 = 1e-8;
 
-/// Follow-up as R's `pyears` sees the response: `stop` is the time (the
-/// second column of a counting-process `Surv`), `start` the entry time of
-/// counting-process data and `event` the status column of a `Surv`
-/// response (absent for a plain numeric response).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PyearsFollowup {
     pub start: Option<Vec<f64>>,
@@ -52,11 +36,6 @@ impl PyearsFollowup {
     }
 }
 
-/// The observed (output) table: one entry per formula term.  A `tcut`
-/// term is time based (`factor == 0`) with `dims[i] + 1` cutpoints; a
-/// factor term (`factor == 1`) has no cutpoints and its `data` column holds
-/// R's one-based level codes.  `data` is `n x ndim`.  An empty table (no
-/// terms) tabulates everything into a single cell.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PyearsCategories {
     pub factors: Vec<i32>,
@@ -125,12 +104,9 @@ impl PyearsCategories {
     }
 }
 
-/// Which expected quantity to accumulate (R's `expect` argument).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyearsExpect {
-    /// Expected number of events: the integrated hazard.
     Event,
-    /// Expected person-years: the integrated expected survival.
     Pyears,
 }
 
@@ -146,29 +122,29 @@ impl PyearsExpect {
     }
 }
 
-/// The per-cell tables of R's `pyears` (column-major over `dims`).
+#[doc = " The per-cell tables of R's `pyears` (column-major over `dims`)."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct PyearsResult {
-    /// Person-years per cell, divided by `scale`.
+    #[doc = " Person-years per cell, divided by `scale`."]
     #[pyo3(get)]
     pub pyears: Vec<f64>,
-    /// Number of observations contributing to each cell.
+    #[doc = " Number of observations contributing to each cell."]
     #[pyo3(get)]
     pub n: Vec<f64>,
-    /// Observed events per cell (a `Surv` response only).
+    #[doc = " Observed events per cell (a `Surv` response only)."]
     #[pyo3(get)]
     pub event: Option<Vec<f64>>,
-    /// Expected events (or expected person-years) per cell (rate table only).
+    #[doc = " Expected events (or expected person-years) per cell (rate table only)."]
     #[pyo3(get)]
     pub expected: Option<Vec<f64>>,
-    /// Person-years that fell outside the observed table, divided by `scale`.
+    #[doc = " Person-years that fell outside the observed table, divided by `scale`."]
     #[pyo3(get)]
     pub offtable: f64,
-    /// Extent of each category dimension.
+    #[doc = " Extent of each category dimension."]
     #[pyo3(get)]
     pub dims: Vec<usize>,
-    /// Number of observations tabulated.
+    #[doc = " Number of observations tabulated."]
     #[pyo3(get)]
     pub observations: usize,
 }
@@ -176,7 +152,7 @@ pub struct PyearsResult {
 #[cfg(feature = "python")]
 #[pymethods]
 impl PyearsResult {
-    /// Independent writable NumPy snapshots of the column-major cell tables.
+    #[doc = " Independent writable NumPy snapshots of the column-major cell tables."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;
         let result = pyo3::types::PyDict::new(py);
@@ -204,14 +180,11 @@ impl PyearsResult {
     }
 }
 
-/// A rate table together with the matched starting positions of every
-/// subject in it (`match.ratetable`'s `R`, one row per subject).
 pub struct PyearsRatetable<'a> {
     pub table: &'a RateTable,
     pub positions: Array2<f64>,
 }
 
-/// Move the time-based coordinates of a table position forward.
 fn advance(position: &mut [f64], factors: &[i32], time: f64) {
     for (value, &factor) in position.iter_mut().zip(factors) {
         if factor != 1 {
@@ -220,7 +193,6 @@ fn advance(position: &mut [f64], factors: &[i32], time: f64) {
     }
 }
 
-/// Raw accumulators of `pyears1.c`.
 struct PyearsCells {
     pyears: Vec<f64>,
     pn: Vec<f64>,
@@ -229,7 +201,6 @@ struct PyearsCells {
     offtable: f64,
 }
 
-/// `pyears1.c`: `expected` is `None` for the `pyears2.c` case.
 fn pyears1(
     followup: &PyearsFollowup,
     weights: &[f64],
@@ -251,7 +222,6 @@ fn pyears1(
     };
     let edim = expected.map_or(0, |(table, _, _)| table.factors.len());
 
-    // eps = min(time[time > 0]) * 1e-8, zero when every follow-up is zero.
     let eps = (0..n)
         .map(timeleft_of)
         .filter(|&t| t > 0.0)
@@ -265,8 +235,6 @@ fn pyears1(
         pexpect: vec![0.0; n_cells],
         offtable: 0.0,
     };
-    // With only fixed categories and no expected rates, every row contributes
-    // to one cell. Avoid the interval stepper and its scratch positions.
     if expected.is_none() && categories.factors.iter().all(|&factor| factor == 1) {
         let mut strides = Vec::with_capacity(odim);
         let mut stride = 1;
@@ -314,7 +282,6 @@ fn pyears1(
         let mut index = None;
 
         if timeleft <= eps && followup.event.is_some() {
-            // Call pystep at least once so the event lands in a cell.
             index = pystep(&observed, &data, 1.0).index;
         }
 
@@ -331,14 +298,10 @@ fn pyears1(
                     let mut hazard: f64 = 0.0;
                     let mut temp = 0.0;
                     while etime > 0.0 {
-                        // A rate table extends past its edges, so every step
-                        // has a cell.
                         let expected_step = pystep(table, &data2, etime);
                         let et2 = expected_step.time;
                         let lambda = rates[expected_step.index.unwrap_or(0)];
                         if method == PyearsExpect::Pyears {
-                            // (1 - exp(-lambda t)) / lambda, whose limit at
-                            // lambda = 0 is t (the C code divides by zero).
                             let survival_loss = if lambda == 0.0 {
                                 et2
                             } else {
@@ -372,9 +335,6 @@ fn pyears1(
     cells
 }
 
-/// The data side of R's `pyears` (`R/pyears.R`) once the model frame has
-/// been evaluated: tabulate person-years, observations, events and, with a
-/// rate table, expected events over the category table.
 pub fn pyears(
     followup: &PyearsFollowup,
     weights: Option<&[f64]>,
@@ -455,9 +415,9 @@ pub fn pyears(
     })
 }
 
-/// Python entry point of [`pyears`]: `categories_data` and
-/// `ratetable_positions` have one row per observation, the latter being
-/// `match_ratetable(...).r`.
+#[doc = " Python entry point of [`pyears`]: `categories_data` and"]
+#[doc = " `ratetable_positions` have one row per observation, the latter being"]
+#[doc = " `match_ratetable(...).r`."]
 #[pyfunction(name = "pyears")]
 #[pyo3(signature = (
     stop,
@@ -724,7 +684,6 @@ mod tests {
 
     #[test]
     fn expected_events_integrate_the_rate_table_hazard() {
-        // One-dimensional age table: rate 0.1/day below 10 days, 0.3 after.
         let table = RateTable::try_new(
             vec![2],
             vec!["age".into()],
@@ -748,7 +707,6 @@ mod tests {
             1.0,
         )
         .unwrap();
-        // 5 days at 0.1 then 5 days at 0.3.
         assert!((events.expected.as_ref().unwrap()[0] - 2.0).abs() < 1e-12);
 
         let ratetable = PyearsRatetable {
@@ -771,7 +729,6 @@ mod tests {
 
     #[test]
     fn rate_table_positions_are_checked_before_indexing_the_rates() {
-        // survexp.us is age x sex x year; sex has two levels.
         let table = survexp_us_table();
         let categories = tcut_categories(vec![0.0, 1000.0], vec![0.0]);
         let followup = right(vec![100.0], vec![0.0]);

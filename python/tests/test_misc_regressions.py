@@ -28,18 +28,12 @@ def assert_rows_close(actual, expected):
         assert actual_row == approx(expected_row)
 
 
-# --- brier -------------------------------------------------------------------
-
-
 def test_brier_reads_the_model_curves_at_the_evaluation_times():
-    # R: brier() of coxph(Surv(time, status) ~ age + sex, lung) at times 3, 180 and 365 with
-    # detail = TRUE, and at its default times
     fit = r.coxph("Surv(time, status) ~ age + sex", data=datasets.load_lung(), model=True)
     result = r.brier(fit, times=[3, 180, 365], detail=True)
     assert result.brier == approx([0.0, 0.191605092010014, 0.236142139448665])
     assert math.isnan(result.rsquared[0])
     assert result.rsquared[1:] == approx([0.0460864863000336, 0.0232491313563413])
-    # every curve is still 1 before the first event time
     assert result.phat[0] == [0.0] * 228
     assert result.phat[1][:4] == approx(
         [0.37766021846661, 0.348294500488361, 0.294579029600006, 0.29879827416173]
@@ -88,12 +82,7 @@ def test_brier_only_predicts_at_requested_times(monkeypatch, formula):
     assert calls == [[3, 6, 10]]
 
 
-# --- survcheck ---------------------------------------------------------------
-
-
 def test_survcheck_numbers_problem_rows_of_the_data_before_na_omit():
-    # R: survcheck(Surv(t1, t2, st) ~ x, data = d, id = id), na.omit dropping the rows where x
-    # is missing
     gap = r.survcheck(
         "Surv(t1, t2, st) ~ x",
         data={
@@ -127,8 +116,6 @@ def test_survcheck_numbers_problem_rows_of_the_data_before_na_omit():
     assert overlap.gap is None
 
 
-# --- survobrien --------------------------------------------------------------
-
 OBRIEN_DATA = {
     "time": [1, 2, 3, 4, 5],
     "status": [1, 0, 1, 1, 1],
@@ -136,7 +123,6 @@ OBRIEN_DATA = {
     "z": [2, 7, 1, 3, 5],
     "w": [1, 2, 1, 2, 2],
 }
-# the columns of OBRIEN_DATA over the 11 rows of its four risk sets
 OBRIEN_Z = [2, 7, 1, 3, 5, 1, 3, 5, 3, 5, 5]
 OBRIEN_W = [1, 2, 1, 2, 2, 1, 2, 2, 2, 2, 2]
 X_LOGITS = [
@@ -165,7 +151,6 @@ Z_LOGITS = [
     1.09861228866810978,
     0.0,
 ]
-# the logits of a column z.1 = 9, 8, 7, 6, 5 over the same risk sets
 Z1_LOGITS = [
     2.19722457733621956,
     0.84729786038720345,
@@ -182,8 +167,6 @@ Z1_LOGITS = [
 
 
 def test_survobrien_leaves_asis_terms_alone():
-    # R's ?survobrien example: survobrien(Surv(futime, fustat) ~ age + factor(rx) + I(ecog.ps),
-    # data = ovarian)
     frame = r.survobrien(
         "Surv(futime, fustat) ~ age + factor(rx) + I(ecog.ps)", data=datasets.load_ovarian()
     )
@@ -203,7 +186,6 @@ def test_survobrien_leaves_asis_terms_alone():
     assert asis["z"] == OBRIEN_Z
     assert asis["x"] == approx(X_LOGITS)
 
-    # a kept term keeps every variable it references (R: all.vars), once per term
     expression = r.survobrien("Surv(time, status) ~ x + I(z^2) + I(z * w)", data=OBRIEN_DATA)
     assert list(expression) == ["time", "status", "z", "z.1", "w", ".id.", "x", ".strata."]
     assert expression["z"] == expression["z.1"] == OBRIEN_Z
@@ -213,7 +195,6 @@ def test_survobrien_leaves_asis_terms_alone():
     assert list(cut) == ["time", "status", "z", "w", ".id.", "x", ".strata."]
     assert (cut["z"], cut["w"]) == (OBRIEN_Z, OBRIEN_W)
 
-    # identity() does not protect a term; data.frame() makes its label syntactic
     identity = r.survobrien("Surv(time, status) ~ x + identity(z)", data=OBRIEN_DATA)
     assert list(identity) == ["time", "status", ".id.", "x", "identity.z.", ".strata."]
     assert identity["identity.z."] == approx(Z_LOGITS)
@@ -222,14 +203,11 @@ def test_survobrien_leaves_asis_terms_alone():
 
 
 def test_survobrien_names_its_columns_as_r_data_frame_does():
-    # R: survobrien(Surv(time, status) ~ z + I(z^2), data = d), whose data.frame() names the
-    # transformed z "z.1" beside the raw z of the I() term
     square = r.survobrien("Surv(time, status) ~ z + I(z^2)", data=OBRIEN_DATA)
     assert list(square) == ["time", "status", "z", ".id.", "z.1", ".strata."]
     assert square["z"] == OBRIEN_Z
     assert square["z.1"] == approx(Z_LOGITS)
 
-    # R: the same with the formula factor(w) + w
     factor = r.survobrien("Surv(time, status) ~ factor(w) + w", data=OBRIEN_DATA)
     assert list(factor) == ["time", "status", "w", ".id.", "w.1", ".strata."]
     assert factor["w"] == OBRIEN_W
@@ -249,7 +227,6 @@ def test_survobrien_names_its_columns_as_r_data_frame_does():
         ]
     )
 
-    # R: ~ z + I(z^2) + z.1 with a data column z.1, a name make.unique then skips
     taken = r.survobrien(
         "Surv(time, status) ~ z + I(z^2) + z.1", data={**OBRIEN_DATA, "z.1": [9, 8, 7, 6, 5]}
     )
@@ -258,8 +235,6 @@ def test_survobrien_names_its_columns_as_r_data_frame_does():
     assert taken["z.2"] == approx(Z_LOGITS)
     assert taken["z.1"] == approx(Z1_LOGITS)
 
-    # R: ~ I(z) + I(z^2) + z.1 with that column. `[.data.frame` names the raw z of the two
-    # I() terms z and z.1 before data.frame() names the transformed z.1 "z.1.1"
     kept = r.survobrien(
         "Surv(time, status) ~ I(z) + I(z^2) + z.1", data={**OBRIEN_DATA, "z.1": [9, 8, 7, 6, 5]}
     )
@@ -267,8 +242,6 @@ def test_survobrien_names_its_columns_as_r_data_frame_does():
     assert kept["z"] == kept["z.1"] == OBRIEN_Z
     assert kept["z.1.1"] == approx(Z1_LOGITS)
 
-    # R: ~ log(z) + log.z. with a data column log.z.; make.names(unique = TRUE) leaves the
-    # name that was already syntactic alone and renames the label log(z)
     syntactic = r.survobrien(
         "Surv(time, status) ~ log(z) + log.z.", data={**OBRIEN_DATA, "log.z.": [4, 1, 3, 5, 2]}
     )
@@ -294,7 +267,6 @@ def test_survobrien_names_its_columns_as_r_data_frame_does():
 def test_make_names_follows_r():
     names = ["in", "(z)", "1x", ".1x", "-z", "a b", "_z", "..1", "...", "I(z^2)", ""]
     names += ["NA", "TRUE", "function", "x.y", ".z", "z_1", "\u00e9"]
-    # the names R's make.names gives
     assert [r_names._make_names(name) for name in names] == [
         "in.",
         "X.z.",
@@ -315,7 +287,6 @@ def test_make_names_follows_r():
         "z_1",
         "\u00e9",
     ]
-    # the names R's make.unique and make.names with unique = TRUE give
     assert r_names._make_unique(["z", "z", "z.1", "z"]) == ["z", "z.2", "z.1", "z.3"]
     assert r_names._make_names_unique(["z", "z", "log(z)", "log(z)", "log.z."]) == [
         "z",
@@ -325,7 +296,6 @@ def test_make_names_follows_r():
         "log.z.",
     ]
 
-    # R: finegray(Surv(time, ev) ~ x, d, count = "in") names the count column "in."
     data = {
         "time": [1, 2, 2, 3, 4, 5, 6, 7],
         "ev": RFactor(["a", "b", "censor", "a", "b", "censor", "a", "b"], ["censor", "a", "b"]),
@@ -334,9 +304,6 @@ def test_make_names_follows_r():
     frame = r.finegray("Surv(time, ev) ~ x", data, count="in")
     assert list(frame) == ["x", "fgstart", "fgstop", "fgstatus", "fgwt", "in."]
     assert frame["in."] == [0, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0]
-
-
-# --- cch ---------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -458,11 +425,9 @@ def test_cch_borgan_score_rows_follow_r_id_order(nwtco_case_cohort):
         assert fit.sc[-1] == approx(last)
 
     numeric = _borgan(nwtco_case_cohort, "I.Borgan", "rid")
-    # character ids sort as strings: p1, p10, p100, ...
     character = _borgan(nwtco_case_cohort, "I.Borgan", "cid")
     assert character.sc_ids[:5] == ("p1", "p10", "p100", "p1000", "p1001")
     assert character.sc[1] == approx(numeric.sc[9])
-    # factor ids follow their levels: factor(rid, levels = n:1) gives the rows of 1154, 1153, ...
     factor_id = RFactor(nwtco_case_cohort["rid"], range(n, 0, -1))
     factor = _borgan(nwtco_case_cohort, "I.Borgan", factor_id)
     assert factor.sc_ids[:3] == (n, n - 1, n - 2)
@@ -470,7 +435,6 @@ def test_cch_borgan_score_rows_follow_r_id_order(nwtco_case_cohort):
 
 
 def test_cch_prentice_fit_carries_the_point_estimate(nwtco_case_cohort):
-    # R's Prentice sets fit$coefficients <- fit1$coefficients on the augmented-data fit
     fit = r.cch(
         "Surv(edrel, rel) ~ stage + histol + age",
         nwtco_case_cohort,

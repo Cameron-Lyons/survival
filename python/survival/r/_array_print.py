@@ -82,7 +82,6 @@ def _vector_lines(
             lines.append(
                 " ".join(_pad(name, size) for name in labels[start : start + per_line]).rstrip()
             )
-            # R's named character vectors always align values right.
             lines.append(
                 " ".join(_pad(cell, size) for cell in cells[start : start + per_line]).rstrip()
             )
@@ -200,7 +199,6 @@ def _matrix_slice(
     digits: int,
     width: int,
 ) -> list[str]:
-    # Precision and row-label widths use all rows, including rows hidden by max.print.
     row_names = [_encoded(name) for name in rows]
     names = [_encoded(name) for name in columns[:shown_columns]]
     row_width = max(map(_width, row_names), default=0)
@@ -222,7 +220,6 @@ def _matrix_slice(
         while end < shown_columns and used + sizes[end] + 1 < width:
             used += sizes[end] + 1
             end += 1
-        # The row-axis title is printed by R's byte-counted printf field.
         row_title = titles[0] + " " * max(0, row_width - len(titles[0].encode("utf-8")))
         lines.extend(
             [
@@ -274,7 +271,6 @@ def print_ratetable(
     if len(dims) == 1:
         shown = len(rates) if len(rates) <= limit + 1 else limit
         cells = _r_format_numbers(rates[:shown], digits)
-        # A named one-dimensional array prints its dimension title, then its labels.
         lines.append(dimid[0])
         lines.extend(_vector_lines(cells, width, names=dimnames[0][:shown], right=True))
         displayed = shown

@@ -1,17 +1,3 @@
-//! The C kernels behind R's `concordancefit`.
-//!
-//! * `btree` ports the R helper of the same name: it places the sorted
-//!   distinct predictor values on a balanced binary tree so that the
-//!   weights below, tied with and above a value are `O(log n)` walks.
-//! * `concordance_sweep` ports `concordance3.c` (`concordance3` for
-//!   right-censored data and `concordance4` for (start, stop] data) and, with
-//!   `std_err = false`, the count-only `concordance5`/`concordance6` of
-//!   `concordance5.c`; the count statements are identical between the two
-//!   files, only the influence, variance and rank work is skipped.
-//! * `fastkm` ports `fastkm.c`: `S(t-)`, `G(t-)` and the number at risk
-//!   at each unique event time, for the time-weight options.
-
-/// R's `btree(n)`: the tree node (0-based) holding each of `n` sorted ranks.
 pub(crate) fn btree(n: usize) -> Vec<usize> {
     fn tfun(n: usize, id: usize, power: usize, out: &mut Vec<usize>) {
         match n {
@@ -41,8 +27,6 @@ pub(crate) fn btree(n: usize) -> Vec<usize> {
     out
 }
 
-/// The node weights (`nwt`) and node-plus-descendant weights (`twt`) of
-/// `concordance3.c`.
 struct RankTree {
     nwt: Vec<f64>,
     twt: Vec<f64>,
@@ -56,8 +40,6 @@ impl RankTree {
         }
     }
 
-    /// `walkup`: weights of the nodes above, below and tied with `index`
-    /// (`[greater, smaller, equal]`).
     fn walkup(&self, mut index: usize) -> [f64; 3] {
         let ntree = self.nwt.len();
         let mut sums = [0.0, 0.0, self.nwt[index]];
@@ -80,7 +62,6 @@ impl RankTree {
         sums
     }
 
-    /// `addin`: adds `wt` at `index` (negative weights remove).
     fn addin(&mut self, mut index: usize, wt: f64) {
         self.nwt[index] += wt;
         while index > 0 {
@@ -95,51 +76,30 @@ impl RankTree {
     }
 }
 
-/// The `z^2` increment of an observation joining the risk set, the Cox
-/// model variance term of `concordance3.c`.
 fn cox_variance_term(wt: f64, wsum: [f64; 3]) -> f64 {
     wt * (wsum[0] * (wt + 2.0 * (wsum[1] + wsum[2]))
         + wsum[1] * (wt + 2.0 * (wsum[0] + wsum[2]))
         + (wsum[0] - wsum[1]) * (wsum[0] - wsum[1]))
 }
 
-/// Result of one [`concordance_sweep`].
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SweepOutput {
-    /// concordant, discordant, tied on x, tied on y, tied on both, and the
-    /// Cox variance numerator (0 without `std_err`).
     pub(crate) count: [f64; 6],
-    /// `n x 5` per-observation influence on the five counts (empty
-    /// without `std_err`).
     pub(crate) influence: Vec<[f64; 5]>,
-    /// Per event, in ascending time order: `(rank, timewt, casewt)`
-    /// (empty without `ranks`).
     pub(crate) resid: Vec<[f64; 3]>,
 }
 
-/// One stratum's inputs to [`concordance_sweep`].
 pub(crate) struct SweepInput<'a> {
-    /// Entry times; `None` for right-censored data.
     pub(crate) start: Option<&'a [f64]>,
     pub(crate) stop: &'a [f64],
-    /// 0/1 event indicators.
     pub(crate) status: &'a [i32],
-    /// Tree node of each observation's predictor rank (`btree` output).
     pub(crate) node: &'a [usize],
     pub(crate) weight: &'a [f64],
-    /// Time weight of each unique event time, largest time first (R passes
-    /// `rev(timewt)`).
     pub(crate) timewt: &'a [f64],
-    /// Observations by decreasing start time (only with `start`).
     pub(crate) sort_start: Option<&'a [usize]>,
-    /// Observations by decreasing stop time, censored before deaths at
-    /// tied times, then by predictor.
     pub(crate) sort_stop: &'a [usize],
 }
 
-/// `concordance3`/`concordance4` (`std_err`) or `concordance5`/`concordance6`
-/// (`!std_err`): walks the observations from the largest time down, counting
-/// each death against the risk set held in the rank tree.
 pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bool) -> SweepOutput {
     let n = input.stop.len();
     let ntree = input.node.iter().map(|&x| x + 1).max().unwrap_or(0);
@@ -149,7 +109,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
     let time = input.stop;
     let status = input.status;
     let sort2 = input.sort_stop;
-    // `tree` holds everyone at risk, `dtree` the (time-weighted) deaths.
     let mut tree = RankTree::new(ntree);
     let mut dtree = RankTree::new(ntree);
     let mut count = [0.0; 6];
@@ -164,7 +123,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
     while i < n {
         let ii = sort2[i];
         if status[ii] == 0 {
-            // Censored: simply add them into the tree.
             if std_err {
                 let wsum = dtree.walkup(x[ii]);
                 imat[ii][0] -= wsum[1];
@@ -177,7 +135,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             continue;
         }
 
-        // A death: first remove the subjects whose start time has passed.
         if let (Some(start), Some(sort1)) = (input.start, input.sort_start) {
             while i2 < n && start[sort1[i2]] >= time[ii] {
                 let jj = sort1[i2];
@@ -203,7 +160,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
         let adjtimewt = input.timewt[utime];
         utime += 1;
 
-        // Pass 1 over the tied deaths.
         let mut j = i;
         while j < n && time[sort2[j]] == time[ii] {
             let jj = sort2[j];
@@ -211,7 +167,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             count[3] += wt[jj] * dwt * adjtimewt;
             dwt += wt[jj];
             if x[jj] != xsave {
-                // Restart the tied-on-both counts for a new predictor value.
                 if std_err && wt[sort2[j2]] < dwt2 {
                     while j2 < j {
                         let kk = sort2[j2];
@@ -249,7 +204,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             }
         }
 
-        // Pass 2: influence, Cox variance, and add the deaths to the tree.
         for &jj in &sort2[i..i + ndeath] {
             if std_err {
                 let wsum = dtree.walkup(x[jj]);
@@ -263,15 +217,10 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
         }
         if std_err {
             let risk_weight = tree.total();
-            // A time containing only zero-weight observations contributes
-            // nothing. Avoid 0/0 poisoning the variance of later pairs.
             if risk_weight > 0.0 {
                 count[5] += dwt * adjtimewt * z2 / risk_weight;
             }
             if ranks {
-                // Ranks use the Cox model risk set, i.e. after the deaths
-                // have been added; filled from the back so the result is
-                // in ascending time order.
                 for &jj in &sort2[i..i + ndeath] {
                     let wsum = tree.walkup(x[jj]);
                     nevent_left -= 1;
@@ -290,8 +239,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
         i += ndeath;
     }
 
-    // Finish the influence of those never removed from the tree; the
-    // contributions flip because time runs backwards.
     if std_err {
         let remaining: &[usize] = match input.sort_start {
             Some(sort1) => &sort1[i2..],
@@ -304,7 +251,6 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             imat[ii][2] += wsum[2];
         }
     }
-    // Ties on both were counted twice, once as tied on y.
     count[3] -= count[4];
     SweepOutput {
         count,
@@ -313,27 +259,14 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
     }
 }
 
-/// `fastkm1`/`fastkm2` output: values at each unique event time, ascending.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FastKm {
     pub(crate) etime: Vec<f64>,
-    /// `S(t-)`, the Kaplan-Meier survival just before each event time.
     pub(crate) surv: Vec<f64>,
-    /// `G(t-)`, the censoring survival; all ones for (start, stop] data,
-    /// where R does not compute it.
     pub(crate) censor: Vec<f64>,
     pub(crate) nrisk: Vec<f64>,
 }
 
-/// `fastkm.c` on data ordered as for [`concordance_sweep`] (`sort_stop`
-/// decreasing time with censored before deaths; `sort_start` decreasing
-/// start time for (start, stop] data).
-///
-/// One row per unique death time, whatever the case weights: the C code
-/// counts a time only when its weighted death count is positive, so a
-/// death with case weight 0 leaves `concordance3.c` (which advances through
-/// `timewt` at every death time) reading past the end of the vector.  A
-/// time where no weight at all is at risk leaves `S` and `G` unchanged.
 pub(crate) fn fastkm(
     start: Option<&[f64]>,
     stop: &[f64],
@@ -353,7 +286,6 @@ pub(crate) fn fastkm(
     let mut nevent = 0;
     match (start, sort_start) {
         (Some(start), Some(sort1)) => {
-            // Pass 1 (fastkm2): number at risk and deaths at each stop time.
             let mut ntemp = 0.0;
             let mut k = 0;
             let mut i = 0;
@@ -372,8 +304,6 @@ pub(crate) fn fastkm(
                         dtemp += weight[p2];
                         death_here = true;
                     }
-                    // Only the value at the last of a set of tied times is
-                    // used.
                     ncount[i] = ntemp;
                     dcount[i] = dtemp;
                     i += 1;
@@ -382,7 +312,6 @@ pub(crate) fn fastkm(
             }
         }
         _ => {
-            // Pass 1 (fastkm1): running totals from the largest time down.
             let mut dtime = stop[sort_stop[0]];
             let mut ntemp = 0.0;
             let mut dtemp = 0.0;
@@ -412,7 +341,6 @@ pub(crate) fn fastkm(
         }
     }
 
-    // Pass 2: the lagged curves, walking from the earliest time up.
     out.etime.reserve(nevent);
     let mut stemp = 1.0;
     let mut gtemp = 1.0;
@@ -463,8 +391,6 @@ mod tests {
         assert_eq!(btree(8), vec![7, 3, 1, 4, 0, 5, 2, 6]);
         assert_eq!(btree(10), vec![7, 3, 8, 1, 9, 4, 0, 5, 2, 6]);
         assert_eq!(btree(13), vec![7, 3, 8, 1, 9, 4, 10, 0, 11, 5, 12, 2, 6]);
-        // Every node index is used exactly once and the in-order traversal
-        // (left subtree, node, right subtree) is the sorted order.
         for n in 1..40 {
             let tree = btree(n);
             let mut nodes = tree.clone();
@@ -547,8 +473,6 @@ mod tests {
                 if i == j || status[i] != 1 {
                     continue;
                 }
-                // i is a death: pair with everyone still at risk after it,
-                // which includes the censored at the same time.
                 if time[j] > time[i] || (time[j] == time[i] && status[j] == 0) {
                     if x[j] > x[i] {
                         c += 1.0;
@@ -573,7 +497,6 @@ mod tests {
         let full = sweep_right(&time, &status, &x, true);
         assert_eq!(full.influence.len(), 8);
         assert_eq!(full.resid.len(), 6);
-        // Column sums of the influence matrix are twice the counts.
         for k in 0..5 {
             let total: f64 = full.influence.iter().map(|row| row[k]).sum();
             assert!(
@@ -605,8 +528,6 @@ mod tests {
         for (actual, expected) in km.surv.iter().zip([1.0, s2, s3, s5]) {
             assert!((actual - expected).abs() < 1e-12);
         }
-        // G(t-) as R computes it (the censoring at 2 sees the running count
-        // 4 because the tied death is added after it): 1, 1, 3/4, 3/8.
         for (actual, expected) in km.censor.iter().zip([1.0, 1.0, 0.75, 0.375]) {
             assert!((actual - expected).abs() < 1e-12);
         }
@@ -630,8 +551,6 @@ mod tests {
 
     #[test]
     fn fastkm_emits_every_death_time_whatever_the_weights() {
-        // Deaths with case weight 0 at 3 (inside the data) and at 6 (the
-        // largest time, where nothing with positive weight is at risk).
         let time: [f64; 8] = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0];
         let status = [1, 1, 0, 1, 1, 1, 0, 1];
         let weight = [1.0, 2.0, 0.5, 0.0, 1.0, 2.0, 0.5, 0.0];
@@ -644,8 +563,6 @@ mod tests {
         let km = fastkm(None, &time, &status, &weight, None, &sort_stop);
         assert_eq!(km.etime, vec![1.0, 2.0, 3.0, 4.0, 6.0]);
         assert_eq!(km.nrisk, vec![7.0, 6.0, 3.5, 3.5, 0.0]);
-        // The zero-weight death at 3 is a unit factor in S; the time with
-        // nobody at risk leaves S and G alone instead of producing 0/0.
         let s2 = 6.0 / 7.0;
         let s3 = s2 * 4.0 / 6.0;
         let s6 = s3 * 0.5 / 3.5;
