@@ -43,24 +43,25 @@ assert fit.residuals is None
 ```
 
 - `coxph_fit` takes a right-censored response; `agreg_fit` takes counting-process
-  data; `agexact_fit` takes either and uses entry time zero for right-censored
-  data. The design can be a numeric matrix, nested sequence, mapping of columns or
-  data frame; `coxph_fit` also accepts a single vector. Empty designs have zero
-  columns. Names come from mappings or data frames or from `column_names`;
-  `rownames` supplies row labels.
-- Offsets keep their original values, including in the linear predictors.
-  Robust variance and concordance are not computed. `nocenter=None` centers every
-  covariate; pass `[-1, 0, 1]` for the high-level binary-column policy. Controls
-  come from `coxph_control`.
+  data; `agexact_fit` takes either and uses entry time zero for right-censored data.
+  The design can be a numeric matrix, nested sequence, mapping of columns or data
+  frame; `coxph_fit` also accepts a single vector. Empty designs have zero columns.
+  Names come from mappings or data frames or from `column_names`; `rownames`
+  supplies row labels.
+- Offsets keep their original values, including in the linear predictors. Robust
+  variance and concordance are not computed. Invalid or missing numerical data,
+  malformed lengths, nonnumeric designs and missing strata are rejected.
+  `nocenter=None` centers every covariate; pass `[-1, 0, 1]` for the high-level
+  binary-column policy. Controls come from `coxph_control`.
 - `coxph_fit` and `agreg_fit` use Efron for `method="efron"` and Breslow for every
   other accepted label, including `"exact"`, as R does. `agexact_fit` always uses
   the exact likelihood and requires unit weights. Use `r.coxph(..., ties="exact")`
   for the usual tie selection. Only the three documented labels are accepted.
 - Null `coxph_fit` and `agreg_fit` models have a single log likelihood, no
-  coefficient, variance, score or iteration components, and
-  `classes=("coxph.null", "coxph")`; ordinary fits have `classes=("coxph",)`.
-  `agexact_fit` keeps R's single-column matrix of linear predictors, its
-  `method="coxph"` label and an empty class list.
+  coefficient, variance, score or iteration components, and `classes=("coxph.null",
+  "coxph")`; ordinary fits have `classes=("coxph",)`. `agexact_fit` keeps R's
+  single-column matrix of linear predictors, its `method="coxph"` label and an empty
+  class list.
 - Arrays are independent copies on access, names are immutable tuples, and results
   pickle. They keep no response or design and cannot predict. R classes and names
   are held in `classes`, `coefficient_names` and `row_names`.
@@ -104,7 +105,7 @@ for unused or filtered-out levels; `strata` is `None` for one declared level and
 otherwise maps every level to its number of output times. Influence components are
 lists in declared level order, with `None` for empty curves; their row labels
 identify clusters, subjects or observations. Numeric properties return copies;
-influence values are read-only views. The R package's `survfitKM` converts this
+influence values are read-only views; results pickle. The R package's `survfitKM` converts this
 result to R's list, keeping its field order, count-matrix names and the
 single-matrix versus list distinction.
 
@@ -140,13 +141,18 @@ assert fit.coefficient_names == ("Intercept", "group", "Log(scale)")
   `nstrat=1` the codes are ignored. Fixed scales cannot be combined with several
   strata. Controls use `survreg_control` through `controlvals`; `assign` is unused.
 - Names come from mappings, data frames or `column_names`, otherwise R's `x 1`,
-  `x 2`, .... `variance_names` is `None` when R drops them while undoing covariate
-  rescaling. The score keeps R's internal covariate scaling. Aliased coefficients
+  `x 2`, ...; they are stored in `coefficient_names`, `icoef_names` and
+  `variance_names`. `variance_names` is `None` when R drops them while undoing
+  covariate rescaling. The score keeps R's internal covariate scaling. Aliased coefficients
   keep the solver's values; alias marking belongs to `survreg`.
 - Custom distribution mappings need a five-column density callback and, when
-  starting values need it, an initialization callback. Explicit callbacks are used
-  regardless of the distribution's display name. Response transforms and fixed
-  scales stored in a distribution are ignored.
+  starting values need it, an initialization callback; quantile and deviance
+  callbacks are not needed, and callbacks are validated on the actual fit inputs
+  rather than by the full distribution probe. Native distribution objects may be
+  supplied; their density and stored parameters (such as Student-t `parms`) are
+  used. Explicit callbacks are used regardless of the distribution's display
+  name. Response transforms and fixed scales stored in a distribution are
+  ignored.
 
 `SurvregFitResult` is immutable, stores numeric output and name tuples, and keeps
 no response, design or callbacks, so it pickles even with local callbacks and does
@@ -154,17 +160,21 @@ not predict. `regression.survreg_fit_raw` takes `SurvregData` and a
 `SurvregDistribution`, accepts an optional explicit stratum count and refuses
 cluster variance. Both ordinary and penalized fitters validate the response,
 design, weights, offsets and grouping vectors at the fitting boundary, because
-Rust callers can change `SurvregData` fields after construction. Interval upper
+Rust callers can change `SurvregData` fields after construction: a mismatched
+offset length or a design with no columns is an input error. Interval upper
 endpoints must be finite and at least the lower endpoint only for status 3.
-Stratum counts whose dense covariance cannot be indexed are refused.
+Stratum counts whose dense covariance cannot be indexed are refused. Native
+strata are zero-based; cluster codes are opaque labels.
 
 The R bridge's `survivalr::survreg.fit` uses this interface for every density and
 passes the design as a matrix. Named built-ins run entirely in Rust. An explicit
 distribution list uses its R density and initialization functions, which receive
 vector batches with the original `parms` (the initializer receives `y`, `weights`
-and `parms`, possibly `NULL`); transforms, quantiles, deviance functions and fixed
-scales are unused. Convergence warnings are R conditions, and there is no call to
-R's reference fitter.
+and `parms`, possibly `NULL`, and parameter names are kept); transforms,
+quantiles, deviance functions and fixed scales are unused, and complete
+intercept-only starting values need no initializer. Callback errors keep their
+messages, convergence warnings are R conditions, and there is no call to R's
+reference fitter.
 
 ## Bare penalized AFT fitting
 
@@ -188,31 +198,34 @@ component for the effective sample size used by penalty searches.
 
 - `pattr` is a sequence of native `regression.CoxPenalty` objects (`ridge`,
   `pspline`, `frailty`, `callback`, `controlled`) or `r.pspline` results; `pcols`
-  gives each penalty's design columns; `assign` maps term names to column groups
-  or is a sequence of groups. Indices in `pcols`, `assign` and the returned
-  `assign2` are **zero-based**. Every column belongs to exactly one term, each
-  penalty's columns must match a term, term names are unique and `sigma` is
-  reserved when scales are estimated.
+  gives each penalty's design columns; `assign` maps term names to column groups or
+  is a sequence of groups; the default uses the penalized groups and one term per
+  remaining column. Indices in `pcols`, `assign` and the returned `assign2` are
+  **zero-based**. Every column belongs to exactly one term, each penalty's columns
+  must match a term, term names are unique and `sigma` is reserved when scales are
+  estimated. Penalties need not be given in term order.
 - A sparse penalty takes one numeric group column, whose sorted unique values
   identify the frailties; only one sparse term is allowed. The sparse column is
   removed from the dense coefficients and covariance; `frail` and `fvar` hold its
   estimates and variances. Dense frailties take indicator columns.
-- For a spline, put `spline.basis` in the design and pass the same
-  `PsplineResult` in `pattr`; the result keeps the small spline description needed
-  for printing. A native `CoxPenalty.pspline` fits but prints ordinary coefficient
-  rows. Native penalties do not carry R's `varname` replacement attribute.
+- For a spline, put `spline.basis` in the design and pass the same `PsplineResult`
+  in `pattr`, with a column count matching `pcols`; the result keeps the small
+  spline description needed for printing. A native `CoxPenalty.pspline` fits but
+  prints ordinary coefficient rows. Native penalties do not carry R's `varname`
+  replacement attribute.
 
-`SurvpenalFitResult` exposes coefficients (with log-scales), `icoef`, `var`,
-`var2`, `loglik`, `iter`, linear predictors, per-term `df`, `penalty`, `score`
-(sparse frailties first, then dense coefficients and log-scales), named `pterms`,
-`assign2` and `history`, and `n`, `nvar`, `n_eff`, scales, convergence and
-`inner_failures`. `df2` is `None`, as R leaves it unpopulated. The native result
-always has a two-element `penalty`; the R bridge returns R's shapes (a scalar for
-a sparse fit). History objects keep their column schema even when R omits names
-for an empty fixed-gamma history. As in R, exhausted inner iterations do not warn:
-inspect `inner_failures` and `converged`. The result is immutable and pickles.
-`regression.survpenal_fit_raw` borrows prepared `SurvregData`, releases the GIL
-around the solver and refuses clustered inputs.
+`SurvpenalFitResult` exposes coefficients (with log-scales), `icoef`, `var`, `var2`,
+`loglik`, `iter`, linear predictors, per-term `df`, `penalty`, `score` (sparse
+frailties first, then dense coefficients and log-scales), named `pterms`, `assign2`
+and `history`, and `n`, `nvar`, `n_eff`, scales, convergence and `inner_failures`.
+`df2` is `None`, as R leaves it unpopulated. `penalty` follows R's list shapes: the
+single final penalty for a sparse fit, and the initial zero and final penalty for a
+dense fit; the native `regression.survpenal_fit_raw` result and the typed
+`SurvpenalFit` always have two elements. History objects keep their column schema
+even when R omits names for an empty fixed-gamma history. As in R, exhausted inner
+iterations do not warn: inspect `inner_failures` and `converged`. The result is
+immutable and pickles. `regression.survpenal_fit_raw` borrows prepared
+`SurvregData`, releases the GIL around the solver and refuses clustered inputs.
 
 The R bridge's `survivalr::survpenal.fit` uses the same fitter. It adapts R
 `pfun`, `cfun`, `cargs`, `cparm` and `pparm` to the shared controller protocol and
@@ -237,7 +250,9 @@ be NaN unless `needs_df=True`). Cox uses the event count for `neff`; AFT uses it
 null-fit effective sample size. Every result must contain a finite scalar `theta`,
 and updates a boolean `done`. The returned mapping becomes `old` on the next call;
 optional numeric `history` rows with `columns`, `c_loglik` and `half` populate
-`PenaltyHistory`. Each fit owns its state.
+`PenaltyHistory`. Each fit owns its state; results keep neither that state nor
+the penalty functions, and reusable penalty objects pickle when their functions
+do.
 
 Minimal custom AFT distributions provide `variance` for the standardized density.
 The optional `fitting_variance(scale_squared)` hook instead receives the null fit's
@@ -266,12 +281,17 @@ consecutive one-based iteration and returns a new state proposing the next theta
 likelihood used by AIC, `loglik` the penalized likelihood used by the gamma
 correction, `neff` the effective sample size, `trh` the Hessian trace, `coef` the
 frailties and `events_by_group` the integer event counts. `df` and `aic`
-controllers accept `gamma_correction=True`. Gamma and Gaussian `init` need at
+controllers accept `gamma_correction=True` to report the corrected likelihood
+alongside the ordinary search history. Array inputs are copied and steps release
+the GIL; controllers and states pickle and support independent concurrent
+searches, and the previous state and its history stay unchanged. Gamma and
+Gaussian `init` need at
 least two values; the gamma correction accepts at most ten million events in one
 group. Nonfinite or negative theta proposals are errors, including a df search
 with no upper point at an exact boundary. Rust callers use `PenaltyControl`,
 `PenaltyController::new`, `PenaltyControlInput` and `PenaltyControlState` from
-`regression`. The R bridge's `ridge`, `pspline` and `frailty` constructors use
+`regression`, also in builds without Python. The R bridge's `ridge`, `pspline`
+and `frailty` constructors use
 these searches through callbacks with R's signatures, history transitions and
 trace output.
 
@@ -362,7 +382,9 @@ actual observations. Callback exceptions name the callback; Python exceptions
 during native fitting surface as `RuntimeError`, and invalid shapes or values
 detected by Rust as `ValueError`. Pickle, `copy` and `deepcopy` keep custom
 distributions in fitted models when their callables are picklable. Generic serde
-serialization rejects runtime callbacks. The R facade's serialization saves the
+serialization rejects runtime callbacks. Cloned native objects share their
+callback handles, so callbacks should not change distribution semantics after
+fitting. The R facade's serialization saves the
 original R functions with their environments; see [R bridge](r-bridge.md).
 
 For direct bindings, use `SurvregDistribution.from_callbacks(...)` with
@@ -378,13 +400,14 @@ callbacks; `dtest` adds the functional probes. See
 the [external-crate example](../tests/survreg_callbacks.rs).
 
 Each likelihood evaluation calls the density once with all standardized lower
-endpoints, followed by the upper endpoints of interval-censored rows in input
-order; linear predictors include offsets and sparse frailties. Shapes, finite
-probabilities and nonnegative finite densities are checked; derivative ratios must
-be finite where the density is positive and may be undefined where it underflows
-to zero. Errors propagate through Newton steps, Fisher fallbacks, penalized
-evaluations and line searches. The Python adapter reacquires the GIL once per
-batch.
+endpoints, followed by the upper endpoints of interval-censored rows in input order;
+linear predictors include offsets and sparse frailties. Shapes, finite probabilities
+and nonnegative finite densities are checked; derivative ratios must be finite where
+the density is positive and may be undefined where it underflows to zero, in which
+case censored tail derivatives are zero. Left-censored rows use their CDF to decide
+whether the probability is zero. Errors propagate through Newton steps, Fisher
+fallbacks, penalized evaluations and line searches. The Python adapter reacquires
+the GIL once per batch.
 
 ### Distribution queries
 
@@ -397,7 +420,9 @@ mean=[0, 1, 2], scale=1, distribution="gaussian")` returns three values with a
 fractional-recycling warning. Callbacks receive the complete batch of each stage,
 including empty and missing entries; density queries evaluate the transform
 derivative before the transform, and quantile queries evaluate the quantile before
-scaling, location and inverse transform. Fitting keeps its stricter checks.
+scaling, location and inverse transform. Standalone queries allow different
+callback result lengths and unused density columns, as R's evaluation does.
+Fitting keeps its stricter checks.
 
 Named Student-t queries require explicit numeric `parms`, which recycle inside
 `pt`, `dt` and `qt`; other named built-ins ignore `parms`.
@@ -406,9 +431,11 @@ and object queries; `for_query("t", parms)` builds a permissive query object.
 
 `rsurvreg(n, ...)` follows R's `runif` count rules: a singleton supplies a finite
 nonnegative count truncated toward zero, any other vector supplies its length,
-NumPy arrays their element count, and one-shot iterators are read once. Exactly
-that many uniforms are drawn before the quantile is evaluated and location and
-scale recycled, so the result can be longer than the draw count. `seed=s`
+NumPy arrays their element count (the result is a flat list), and one-shot
+iterators are read once. Exactly that many uniforms are drawn before the quantile
+is evaluated and location and scale recycled, so the result can be longer than
+the draw count; a custom quantile receives empty probabilities when the count is
+zero. `seed=s`
 reproduces R's `set.seed(s)` stream (Mersenne-Twister, inversion), also for custom
 families; seeds are R's 32-bit integers.
 
@@ -450,24 +477,30 @@ assert curves.surv.shape == (3, 2)
   errors need a finite square `varmat`; `se_fit=False` (or `**{"se.fit": False}`)
   omits them. `cluster`, `position` and `oldid` are accepted and unused, as in R.
 - `strata` uses sorted distinct values or declared categorical levels, including
-  unused ones; omitting it gives one curve labeled `"0"`. Missing stratum values
-  are rejected.
+  unused ones; omitting it or passing an empty vector gives one curve labeled
+  `"0"`. Missing stratum values are rejected.
 - `id2` builds one trajectory per id in first-appearance order from `(start,
-  stop]` intervals in `y2`; `strata2` holds **one-based** positions in the training
-  levels, or factor codes. Intervals with no baseline times contribute no rows.
+  stop]` intervals in `y2` (or a counting `Surv`; an optional third column is
+  ignored); rows of an id may be interleaved with other ids and keep their input
+  order. `strata2` holds **one-based** positions in the training levels, or factor
+  codes, and may be omitted for one training stratum. Intervals with no baseline
+  times contribute no rows.
 
 With `unlist=True`, `CoxSurvFitResult` stacks time rows across curves; `n` gives
-each curve's observation count, `strata` maps labels to row counts, and `surv`,
-`cumhaz` and `std_err` (on the cumulative-hazard scale) have one column per
-prediction row, or are vectors for one row or a trajectory. `unlist=False`
-returns a `CoxSurvFitList` with `names`; ordinary curves also expose `hazard`,
-`varhaz`, `ndeath` and `xbar`. Python names individual trajectories by their ids.
-Arrays are read-only views of a frozen native result (use `.copy()` for writable
-arrays); results and lists pickle. Unused levels, zero-column designs and empty
-trajectories have explicit zero-size outputs.
+each curve's observation count, `strata` maps labels to row counts when there is
+more than one curve, `row_names` records explicit `rownames` or a pandas index, and
+`surv`, `cumhaz` and `std_err` (on the cumulative-hazard scale) have one column per
+prediction row, or are vectors for one row or a trajectory. No confidence limits or
+`survfit` class are added. `unlist=False` returns a `CoxSurvFitList` with `names`;
+ordinary curves also expose `hazard`, `varhaz`, `ndeath` and `xbar`, which
+trajectories lack. Python names individual trajectories by their ids. Arrays are
+read-only views of a frozen native result (use `.copy()` for writable arrays); list
+elements share their parent's storage; results and lists pickle. Unused levels,
+zero-column designs and empty trajectories have explicit zero-size outputs.
 
 `r.survfitcoxph_fit` is the older wrapper: `survtype` 1, 2 or 3 selects
 Kalbfleisch–Prentice, Breslow or Efron, `newrisk` is required and `vartype` is
 ignored, as in R. The Rust `surv_analysis::coxsurv_fit` takes `CoxSurvData` and
-`CoxSurvNewData` with zero-based stratum indices; the domain binding
+`CoxSurvNewData` with zero-based stratum indices and exposes the optional
+baseline components as `CoxSurvBaselineDetails`; the domain binding
 `surv_analysis.coxsurv_fit` exposes those codes and releases the GIL.

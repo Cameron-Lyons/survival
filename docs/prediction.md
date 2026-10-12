@@ -37,8 +37,8 @@ Native expected-count predictions require a stratum for every new row when the
 model has several baselines. Ordinary `survfit(newdata)` may omit strata because
 it returns a curve block for every baseline, and individual covariate paths keep
 R's default of the first stratum. Public Rust fitted-Cox predictions check stored
-row, covariate and covariance dimensions before using cached baselines, and an
-unknown training stratum code is an input error.
+row, covariate and covariance dimensions before using cached baselines, and
+missing stored strata or an unknown training stratum code are input errors.
 
 ## Missing values
 
@@ -151,6 +151,8 @@ residuals = r.residuals(fit, type="score", collapse=groups)
 - Values sum within each group in input order; standard errors are
   `sqrt(sum(se^2))`, as in R's collapse method, with each per-row error computed
   before squaring so negative variances still propagate NaN.
+- `r.predict` takes one label per row of the data before omission; labels may be
+  factors, text, logical or missing values.
 - For new data, missing collapse labels also count for `na.omit`, `na.exclude`
   and `na.fail`. Under `na.pass`, a missing group can hold valid predictions.
   Under `na.exclude`, groups containing an omitted row propagate missingness;
@@ -171,7 +173,7 @@ allocate one output row per group. Rust callers can use
 `CoxPrediction::collapse(group)` after `predict_lp`, `predict_risk`,
 `predict_expected` or `predict_survival`. Native Python methods take a
 keyword-only `collapse` with one integer code per prediction row; arbitrary signed
-codes sort in ascending order:
+codes sort in ascending order, and list properties are owned snapshots:
 
 ```python
 terms = fit.fit.predict_terms(se_fit=True, collapse=integer_group_codes)
@@ -198,7 +200,8 @@ estimate (`stype = 2`, with the hazard type of the fitted tie method) and keep
 time, extension after the last time, offsets, aliased coefficients and stratum
 order. Use `survfit` for other estimates, confidence intervals or time-varying
 covariates. `CoxPHEstimator.predict_survival_function` and the R-style `brier`
-use this method; the estimator keeps its `(n_observations, n_times)` orientation.
+use this method; the estimator keeps its `(n_observations, n_times)` orientation
+and `brier(detail=True)` keeps its nested-list `phat` result.
 
 ## Native results
 

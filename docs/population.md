@@ -89,7 +89,8 @@ follow-up times can add fitted rows between requests without merging nearby
 distinct times. Scaling divides the reported times after selection.
 `SurvExpResult.cumhaz` is `-log(surv)` with R's domain behavior: zero survival
 gives positive infinity and missing or negative survival gives NaN, including for
-Cox curves whose group has an exhausted risk set.
+Cox curves whose group has an exhausted risk set. As in R, an empty sparse group
+has cohort survival zero and conditional survival one.
 
 ### Cox rate models
 
@@ -145,6 +146,10 @@ result = survival.pyears(response, group=attained, scale=1)
   allowed); matrices with more than two columns are rejected. Zero-time
   right-censored events give R's warning, and missing responses or invalid rate
   tables fail explicitly. Missing cells in either column remove the whole row.
+  Matrix responses may be lists or NumPy arrays of any layout, including strided,
+  Fortran-ordered, read-only and object or nullable inputs; retained responses and
+  matrix columns returned by `model_frame` are independent row-major lists, and
+  retained `x` values are ordinary nested lists.
 - In fixed categories, zero-time rows keep observed events without adding exposure
   or observations. Category products are checked against addressable storage
   before allocation.
@@ -157,14 +162,16 @@ result = survival.pyears(response, group=attained, scale=1)
                     expect="pyears", scale=1)
   ```
 
-  Rate positions use the table's units; direct keywords may name columns in
-  `data`, and generated columns never overwrite sources used by rate mappings or
-  weights. Factor groups keep declared levels and `TcutResult` groups their
-  boundaries. With `start`/`stop` and a rate table, positions advance to the entry
-  time before accumulation. A complete `Surv` or matrix cannot be combined with
-  separate start or event values, follow-up cannot be supplied twice, and formula
-  strings reject direct response or group keywords. The R bridge's direct vector
-  form still needs formula calls for rate tables.
+  Rate positions use the table's units; direct keywords may name columns in `data`,
+  and generated columns never overwrite sources used by rate mappings or weights.
+  Factor groups keep declared levels and `TcutResult` groups their boundaries.
+  Missing follow-up and mapped values go through the same subset and missing-value
+  handling as formula inputs. With `start`/`stop` and a rate table, positions
+  advance to the entry time before accumulation; without a rate table and without
+  events, the response is the follow-up duration. A complete `Surv` or matrix cannot
+  be combined with separate start or event values, follow-up cannot be supplied
+  twice, and formula strings reject direct response or group keywords. The R
+  bridge's direct vector form still needs formula calls for rate tables.
 - `pyears(ratetable=cox_fit)` is not supported (R also fails); use `survexp`.
 
 `PyearsResult.to_arrays()` returns independent writable NumPy snapshots of the
@@ -219,7 +226,8 @@ return a plain vector, ignore the retention flags and restore excluded rows as N
 under `na.exclude`.
 
 `summary_survexp`, `summary_ratetable` and `summary_tmerge` are available through
-`survival.r` and the `model_summary` generic, and their results support
+`survival.r` and the `model_summary` generic. Expected curves and their
+summaries, rate tables and their summaries, and the `tmerge` count table support
 `as_data_frame`.
 
 - `summary_survexp` returns a `SurvExpSummary`: a vector for one curve or a
@@ -228,7 +236,8 @@ under `na.exclude`.
   range are dropped. Survival uses the preceding observation (one before the
   first) and risk counts the next. Omitted times keep the original rows; a scalar
   `scale` divides the output times with R's zero and nonfinite arithmetic; tied
-  source times use R's averaged indices. Rust callers use
+  source times use R's averaged indices without its tie-collapse warning. Rust
+  callers use
   `population::summary_survexp`, whose selector validates shapes and time order and
   makes one sweep after sorting.
 - `summary_ratetable` returns a `RateTableSummary` with the canonical attributes, a

@@ -50,6 +50,10 @@ fit = core.concordancefit(
   order; plain logical and character vectors are refused.
 - Iterator cluster and strata columns are read once; declared categories keep
   their order, and unused categories never add influence rows.
+- With several predictors, the first predictor sets the risk-sum accumulation
+  order, so other columns can differ from separate single-predictor calls by
+  rounding. Equal predictor values keep their original observation order,
+  including the order of case weights in event-rank results.
 
 ## Fitted models
 

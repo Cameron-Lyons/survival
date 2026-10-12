@@ -61,8 +61,9 @@ available, both record and subject counts stay visible.
 | `"individual"` | Each stratum's last time | Each stratum's last time |
 | Numeric | Specified cutoff in original time units | Specified cutoff in original time units |
 
-`print_rmean=True` is the legacy shortcut for `rmean="common"`; an explicit
-`rmean` takes precedence, and partial matches such as `"ind"` work. `scale`
+For ordinary curves, `print_rmean=True` is the legacy shortcut for
+`rmean="common"` (multi-state curves ignore it); an explicit `rmean` takes
+precedence, and partial matches such as `"ind"` work. `scale`
 divides reported times, mean standard errors and the cutoff and must be finite and
 positive. `digits` defaults to 3 for ordinary curves and 7 for multi-state curves;
 each column chooses fixed or scientific notation independently; missing values
@@ -102,8 +103,8 @@ table), and `as_data_frame` adds `strata` when groups exist.
 summaries in one table with the time grid, risk counts and one probability column
 per group. Both use three digits by default; `print_survexp` also accepts a
 positive `scale` and `naprint`. As in R, `naprint=False` drops rows with at least
-the number of columns minus two missing cells. Each curve keeps its own risk
-counts.
+the number of columns minus two missing cells; expected-summary printing keeps
+missing cells. Each curve keeps its own risk counts.
 
 ## Models
 
@@ -160,34 +161,37 @@ print(r.print_summary_aareg(r.model_summary(additive, test="nrisk")))
 ```
 
 - `print_survreg(fit, digits=None, width=80)` shows the coefficient vector, fitted
-  or fixed scales, both log likelihoods, a likelihood-ratio test when its degrees
-  of freedom are positive, and the sample size; aliased coefficients get R's
+  or fixed scales, both log likelihoods, a likelihood-ratio test when its degrees of
+  freedom are positive, and the sample size; aliased coefficients get R's
   singularity notice. The default is seven digits; as in R, an explicit `digits`
-  changes the coefficient vector and multiple named scales, while scalar scales
-  and likelihood text keep seven digits.
+  changes the coefficient vector and multiple named scales, while scalar scales and
+  likelihood text keep seven digits.
 - `print_summary_survreg(summary, digits=None, signif_stars=False, width=80)` adds
   standard errors, z statistics, p-values, the distribution, iteration counts and
-  optional correlations (three digits). Robust fits show robust and naive
-  standard errors. With `correlation=True`, the lower triangle is displayed, the
-  full matrix kept and aliased coefficients excluded. Summaries carry
-  `fixed_scale` and `scale_names`.
+  optional correlations (three digits). Robust fits show robust and naive standard
+  errors. With `correlation=True`, the lower triangle is displayed, the full matrix
+  kept and aliased coefficients excluded. Summaries carry `fixed_scale` and
+  `scale_names`.
 - Penalized fits dispatch to `print_survreg_penal`, returning `SurvregPenalPrint`
-  with full-precision `rows` and `columns`, `width` and `as_data_frame`; it
-  accepts compact and full fits and includes spline linear and nonlinear tests,
-  dense and sparse frailty Wald tests, search summaries, scales, iteration counts
-  and likelihood-ratio tests. A summary of a penalized fit uses
-  `print_summary_survreg`, as in R.
+  with full-precision `rows` and `columns`, `width` and `as_data_frame`; it accepts
+  compact and full fits and includes spline linear and nonlinear tests, dense and
+  sparse frailty Wald tests, search summaries, scales, iteration counts and
+  likelihood-ratio tests. Call it explicitly for its `terms=True` and `maxlabel`
+  controls. A summary of a penalized fit uses `print_summary_survreg`, as in R.
 - `print_aareg(fit, maxtime=None, test=None, scale=1, width=80)` shows the sample
   size, used and total unique event times, slopes, weighted tests, standard errors
   (robust when the fit keeps influences), z statistics, p-values and the overall
-  chi-square test. `maxtime` includes events at or before the cutoff; `test`
-  selects `aalen` or `nrisk` weights; `scale` changes the displayed weighted
-  coefficients and errors. Changing `maxtime` or `test` recomputes the robust
-  covariance from the stored influences. Zero scale and cutoffs before all events
-  raise errors; a `test="variance"` fit needs an explicit supported test. As in R,
-  the values are rounded to three significant figures and then formatted at seven
-  digits, and the direct printer's footer keeps the fit's original test label when
-  an override was supplied; `statistics["test"]` records the computed test.
+  chi-square test. `maxtime` includes events at or before the cutoff; `test` selects
+  `aalen` or `nrisk` weights and defaults to the fit's test; `scale` changes the
+  displayed weighted coefficients and errors. Changing `maxtime` or `test`
+  recomputes the robust covariance from the stored influences. Zero scale and
+  cutoffs before all events raise errors; a `test="variance"` fit needs an explicit
+  supported test. As in R, the values are rounded to three significant figures and
+  then formatted at seven digits, with no precision override, and the direct
+  printer's footer keeps the fit's original test label when an override was
+  supplied; `statistics["test"]` records the computed test.
+  `print_summary_aareg(summary, width=80)` shows the same table and test without the
+  sample and event-count introduction, labeled with the computed test.
 
 ### Diagnostics and tests
 
@@ -222,11 +226,13 @@ logrank = r.print_survdiff(r.survdiff("Surv(time, status) ~ sex", lung))
   seven-digit formatting; stored counts are unrounded. A missing variance omits
   the standard error, and no comparable pairs display `NaN`. Formula results keep
   `na_action`. `print_survConcordance` is explicit because R 3.8-12 no longer
-  registers `print.survConcordance`.
+  registers `print.survConcordance`; the legacy Python estimator keeps its
+  deprecation warning, and printing its result adds none.
 - Survival-difference output covers log-rank, G-rho, stratified and one-sample
   tests. Stratified counts are summed for display; zero denominators keep R's
   `NaN` and infinity; one-sample tests show observed and expected events, the
-  signed z statistic and the p-value.
+  signed z statistic and the p-value. Formula and direct-response results keep
+  their omission records.
 
 ### Population and validation
 
@@ -276,21 +282,22 @@ also works).
 
 - `print_surv(response, quote=False, right=False, names=None, width=80,
   max_print=99999)` and `print_surv2` keep all labels from `as_character_surv` in
-  `labels`, formatting times at seven significant figures. `quote=True` adds
-  double quotes and escapes; layout accounts for wide and combining characters.
-  Unnamed vectors use one-based indexes; named vectors right-align names and
-  values, as R does even with `right=False`. `names` supplies one label per row.
-  `data` and `as_data_frame` keep full-precision time and status columns.
-  Truncation affects text only. An empty response displays `character(0)`.
-- `print_ratetable(table, digits=None, width=80, max_print=99999)` displays named
-  vectors, matrices or, for more dimensions, matrix slices in R's first-index
-  order, with `dimid` as axis titles. The object owns `dims`, `dimid`, `dimnames`
-  and `rates`; `as_data_frame` expands each dimension's labels and a `rate` column,
-  with R's `make.unique` suffixes for repeated names. Display limits follow R:
-  vectors print every entry when only one would be omitted, matrices keep complete
-  rows and arrays complete slices; hidden slices are never formatted. R's
-  zero-limit matrix display keeps row labels and named Unicode axis titles keep
-  R's byte-counted padding.
+  `labels`, formatting times at seven significant figures. `quote=True` adds double
+  quotes and escapes; layout accounts for wide and combining characters. Unnamed
+  vectors use one-based indexes; named vectors right-align names and values, as R
+  does even with `right=False`. `names` supplies one label per row. `data` and
+  `as_data_frame` keep full-precision time and status columns. Truncation affects
+  text only. An empty response displays `character(0)`.
+- `print_ratetable(table, digits=None, width=80, max_print=99999)` uses seven
+  significant figures by default and displays named vectors, matrices or, for more
+  dimensions, matrix slices in R's first-index order, with `dimid` as axis titles.
+  The object owns `dims`, `dimid`, `dimnames` and `rates`; `as_data_frame` expands
+  each dimension's labels and a `rate` column, with R's `make.unique` suffixes for
+  repeated names. Display limits follow R: vectors print every entry when only one
+  would be omitted, matrices keep complete rows and arrays complete slices; hidden
+  slices are never formatted. R's zero-limit matrix display keeps row labels and
+  named Unicode axis titles keep R's byte-counted padding. `displayed` counts the
+  numeric or response entries actually shown.
 
 ## Graphics
 
@@ -336,7 +343,9 @@ right-continuous path, and `data.xend` and `data.yend` the endpoints.
 (right, left, interval, counting and multi-state responses); missing rows are
 omitted, and other fitting options require an explicit `r.survfit` call.
 Expected-survival curves share one time grid and have no bands or automatic
-censor marks; explicit intervals raise an error. `lines_survexp` joins estimates
+censor marks; explicit intervals raise an error, while explicit marker times
+work. Event-only points are empty, and `censor=True` plots every stored time,
+including the origin. `lines_survexp` joins estimates
 with straight lines, as R does, while `plot_survfit` and `lines_survfit` draw
 steps; override with `drawstyle`. Expected cumulative hazard is `-log(surv)`, for
 `fun="cumhaz"` and also for `cumhaz=True`, an extension to R.
@@ -353,13 +362,17 @@ steps; override with `drawstyle`. Expected cumulative hazard is `-log(surv)`, fo
 
 - `cloglog` also selects a log time axis; `log=True`, `"x"`, `"y"` or `"xy"`
   select scales explicitly. A callable `fun` receives a NumPy vector and must
-  return one value per input; it transforms estimates and each limit separately.
-- `noplot="(s0)"` hides the initial multi-state state; `cumprob=True` accumulates
+  return one value per input; it transforms estimates and each limit separately,
+  and a decreasing transform keeps the lower and upper limits' identities.
+- `noplot="(s0)"` hides the initial multi-state state and `noplot=[]` shows every
+  state; `cumprob=True` accumulates
   state probabilities; `cumprob=[3, 2]` and `cumhaz=[2, 1]` select **one-based**
   states or transitions in that order. Curves have strata fastest, then
   prediction rows, then states.
-- `conf_int` defaults to bands for one curve and none for several; `"only"` hides
-  estimates and a level between zero and one recomputes limits with `conf_type`.
+- `conf_int` defaults to bands for one curve and none for several; `True` shows
+  intervals for grouped curves, `False` or `"none"` hides them, `"only"` hides
+  estimates, and a level between zero and one recomputes limits with `conf_type`.
+  Stored limits keep their fitted method.
   `cumprob` sums cannot show intervals. Intervals are dashed by default;
   `conf_style="band"` shades them and `conf_times=[...]` draws bars, which, as in
   R, use the next fitted limit, while explicit `mark_time` coordinates use the
@@ -380,19 +393,22 @@ fit = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", datasets.load_ovarian(), d
 plot = plotting.plot_aareg(fit, var=["age", "ecog.ps"])
 ```
 
-`plot_aareg` draws right-continuous cumulative coefficients with pointwise bands
-at plus or minus 1.96 standard errors, one panel per coefficient when bands are
-shown; with `se=False` all coefficients share one panel and a legend.
-`lines_aareg` overlays curves on one axis without bands by default. Both return
-`AalenPlot` with `axes`, `lines`, `confidence` and `data`. As in R, variance
-increments are sums of squared per-subject or per-cluster influences at each
-event time when the fit keeps `dfbeta`, and otherwise the squared coefficient
-increments, each squared individually at tied times. `maxtime` keeps events at or
-before the cutoff; `var` selects names or one-based indices in order, with the
-intercept included by default. `drawstyle="steps-post"` corresponds to R's
-`type="s"`. Output starts at zero even when fitted times are negative.
-`plotting.aareg_plot_data(fit, se=True, maxtime=None, var=None)` returns the
-times, coefficient and error matrices, bounds and names without Matplotlib.
+`plot_aareg` draws right-continuous cumulative coefficients with pointwise bands at
+plus or minus 1.96 standard errors, one panel per coefficient when bands are shown;
+with `se=False` all coefficients share one panel and a legend. `lines_aareg`
+overlays curves on one axis without bands by default. Both return `AalenPlot` with
+`axes`, `lines`, `confidence` and `data`. Pass `ax=` with one axis per coefficient
+when bands are shown, or one axis without bands or for an overlay. As in R, variance
+increments are sums of squared per-subject or per-cluster influences at each event
+time when the fit keeps `dfbeta`, and otherwise the squared coefficient increments,
+each squared individually at tied times. `maxtime` keeps events at or before the
+cutoff; `var` selects names or one-based indices in order, with the intercept
+included by default. `drawstyle="steps-post"` corresponds to R's `type="s"` and
+`"steps-pre"` to R's `"S"`. Output starts at zero even when fitted times are
+negative. `plotting.aareg_plot_data(fit, se=True, maxtime=None, var=None)` returns
+the times, coefficient and error matrices (one row per time, one column per selected
+coefficient), bounds, names and whether stored influences were used, without
+Matplotlib.
 
 ### Cox proportional-hazards diagnostics
 
@@ -410,9 +426,16 @@ two); as in R, knots use the event times and the prediction grid, so changing
 skipped; missing residuals are excluded per term. `var` selects terms by name or
 one-based index; `resid=False` hides residuals; `se=False` omits bands; `hr=True`
 exponentiates onto a log hazard-ratio axis, with R's eight rounded time labels for
-transforms other than identity and log. The result is a `CoxDiagnosticPlot`.
+transforms other than identity and log. The result is a `CoxDiagnosticPlot`;
+pass one axis per selected nonsingular term through `ax=`. If every selected
+spline is singular, its tuples are empty and no figure is created.
 `plotting.cox_zph_plot_data(diagnostic, ...)` returns the curves, residual
 coordinates, scale flags, ticks and skipped terms for every selected nonsingular
 term, also with standard errors disabled. The smoother is
 `survival::regression::cox_zph_smooth(x, y.view(), variance, df, nsmo, se)` in
-Rust and `regression.cox_zph_smooth` in Python.
+Rust and `regression.cox_zph_smooth` in Python: `x` is the transformed death time,
+`y` the death-by-term residual matrix and `variance` the diagonal of the residual
+variance matrix. It returns the transformed prediction times, fitted
+coefficients, one-standard-error values when requested and zero-based indices of
+singular columns, without display transforms or doubling of the errors. The
+binding accepts NumPy matrices of any layout and releases the GIL.

@@ -72,22 +72,22 @@ alongside the corrected oracle.
 
 ### Predictions and residuals
 
-- **Offsets in predictions**: the port includes AFT new-data offsets in the
-  linear predictor (see the
-  [retained reference differences](#reference-differences-retained-deliberately))
-  and consistently centers Cox offsets, even for models without coefficients. For
-  models without covariate terms, term prediction returns an empty-column matrix
-  where R's method errors.
-- **Empty AFT term predictions**: stock AFT term prediction fails on empty new
-  data, when omission leaves zero rows (including entirely omitted new data, in
+- **Offsets in predictions**: the port includes AFT new-data offsets in the linear
+  predictor (see the [retained reference
+  differences](#reference-differences-retained-deliberately)) and consistently
+  centers Cox offsets, even for models without coefficients. For models without
+  covariate terms, term prediction returns an empty-column matrix where R's method
+  errors.
+- **Empty AFT term predictions**: stock AFT term prediction fails on empty new data,
+  when omission leaves zero rows (including entirely omitted new data, in
   `attrassign()`) and for intercept-only models (in the empty term loop). The port
   returns a matrix with the selected column names and width and the retained row
   count, or missing-value padding under `na.exclude`.
-- **All spline inputs missing**: stock prediction raises an empty-derivatives
-  error; the port returns the empty or padded output.
-- **Penalized Cox survival predictions**: the stock penalized wrapper refuses
-  `type = "survival"`, before validating a term selector; the port computes the
-  prediction from the fitted state.
+- **All spline inputs missing**: stock prediction raises an empty-derivatives error;
+  the port returns the empty or padded output.
+- **Penalized Cox survival predictions**: the stock penalized wrapper refuses `type
+  = "survival"`, before validating a term selector; the port computes the prediction
+  from the fitted state.
 - **AFT term labels with standalone strata**: stock AFT prediction passes the full
   formula terms to `attrassign()` after its model matrix has removed standalone
   strata columns. When strata precede covariates, the remaining columns get
@@ -97,13 +97,14 @@ alongside the corrected oracle.
 - **Grouped predictions and residuals**: stock sparse Cox predictions can be
   collapsed both in the delegated prediction method and in the penalized method;
   sparse term reconstruction and partial residuals can fail for a one-column dense
-  design; excluded-row collapse can check a padded group vector against an
-  unpadded response; and Cox residuals reject logical group vectors through a
-  scalar logical condition. The port groups each prediction or residual once, pads
-  before grouping and accepts logical groups.
-- **Null Cox models**: stock expected and survival predictions for a null Cox
-  model fail when multiplying by `NULL` coefficients; the port returns the
-  baseline hazard and its exponential survival.
+  design; and Cox residuals reject logical group vectors through a scalar logical
+  condition. The port groups each prediction or residual once and accepts logical
+  groups (excluded rows are covered under [Cox models](#cox-models)). The R wrapper
+  keeps the group labels even where a stock method loses them while dropping a
+  one-column matrix.
+- **Null Cox models**: stock expected and survival predictions for a null Cox model
+  fail when multiplying by `NULL` coefficients; the port returns the baseline hazard
+  and its exponential survival.
 - **Empty AFT probability requests**: stock Gaussian, lognormal and t predictions
   reject `p = NULL`, and estimated-scale empty predictions with `se.fit = TRUE`
   fail; some fixed-scale predictions keep a nonempty error vector beside an empty
@@ -144,8 +145,9 @@ alongside the corrected oracle.
 - **cox.zph with a sparse frailty that is not the last term**: R stops with
   "subscript out of bounds"; each term gets its own df here.
 - **Collapsed residuals of an na.exclude fit**: `residuals(collapse = TRUE)` and
-  `predict(collapse =)` sum the fit's rows; R fails in `rowsum` on vectors of
-  different lengths.
+  `predict(collapse =)` pad the excluded rows and sum the fit's rows; R checks a
+  padded group vector against the unpadded response and fails in `rowsum` on
+  vectors of different lengths.
 - **Stratified scaled Schoenfeld residuals** with several covariates keep
   their strata attribute; R loses it as a side effect of `%*%`.
 - **Tied deaths across strata in `Ccoxcount2`** (`coxcount1.c`): R indexes the
@@ -417,6 +419,8 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   and its `rowsum` makes a missing cluster a group of its own. A factor-like
   strata value outside its declared levels raises (R's `factor()` makes it NA,
   which then fails as above).
+- AFT new-data concordance includes formula offsets in the predictions; see
+  [offsets in predictions](#predictions-and-residuals).
 - `concordance(fit, newdata)`, including for external linear models, with a row
   missing only its response drops the row from both the frame and the
   predictions; R drops it from one and stops with "x and y are not the same
@@ -683,8 +687,8 @@ this does not show.
   metadata; the vector-operation fixtures check current labels against 3.8-12.
 - Transition tables in multi-state curves, Cox models and `print_survcheck`
   output use the response's censoring level, e.g. "(censor)" or "(lost)",
-  following 3.8-12; numeric `survcheck` responses use "(censor)". The raw
-  `survcheck` result keeps the column label "(censored)". Curve transformations
+  following 3.8-12; printed `survcheck` tables of numeric responses use
+  "(censor)". The raw `survcheck` result keeps the column label "(censored)". Curve transformations
   and serialization preserve the label. Historical fixtures adapt only their
   fixed "(censored)" column name; all counts remain checked unchanged.
 - `rsurvreg(seed=s)` reproduces R's `set.seed(s)` stream (Mersenne-Twister,
@@ -968,8 +972,7 @@ this does not show.
   `dput()`s the whole call. Its `terms=TRUE` Wald rows keep R's p-value on 1 df
   while the DF column shows the term's df, as `summary_coxph_penal` does.
   Arbitrary R `printfun` closures are not retained or executed; callback
-  penalties use built-in coefficient or sparse Wald rows. A zero frailty
-  variance gives a NaN test.
+  penalties use built-in coefficient or sparse Wald rows.
 - `print_survConcordance` is an explicit function because R 3.8-12 contains
   `print.survConcordance` but no longer registers it.
 - `plotting.cox_zph_plot_data` returns every selected nonsingular term and works
@@ -990,6 +993,8 @@ this does not show.
   log(off)`, where R says `NaNs produced`. R's additional warning before AFT
   `model.matrix` rejects a numeric replacement for an ordinary factor is not
   reproduced.
+- Expected-survival summaries use R's averaged interpolation indices for tied
+  source times without emitting R's tie-collapse warning, as curve quantiles do.
 - A `match.arg` miss reads `'arg' should be one of "response", "link", ...` with
   ASCII quotes; R in a UTF-8 locale prints curly quotes.
 - tmerge's not-found message adds "in data2" to R's "object 'x' not found"; a
@@ -1001,9 +1006,11 @@ this does not show.
   least one curve" (R: "strata k not matched").
 - A Student-t bare AFT fit without `parms` raises a clear error; R's bare fitter
   fails with an unhelpful length-zero error.
-- For an evaluated AFT model frame of `age + strata(g) + strata(g):flag` without
-  raw `g`, R fails with "number of variables != number of variable names"; the
-  port reports the absent `g`.
+- For an AFT `model.matrix` call on a frame without a `terms` attribute and
+  without raw `g`, with the formula `age + strata(g) + strata(g):flag`, R fails
+  with "number of variables != number of variable names"; the port reports the
+  absent `g`. A missing raw Cox strata variable likewise raises the port's own
+  missing-variable error.
 - `untangle_specials` reports a missing factor matrix when removing all terms
   leaves a registered special; R errors.
 - `match_ratetable` on empty input returns empty positions without R's warnings
@@ -1061,14 +1068,26 @@ Formulas and model frames:
   levels, and offsets or unused variables do not remove rows. Because the stock
   Cox standalone-strata branch misspells `contrasts.arg`, supplied frame contrasts
   apply in that branch, while other Cox and AFT branches use the fitted contrasts.
+  (For fitted and new-data matrices the port corrects this typo; see
+  [Formulas and model matrices](#formulas-and-model-matrices).)
 - `model.matrix.survreg` renumbers assignments after removing strata columns, so
   `attrassign` with the fitted term labels names a later column after a strata
   term. With exactly one term, `untangle.specials` uses the summed factor code as
   the endpoint of `seq(ff)`, so an interaction-only special with code 2 gives
   indices `[1, 2]`.
-- A fitted dense frailty term that becomes sparse on small new data fails because
-  its factor contrasts no longer apply. Explicit `na.action` arguments in `...`
-  are ignored by new-data `model.matrix`, which uses `options("na.action")`.
+- Factor levels absent before `strata()` is evaluated are dropped. Several
+  separate `strata()` terms are recombined after row selection, keeping only
+  observed combinations, while a single `strata(a, b)` term keeps its combinations
+  from before selection.
+- Automatic frailty selection follows R's reevaluated constructor, so a sparse
+  term can become dense on small new data, while a fitted dense term that switches
+  to sparse codes fails because its factor contrasts no longer apply. Explicit
+  `na.action` arguments in `...` are ignored by new-data `model.matrix`, which
+  uses `options("na.action")`.
+- Variables removed by formula subtraction stay in the model frame and take part
+  in training-row omission, while Cox and AFT cluster extraction rebuilds the
+  formula and drops them. R's checks for multiple clusters and missing interaction
+  margins are kept.
 
 Predictions and residuals:
 
@@ -1084,12 +1103,12 @@ Predictions and residuals:
   evaluate the frailty variable, so its missing values remove no rows.
 - Schoenfeld and scaled Schoenfeld residuals ignore `collapse`.
 - An aliased AFT coefficient makes new-data and term predictions that use it
-  missing.
+  missing. AFT prediction types other than quantiles ignore `p`.
 
 Low-level fitters:
 
 - `coxph.fit` and `agreg.fit` use Efron for `method = "efron"` and Breslow for
-  every other label, including `"exact"`. `agexact.fit` always uses the exact
+  every other accepted label, including `"exact"`. `agexact.fit` always uses the exact
   likelihood, requires unit weights, returns a one-column matrix of linear
   predictors, labels its method `"coxph"` and has no class.
 - `survfitKM`'s old `type` argument overrides `stype` and `ctype`, including
@@ -1100,13 +1119,24 @@ Low-level fitters:
   because its entry has no density; with `nstrat = 1` the stratum codes are
   ignored; variance names are dropped when covariate rescaling is undone; the
   score keeps the internal covariate scaling; `assign` is unused.
-- `survpenal.fit` leaves `df2` unpopulated, returns a scalar penalty for sparse
-  fits, and does not warn about exhausted inner iterations.
+- `survpenal.fit` and `r.survpenal_fit` leave `df2` unpopulated and return a
+  scalar penalty for sparse fits (the native result always has two elements).
 - The t family's `n.eff` evaluates `variance(sigma^2)` as R does and can be
   negative (-111.527 on log lung time); only AIC-method psplines with
   `dist = "t"` use it.
 - `coxsurv.fit` accepts and ignores `cluster`, `position` and `oldid`, and
   `survfitcoxph.fit` ignores `vartype`.
+- `rsurvreg(n, ...)` draws as many uniforms as R's `runif` count rules give before
+  recycling location and scale, so `rsurvreg(2, mean=1:3)` draws two uniforms and
+  returns three values with a recycling warning. Distribution queries recycle
+  location and scale separately at each arithmetic stage, as R does.
+- `rep_surv` follows R's first-element warnings, nonfinite defaults, fractional
+  truncation and argument precedence.
+- Frailty penalties follow R's initial values: a gamma EM search ignores an `init`
+  vector longer than one value, Gaussian REML keeps a vector, and AIC searches
+  start from R's `c(0.1, 1)`. Ridge scaling uses the sample variance without
+  NumPy arithmetic warnings, as R's `var()` does for very large or subnormal
+  inputs.
 
 Curves:
 
@@ -1119,6 +1149,9 @@ Curves:
   increments, reuses the previous event count stepwise, and takes a state's risk
   count from the last departing transition in column-major order.
 - Tied `ctype = 2` residual and pseudo-value diagnostics use R's approximation.
+- With the default tolerance, an entirely censored curve has an undefined quantile
+  even at probability zero (R's terminal-flat rule); infinite tolerances keep R's
+  undefined results and zero-probability origin rules.
 - Counting curves whose inserted `start.time` origin makes the times unsorted
   refuse requested summaries. Ordinary KM quantiles keep the zero origin even when
   fitting starts later. Multi-state quantiles and medians are refused.
@@ -1129,6 +1162,8 @@ Printing and graphics:
   `se(rmean)`; one-row strata blocks use the named-vector layout; several Cox
   prediction curves have no confidence columns; `print_survexp(naprint=False)`
   drops rows with at least the number of columns minus two missing cells.
+- A zero frailty variance gives R's NaN Wald test, in Cox and penalized AFT
+  summaries alike.
 - `print_coxph_null` ignores the precision argument and uses seven digits.
   `print_summary_coxph_penal` ignores `signif_stars` and does not truncate
   confidence-interval labels. Multi-state Cox output omits `se(coef)`.
@@ -1143,6 +1178,8 @@ Printing and graphics:
   `right=False`. Rate-table vectors print every entry when only one would be
   omitted; zero-limit matrix displays keep row labels; named Unicode axis titles
   use byte-counted padding.
+- Plotting a `Surv2` response, and line or point overlays of raw `Surv`
+  responses, are refused with R's message.
 - `lines_survexp` joins expected survival with straight lines. Confidence bars
   from `conf_times` use the next fitted limit, while `mark_time` marks use the
   preceding estimate. Zero values on a log probability axis are drawn at 80% of
@@ -1157,10 +1194,16 @@ Population, data preparation and marginal means:
 - `finegray` multiplies user weights by source position within the stratum,
   indexing the full weight vector, so a stratified result's `(weights)` column
   need not equal its initial `fgwt`.
+- Rate-table `survexp` keeps R's zero cohort survival and unit conditional
+  survival for an empty sparse group.
 - `model=True` takes precedence over `x` and `y` in `pyears` and `survexp`. Cox
   rate models with a sparse frailty refuse new cohort curves; individual
   predictions use zero frailty for new rows.
-- A matrix-valued continuous `survobrien` term uses its first column.
+- A matrix-valued continuous `survobrien` term uses its first column, and a custom
+  transformation is first probed with ten values before it is called once per
+  column of each risk set.
+- With a two-column numeric `pyears` response, the columns are time and event
+  without a rate table, and start and stop (without events) with one.
 - `yates` weights linear estimates for the data population but not nonlinear
   averages, and omits model offsets. R's default `yates_setup` method reads `type`
   while its Cox and GLM methods read `predict`; GLM `terms` and Cox

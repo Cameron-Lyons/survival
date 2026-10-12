@@ -170,7 +170,8 @@ error. This applies to `coxph`, `survreg`, formula and direct-response `survfit`
 `survdiff`, `rttright`, `survcondense`, formula `concordance`, `survConcordance`
 and direct-input `pyears`; the other wrappers use R's `model.frame` selection.
 Formula strings use the calling environment for subset expressions; R formula
-objects use their own environment, with data columns taking precedence.
+objects use their own environment, with data columns taking precedence. R formula
+evaluation without a data argument has not been checked for every function.
 
 The survival response is constructed before rows are selected or omitted, and the
 normalized response determines which rows are missing. With status codes
@@ -205,7 +206,11 @@ response create a categorical status; `as.factor` keeps unused levels and
 `Surv` and `Surv2` keep the censoring factor's first level in `clabel` and format
 it as `:label`; objects without `clabel` keep the `+` marker. A one-shot event
 input is consumed once, and the input values and categories are never modified.
-Plain numeric and logical arrays keep their dtype during validation.
+Plain numeric and logical arrays keep their dtype during validation. In the R
+bridge, native model frames use the same constructor: Date-valued times are
+rejected as in R, `difftime` inputs, named arguments and factor levels are kept,
+and constructor diagnostics are R warnings. `survcheck` reports problem rows by
+their original observation numbers.
 
 Row operations are available from `survival.r` and the package root:
 `concat_surv`, `rep_surv`, `rev_surv`, `unique_surv`, `duplicated_surv`,
@@ -219,13 +224,17 @@ subset containing only status 2 as an ordinary 1/2 response.
   entry; a finite `length_out` (`length.out`) takes precedence over `times`.
   Counts truncate toward zero before the negativity check, so `-0.5` gives zero
   copies and `-1` is invalid. `each` and `length_out` use the first element of a
-  vector with R's warning; missing values take the defaults; `length_out` is
-  validated before `each`. Length-limited repetition builds only the required
-  rows.
+  vector with R's warning. A missing `each` means one, and a missing `length_out`
+  leaves `times` in effect; Python `None` and nullable pandas missing scalars count
+  as missing. Numeric character controls are accepted; an unconvertible `each` or
+  `length_out` warns and is treated as missing, while an invalid `times` raises R's
+  error. `length_out` is validated before `each`. Length-limited repetition builds
+  only the required rows.
 - `unique_surv` and `duplicated_surv` accept `from_last` (`fromLast`) and compare
   complete rows, including missing values, in expected linear time.
 - `as_character_surv` returns labels without right padding; `format_surv` pads
-  them to a common width. `transpose_surv` returns a plain matrix with one row
+  them to a common width. Both keep the common numeric precision and leading
+  padding of the time columns. `transpose_surv` returns a plain matrix with one row
   per response column; `levels_surv` returns the event-state names or `None`.
 
 `Surv` and `Surv2` reject arithmetic, comparisons (including `==` and `!=`),
@@ -235,7 +244,8 @@ logical operations, reductions, NumPy ufuncs and implicit array conversion with
 metadata (matching missing values compare equal); response objects are
 unhashable, and truth-value tests are invalid. `copy`, `deepcopy`, pickle, `len`
 and survival-aware `median`/`quantile` remain available; extract
-`response.as_matrix()` or a single column for numeric work.
+`response.as_matrix()` or a single column for numeric work; `Surv2.as_matrix()`
+returns the time and normalized status.
 
 ## Input containers
 
@@ -245,7 +255,9 @@ or Polars series, masked arrays or one-shot iterators.
 
 - Each used one-shot column or row-aligned argument is read once per call; the
   missing-value checks, subset selection, expression evaluation, fitting and
-  prediction then read the same prepared values. An iterator shared by a column
+  prediction then read the same prepared values. This also applies to the direct
+  response arguments of `survfit`, `survdiff` and `survcheck`, to Aalen fits and
+  to the formula-based data preparation functions. An iterator shared by a column
   and a direct argument, such as `weights`, is read once. Unused mapping columns
   are never read. The caller must supply a fresh iterator for another call.
 - Declared factor levels, ordering and contrasts, and declared integer or double
@@ -311,6 +323,7 @@ input columns independently, so a missing `age` leaves an observed `rx` intact i
   labels of zero-column frames.
 - **Time transforms.** Expanded `tt()` matrices use risk-set row labels and need
   their fitted time and risk-set context to be rebuilt for new data.
+- **Null models.** R null Cox models return `NULL` coefficients, as in R.
 
 ### Evaluated R model frames
 
@@ -321,7 +334,11 @@ and spline terms use the supplied basis and its current width. As in stock
 survival, `model.frame` is bypassed for such inputs, so missing rows remain under
 every global action, supplied factor levels may differ from the fitted levels, and
 offsets or unused variables do not remove rows. Required column names follow the
-full or reduced formula; missing ones raise the stock mismatch error. Logical
+full or reduced formula; missing ones raise the stock mismatch error. A one-column
+numeric matrix gets its variable name alone, even with a column suffix, while
+wider matrices append the supplied names or one-based indices; assignments adapt
+to changed basis widths; with one stratum, the supplied column keeps its
+attributes, including custom contrasts. Logical
 factor coding, interactions, assignments, row labels, contrasts and R `NA`/`NaN`
 payloads are kept. The port's own `model.frame` output contains raw columns
 without R's evaluated-column schema and `terms` attribute. Custom global
@@ -441,11 +458,15 @@ one-based group positions. Because Python cannot recover R's unevaluated argumen
 expressions, `column_names` supplies complete coefficient labels, and callback
 splines are labeled from the variable name, such as `ps(x)3`. Boolean bases use
 zero and one; a sparse penalty requires one numeric group column; penalty
-interactions and multiple sparse penalties raise errors. Sparse callbacks without
-a custom formatter get a group Wald summary. R callbacks may return
+interactions and multiple sparse penalties raise errors, and nonnumeric bases fail
+before any penalty callback runs. Sparse callbacks without a custom formatter get
+a group Wald summary. R callbacks may return
 `survival::frailty()`, `survivalr::frailty()`, splines, ridge terms or custom
 penalty objects; sparse formatting callbacks receive the frailties and their
-variance diagonal with the third argument missing, as in R.
+variance diagonal with the third argument missing, as in R, and dense formatting
+callbacks receive coefficient and covariance blocks. Controller histories and
+formatter closures survive model serialization, and R frailty constructors keep
+R's numeric and logical group labels.
 
 ## Multi-state Cox models
 
@@ -477,8 +498,8 @@ zero-based positions in a fitted model's internal `assign` dictionary. The matri
 input may be the mapping from `r.model_matrix(fit)`, a mapping with `assign`, or
 an object with an `assign` vector. The terms input may be `TermMetadata`, a mapping
 with `term_labels` (or `term.labels`), or a fitted model. Groups follow the first
-occurrence of each label in column order; unused terms are absent; invalid codes
-are rejected.
+occurrence of each label in column order; unused terms are absent; an empty
+assignment vector returns `{}`; invalid codes are rejected.
 
 ```python
 terms = r.TermMetadata(
@@ -504,11 +525,11 @@ assert r.untangle_specials(terms, "strata", order=2) == {
 | `specials` | Registered special names and their one-based variable positions |
 
 Only labels are required for column grouping; selecting a present special needs
-`factors` and `order`. An absent special returns `{"vars": [], "terms": []}`. For
-a present special, `vars` lists its registered variables, `tvar` adjusts their
-positions for the response, and `terms` selects matching degrees; `order` may be
-a sequence. Selection uses the supplied registration and does not infer specials
-from expression text.
+`factors` and `order`. An absent special returns `{"vars": [], "terms": []}`. For a
+present special, `vars` lists its registered variables, `tvar` adjusts their
+positions for the response, and `terms` selects matching degrees; `order` may be a
+sequence. Returned lists are independent of the metadata. Selection uses the
+supplied registration and does not infer specials from expression text.
 
 `model_term_names` returns the original fitted term labels, including strata, as
 R's `labels(fit)`. Because `model.matrix.survreg` renumbers assignments after

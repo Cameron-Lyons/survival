@@ -95,7 +95,9 @@ the GIL.
 
 `r.as_data_frame` of a curve keeps fitted terminal uncertainty and confidence
 limits: robust fits can have zero standard errors and zero bounds at survival
-zero, and these stay zero, while undefined native values stay missing. Grouped
+zero, and these stay zero, also in R curve quantiles, while undefined native
+values stay missing and logarithmic standard errors still convert to the survival
+scale. Grouped
 multi-state frames are state-major, then stratum-major, as in R; repeated or
 reordered state selections keep their columns by position.
 
@@ -193,7 +195,8 @@ the R wrapper uses its bracket syntax. Select by zero-based indices, stratum
 labels or state names; omitted dimensions keep all values. Selected curves keep
 their count engine, so `summary_survfit`, `survfit0`, `as_data_frame`, reports and
 aggregation stay available. Original state names stay in `oldstate`;
-probabilities are not renormalized. A state selection drops transition hazards
+probabilities are not renormalized. Arrays and mutable count rows are
+independent of the source. A state selection drops transition hazards
 and counts unless every state remains in its original order. `n_censor` follows
 the selected state columns, and repeated stratum labels gain suffixes such as `b`,
 `b.1`.
@@ -209,7 +212,7 @@ summary = r.summary_survfit(death, times=[100, 200])
 multi-state probability curves at each time, following R's `aggregate.survfit`.
 It supports `mean`, `median`, `min`, `max`, `sum` and custom scalar summaries,
 with the first grouping variable varying fastest; only observed combinations give
-output columns.
+output columns. Iterator and generator `by` columns are read once.
 
 ```python
 import numpy as np
@@ -226,11 +229,13 @@ spread = r.aggregate_survfit(curves, by=groups, FUN=lambda values: np.ptp(values
   all those results are collected before checking that each is a numeric scalar.
   Survival values then arrive in time/group order, followed by state
   probabilities in state/time/group order, each group in original row order. Extra
-  keyword arguments are accepted and ignored.
+  keyword arguments are accepted and ignored, so a callback that requires another
+  argument raises its own missing-argument error.
 - Every Python call receives a fresh one-dimensional float64 array. Results must
   be real numeric scalars or one-element numeric arrays (NaN and infinities
-  allowed); a callback that changes its return length gets an error. Callback
-  exceptions stop immediately with their type and message.
+  allowed); boolean, string, list and vector results are rejected, and a callback
+  that changes its return length gets an error. Callback exceptions stop
+  immediately with their type and message.
 - Uncertainty components and cumulative hazards are dropped (counts, times,
   strata and states are kept). Aggregation without `by` keeps a data axis of
   length one.
@@ -244,9 +249,10 @@ spread = r.aggregate_survfit(curves, by=groups, FUN=lambda values: np.ptp(values
 Rust callers use `aggregate_survfit_with(surv, pstate, by, callback)` with a
 closure taking `&[f64]` and returning `SurvivalResult<f64>`; Python's native
 `aggregate_survfit(..., fun=callback)` accepts the same callbacks. Built-in names
-release the GIL. The multi-state binding accepts an owned three-dimensional float
-array or nested lists. The R bridge accepts a function or function name and keeps
-the original R group table, including factor order and unused declared levels, in
+release the GIL; Python callbacks keep it. The multi-state binding accepts an
+owned three-dimensional float array or nested lists. The R bridge accepts a
+function or function name, passes callback indices as R integers and keeps the
+original R group table, including factor order and unused declared levels, in
 `newdata`.
 
 ## Curves from transition matrices
@@ -282,7 +288,8 @@ print(fit.time, fit.pstate)
   off-diagonal increments, so probabilities can sum above one; `matexp` multiplies
   by `exp(dA)`.
 - The time grid is the union of transition event times. `start_time` excludes
-  earlier times and applies `p0` there; the default start is `min(0, event times)`.
+  times at or before that value and applies `p0` there, subtracting the earlier
+  hazard increments; the default start is `min(0, event times)`.
   `time0=True` adds the initial row; an empty event grid gives an empty curve with
   its `p0`.
 - The result is a `SurvfitMultiStateResult` without standard errors or influence.
@@ -293,8 +300,12 @@ print(fit.time, fit.pstate)
 
 Rust callers use `surv_analysis::survfit_matrix` with borrowed
 `SurvfitMatrixTransition` values, state names, an optional initial-probability
-matrix, `SurvfitMatrixMethod` and an optional start time; the domain function
-`surv_analysis.survfit_matrix` takes nested lists of native KM results.
+matrix, `SurvfitMatrixMethod` and an optional start time. Each transition gives
+its zero-based source and destination states and a slice of `SurvfitKMResult`
+values, one per prediction column; the result is a
+`SurvivalResult<SurvfitAJResult>`. The domain function
+`surv_analysis.survfit_matrix` takes nested lists of native KM results and
+releases the GIL.
 
 ## Residuals and pseudo-values
 

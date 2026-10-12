@@ -74,23 +74,35 @@ benchmarks.
   Counting-process data, repeated clusters, uncertain initial distributions,
   explicit influences and numerically sensitive inputs use the general kernel.
   Point-estimate fits (`se_fit=False`) allocate no robust-variance workspace.
+  Grouped initial-state preparation scans the global minimum entry time once, and
+  only for counting-process data.
 - Requested-time summaries choose a forward sweep for dense ordered queries and
   binary search for sparse or unordered ones, comparing the query count with the
   grid size divided by its search depth; count accumulation streams prefix sums in
   R's addition order. Compact tables read restricted-mean rectangles directly from
   the curve with scratch storage proportional to the number of curves, and median
-  searches stop at the required crossing.
+  searches stop at the required crossing. `print_survfit` uses these compact
+  kernels directly and never builds the per-observation arrays of
+  `summary_survfit`.
 - Grouped residuals and pseudo-values bucket input rows by curve in one pass
   (O(n + g) for g curves). Grouped multi-state data frames copy contiguous time
   blocks per state.
 - Curve aggregation prepares group positions once and fills one reusable buffer per
-  time and state; medians use linear-time selection instead of sorting.
+  time and state; medians use linear-time selection instead of sorting. When the
+  product of declared factor levels overflows, observed level combinations are
+  ranked directly.
 - Quantiles use adjacent comparisons on the common monotone path and share one
   interpolation buffer across the two tolerance shifts.
 - `survfit.matrix` sorts the event-time union in O(L log L) for L input rows and
   updates discrete curves in O(L + U(K + S)) for U times, K transitions and S
   states, plus O(U S³) for dense matrix exponentials; it allocates no
   time-by-transition jump matrix.
+- Restricted-mean comparisons gather each group's rows once in sorted label order
+  instead of scanning all observations per group.
+- Plot data compress constant runs, so path vertices scale with the number of
+  changes rather than the number of censored observations; preparing plots copies
+  no observation-by-time influence matrix and skips confidence arrays when
+  intervals are off.
 
 ### Cox models
 
@@ -117,6 +129,22 @@ benchmarks.
 - Cohort expected survival from a Cox model aggregates baselines and risks
   directly, using O(N + B + T × G) storage for N subjects, B baseline points, T
   times and G groups.
+- Stored sparse-frailty model matrices insert the group vector into one owned row
+  snapshot, so keeping the sparse labels costs one vector rather than a copy of the
+  expanded design.
+- The proportional-hazards smoother (`cox_zph_smooth`) forms the spline basis
+  once, reuses QR factorizations and prediction variances for terms with the same
+  missing-value mask, and computes standard errors by triangular solves without
+  normal equations, so one call for all terms is much cheaper than one per term.
+
+### AFT models
+
+- Built-in families select their scalar kernels once per likelihood evaluation and
+  allocate no endpoint or density buffers; callback families use workspace linear
+  in the number of rows plus interval endpoints, and the Python adapter reacquires
+  the GIL once per batch.
+- Built-in distribution queries compose recycling indices and allocate the result
+  once; callback queries reuse owned arithmetic buffers.
 
 ### Other routines
 
@@ -126,11 +154,23 @@ benchmarks.
   the same.
 - Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order
   without a separate curve fit; `rho=0` allocates no weights.
-- Rate-table matching folds labels once, caches small categorical axes and promotes
-  to a hash map for larger ones; expected-survival grids select requested times
-  with one forward scan (O(fitted times + requests)).
+- Rate-table matching folds table labels once and indexes exact matches; a small
+  cache serves the observed labels of common sex and race dimensions and is
+  promoted to a hash map after four distinct observed labels. Prefix matching
+  scans an axis only when there is no exact match. Expected-survival grids select
+  requested times with one forward scan (O(fitted times + requests)).
 - Person-years tabulation accumulates directly into cells for fixed categories
-  without a rate table; other inputs use the shared interval stepper.
+  without a rate table; other inputs use the shared interval stepper. Summary
+  margins use direct column-major slab offsets, and `print_pyears` totals walk the
+  stored cells without flattening them.
+- Aalen influence reductions for robust summaries and plot variances work in
+  blocks of about 1 MiB and never convert or square the whole group by coefficient
+  by time array; `se=False` plots never read the stored influences.
+- Yates survival setups fill one N by (T + 2) result row by row with constant
+  scratch space, and response simulations reuse one predictor buffer and
+  accumulate the covariance online without keeping each draw's responses.
+- Evaluated R model-frame columns with numeric dtypes skip per-value boolean and
+  string scans during classification.
 - O'Brien expansion sorts each covariate once per stratum and writes into
   precomputed output slices: O(P N log N + P M) work for N rows, P continuous
   columns and M expanded rows.

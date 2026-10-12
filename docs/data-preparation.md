@@ -160,8 +160,9 @@ expected columns.
 and releases the GIL. `block_offsets` holds the half-open slices of consecutive
 blocks, and `to_arrays()` returns independent writable arrays. `transform=False`
 builds only the risk sets (`continuous=[]` allowed); Rust callers have
-`validation::survobrien_expand`. A custom transformation receives one column of
-one risk set per call and must return one value per row.
+`validation::survobrien_expand`. A custom transformation is first checked on ten
+values, as in R, then receives one column of one risk set per call and must
+return one value per row.
 
 The R bridge evaluates formulas in R and uses the shared kernel for every
 expansion, including user-defined transformations, protected `I()` terms,
