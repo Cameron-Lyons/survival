@@ -956,11 +956,16 @@ def _positions(selection: Any, count: int, labels: Sequence[str], name: str) -> 
     ``labels``, labels."""
 
     positions = []
+    lookup: dict[str, int] | None = None
     for value in _materialize_1d(selection, name):
         if isinstance(value, str):
-            if value not in labels:
+            if lookup is None:
+                lookup = {}
+                for position, label in enumerate(labels):
+                    lookup.setdefault(label, position)
+            if value not in lookup:
                 raise ValueError(f"{name} {value!r} is not one of {', '.join(labels)}")
-            positions.append(labels.index(value))
+            positions.append(lookup[value])
         else:
             position = _integer_scalar(value, name)
             if not 0 <= position < count:

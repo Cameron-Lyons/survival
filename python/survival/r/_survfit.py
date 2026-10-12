@@ -991,11 +991,16 @@ def _cox_subset_positions(
     if selection is None:
         return list(range(count))
     positions = []
+    lookup: dict[str, int] | None = None
     for value in _scalar_or_vector(selection, name):
         if isinstance(value, str):
-            if value not in labels:
+            if lookup is None:
+                lookup = {}
+                for position, label in enumerate(labels):
+                    lookup.setdefault(label, position)
+            if value not in lookup:
                 raise ValueError(f"{name} {value!r} not matched")
-            positions.append(labels.index(value))
+            positions.append(lookup[value])
         else:
             index = _integer_scalar(value, name)
             if not 0 <= index < count:
