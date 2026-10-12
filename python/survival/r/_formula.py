@@ -1497,12 +1497,15 @@ def _evaluated_variables(variables: Iterable[_CovariateTerm]) -> list[_Covariate
         dict.fromkeys(
             replace(term, special=None) if term.special in {"offset", "cluster"} else term
             for term in variables
-            if term.call is None
-            and term.strata is None
+            if term.strata is None
             and (
-                term.arithmetic is not None
-                or term.transform not in {None, "tt"}
-                or term.categorical_wrapper is not None
+                _is_cut_call(term.call)
+                or term.call is None
+                and (
+                    term.arithmetic is not None
+                    or term.transform not in {None, "tt"}
+                    or term.categorical_wrapper is not None
+                )
             )
         )
     )
@@ -2196,6 +2199,8 @@ def _term_raw_values(data: Any, term: _CovariateTerm, n: int) -> list[Any]:
             raise ValueError("formula columns must have the same length as the Surv response")
         return values
     if term.call is not None:
+        if _is_cut_call(term.call):
+            return _cut_term_values(data, term.call, n)
         raise ValueError(f"unsupported formula term(s): {term.call}")
     if term.arithmetic is not None:
         return _expression_values(data, term.arithmetic, n)
@@ -3243,21 +3248,29 @@ def _parse_strata(call: str) -> _StrataSpec:
     )
 
 
+def _is_cut_call(call: str | None) -> bool:
+    return call is not None and call.startswith("cut(")
+
+
+def _cut_term_values(data: Any, call: str, n: int) -> Any:
+    """R's ``cut(x, breaks, ...)`` as a model-frame factor with its interval levels."""
+
+    from ._pyears import _cut_call
+
+    cut = _cut_call(call, data, n)
+    if cut.levels is None:
+        return cut.values
+    return _r_factor(
+        [None if math.isnan(value) else cut.levels[int(value) - 1] for value in cut.values],
+        cut.levels,
+    )
+
+
 def _strata_argument_values(data: Any, term: _CovariateTerm, n: int) -> Any:
     if term.strata is not None:
         return _strata_term_values(data, term.strata)
     if term.call is not None:
-        from ._pyears import _cut_call
-
-        cut = _cut_call(term.call, data, n)
-        return (
-            cut.values
-            if cut.levels is None
-            else _r_factor(
-                [None if math.isnan(value) else cut.levels[int(value) - 1] for value in cut.values],
-                cut.levels,
-            )
-        )
+        return _cut_term_values(data, term.call, n)
     if term.transform is None and term.arithmetic is None:
         values = _column_source(data, term.column)
     else:

@@ -883,7 +883,7 @@ def _population_variable_overrides(
                 [None if math.isnan(v) else factor.levels[int(v) - 1] for v in factor.values],
                 factor.levels,
             )
-        elif term.transform is None and term.arithmetic is None:
+        elif term.call is None and term.transform is None and term.arithmetic is None:
             source = _column_source(mf.data, term.column)
             overrides[label] = _rows_of(source, _materialize_labels(source, label))
     return overrides

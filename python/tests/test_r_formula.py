@@ -208,11 +208,14 @@ def test_model_frame_applies_subset_then_na_action():
 
 def test_arithmetic_responses_and_call_terms_evaluate_against_data():
     data = {"stop": [365.25, 730.5], "event": [1, 0], "age": [40, 60]}
-    mf = r_formula.model_frame("Surv(stop / 365.25, event) ~ cut(age + 48, c(0, 50, 100))", data)
+    mf = r_formula.model_frame("Surv(stop / 365.25, event) ~ cut(age + 48, c(0, 100, 200))", data)
     assert list(mf.response.time) == [1.0, 2.0]
-    assert mf.terms.covariates[0].call == "cut(age + 48, c(0, 50, 100))"
-    with pytest.raises(ValueError, match="unsupported formula term"):
-        r_formula._term_values(data, mf.terms.covariates[0], 2)
+    assert mf.terms.covariates[0].call == "cut(age + 48, c(0, 100, 200))"
+    cut = r_formula._term_values(data, mf.terms.covariates[0], 2)
+    assert list(cut) == ["(0,100]", "(100,200]"]
+    assert list(cut.categories) == ["(0,100]", "(100,200]"]
+    dropped = r_formula.model_frame("Surv(stop, event) ~ cut(age + 48, c(0, 50, 100))", data)
+    assert list(dropped.response.time) == [365.25]
     assert r_formula._response_arg_values(data, "stop / 365.25") == [1.0, 2.0]
     assert r_formula._response_arg_values(data, "event == 1") == [True, False]
     assert r_formula._response_arg_values(data, "rep(1, n)", 2) == [1, 1]
