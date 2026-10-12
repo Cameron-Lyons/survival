@@ -345,6 +345,12 @@ def _status_labels(states: Sequence[str], status: Sequence[float | int | None]) 
     """
 
     if not states:
+        try:
+            codes = np.asarray(status, dtype=float)
+        except (TypeError, ValueError):
+            codes = None
+        if codes is not None and not np.isnan(codes).any():
+            return codes.astype(np.int64).tolist()
         return [None if code is None or code != code else int(code) for code in status]
     labels = ["censor", *states]
     return Factor(
@@ -367,6 +373,27 @@ def _output_name(value: Any, name: str) -> str:
 
 def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> dict[str, list[Any]]:
     return {name: _select_rows(values, rows) for name, values in columns.items()}
+
+
+def _split_data(data: Any, rows: Sequence[int]) -> dict[str, list[Any]]:
+    """``data[rows, ]`` column by column; plain numeric arrays are indexed directly."""
+
+    sources = _data_column_sources(data, "data")
+    index = np.asarray(rows, dtype=np.intp)
+    frame: dict[str, list[Any]] = {}
+    for column, source in sources.items():
+        if (
+            type(source) is np.ndarray
+            and source.ndim == 1
+            and source.dtype.kind in "biuf"
+            and len(source) > (index.max() if len(index) else -1)
+        ):
+            frame[column] = source[index].tolist()
+        else:
+            frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
+    if len({len(values) for values in frame.values()}) > 1:
+        raise ValueError("data columns must have equal lengths")
+    return frame
 
 
 def _data_column_sources(data: Any, name: str) -> dict[str, Any]:
@@ -545,7 +572,7 @@ def survSplit(
     split = _split_kernel(mf.response, cut_values, zero_value, timefix, mf.id if timeline else None)
     rows = split.row
     if formula.partition("~")[2].strip() == "." and mf.n == _data_row_count(data):
-        newdata = _split_frame(_data_columns(data, "data"), rows)
+        newdata = _split_data(data, rows)
     else:
         newdata = _split_frame(dict(_model_variables(mf)), rows)
         if timeline:
