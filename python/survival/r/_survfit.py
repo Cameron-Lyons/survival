@@ -1832,14 +1832,16 @@ def _summary_table(
     if first.lower is not None and first.upper is not None:
         level = _strata_value_label(conf_int if conf_int is not None else 0.95)
         columns += [(f"{level}LCL", "lower"), (f"{level}UCL", "upper")]
+    values: list[list[float]] = []
+    for table in tables:
+        vectors = [getattr(table, field) for _name, field in columns]
+        values.extend(
+            [float(vector[curve]) for vector in vectors] for curve in range(len(vectors[0]))
+        )
     return NamedMatrix(
         rownames=list(rownames) if rownames else None,
         colnames=[name for name, _field in columns],
-        values=[
-            [float(getattr(table, field)[curve]) for _name, field in columns]
-            for table in tables
-            for curve in range(len(table.records))
-        ],
+        values=values,
     )
 
 
