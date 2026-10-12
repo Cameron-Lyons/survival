@@ -8,11 +8,12 @@ residuals, and the native array interfaces. Formula evaluation is described in
 
 ## Prediction types
 
-`r.predict(fit, newdata=None, type=..., se_fit=False)` and `r.fitted(fit)`
+`r.predict(fit, newdata=None, type=..., se_fit=...)` and `r.fitted(fit)`
 support Cox `"lp"`, `"risk"`, `"expected"`, `"survival"` and `"terms"`
 predictions, and AFT `"lp"` (`"linear"`), `"response"`, `"terms"`, `"quantile"`
-and `"uquantile"` predictions. Without `newdata`, predictions refer to the
-training rows; Cox `fitted()` returns the unpadded stored predictors.
+and `"uquantile"` predictions; R's `se.fit` and `na.action` spellings are
+accepted. Without `newdata`, predictions refer to the training rows; Cox
+`fitted()` returns the unpadded stored predictors.
 
 - AFT `"quantile"` returns response-scale quantiles at `p` (R's default
   `[0.1, 0.9]`) and `"uquantile"` the same quantiles on the linear scale.
