@@ -62,6 +62,19 @@ effects; AFT removes those main effects before assigning contrasts. The port
 keeps this difference, including factor order and column labels. Cox survival
 curves for these models require `newdata`, as in R.
 
+Character columns are factors, as in R's `model.matrix`: a column of `"0"`,
+`"1"`, `"2"` gives two treatment columns, not a slope, and string levels sort as
+strings (`"10"` before `"9"`). New data matches string levels through R's
+`as.character`, so numeric `0`/`1` predicts for a factor with levels `"0"` and
+`"1"`. `cut()` is a factor term in every formula; data-dependent breaks such as
+`cut(age, 3)` are computed before subsetting and missing-row removal, as
+`model.frame` does. `survival.r.Factor(values, levels=None, ordered=False)` is
+R's `factor()`: a `list` of labels that carries `categories` (and `levels`), so
+it declares a level order without pandas; the bundled data sets return their
+factor columns this way. Cox and AFT fits record R's `xlevels` and `contrasts`
+(Cox also lists the `strata()` levels; a plain logical column has a contrast but
+no levels).
+
 ## Typed vector expressions
 
 Expressions inside `I()`, `identity()`, `as.numeric()`, `offset()` and the other
@@ -193,7 +206,9 @@ calls raise `ValueError("missing values in the response")`. Use `na.omit` or
 
 `Surv(time, event)`, `Surv(start, stop, event)` and the interval forms accept R's
 named aliases `time=`, `time1=`, `start=`, `time2=`, `stop=`, `event=` and
-`status=`. Numeric 1/2 status codes are recoded as in R; logical arrays, masked
+`status=`. As in R, named arguments are matched first and the positional ones
+fill the remaining slots, so `Surv(time, event = status)` works; `origin` may
+hold one value per observation. Numeric 1/2 status codes are recoded as in R; logical arrays, masked
 logical values and nullable pandas logical columns use logical coding. A
 factor-valued event gives a multi-state response. Declared factor levels are
 kept in their declared order, including unused levels: for values

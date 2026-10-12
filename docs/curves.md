@@ -178,6 +178,14 @@ GIL.
 
 ## Selecting curves
 
+Formula curves expose `curves.subset(strata=..., drop=...)` and, for multi-state
+curves, `curves.subset(strata=..., states=..., drop=...)`, R's `fit[...]`, with
+labels or zero-based indices in the order given; `curves.dim` is R's `dim(fit)`.
+A single selected stratum loses its label unless `drop=False`.
+`summary_survfit(curves, times=..., data_frame=True)` (or `as_data_frame` of a
+summary) returns R's `summary(fit, data.frame = TRUE)` table: one row per time
+and curve, long by state for multi-state curves.
+
 Ordinary Cox curves expose `curves.subset(strata=..., data=..., drop=...)`.
 Python positions are zero-based; stratum labels and prediction-row names can also
 select their margins. The R bridge accepts `curves[strata, data, drop=FALSE]`.

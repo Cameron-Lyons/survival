@@ -8,6 +8,14 @@ forward (`lvcf`), Fine–Gray expansion (`finegray`) and O'Brien risk-set expans
 
 ## Time-dependent data
 
+`survSplit`, `tmerge`, `survcondense`, `finegray` and `survobrien` keep factor
+columns as factors (`survival.r.Factor`) with their levels, so a model refitted
+on their output uses the same reference levels. Factor `event` and `tdc`
+arguments of `tmerge` give factor columns; a `tdc` default outside the levels is
+appended as a level, as R does. Multi-state statuses of `survSplit` and
+`survcondense` are factors with R's `"censor"` first level. `survSplit(zero=)`
+may hold one start time per row.
+
 `r.tmerge` builds start/stop data with R's `(tstart, tstop]` boundary rules,
 event placement, cumulative updates, missing-value handling and classification
 metadata; the README has a complete example. `tdc`, `cumtdc`, `event` and

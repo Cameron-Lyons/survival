@@ -13,7 +13,10 @@ support Cox `"lp"`, `"risk"`, `"expected"`, `"survival"` and `"terms"`
 predictions, and AFT `"lp"` (`"linear"`), `"response"`, `"terms"`, `"quantile"`
 and `"uquantile"` predictions; R's `se.fit` and `na.action` spellings are
 accepted. Without `newdata`, predictions refer to the training rows; Cox
-`fitted()` returns the unpadded stored predictors.
+`fitted()` returns the unpadded stored predictors. AFT new data may contain a
+stratum the fit did not see: the linear predictor, response and terms are
+returned, and quantiles of an estimated-scale fit are NA for those rows, as in
+R; Cox predictions refuse an unknown stratum, as R does.
 
 - AFT `"quantile"` returns response-scale quantiles at `p` (R's default
   `[0.1, 0.9]`) and `"uquantile"` the same quantiles on the linear scale.
