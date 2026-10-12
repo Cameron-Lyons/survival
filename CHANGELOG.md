@@ -37,6 +37,10 @@
   with R's column-relative QR rule (`qrtol`): covariates offset by large
   constants keep R's precision, and rescaled covariates such as `age * 1e-6`
   are no longer reported as rank deficient.
+- `aareg` fits (start, stop] data whose early risk sets are singular, such as
+  R's own `heart ~ transplant` example, instead of raising "risk covariance is
+  rank deficient". An aliased covariate takes no step at such a time; the test
+  statistics and summary table match R.
 
 ### Added
 

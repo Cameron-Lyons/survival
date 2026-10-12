@@ -414,9 +414,9 @@ fn taper_covariances(moments: &mut [RiskMoment], taper: &[f64], nvar: usize) {
     }
 }
 
-fn invert_matrix(values: &[f64], n: usize, tolerance: f64) -> Option<Vec<f64>> {
+fn pseudo_inverse(values: &[f64], n: usize, tolerance: f64) -> Option<(Vec<f64>, usize)> {
     if n == 0 {
-        return Some(Vec::new());
+        return Some((Vec::new(), 0));
     }
     if values.iter().any(|value| !value.is_finite()) {
         return None;
@@ -425,19 +425,18 @@ fn invert_matrix(values: &[f64], n: usize, tolerance: f64) -> Option<Vec<f64>> {
         .map(|column| (0..n).map(|row| values[row * n + column]).collect())
         .collect();
     let qr = LinpackLeastSquares::with_tolerance(columns, n, tolerance);
-    if qr.rank() < n {
-        return None;
-    }
     let mut inverse = vec![0.0; n * n];
     let mut unit = vec![0.0; n];
     for column in 0..n {
         unit.fill(0.0);
         unit[column] = 1.0;
         for (row, value) in qr.coefficients(&unit).into_iter().enumerate() {
-            inverse[row * n + column] = value;
+            if !value.is_nan() {
+                inverse[row * n + column] = value;
+            }
         }
     }
-    Some(inverse)
+    Some((inverse, qr.rank()))
 }
 
 fn matrix_vector_product(matrix: &[f64], vector: &[f64], n: usize) -> Vec<f64> {
@@ -470,7 +469,8 @@ fn prepare_retained_moments(
         .count();
     if nvar > 1 {
         while retained > 0
-            && invert_matrix(&moments[retained - 1].covariance, nvar, qrtol).is_none()
+            && pseudo_inverse(&moments[retained - 1].covariance, nvar, qrtol)
+                .is_none_or(|(_, rank)| rank != nvar)
         {
             retained -= 1;
         }
@@ -481,12 +481,14 @@ fn prepare_retained_moments(
         ));
     }
     for (time_idx, moment) in moments.iter_mut().take(retained).enumerate() {
-        moment.inverse = invert_matrix(&moment.covariance, nvar, qrtol).ok_or_else(|| {
-            SurvivalError::invalid_input(format!(
-                "risk covariance is rank deficient at event time {} (index {time_idx})",
-                moment.time
-            ))
-        })?;
+        moment.inverse = pseudo_inverse(&moment.covariance, nvar, qrtol)
+            .ok_or_else(|| {
+                SurvivalError::invalid_input(format!(
+                    "risk covariance is not finite at event time {} (index {time_idx})",
+                    moment.time
+                ))
+            })?
+            .0;
         moment.time_weight = if nvar == 0 {
             vec![moment.risk]
         } else {
@@ -494,7 +496,12 @@ fn prepare_retained_moments(
             let mut weights = Vec::with_capacity(nvar + 1);
             weights.push(moment.risk / (1.0 + dot(&moment.mean, &inverse_mean)));
             for column in 0..nvar {
-                weights.push(moment.risk / moment.inverse[column * nvar + column]);
+                let diagonal = moment.inverse[column * nvar + column];
+                weights.push(if diagonal == 0.0 {
+                    0.0
+                } else {
+                    moment.risk / diagonal
+                });
             }
             weights
         };
