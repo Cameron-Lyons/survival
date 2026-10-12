@@ -450,7 +450,7 @@ def test_survfit_reads_the_curves_once_and_limits_them_in_one_call(monkeypatch, 
     class Curve:
         def __init__(self, curve):
             self._curve = curve
-            self.reads = {"surv": 0, "cumhaz": 0, "std_err": 0}
+            self.reads = {"surv": 0, "cumhaz": 0, "std_err": 0, "to_arrays": 0}
             reads.append(self.reads)
 
         def __getattr__(self, name):
@@ -478,5 +478,5 @@ def test_survfit_reads_the_curves_once_and_limits_them_in_one_call(monkeypatch, 
     monkeypatch.setattr(_coxph._core, "survfit_confint", counted)
     curve = r.survfit(dataclasses.replace(fit, fit=Engine(fit.fit)), newdata)
     assert (curve.lower, curve.upper) == (expected.lower, expected.upper)
-    assert reads == [{"surv": 1, "cumhaz": 1, "std_err": 1}] * 2
+    assert reads == [{"surv": 0, "cumhaz": 0, "std_err": 0, "to_arrays": 1}] * 2
     assert calls == [len(expected.time) * 3]
