@@ -9620,10 +9620,22 @@ summary.survival_py_anova <- function(object, ...) {
   }
   fields[["states"]] <- states
   fields[["type"]] <- as.character(fields[["type"]])[[1L]]
-  fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
-  fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
+  if (!is.null(fields[["conf.type"]])) {
+    fields[["conf.type"]] <- as.character(fields[["conf.type"]])[[1L]]
+  } else {
+    fields[["conf.type"]] <- NULL
+  }
+  if (!is.null(fields[["conf.int"]])) {
+    fields[["conf.int"]] <- as.numeric(fields[["conf.int"]])[[1L]]
+  } else {
+    fields[["conf.int"]] <- NULL
+  }
   fields[["t0"]] <- as.numeric(fields[["t0"]])[[1L]]
-  fields[["logse"]] <- isTRUE(as.logical(fields[["logse"]]))
+  if (!is.null(fields[["std.err"]])) {
+    fields[["logse"]] <- isTRUE(as.logical(fields[["logse"]]))
+  } else {
+    fields[["logse"]] <- NULL
+  }
   if (!is.null(fields[["oldstate"]])) {
     fields[["oldstate"]] <- as.character(fields[["oldstate"]])
   }
