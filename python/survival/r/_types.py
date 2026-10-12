@@ -286,26 +286,26 @@ class CchModelResult:
 @dataclass(frozen=True)
 class AaregModelResult:
     n: list[int]
-    times: list[float]
-    n_risk: list[float]
-    coefficient: list[list[float]]
+    times: list[float] = field(repr=False)
+    n_risk: list[float] = field(repr=False)
+    coefficient: list[list[float]] = field(repr=False)
     coefficient_names: list[str]
     test_statistic: list[float]
     test_statistic_names: list[str]
-    test_variance: list[list[float]]
+    test_variance: list[list[float]] = field(repr=False)
     test: str
-    time_weights: list[list[float]]
-    dfbeta: list[list[list[float]]] | None = None
-    robust_test_variance: list[list[float]] | None = None
+    time_weights: list[list[float]] = field(repr=False)
+    dfbeta: list[list[list[float]]] | None = field(default=None, repr=False)
+    robust_test_variance: list[list[float]] | None = field(default=None, repr=False)
     formula: str | None = None
-    weights: list[float] | None = None
-    cluster: list[Any] | None = None
-    cluster_levels: list[Any] | None = None
-    model: dict[str, Any] | None = None
-    x: list[list[float]] | None = None
-    y: Surv | None = None
+    weights: list[float] | None = field(default=None, repr=False)
+    cluster: list[Any] | None = field(default=None, repr=False)
+    cluster_levels: list[Any] | None = field(default=None, repr=False)
+    model: dict[str, Any] | None = field(default=None, repr=False)
+    x: list[list[float]] | None = field(default=None, repr=False)
+    y: Surv | None = field(default=None, repr=False)
     term_labels: tuple[str, ...] = ()
-    na_action: NaAction | None = None
+    na_action: NaAction | None = field(default=None, repr=False)
 
     @property
     def nrisk(self) -> list[float]:

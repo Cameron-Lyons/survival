@@ -60,6 +60,8 @@
   `survexp` or `pyears` formula is read as `rmap`.
 - `summary_coxph`, `summary_coxph_penal`, `summary_aareg`, `summary_cch` and
   `summary_survreg` are exported from `survival.r`, beside `summary_survfit`.
+- Cox and Aalen fit objects print a short repr (formula, coefficients, sizes)
+  instead of their engine handle, design and full arrays.
 - Formula terms accept R's `factor(levels =, labels =)`, `relevel()`,
   `interaction()`, `ifelse()`, `pmin()`/`pmax()`, `round()`, `signif()`,
   `floor()`, `ceiling()`, `trunc()`, `abs()`, `sign()`, `log(x, base)`,
