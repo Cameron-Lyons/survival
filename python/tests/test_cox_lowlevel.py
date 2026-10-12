@@ -55,9 +55,6 @@ def test_bare_fitters_against_r(case):
         if value is None:
             assert actual is None, name
         elif name == "var" and case["name"] == "coxph_nonconvergence":
-            # R omits Cholesky factorization before inversion after exhaustion.
-            # The shared optimizer deliberately fixes that bug; verify the
-            # information inverse independently from likelihood differences.
             beta = np.asarray(result.coefficients)
             step = 1e-4
 
@@ -105,7 +102,7 @@ def test_design_inputs_and_owned_results(order):
     np.testing.assert_allclose(result.coefficients, case["expected"]["coefficients"])
     if order in {"mapping", "frame"}:
         assert result.coefficient_names == ("age", "group")
-    restored = pickle.loads(pickle.dumps(result))  # noqa: S301 - own test data
+    restored = pickle.loads(pickle.dumps(result))
     assert restored.coefficients == result.coefficients
     assert restored.var == result.var
     assert restored.row_names == result.row_names

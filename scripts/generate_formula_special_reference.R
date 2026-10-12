@@ -73,8 +73,6 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
     newoffset <- model.offset(model.frame(delete.response(terms(fit)),new,na.action=na.pass))
     intended <- prediction$fit
     if(!is.null(newoffset)) {
-        # The port deliberately includes AFT new-data offsets and centers Cox
-        # offsets consistently even when there are no fitted coefficients.
         if(kind=="survreg") intended <- intended + newoffset
         else if(!length(coef(fit))) intended <- intended - mean(model.offset(fit$model))
     }
@@ -103,9 +101,6 @@ errors <- lapply(bad,function(rhs) {
 curves <- lapply(c("group + sex", "log(transformed*sex)","group>5"),function(expression) {
     formula <- paste0("Surv(time, status) ~ sex + cluster(",expression,")")
     raw <- survfit(as.formula(formula),data=d)
-    # In 3.8-12 terms(mf, specials) reuses mf's terms without recognizing
-    # cluster(). The intended deprecated branch never runs: the cluster
-    # instead becomes a curve grouping variable. Use the explicit argument.
     cluster_values <- eval(str2lang(expression),d)
     fit <- survfit(Surv(time,status) ~ sex,data=d,cluster=cluster_values)
     list(formula=formula,time=I(fit$time),surv=I(fit$surv),cumhaz=I(fit$cumhaz),

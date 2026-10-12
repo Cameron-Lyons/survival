@@ -133,7 +133,6 @@ def test_complete_tmerge_matches_stock_r_with_one_shot_sources(case, container):
         value = case[name]
         if value is not None:
             arguments[name] = source(value) if isinstance(value, str) else value
-    # Every retained data1 column must survive even when it aliases an operation vector.
     assert_frame(r.tmerge(data1, data2, **arguments), case["result"])
     assert all(data2[name] is value for name, value in original_sources.items())
     for name, value in original_sources.items():

@@ -39,7 +39,7 @@ def previous_function(path):
         if isinstance(node, ast.FunctionDef) and node.name == "_grouped_survfit_frame"
     )
     namespace = dict(vars(_models))
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)  # noqa: S102 -- explicitly supplied repository revision
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
     return namespace[function.name]
 
 
@@ -47,7 +47,6 @@ def fitted_curves(states, groups, rows):
     labels = [f"event{i + 1}" for i in range(states)]
     data = {"time": [], "event": [], "group": []}
     for group in range(groups):
-        # Different time counts exercise contiguous blocks with unequal widths.
         count = rows + group % 3
         data["time"].extend(range(1, count + 1))
         data["event"].extend(labels[i % states] for i in range(count))

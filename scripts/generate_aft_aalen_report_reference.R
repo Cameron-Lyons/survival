@@ -61,8 +61,6 @@ add <- function(name,fit_name,method='direct',arguments=list(),summary_arguments
   requested <- if(method=='direct') arguments else summary_arguments
   recompute <- !is.null(requested$maxtime) || (!is.null(requested$test) && requested$test!=fit$test)
   if(kind=='aareg' && grepl('cluster(',models[[fit_name]]$formula,fixed=TRUE) && !recompute) {
-    # aareg.R computes test.dfbeta in event-sorted order, but its final rowsum
-    # uses the original cluster order. Refit sorted input to align those rows.
     raw <- if(method=='summary') do.call(summary,c(list(fit),summary_arguments)) else fit
     raw$call <- NULL
     saved <- options(width=width)

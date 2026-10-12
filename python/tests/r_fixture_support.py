@@ -26,14 +26,10 @@ from typing import Any
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "test" / "r" / "fixtures"
 
-# Relative tolerances (see test/r/README.md).
-RTOL_COEF = 1e-8  # coefficients, curves, residuals, linear predictors
-RTOL_VAR = 1e-6  # variances, standard errors, test statistics, p-values
-RTOL_EXACT = 0.0  # counts
+RTOL_COEF = 1e-8
+RTOL_VAR = 1e-6
+RTOL_EXACT = 0.0
 
-# Environment variable naming a JSONL file that receives one record per
-# fixture test (``{"id", "kind", "message"}`` with kind pass / mismatch /
-# missing feature / error); used to build the KNOWN_FAILURES burndown list.
 COLLECT_ENV = "R_FIXTURES_COLLECT"
 
 
@@ -43,11 +39,6 @@ class UnsupportedCaseError(Exception):
 
 class FixtureMismatchError(AssertionError):
     """A numeric or structural difference between R and Python."""
-
-
-# ---------------------------------------------------------------------------
-# Fixture documents
-# ---------------------------------------------------------------------------
 
 
 def topic_names() -> list[str]:
@@ -87,11 +78,6 @@ def is_r_error(value: Any) -> bool:
     return isinstance(value, Mapping) and "r_error" in value and len(value) == 1
 
 
-# ---------------------------------------------------------------------------
-# Data
-# ---------------------------------------------------------------------------
-
-
 class RFactor(list):
     """A column with R factor levels attached as ``categories``."""
 
@@ -104,8 +90,6 @@ class RFactor(list):
         return [None if value is None else index[value] for value in self]
 
 
-# R dataset name -> candidate loader names in the Python package.  The
-# first loader found is used; a dataset with no loader raises Unsupported.
 DATASET_LOADERS: dict[str, tuple[str, ...]] = {
     "nafld1": ("load_nafld1", "load_nafld"),
     "rhDNase": ("load_rhdnase", "load_rhDNase"),
@@ -119,9 +103,6 @@ def _loader_module() -> Any:
 
         return datasets
     except ImportError:
-        # A stale extension without the newest loaders makes the curated
-        # module fail on import; fall back to the raw extension so the
-        # remaining datasets stay reachable.
         import survival._survival as native
 
         return native
@@ -135,8 +116,6 @@ def load_dataset(name: str) -> dict[str, list[Any]]:
         loader = getattr(module, candidate, None)
         if loader is not None:
             columns = loader()
-            # CSV-backed loaders cannot carry R's factor attributes. Restore
-            # the dataset schema recorded by the generator before fitting.
             schema = next(
                 case["expected"]["columns"] for case in cases("datasets") if case["dataset"] == name
             )
@@ -195,8 +174,6 @@ def case_data(topic: str, case: Mapping[str, Any]) -> dict[str, Any]:
     if "data_ref" in case:
         columns = decode_frame(doc["data"][case["data_ref"]])
         if case["data_ref"] == "synthetic_timefix":
-            # Restore the generator's expressions: 15-digit JSON rounding loses
-            # their exact IEEE ties, which timefix=FALSE deliberately preserves.
             columns["time"] = [0.1 + 0.2, 0.3, 0.7, 0.1 * 7, 1.0, 1.0 + 1e-13, 2.5, 3.1]
     elif "dataset" in case:
         columns = dict(load_dataset(case["dataset"]))
@@ -216,10 +193,6 @@ def newdata_frame(expected: Mapping[str, Any]) -> dict[str, Any] | None:
 def nrow(columns: Mapping[str, Sequence[Any]]) -> int:
     return len(next(iter(columns.values()))) if columns else 0
 
-
-# ---------------------------------------------------------------------------
-# Value decoding
-# ---------------------------------------------------------------------------
 
 _SPECIAL = {"NaN": math.nan, "Inf": math.inf, "-Inf": -math.inf}
 
@@ -276,11 +249,6 @@ def transpose(matrix: Sequence[Sequence[Any]]) -> list[list[Any]]:
 
 def column(matrix: Sequence[Sequence[Any]], idx: int) -> list[Any]:
     return [row[idx] for row in matrix]
-
-
-# ---------------------------------------------------------------------------
-# Comparison
-# ---------------------------------------------------------------------------
 
 
 def _is_missing(value: Any) -> bool:
@@ -454,11 +422,6 @@ def r_strata_value(name: str) -> str:
     if "=" in name:
         return name.split("=", 1)[1]
     return name
-
-
-# ---------------------------------------------------------------------------
-# Failure collection (burndown support)
-# ---------------------------------------------------------------------------
 
 
 def record_outcome(test_id: str, kind: str, message: str) -> None:

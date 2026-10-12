@@ -1,6 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete prepared-matrix R calls, including conversion and result assembly.
-# Optionally pass an older bridge.R as the third argument for a before/after run.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)
@@ -31,8 +29,6 @@ for (kind in c("gaussian", "logistic", "custom")) {
   samples <- list()
   for (name in names(implementations)) {
     call <- implementations[[name]]
-    # Scores can be nearly zero at convergence; compare with an absolute
-    # tolerance instead of dividing rounding noise by those small values.
     comparison <- all.equal(do.call(call, arguments), reference, tolerance = 2e-7, scale = 1)
     if (!isTRUE(comparison)) stop(paste(kind, name, paste(comparison, collapse = "\n")))
     elapsed <- numeric(repeats)

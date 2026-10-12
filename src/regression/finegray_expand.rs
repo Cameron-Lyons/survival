@@ -1,6 +1,3 @@
-//! Formula-independent Fine–Gray preparation using the shared Kaplan–Meier
-//! and interval-expansion kernels. Callers retain covariates by source row.
-
 use std::collections::BTreeMap;
 
 use crate::core::strata_order::validate_intervals;
@@ -13,8 +10,6 @@ use pyo3::prelude::*;
 
 use super::finegray_data::{FineGrayOutput, finegray};
 
-/// Prepared response and grouping. Status 0 is censoring, positive codes are
-/// competing endpoints. Strata and subject codes need not be consecutive.
 #[derive(Debug, Clone, Copy)]
 pub struct FineGrayInput<'a> {
     pub time: &'a [f64],
@@ -23,8 +18,6 @@ pub struct FineGrayInput<'a> {
     pub start: Option<&'a [f64]>,
     pub strata: Option<&'a [i32]>,
     pub id: Option<&'a [i32]>,
-    /// As in R, weights multiply the expansion only, not the censoring fits.
-    /// R indexes weights by row within each stratum; that convention is retained.
     pub weights: Option<&'a [f64]>,
     pub timefix: bool,
 }
@@ -114,10 +107,6 @@ fn subject_layout(
     Ok((first, last, delay))
 }
 
-/// Expand a multi-state response into Fine–Gray rows. The result's one-based
-/// source rows refer to the full input. Output is grouped by ascending stratum,
-/// then input row, then added interval. `wt` includes the optional user weights.
-/// Near ties are resolved before subject checks when `timefix` is true.
 pub fn finegray_expand(input: &FineGrayInput<'_>) -> SurvivalResult<FineGrayOutput> {
     let n = input.time.len();
     if n == 0 {
@@ -297,8 +286,8 @@ pub fn finegray_expand(input: &FineGrayInput<'_>) -> SurvivalResult<FineGrayOutp
     Ok(output)
 }
 
-/// Shared numerical preparation for R/Python formula interfaces. Integer id
-/// and strata codes are arbitrary. Covariates remain in the calling language.
+#[doc = " Shared numerical preparation for R/Python formula interfaces. Integer id"]
+#[doc = " and strata codes are arbitrary. Covariates remain in the calling language."]
 #[pyfunction(name = "finegray_expand")]
 #[pyo3(signature = (time, status, event_type=1, start=None, strata=None, id=None, weights=None, timefix=true))]
 #[allow(clippy::too_many_arguments)]

@@ -64,8 +64,6 @@
 .logical_matrix_compare <- function(actual, expected, info) {
   expect_identical(dim(actual), dim(expected), info = info)
   expect_identical(dimnames(actual), dimnames(expected), info = info)
-  # Stock's strata term-number shift sometimes promotes assign to double;
-  # the bridge retains the established integer term-index convention.
   expect_identical(attr(actual, "assign"), as.integer(attr(expected, "assign")), info = info)
   expect_identical(attr(actual, "contrasts"), attr(expected, "contrasts"), info = info)
   expect_equal(attr(actual, "strata"), attr(expected, "strata"), info = info)

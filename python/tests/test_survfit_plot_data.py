@@ -114,7 +114,6 @@ def test_prepared_graphics_match_r(case):
     for actual, wanted in zip(calls, expected["calls"], strict=True):
         assert actual["kind"] == wanted["kind"]
         if wanted["kind"] == "point":
-            # R leaves NA marker coordinates beyond xmax; they are not drawn.
             actual = dict(actual)
             wanted = dict(wanted)
             for pair in (actual, wanted):
@@ -128,8 +127,6 @@ def test_prepared_graphics_match_r(case):
         assert_close(data.yend, expected["endpoint"]["y"])
     if case["method"] == "plot":
         assert data.xlog == expected["xlog"]
-        # R 3.8-12 sets its ylog variable but fails to update the graphics log
-        # argument for these named transforms. Use their documented log axis.
         assert data.ylog == (expected["ylog"] or options.get("fun") in {"log", "logpct"})
 
 

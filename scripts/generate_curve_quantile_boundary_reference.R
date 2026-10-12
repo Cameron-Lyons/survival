@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-survival curve quantiles and probability boundaries.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -72,7 +71,6 @@ record <- function(name, p, tolerance, conf, scale, method = "quantile", tag) {
     if (!is.null(tolerance)) arguments$tolerance <- tolerance
     if (method == "quantile") {
         arguments$probs <- p
-        # Keep an explicit NULL probability argument instead of deleting it.
         if (is.null(p)) arguments["probs"] <- list(NULL)
         arguments$conf.int <- conf
     }

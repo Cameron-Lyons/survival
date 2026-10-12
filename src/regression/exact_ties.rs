@@ -60,10 +60,6 @@ impl ExactRiskAccumulator {
     }
 }
 
-/// Dynamic singleton moments for counting-process risk sets. Leaves contain
-/// 16 input rows: changing membership rebuilds that small block, then merges
-/// its ancestors. Removal never subtracts a large weight from rounded totals.
-/// Dirty blocks accumulate until the next death time, batching censor changes.
 pub(crate) struct ExactRiskTree {
     first_row: usize,
     active: Vec<bool>,
@@ -155,8 +151,6 @@ impl ExactRiskTree {
         let (left, right) = (2 * node, 2 * node + 1);
         let nvar = self.scratch.mean.len();
         let square = nvar * nvar;
-        // An empty child contributes no moments. Copying the other child
-        // also preserves tiny contributions after its dominant sibling leaves.
         if self.log_denoms[left] == f64::NEG_INFINITY || self.log_denoms[right] == f64::NEG_INFINITY
         {
             let source = if self.log_denoms[left] == f64::NEG_INFINITY {
@@ -208,9 +202,6 @@ impl ExactRiskTree {
     }
 }
 
-/// Total log weight and the two mixing probabilities. Compute the smaller
-/// probability directly, since subtracting the larger from one can erase
-/// the covariance when the weights differ by more than about exp(36).
 fn log_weighted_mix(lhs: f64, rhs: f64) -> (f64, f64, f64) {
     if lhs == f64::NEG_INFINITY {
         return (rhs, 0.0, 1.0);
@@ -237,18 +228,7 @@ pub(crate) fn exact_tied_moments(
 ) -> ExactTiedMoments {
     let nvar = covar.ncols();
     debug_assert!(deaths <= risk_indices.len());
-    // A death subset A has weight exp(sum(eta[A])). Its complement has
-    // weight exp(-sum(eta[Ac])), multiplied by the same exp(sum(eta))
-    // for every subset. Compute whichever subset is smaller: this changes
-    // O(n * deaths * p^2) work to O(n * min(deaths, n - deaths) * p^2).
-    // Selected and complementary covariate sums have equal covariances.
-    // Track selected-so-far means even on the complementary path: subtracting
-    // an almost-certainly excluded large covariate from total_x can erase the
-    // moderate selected mean.
     let complementary = deaths > risk_indices.len() / 2;
-    // Remove a common shift before adding or negating log risks. Otherwise
-    // the complement's negative log denominator can cancel against a large
-    // total even though all risk ratios are small and well conditioned.
     let log_shift = if complementary {
         log_risk[risk_indices[0]]
     } else {
@@ -309,9 +289,6 @@ pub(crate) fn exact_tied_moments(
                 }
             }
             for variable in 0..nvar {
-                // Anchor at the more probable branch. In particular, when
-                // added_fraction rounds to 1, existing + delta can cancel the
-                // added mean across a large covariate contrast.
                 let x = covar[(person, variable)];
                 means[current_mean_offset + variable] = if existing_fraction >= added_fraction {
                     means[current_mean_offset + variable]
@@ -325,8 +302,6 @@ pub(crate) fn exact_tied_moments(
             log_denoms[size] = total_log_weight;
         }
         if complementary {
-            // The zero-exclusion state selects every row seen so far. Update
-            // it after the descending-size walk has read its previous mean.
             for variable in 0..nvar {
                 means[variable] += covar[(person, variable)];
             }
@@ -453,8 +428,6 @@ mod tests {
         assert!(moments.covariance[(0, 0)] > 0.0);
     }
 
-    /// Independent reference: enumerate every possible death subset and
-    /// compute its weighted mean and centred covariance directly.
     fn enumerated_moments(
         risk_indices: &[usize],
         deaths: usize,
@@ -518,7 +491,6 @@ mod tests {
             ],
         )
         .unwrap();
-        // Exercise noncontiguous indices and an order independent of row order.
         let risk_indices = [6, 0, 4, 2, 5];
         for shift in [-1_000.0, 0.0, 1_000.0] {
             let log_risk: Vec<f64> = [-2.0, -0.5, 0.25, 1.5, 3.0, -1.25, 0.75]
@@ -550,8 +522,6 @@ mod tests {
             vec![-1.0, 0.25, 0.5, 2.0, 2.0, -0.5, 0.25, -2.0, 0.75, 3.0],
         )
         .unwrap();
-        // Row 0 almost certainly survives. Its arrival last must still
-        // retain the small covariance of the other surviving subjects.
         for shift in [-10_000.0, 0.0, 10_000.0] {
             let log_risk: Vec<f64> = [-40.0, 0.0, 40.0, 1.0, -1.0]
                 .iter()
@@ -619,7 +589,6 @@ mod tests {
                     expected.covariance[(0, 0)] * 1e-12,
                 );
             }
-            // Opposite blocks exercise the same merge in the tree ancestors.
             let mut tree = ExactRiskTree::new(0, 17, 1);
             tree.set_active(0, true);
             tree.set_active(16, true);
@@ -662,8 +631,6 @@ mod tests {
 
     #[test]
     fn nearly_complete_large_tie_matches_uniform_subset_moments() {
-        // Omitting one row uniformly leaves the negative of that row's
-        // covariates (both population means are zero), with its covariance.
         let n = 10_000;
         let covar = Array2::from_shape_fn((n, 2), |(row, column)| match column {
             0 => {
@@ -737,8 +704,6 @@ mod tests {
                     );
                 }
             }
-            // Empty blocks and the whole tree reset; membership changes may
-            // accumulate without refreshing until the next death time.
             for row in [17, 34, 65] {
                 tree.set_active(row, false);
             }

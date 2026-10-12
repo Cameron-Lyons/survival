@@ -24,7 +24,6 @@ def approx(values, rel=1e-12):
     return pytest.approx(values, rel=rel, abs=1e-15)
 
 
-# R's d: data.frame(time = c(10, 20, 30, 40), status = c(1, 0, 1, 1), age = c(50, 65, 70, 80))
 SMALL = {"time": [10, 20, 30, 40], "status": [1, 0, 1, 1], "age": [50, 65, 70, 80]}
 
 
@@ -32,13 +31,9 @@ def _pyears(term, data=SMALL, **kwargs):
     return r.pyears(f"Surv(time, status) ~ {term}", data, scale=1, **kwargs)
 
 
-# --- cut() -------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("term", "levels", "pyears", "n", "event"),
     [
-        # pyears(Surv(time, status) ~ cut(age, c(0, 65, 100), right = FALSE), d, scale = 1)
         (
             "cut(age, c(0, 65, 100), right = FALSE)",
             ["[0,65)", "[65,100)"],
@@ -60,7 +55,6 @@ def _pyears(term, data=SMALL, **kwargs):
             [1, 3],
             [1, 2],
         ),
-        # arguments by position, partial name and in any order, as R matches them
         (
             "cut(age, c(0, 65, 100), NULL, TRUE, FALSE)",
             ["[0,65)", "[65,100]"],
@@ -72,7 +66,6 @@ def _pyears(term, data=SMALL, **kwargs):
         ("cut(age, c(0, 65, 100), right = F)", ["[0,65)", "[65,100)"], [10, 90], [1, 3], [1, 2]),
         ("cut(age, c(0, 65, 100), lab = c('y', 'o'))", ["y", "o"], [30, 70], [2, 2], [1, 2]),
         ("cut(age, c(0, 65, 100), c('young', 'old'))", ["young", "old"], [30, 70], [2, 2], [1, 2]),
-        # formatC(breaks, digits = 3): 1e+03, and wider only when labels would collide
         (
             "cut(time, c(0, 1000, 2000, 5000))",
             ["(0,1e+03]", "(1e+03,2e+03]", "(2e+03,5e+03]"],
@@ -89,9 +82,7 @@ def _pyears(term, data=SMALL, **kwargs):
             [2, 0, 2],
             [1, 0, 2],
         ),
-        # a number of intervals over the range of x, widened by a thousandth
         ("cut(age, 3)", ["(50,60]", "(60,70]", "(70,80]"], [10, 50, 40], [1, 2, 1], [1, 1, 1]),
-        # labels = FALSE: the codes, which as.factor levels by those in use
         (
             "cut(age, c(0, 55, 60, 70, 100), labels = FALSE)",
             ["1", "3", "4"],
@@ -99,7 +90,6 @@ def _pyears(term, data=SMALL, **kwargs):
             [1, 2, 1],
             [1, 1, 1],
         ),
-        # factor() merges intervals that share a label
         (
             "cut(age, c(0, 60, 70, 100), labels = c('a', 'a', 'b'))",
             ["a", "b"],
@@ -127,18 +117,15 @@ def test_cut_terms_follow_cut_default(term, levels, pyears, n, event):
 
 
 def test_cut_values_outside_the_breaks_are_missing():
-    # pyears(Surv(time, status) ~ cut(age, c(55, 65, 100)), d, scale = 1)
     result = _pyears("cut(age, c(55, 65, 100))")
     assert result.pyears == [20, 70]
     assert result.n == [1, 2]
     assert result.observations == 3
     assert result.na_action.rows == (1,)
     assert len(result.na_action) == 1
-    # ... cut(age, c(0, 65, 80), right = FALSE): 80 is outside [65, 80)
     result = _pyears("cut(age, c(0, 65, 80), right = FALSE)")
     assert result.pyears == [10, 50]
     assert result.na_action.rows == (4,)
-    # ... cut(age * 20, c(1000, 2000, 3000, 12345)) and with dig.lab = 5
     result = _pyears("cut(age * 20, c(1000, 2000, 3000, 12345))")
     assert list(result.dimnames.values()) == [
         ["(1e+03,2e+03]", "(2e+03,3e+03]", "(3e+03,1.23e+04]"]
@@ -147,21 +134,16 @@ def test_cut_values_outside_the_breaks_are_missing():
     assert result.observations == 3
     result = _pyears("cut(age * 20, c(1000, 2000, 3000, 12345), dig.lab = 5)")
     assert list(result.dimnames.values()) == [["(1000,2000]", "(2000,3000]", "(3000,12345]"]]
-    # na.exclude drops the row as well; na.fail stops
     assert _pyears("cut(age, c(55, 65, 100))", na_action="na.exclude").observations == 3
     with pytest.raises(ValueError, match="missing values"):
         _pyears("cut(age, c(55, 65, 100))", na_action="na.fail")
 
 
 def test_cut_labels_widen_until_the_breaks_differ():
-    # pyears(Surv(time, status) ~ cut(x, c(1.001, 1.002, 1.003, 1.004)), d, scale = 1)
-    # with x = c(1.0015, 1.0025, 1.0035, 1.0012)
     data = {**SMALL, "x": [1.0015, 1.0025, 1.0035, 1.0012]}
     result = _pyears("cut(x, c(1.001, 1.002, 1.003, 1.004))", data)
     assert list(result.dimnames.values()) == [["(1.001,1.002]", "(1.002,1.003]", "(1.003,1.004]"]]
     assert result.pyears == [50, 20, 30]
-    # d5 <- data.frame(time = 1:30, status = rep(c(1, 0, 1), 10),
-    #                  x = seq(1.0, 1.006, length.out = 30)): 15 rows outside the breaks
     data = {
         "time": list(range(1, 31)),
         "status": [1, 0, 1] * 10,
@@ -173,7 +155,6 @@ def test_cut_labels_widen_until_the_breaks_differ():
     assert result.n == [5, 5, 5]
     assert result.observations == 15
     assert result.na_action.rows == (1, 2, 3, 4, 5, *range(21, 31))
-    # constant x: the breaks straddle it by a thousandth of |x| (or of 1 at zero)
     result = _pyears("cut(age, 2)", {**SMALL, "age": [65] * 4})
     assert list(result.dimnames.values()) == [["(64.9,65]", "(65,65.1]"]]
     result = _pyears("cut(age, 2)", {**SMALL, "age": [0] * 4})
@@ -189,7 +170,6 @@ def test_cut_argument_errors_follow_r():
         _pyears("cut(age, c(0, 65, 100), labels = c('a', 'b', 'c'))")
     with pytest.raises(ValueError, match="number of intervals and length of 'labels' differ"):
         _pyears("cut(age, c(0, 65, 100), TRUE)")
-    # R's cut.default swallows an unknown argument in ...; the port refuses it
     with pytest.raises(ValueError, match=r"unused argument \(bogus = 1\)"):
         _pyears("cut(age, c(0, 65, 100), bogus = 1)")
     with pytest.raises(ValueError, match='argument "breaks" is missing'):
@@ -202,14 +182,12 @@ def _lung_male():
 
 
 def test_cut_and_tcut_of_a_number_of_intervals_use_the_whole_data():
-    # pyears(Surv(time, status) ~ cut(age, 3), lung, scale = 1, subset = sex == 1)
     lung, male = _lung_male()
     result = r.pyears("Surv(time, status) ~ cut(age, 3)", lung, scale=1, subset=male)
     assert list(result.dimnames.values()) == [["(39,53.3]", "(53.3,67.7]", "(67.7,82]"]]
     assert result.pyears == [5758, 20169, 13159]
     assert result.n == [20, 67, 51]
     assert result.observations == 138
-    # ... tcut(age, 3): R's cutpoints 38.57, 53.19, 67.81, 82.43 from all 228 ages
     result = r.pyears("Surv(time, status) ~ tcut(age, 3)", lung, scale=1, subset=male)
     assert result.pyears == approx([110.80000000000004, 735.66999999999962, 1779.0099999999993])
     assert result.n == [20, 87, 138]
@@ -217,13 +195,9 @@ def test_cut_and_tcut_of_a_number_of_intervals_use_the_whole_data():
     assert result.pyears == approx([199.41000000000003, 1351.8999999999962, 2983.4399999999923])
 
 
-# --- tcut() ------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("term", "levels", "pyears"),
     [
-        # pyears(Surv(time, status) ~ tcut(age, c(0, 65, 100), scale = 2), lung, scale = 1)
         ("tcut(age, c(0, 65, 100), scale = 2)", [" 0+ thru  65", "65+ thru 100"], [2300, 14239]),
         ("tcut(age, c(0, 65, 100), c('young', 'old'))", ["young", "old"], [1150, 7273]),
         ("tcut(breaks = c(0, 65, 100), x = age)", [" 0+ thru  65", "65+ thru 100"], [1150, 7273]),
@@ -254,9 +228,6 @@ def _hearta():
 
 
 def test_pyears_rd_example_with_tcut_of_an_expression():
-    # hearta <- do.call("rbind", by(heart, heart$id, function(x) x[x$stop == max(x$stop), ]))
-    # pyears(Surv(stop/365.25, event) ~ tcut(age + 48, c(0,50,60,70,100)) + surgery,
-    #        hearta, scale = 1)
     result = r.pyears(
         "Surv(stop/365.25, event) ~ tcut(age + 48, c(0,50,60,70,100)) + surgery",
         _hearta(),
@@ -274,11 +245,7 @@ def test_pyears_rd_example_with_tcut_of_an_expression():
     assert result.tcut is True
 
 
-# --- precomputed tcut columns --------------------------------------------------------
-
-
 def _cohort_with_tcut():
-    # d$age[2] <- NA; d$agecut <- tcut(d$age, c(0, 65, 100) * 365.25)
     age = [60 * 365.25, math.nan, 65 * 365.25, 80 * 365.25]
     return {
         "time": [100, 400, 900, 300],
@@ -298,7 +265,6 @@ def _cohort_with_tcut():
 
 def test_a_tcut_column_keeps_its_cutpoints_through_na_action_and_subset():
     data = _cohort_with_tcut()
-    # pyears(Surv(time, status) ~ grp + agecut, d, scale = 365.25)
     result = r.pyears("Surv(time, status) ~ grp + agecut", data, scale=365.25)
     assert result.pyears[0] == approx([0.27378507871321012, 2.4640657084188913])
     assert result.pyears[1] == approx([0.0, 0.82135523613963035])
@@ -307,12 +273,10 @@ def test_a_tcut_column_keeps_its_cutpoints_through_na_action_and_subset():
     assert result.tcut is True
     assert result.observations == 3
     assert result.na_action.rows == (2,)
-    # ... subset = c(1, 2, 4)
     result = r.pyears("Surv(time, status) ~ grp + agecut", data, scale=365.25, subset=[0, 1, 3])
     assert result.pyears[0] == approx([0.27378507871321012, 0.0])
     assert result.pyears[1] == approx([0.0, 0.82135523613963035])
     assert result.observations == 2
-    # ... ~ agecut, na.action = na.pass, subset = c(1, 3, 4)
     result = r.pyears(
         "Surv(time, status) ~ agecut", data, scale=365.25, na_action="na.pass", subset=[0, 2, 3]
     )
@@ -325,9 +289,6 @@ def test_survexp_refuses_a_tcut_column():
         r.survexp("~ agecut", _cohort_with_tcut(), rmap=rmap, times=[1])
     with pytest.raises(ValueError, match="Can't use tcut variables in expected survival"):
         r.survexp("~ agecut", _cohort_with_tcut(), rmap=rmap, times=[1], na_action="na.pass")
-
-
-# --- rmap expressions ----------------------------------------------------------------
 
 
 def _cohort():
@@ -354,20 +315,15 @@ def _cohort():
 
 def test_rmap_expressions_are_evaluated_in_the_data():
     us = r.survexp_us()
-    # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us,
-    #        rmap = list(age = ageyr * 365.25, sex = sex, year = year), scale = 1)
     rmap = {"age": "ageyr * 365.25", "sex": "sex", "year": "year"}
     result = r.pyears("Surv(time, status) ~ grp", _cohort(), ratetable=us, rmap=rmap, scale=1)
     assert result.expected == approx([0.058742502586283094, 0.065771124924939944])
-    # the same rmap in survexp(~ 1, d, ratetable = survexp.us, times = c(0, 182.5, 365))
     expected = r.survexp("~ 1", _cohort(), ratetable=us, rmap=rmap, times=[0, 182.5, 365])
     assert expected.surv == approx([1.0, 0.98650866680065386, 0.97325663181952982])
-    # a missing ageyr drops the row, as the variable is in R's model frame
     data = {**_cohort(), "ageyr": [60, 70, None, 80]}
     expected = r.survexp("~ 1", data, ratetable=us, rmap=rmap, times=[0, 182.5, 365])
     assert expected.surv == approx([1.0, 0.98552633365506292, 0.97133437877078055])
     assert expected.n == 3
-    # rmap = list(age = year - birth, ...): date differences count days
     rmap = {"age": "year - birth", "sex": "sex", "year": "year"}
     expected = r.survexp("~ 1", _cohort(), ratetable=us, rmap=rmap, times=[0, 182.5, 365])
     assert expected.surv == approx([1.0, 0.98650888042295504, 0.97325652219744718])
@@ -386,8 +342,6 @@ def test_rmap_expressions_are_evaluated_in_the_data():
 @pytest.mark.parametrize(
     ("race", "expected"),
     [
-        # pyears(Surv(time, status) ~ 1, d, ratetable = survexp.usr, scale = 1,
-        #        rmap = list(race = "white", sex = sex, year = year)) with age = 60 * 365.25
         ("white", 0.05297215667328728),
         ('"white"', 0.05297215667328728),
         ("'black'", 0.09204296457999922),
@@ -407,8 +361,6 @@ def test_an_rmap_word_or_quoted_string_is_a_constant(race, expected):
 @pytest.mark.parametrize(
     ("age", "expected"),
     [
-        # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us, scale = 1,
-        #        rmap = list(age = 21915, sex = sex, year = year))
         ("21915", [0.039888584560963558, 0.016090412028239812]),
         ("+21915", [0.039888584560963558, 0.016090412028239812]),
         ("-365.25", [0.019455489256699928, 0.013241362722314643]),
@@ -424,9 +376,6 @@ def test_an_rmap_number_is_its_value(age, expected):
 
 @pytest.mark.parametrize(("name", "text"), [("year", "1995-03-01"), ("age", "60 * 365.25")])
 def test_an_rmap_string_reading_no_column_is_a_label(name, text):
-    # pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us,
-    #        rmap = list(age = ageyr * 365.25, sex = sex, year = "1995-03-01")):
-    # a quoted string, not the day count 1995 - 3 - 1
     rmap = {"age": "ageyr * 365.25", "sex": "sex", "year": "year", name: text}
     with pytest.raises(ValueError, match=f"for this ratetable, {name} must be a continuous"):
         r.pyears("Surv(time, status) ~ grp", _cohort(), ratetable=r.survexp_us(), rmap=rmap)
@@ -434,7 +383,6 @@ def test_an_rmap_string_reading_no_column_is_a_label(name, text):
 
 def test_an_rmap_expression_that_cannot_be_read_is_an_error():
     us = r.survexp_us()
-    # R: object 'agyr' not found
     with pytest.raises(KeyError, match="column 'agyr' not found"):
         r.pyears(
             "Surv(time, status) ~ grp",
@@ -451,13 +399,9 @@ def test_an_rmap_expression_that_cannot_be_read_is_an_error():
         )
 
 
-# --- transforms of expressions and comparisons -------------------------------------
-
-
 @pytest.mark.parametrize(
     ("rhs", "names", "coefficients", "n"),
     [
-        # coxph(Surv(time, status) ~ as.numeric(sex == 2), lung)
         ("as.numeric(sex == 2)", ["as.numeric(sex == 2)"], [-0.53102353761950805], 228),
         ("I(sex == 2)", ["I(sex == 2)TRUE"], [-0.53102353761950805], 228),
         ("I(sqrt(age))", ["I(sqrt(age))"], [0.28880912639889705], 228),
@@ -482,11 +426,8 @@ def test_an_rmap_expression_that_cannot_be_read_is_an_error():
             [-0.021862150819588585],
             227,
         ),
-        # the exponent's sign is part of the number (R's label is I(age * 0.001))
         ("I(age*1e-3)", ["I(age*1e-3)"], [18.720179204551467], 228),
-        # R's constants: TRUE counts one
         ("I(age + TRUE)", ["I(age + TRUE)"], [0.018720179204551463], 228),
-        # %in% is an interaction whose variables R orders by first appearance
         (
             "age + sex %in% inst",
             ["age", "sex:inst"],
@@ -510,8 +451,6 @@ def test_coxph_transforms_of_expressions_match_r(rhs, names, coefficients, n):
 
 def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
     lung = datasets.load_lung()
-    # d$f <- factor(ifelse(sex == 1, "1", "2")): R's Ops.factor compares the labels, and a
-    # number compared with a string is as.character(number)
     data = {**lung, "f": r._r_factor(["1" if sex == 1 else "2" for sex in lung["sex"]], ["1", "2"])}
     for rhs, names, coefficients in [
         ("I(f == 2)", ["I(f == 2)TRUE"], [-0.53102353761950805]),
@@ -530,33 +469,27 @@ def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
         fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
         assert list(fit.coef_names) == names
         assert fit.coefficients == approx(coefficients, rel=1e-9)
-    # survfit(Surv(time, status) ~ I(f == 2), d)
     curves = r.survfit("Surv(time, status) ~ I(f == 2)", data)
     assert list(curves.strata) == ["I(f == 2)=FALSE", "I(f == 2)=TRUE"]
     curves = r.survfit('Surv(time, status) ~ I(sex == "2")', data)
     assert list(curves.strata) == ['I(sex == "2")=FALSE', 'I(sex == "2")=TRUE']
-    # the response too: coxph(Surv(time, status == "2") ~ sex, lung)
     fit = r.coxph('Surv(time, status == "2") ~ sex', lung)
     assert fit.coefficients == approx([-0.53102353761950816], rel=1e-9)
-    # Unordered-factor ordering warns and yields NA, so every model row is omitted.
     with (
         pytest.warns(UserWarning, match="'<' not meaningful for factors"),
         pytest.raises(ValueError, match=r"No \(non-missing\) observations"),
     ):
         r.coxph("Surv(time, status) ~ I(f < 2)", data)
-    # Plain-string ordering still requires R's locale-sensitive collation.
     with pytest.raises(ValueError, match="of character or factor values is not supported"):
         r.coxph('Surv(time, status) ~ I(sex < "2")', data)
 
 
 def test_a_comparison_inside_arithmetic_counts_true_as_one():
-    # coxph(Surv(time, status) ~ I((age > 60) + 0), lung)
     fit = r.coxph("Surv(time, status) ~ I((age > 60) + 0)", datasets.load_lung())
     assert fit.coefficients == approx([0.21615449288090741], rel=1e-9)
 
 
 def test_a_nan_made_by_a_transform_of_an_expression_is_missing():
-    # coxph(Surv(time, status) ~ sqrt(wt.loss + 10), lung): sqrt of a negative is NaN
     with pytest.warns(UserWarning, match="NaNs produced"):
         fit = r.coxph("Surv(time, status) ~ sqrt(wt.loss + 10)", datasets.load_lung())
     assert fit.coefficients == approx([0.044140903193740207], rel=1e-9)
@@ -566,13 +499,11 @@ def test_a_nan_made_by_a_transform_of_an_expression_is_missing():
 
 def test_as_numeric_of_a_factor_inside_an_expression_is_its_codes():
     lung = datasets.load_lung()
-    # d$f <- factor(ifelse(sex == 1, 10, 20)); d$e <- factor(ph.ecog)
     data = {
         **lung,
         "f": r._r_factor([10 if sex == 1 else 20 for sex in lung["sex"]], [10, 20]),
         "e": r._r_factor(lung["ph.ecog"], [0, 1, 2, 3]),
     }
-    # coxph(Surv(time, status) ~ I(as.numeric(f) + 0), d), and so on
     for rhs, names, coefficient, n in [
         ("I(as.numeric(f) + 0)", ["I(as.numeric(f) + 0)"], -0.53102353761950816, 228),
         ("log(as.numeric(e))", ["log(as.numeric(e))"], 0.8180812666404994, 227),
@@ -586,31 +517,24 @@ def test_as_numeric_of_a_factor_inside_an_expression_is_its_codes():
 
 def test_logical_terms_in_the_other_formula_functions():
     lung = datasets.load_lung()
-    # survreg(Surv(time, status) ~ I(sex == 2) + as.numeric(ph.ecog > 1), lung)
     fit = r.survreg("Surv(time, status) ~ I(sex == 2) + as.numeric(ph.ecog > 1)", lung)
     assert fit.coefficients == approx(
         [6.0018222626144837, 0.38534972330497136, -0.51421690397087472], rel=1e-9
     )
     assert fit.scale == approx([0.73860628615804724], rel=1e-9)
-    # survdiff(Surv(time, status) ~ I(sex == 2), lung)
     test = r.survdiff("Surv(time, status) ~ I(sex == 2)", lung)
     assert test.groups == ["I(sex == 2)=FALSE", "I(sex == 2)=TRUE"]
     assert test.chisq == approx(10.326741954885632, rel=1e-9)
-    # survfit(Surv(time, status) ~ I(age > 60), lung)
     curves = r.survfit("Surv(time, status) ~ I(age > 60)", lung)
     assert list(curves.strata) == ["I(age > 60)=FALSE", "I(age > 60)=TRUE"]
     assert curves.n == [94, 134]
-    # pyears(Surv(time, status) ~ I(age > 60), lung, scale = 1)
     table = r.pyears("Surv(time, status) ~ I(age > 60)", lung, scale=1)
     assert table.dimnames == {"I(age > 60)": ["FALSE", "TRUE"]}
     assert table.pyears == [30530, 39063]
-    # a comparison with a string: coxph(Surv(time, status) ~ I(fac == "m") + age, lung2)
     labelled = {**lung, "fac": ["m" if sex == 1 else "f" for sex in lung["sex"]]}
     fit = r.coxph('Surv(time, status) ~ I(fac == "m") + age', labelled)
     assert list(fit.coef_names) == ['I(fac == "m")TRUE', "age"]
     assert fit.coefficients == approx([0.51321851710838429, 0.017045331845411283], rel=1e-9)
-    # predict(coxph(Surv(time, status) ~ I(sex == 2) + log(age + 1), lung),
-    #         newdata = data.frame(sex = c(1, 2), age = c(50, 70)))
     fit = r.coxph("Surv(time, status) ~ I(sex == 2) + log(age + 1)", lung)
     assert r.predict(fit, newdata={"sex": [1, 2], "age": [50, 70]}) == approx(
         [-0.21232280708123705, -0.38718647692208075], rel=1e-9
@@ -620,15 +544,11 @@ def test_logical_terms_in_the_other_formula_functions():
 @pytest.mark.parametrize(
     ("rhs", "coefficients"),
     [
-        # coxph(Surv(time, status) ~ pspline(df = 4, age), lung): the variable is the
-        # first unnamed argument
         ("pspline(df = 4, age)", [0.376920844214556, 0.754403211878295]),
-        # computed options are R's length-one vectors
         ("pspline(age, df = 2*2)", [0.376920844214556, 0.754403211878295]),
         ("ridge(age, ph.ecog, theta = 1/2)", [0.0112690971661902, 0.4420717290071376]),
         ("age + frailty(inst, theta = 1/2)", [0.0210228272407693]),
         ('age + frailty(inst, method = c("aic"), init = c(0.2, 2))', [0.018636025573109897]),
-        # numbers written with c() of length one are scalars too
         (
             "age + pspline(age, df = c(4))",
             [0.067666457835177427, 0.131779192133189921, 0.270569230531364835],
@@ -657,15 +577,11 @@ def test_penalty_options_are_r_values(rhs, coefficients):
 
 @pytest.mark.parametrize("init", ["c(0.5)", "0.5"])
 def test_a_single_frailty_init_is_refused(init):
-    # coxph(Surv(time, status) ~ age + frailty(inst, init = 0.5), lung) fails in R's
-    # frailty.controlaic (missing value where TRUE/FALSE needed)
     with pytest.raises(ValueError, match="frailty init must hold two starting values"):
         r.coxph(f"Surv(time, status) ~ age + frailty(inst, init = {init})", datasets.load_lung())
 
 
 def test_a_comparison_in_surv_is_not_a_variable_name():
-    # survSplit(Surv(time, status == 2) ~ ., data.frame(time = c(5, 15), status = c(1, 2),
-    #           x = 1:2), cut = 10): the event column is "event", not "status == 2"
     data = {"time": [5, 15], "status": [1, 2], "x": [1, 2]}
     split = r.survSplit("Surv(time, status == 2) ~ .", data, cut=[10])
     assert list(split) == ["time", "status", "x", "tstart", "event"]
@@ -687,9 +603,6 @@ def test_in_operator_builds_interactions_left_to_right():
     assert labels == ["sex:inst"]
 
 
-# --- literal vectors ----------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("expression", "values"),
     [
@@ -698,7 +611,6 @@ def test_in_operator_builds_interactions_left_to_right():
         ("0:2 * 50", [0.0, 50.0, 100.0]),
         ("-1:2", [-1.0, 0.0, 1.0, 2.0]),
         ("1.5:4", [1.5, 2.5, 3.5]),
-        # seq_colon counts |to - from| + 1 + FLT_EPSILON steps
         ("0:2.9999999", [0.0, 1.0, 2.0, 3.0]),
         ("0:2.99999", [0.0, 1.0, 2.0]),
         ("0.5:2.4999999", [0.5, 1.5, 2.5]),
@@ -728,7 +640,6 @@ def test_literal_vectors_follow_r(expression, values):
 
 
 def test_literal_vectors_evaluate_literals_only():
-    # seq(0.1, 0.7, 0.1): from + (0:n) * by, the last clamped to `to`
     assert r_formula._literal_vector("seq(0.1, 0.7, 0.1)") == [
         0.1,
         0.2,
@@ -740,7 +651,6 @@ def test_literal_vectors_evaluate_literals_only():
     ]
     with pytest.raises(ValueError, match="unsupported formula vector expression: brk"):
         r_formula._literal_vector("c(0, brk)")
-    # 1_000 is Python's digit separator, not an R number
     with pytest.raises(ValueError, match="unsupported formula vector expression: 1_000"):
         r_formula._literal_vector("c(0, 1_000)")
     assert r_formula._r_literal("1_000") is None
@@ -757,10 +667,8 @@ def test_literal_vectors_evaluate_literals_only():
 
 
 def test_seq_disregards_extra_arguments_with_a_warning():
-    # seq(1, 2, bogus = 3): R's seq.default warns and drops what lands in its ...
     with pytest.warns(UserWarning, match="extra argument 'bogus' will be disregarded"):
         assert r_formula._literal_vector("seq(1, 2, bogus = 3)") == [1.0, 2.0]
-    # seq(5, bogus = 3) is 5:1, not seq_len(5): R's nargs() counts the extra argument
     with pytest.warns(UserWarning, match="extra argument 'bogus'"):
         assert r_formula._literal_vector("seq(5, bogus = 3)") == [5.0, 4.0, 3.0, 2.0, 1.0]
     with pytest.warns(UserWarning, match="extra arguments 'bogus', 'foo' will be disregarded"):

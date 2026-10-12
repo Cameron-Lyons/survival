@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def _run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=check, capture_output=True, text=True)  # noqa: S603
+    return subprocess.run(args, check=check, capture_output=True, text=True)
 
 
 def _tag_commit(tag: str) -> str | None:
@@ -32,8 +32,6 @@ def create_release() -> None:
         raise ValueError(f"Existing tag {tag} points to {tagged_commit}, not {commit}")
 
     repository = os.environ["GH_REPO"]
-    # The by-tag API only promises published releases. Authenticated listings
-    # also include drafts, so a draft retry must search the listing instead.
     result = _run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100")
     existing_release = next(
         (item for page in json.loads(result.stdout) for item in page if item["tag_name"] == tag),
@@ -44,8 +42,6 @@ def create_release() -> None:
     elif existing_release["draft"]:
         _run("gh", "release", "edit", tag, "--target", commit, "--draft=false")
 
-    # Release creation can create the tag remotely. Check it again before
-    # dispatching, including when resuming an already published release.
     _run("git", "fetch", "--no-tags", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
     if _tag_commit(tag) != commit:
         raise ValueError(f"Published tag {tag} does not point to {commit}")

@@ -14,9 +14,6 @@ keywords = [
   "cox-regression",
 ]
 categories = ["science", "mathematics"]
-# Keep the Rust archive independent of the Python/R implementation and their
-# test suites. Retain fixtures embedded by Rust tests and the stock-R fixtures
-# that the Rust differential test harness reads from disk.
 include = [
   "/src/**",
   "/build.rs",
@@ -84,10 +81,6 @@ harness = false
 name = "concordance_benchmarks"
 harness = false
 
-# `panic = "abort"` is deliberately NOT set: the release profile builds every
-# maturin wheel, and a PyO3 extension module must be able to unwind so that a
-# Rust panic surfaces in Python as `pyo3_runtime.PanicException` instead of
-# aborting the interpreter.
 [profile.release]
 lto = true
 codegen-units = 1

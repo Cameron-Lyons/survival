@@ -81,8 +81,6 @@ def _fitting_distribution(dist: Any, parms: Any) -> _core.SurvregDistribution:
         if isinstance(dist, _core.SurvregDistribution):
             if key == "t" and dist.family == _core.SurvregFamily.T and not _parms_vector(parms):
                 raise ValueError("Student-t distribution requires an explicit parms value")
-            # R's transformed built-in entries have no density of their own.
-            # Registered custom definitions supply their own density instead.
             if (
                 key
                 in {"weibull", "exponential", "rayleigh", "loggaussian", "lognormal", "loglogistic"}
@@ -107,7 +105,6 @@ def _fitting_distribution(dist: Any, parms: Any) -> _core.SurvregDistribution:
         )
     if not isinstance(dist, _core.SurvregDistribution):
         raise TypeError("Invalid distribution object")
-    # The three fixed built-in densities ignore their parms argument in R.
     optional = int(dist.family) in {int(_core.SurvregFamily.T), int(_core.SurvregFamily.Custom)}
     return _resolve_distribution(dist, parms if optional else None, probe=False)
 

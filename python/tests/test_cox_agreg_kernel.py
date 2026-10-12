@@ -14,8 +14,6 @@ survival = setup_survival_import()
 core = survival._survival
 datasets = survival.datasets
 
-# 11 (start, stop] rows whose risk scores span many orders of magnitude at the
-# solution, so small risk sets follow large ones.
 CASE_1520 = {
     "time": [15.0, 4.0, 25.0, 8.0, 18.0, 6.0, 9.0, 14.0, 11.0, 64.0, 19.0],
     "entry": [9.0, 2.0, 5.0, 1.0, 14.0, 3.0, 7.0, 6.0, 3.0, 39.0, 2.0],
@@ -36,7 +34,6 @@ CASE_1520 = {
 }
 R_COEF_1520 = [-2.729510672, 2.391046607]
 
-# 9 rows, all deaths: the coefficients run off to infinity.
 CASE_2124 = {
     "time": [43.0, 7.0, 2.0, 1.0, 13.0, 3.0, 41.0, 4.0, 10.0],
     "entry": [28.0, 6.0, 1.0, 0.0, 4.0, 0.0, 31.0, 1.0, 5.0],
@@ -73,7 +70,6 @@ def test_counting_fit_keeps_small_risk_sets_exact():
 
 def test_counting_fit_never_converges_while_step_halving():
     fit = _counting_fit(CASE_2124, init=[-1.7291049186754255, -1.9022957381326357])
-    # R: iter 20, info = (rank 2, 26 recentrings, 2 step halvings, ran out).
     assert fit.iter == 20
     assert fit.flag == 1000
     assert fit.info == [2, 26, 2, 1]
@@ -82,9 +78,6 @@ def test_counting_fit_never_converges_while_step_halving():
 
 
 def test_counting_fit_reports_exp_overflow_like_r():
-    # agreg.fit(matrix(c(0, 0, 1)), Surv(c(0, 0, 0), 1:3, 1), init = b,
-    # iter.max = 0), which centres every column (nocenter = NULL): the centre
-    # of the risk scores moves by b / 2.
     def fit(beta):
         return core.coxph_fit(
             [1.0, 2.0, 3.0],
@@ -120,9 +113,6 @@ def test_heart_offset_is_centred_before_the_fit():
         )
         for offset in (0.0, -750.0)
     }
-    # R: coxph(Surv(start, stop, event) ~ age + transplant + offset(o), heart) centres
-    # the offset before agreg.fit, so the -750 never reaches the risk scores (the
-    # kernel's own recentring of it is tested in cox_optimizer.rs).
     for fit in fits.values():
         assert fit.info == [2, 0, 0, 0]
         assert fit.iter == 4
@@ -141,7 +131,6 @@ def test_detail_of_counting_fit_matches_coxdetail():
 
 
 def test_aliased_column_is_na_after_converging_while_halving():
-    # coxph.fit marks aliased coefficients when coxfit$flag < nvar, -2 included.
     x1 = [
         -0.40135649592727085,
         -1.1471693888359418,
@@ -170,8 +159,6 @@ def test_aliased_column_is_na_after_converging_while_halving():
 
 @pytest.mark.parametrize("counting", [False, True])
 def test_exact_fit_marks_aliased_coefficients_without_iterations(counting):
-    # coxexact.fit / agexact.fit mark which.sing even with iter.max = 0;
-    # coxph.fit and agreg.fit leave iter.max = 0 fits alone.
     x1 = [0.5, 1.2, -0.3, 0.8, 2.1, -1.0, 0.4, 1.5]
 
     def fit(method):
@@ -202,8 +189,6 @@ def test_exact_fit_marks_aliased_coefficients_without_iterations(counting):
     ],
 )
 def test_iterations_reported_when_they_run_out(method, counting, expected_iter, coef):
-    # coxfit6.c's loop counter ends at iter.max + 1; the other fitters stop at
-    # iter.max.  lung, age + sex + ph.ecog, iter.max = 2.
     lung = datasets.load_lung()
     rows = [
         i

@@ -244,7 +244,6 @@ def survfit_plot_data(
     if numeric_hazard:
         if not multi and np.any(np.asarray(cumhaz) != 1):
             raise ValueError("numeric cumhaz argument only applies to multistate curves")
-        # Select transitions, retaining all prediction rows of each transition.
         selected = _selection(cumhaz, estimate.shape[1] // ndata, "cumhaz")
         selection = (selected[:, None] * ndata + np.arange(ndata)).ravel()
     elif multi and not hazard:
@@ -301,7 +300,6 @@ def survfit_plot_data(
     if recomputed_ci:
         std = _array(raw_std, len(time), "std_err")[:, selection]
         bands = _core.survfit_confint(
-            # FloatVec accepts NumPy directly; its generated stub lists Sequence.
             cast(Sequence[float], estimate.ravel()),
             cast(Sequence[float], std.ravel()),
             logse=False if hazard else bool(getattr(fit, "logse", False)),

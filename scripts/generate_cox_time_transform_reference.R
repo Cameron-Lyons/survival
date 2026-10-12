@@ -2,9 +2,6 @@
 suppressPackageStartupMessages(library(survival))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/cox_time_transform_reference.json"
-# Stock 3.8-12 counts main-effect terms rather than distinct tt variables. This
-# fails for interaction-only transforms and mismatches lists with mixed orders.
-# Correct only that variable count; the R expansion and fitter are unchanged.
 source <- deparse(survival::coxph)
 stopifnot(sum(grepl("ntrans <- length(timetrans$terms)", source, fixed = TRUE)) == 1L)
 corrected <- eval(parse(text = sub("ntrans <- length(timetrans$terms)",
@@ -61,9 +58,6 @@ for (name in names(specs)) for (method in c("efron", "breslow")) {
   cat(name, method, "\n")
   spec <- specs[[name]]
   data <- d
-  # Stock Ccoxcount2 misindexes stratum boundaries while walking tied deaths.
-  # Keep counting-process stop times distinct here so these are stock fits;
-  # tied right-censored cases still exercise the complete transform path.
   if (isTRUE(spec$counting)) data$time <- data$time + seq_len(nrow(data)) / 1000
   if (isTRUE(spec$missing)) data$x[c(2, 9, 25)] <- NA
   formula <- paste(if (isTRUE(spec$counting)) "Surv(start, time, status)" else "Surv(time, status)",

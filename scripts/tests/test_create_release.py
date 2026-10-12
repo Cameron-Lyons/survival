@@ -1,7 +1,5 @@
 """Release retries must preserve the selected commit and resume publishing."""
 
-# ruff: noqa: PT009, PT027
-
 from __future__ import annotations
 
 import importlib.util
@@ -13,8 +11,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("create_release", ROOT / "scripts/create_release.py")
-assert SPEC is not None  # noqa: S101
-assert SPEC.loader is not None  # noqa: S101
+assert SPEC is not None
+assert SPEC.loader is not None
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
 

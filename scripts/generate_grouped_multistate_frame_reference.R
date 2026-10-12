@@ -41,10 +41,6 @@ for (se_fit in c(TRUE,FALSE)) {
                     block <- list(time=source$time)
                     for (name in fields) {
                         if (is.null(selected[[name]])) next
-                        # Stock [.survfitms leaves n.censor unsliced. Its summary
-                        # consequently fails or reports the wrong censor column.
-                        # Keep raw selected matrices above as provenance, and
-                        # select this count from the original matrix by position.
                         block[[name]] <- if (name == "n.censor") source[[name]][,selection[[state_position]]]
                                          else selected[[name]][,state_position]
                     }

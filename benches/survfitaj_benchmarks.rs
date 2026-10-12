@@ -5,8 +5,6 @@ use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
 #[global_allocator]
 static ALLOCATOR: divan::AllocProfiler = divan::AllocProfiler::system();
 
-/// Competing-risks data: one interval per subject, a quarter of them ending
-/// in the second state, on a grid of `max_times` distinct times.
 fn benchmark_inputs(n: usize, max_times: usize) -> SurvfitAJData {
     let n_times = n.min(max_times);
     let time: Vec<f64> = (0..n).map(|idx| (idx % n_times + 1) as f64).collect();
@@ -57,8 +55,6 @@ fn point_estimates_long_grid(bencher: divan::Bencher, n: usize) {
         .bench_local_values(|(data, options)| run_benchmark(data, options));
 }
 
-/// Many subjects, states and tied times make unnecessary per-subject
-/// influence workspaces visible in the allocation profile.
 #[divan::bench(args = [10000, 100000])]
 fn point_estimates_tied_states(bencher: divan::Bencher, n: usize) {
     let data = SurvfitAJData::try_new(

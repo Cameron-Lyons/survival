@@ -1,6 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete R calls, including the Python/Rust boundary. Requires jsonlite,
-# pkgload and the built Python extension selected by RETICULATE_PYTHON.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

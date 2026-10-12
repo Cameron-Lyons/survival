@@ -102,7 +102,6 @@ def test_direct_vectors_match_formula_rate_predictions(kind, expect):
 
 def test_rate_positions_advance_from_entry_and_expected_pyears_are_honored():
     event = r.pyears(start=[2], stop=[6], rmap={"age": [2]}, ratetable=_table(), scale=1)
-    # Age 4 at entry: one time unit at .01 and three at .02.
     assert event.expected == pytest.approx(0.07)
     py = r.pyears(
         start=[2], stop=[6], rmap={"age": [2]}, ratetable=_table(), scale=1, expect="pyears", y=True

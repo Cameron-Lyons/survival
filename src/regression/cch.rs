@@ -1,12 +1,3 @@
-//! Case-cohort analysis: R survival's `cch()` (`R/cch.R`) with the
-//! Prentice, Self-Prentice, Lin-Ying and Borgan I / II estimators.
-//!
-//! Each estimator is a Cox fit on a rearranged data set (cases entered
-//! just before their failure, offsets of `-100` for the pseudo-cases,
-//! sampling weights for Borgan) followed by a phase-two variance built from
-//! the dfbeta or score residuals of that fit; everything Cox-related goes
-//! through [`CoxPHFit`].
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
@@ -77,51 +68,51 @@ impl BorganMethod {
     }
 }
 
-/// R's `cch` object: the underlying Cox fit plus the case-cohort variance
-/// pieces.
+#[doc = " R's `cch` object: the underlying Cox fit plus the case-cohort variance"]
+#[doc = " pieces."]
 #[derive(Debug, Clone)]
 #[pyclass(skip_from_py_object)]
 pub struct CchFitResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
-    /// `var`: the case-cohort variance (`naive_var`, or the robust
-    /// Lin-Ying variance).
+    #[doc = " `var`: the case-cohort variance (`naive_var`, or the robust"]
+    #[doc = " Lin-Ying variance)."]
     #[pyo3(get)]
     pub var: Vec<Vec<f64>>,
-    /// Model-based variance of the Cox fit plus `phase2var`.
+    #[doc = " Model-based variance of the Cox fit plus `phase2var`."]
     #[pyo3(get)]
     pub naive_var: Vec<Vec<f64>>,
-    /// Variance from the phase-two (subcohort) sampling.
+    #[doc = " Variance from the phase-two (subcohort) sampling."]
     #[pyo3(get)]
     pub phase2var: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub method: String,
-    /// Cohort size per stratum (one entry when unstratified).
+    #[doc = " Cohort size per stratum (one entry when unstratified)."]
     #[pyo3(get)]
     pub cohort_size: Vec<usize>,
-    /// Subcohort size per stratum.
+    #[doc = " Subcohort size per stratum."]
     #[pyo3(get)]
     pub subcohort_size: Vec<usize>,
     #[pyo3(get)]
     pub stratified: bool,
-    /// Stratum of each input row (Borgan methods).
+    #[doc = " Stratum of each input row (Borgan methods)."]
     #[pyo3(get)]
     pub stratum: Option<Vec<usize>>,
     #[pyo3(get)]
     pub robust: bool,
-    /// Borgan's per-stratum optimal allocation fractions (`opt`).
+    #[doc = " Borgan's per-stratum optimal allocation fractions (`opt`)."]
     #[pyo3(get)]
     pub opt: Option<Vec<Vec<f64>>>,
-    /// Borgan's phase-two score matrix (`delta`).
+    #[doc = " Borgan's phase-two score matrix (`delta`)."]
     #[pyo3(get)]
     pub delta: Option<Vec<Vec<f64>>>,
-    /// Borgan's weighted score residuals collapsed by `id` (`sc`), one row
-    /// per id in ascending id order as R's `rowsum` gives them.
+    #[doc = " Borgan's weighted score residuals collapsed by `id` (`sc`), one row"]
+    #[doc = " per id in ascending id order as R's `rowsum` gives them."]
     #[pyo3(get)]
     pub sc: Option<Vec<Vec<f64>>>,
-    /// The Cox fit the estimator is built on.  For Prentice it is the fit
-    /// to the augmented data set with its coefficients replaced by the
-    /// point estimate, as R does (`fit$coefficients <- fit1$coefficients`).
+    #[doc = " The Cox fit the estimator is built on.  For Prentice it is the fit"]
+    #[doc = " to the augmented data set with its coefficients replaced by the"]
+    #[doc = " point estimate, as R does (`fit$coefficients <- fit1$coefficients`)."]
     #[pyo3(get)]
     pub fit: CoxPHFit,
 }
@@ -280,8 +271,6 @@ fn validate_borgan_inputs(
     Ok(width)
 }
 
-/// Half the smallest gap between distinct event times (1 with a single
-/// event time): the artificial entry offset of the Prentice pseudo-cases.
 fn event_time_delta(stop: &[f64], status: &[i32]) -> f64 {
     let mut times: Vec<f64> = stop
         .iter()
@@ -309,8 +298,6 @@ struct CoxInput {
     weights: Option<Vec<f64>>,
 }
 
-/// `coxph(Surv(start, stop, status) ~ x + offset, weights, init, iter.max)`
-/// with `coxph`'s defaults (Efron ties, `nocenter = c(-1, 0, 1)`).
 fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> SurvivalResult<CoxPHFit> {
     let data = CoxphData::try_new(
         input.stop,
@@ -338,9 +325,6 @@ struct CchComputation {
     robust: bool,
 }
 
-/// The Prentice (`prentice = true`) and Self-Prentice estimators: cases
-/// enter the risk set just before their failure with offset `-100`, the
-/// subcohort is appended censored.
 fn augmented_fit(
     stop: &[f64],
     status: &[i32],
@@ -353,15 +337,12 @@ fn augmented_fit(
     let case_indices: Vec<usize> = (0..stop.len()).filter(|&i| status[i] == 1).collect();
     let subcohort_indices: Vec<usize> = (0..stop.len()).filter(|&i| subcohort[i] == 1).collect();
 
-    // Prentice's point estimate: the cases outside the subcohort enter
-    // `delta` before their failure.
     let initial_coefficients = if prentice {
         let delta = event_time_delta(stop, status);
         let mut entry = start.to_vec();
         for idx in 0..stop.len() {
             if status[idx] == 1 && subcohort[idx] == 0 {
                 let candidate = stop[idx] - delta;
-                // Float-near ties can make stop - delta == stop; keep a strict entry time.
                 entry[idx] = if candidate < stop[idx] {
                     candidate
                 } else {
@@ -435,8 +416,6 @@ fn augmented_fit(
     })
 }
 
-/// The Lin-Ying estimator: a Cox fit with the offset
-/// `log((ntot - nd) / (nc - ncd))` for the non-cases.
 fn lin_ying_fit(
     stop: &[f64],
     status: &[i32],
@@ -495,7 +474,6 @@ fn lin_ying_fit(
     let phase2var = centered.t().dot(&centered) * phase2_scale;
     let naive_var = &fit.var + &phase2var;
     let var = if robust {
-        // crossprod(db, db / offs): the cases keep weight 1.
         let mut scaled = dfbeta.clone();
         for (i, mut row) in scaled.outer_iter_mut().enumerate() {
             if status[i] == 0 {
@@ -521,8 +499,6 @@ struct BorganPhaseTwo {
     opt: Vec<Vec<f64>>,
 }
 
-/// Borgan's equations (17) and (19): the within-stratum covariance of the
-/// phase-two score residuals, scaled by the sampling fractions.
 fn borgan_phase_two(
     score_rows: &Array2<f64>,
     row_strata: &[usize],
@@ -653,9 +629,6 @@ fn borgan_fit(
         .map(|(&population, &sample)| population as f64 / sample as f64)
         .collect();
 
-    // Rows of the Cox fit: the input row each comes from and whether it
-    // enters as a case (I.Borgan: the cases as pseudo-cases, then the whole
-    // subcohort censored; II.Borgan: the data as they are).
     let (source_indices, cases): (Vec<usize>, Vec<bool>) = match method {
         BorganMethod::I => (0..observed_n)
             .filter(|&i| status[i] == 1)
@@ -720,9 +693,6 @@ fn borgan_fit(
         &fit.var,
     );
     let naive_var = &fit.var + &phase_two.variance;
-    // resid(fit, type = "score", collapse = id, weighted = TRUE): rowsum
-    // sums the rows of each id in ascending id order, so the fit's rows are
-    // collapsed by the rank of their record's id.
     let mut sorted_ids = id.to_vec();
     sorted_ids.sort_unstable();
     let id_rank = source_indices
@@ -776,8 +746,6 @@ fn finish(computation: CchComputation, metadata: CchMetadata) -> CchFitResult {
     }
 }
 
-/// `cch(Surv(start, stop, status) ~ x, subcoh, id, cohort.size, method, robust)`
-/// for the unstratified estimators.
 #[allow(clippy::too_many_arguments)]
 pub fn cch(
     stop: Vec<f64>,
@@ -846,7 +814,6 @@ pub fn cch(
     ))
 }
 
-/// `cch(..., stratum, cohort.size = per-stratum sizes, method = "I.Borgan" | "II.Borgan")`.
 #[allow(clippy::too_many_arguments)]
 pub fn cch_borgan(
     stop: Vec<f64>,
@@ -872,7 +839,6 @@ pub fn cch_borgan(
     )?;
     let method = BorganMethod::parse(method)?;
     let entry = start.unwrap_or_else(|| vec![0.0; stop.len()]);
-    // R: subcohort.sizes <- table(stratum), every sampled record.
     let mut subcohort_size = vec![0usize; cohort_sizes.len()];
     for &s in &stratum {
         subcohort_size[s] += 1;
@@ -902,7 +868,7 @@ pub fn cch_borgan(
     ))
 }
 
-/// Python binding of [`cch`].
+#[doc = " Python binding of [`cch`]."]
 #[pyfunction]
 #[pyo3(signature = (stop, status, covariates, subcohort, id, cohort_size, start=None, method="Prentice", robust=false))]
 #[allow(clippy::too_many_arguments)]
@@ -933,7 +899,7 @@ pub fn cch_fit(
     })?)
 }
 
-/// Python binding of [`cch_borgan`].
+#[doc = " Python binding of [`cch_borgan`]."]
 #[pyfunction]
 #[pyo3(signature = (stop, status, covariates, subcohort, id, stratum, cohort_sizes, start=None, method="I.Borgan"))]
 #[allow(clippy::too_many_arguments)]
@@ -1107,7 +1073,6 @@ mod tests {
             .expect("R parity fit should succeed");
             assert_close(&result.coefficients, &expected_coefficients);
             assert_matrix_close(&result.var, &expected_variance);
-            // R's Prentice sets fit$coefficients <- fit1$coefficients
             assert_close(&result.fit.coefficients, &expected_coefficients);
         }
     }
@@ -1252,8 +1217,6 @@ mod tests {
 
     #[test]
     fn borgan_score_rows_follow_sorted_ids() {
-        // Ids beyond the i32 range in shuffled order: R's rowsum returns the
-        // rows of ids 5e9, 5e9 + 1, ... (input rows 0, 3, 6, 9, ..., 17 last).
         let (_start, stop, status, covariates, subcohort, _id) = r_parity_fixture();
         let id: Vec<i64> = (0..20).map(|idx| 5_000_000_000 + (idx * 7) % 20).collect();
         let stratum = (0..stop.len()).map(|idx| idx % 2).collect::<Vec<_>>();
@@ -1314,8 +1277,6 @@ mod tests {
     fn accepts_benchmark_style_case_cohort_sample() {
         let p = 4;
         for n in [100usize, 5000usize] {
-            // Intentionally reuse the float-colliding tied generator so Prentice's
-            // entry adjustment must keep a strict entry time at large n.
             let stop = (0..n)
                 .map(|i| 1.0 + (i % 80) as f64 * 0.25 + (i / 80) as f64 * 0.01)
                 .collect::<Vec<_>>();

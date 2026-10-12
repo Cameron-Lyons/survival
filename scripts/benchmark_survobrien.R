@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete O'Brien expansion calls, with stock R's documented strata typos fixed.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

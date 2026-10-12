@@ -49,7 +49,7 @@ from ._coxph import (
     residuals_coxph,
     summary_coxph,
 )
-from ._coxph import predict_terms_constant as predict_terms_constant  # re-exported by survival.r
+from ._coxph import predict_terms_constant as predict_terms_constant
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._data_prep import aeqSurv, summary_tmerge
 from ._finegray import _finegray_frame
@@ -177,11 +177,6 @@ def _no_method(generic: str) -> TypeError:
     return TypeError(f"{generic} requires a fitted coxph or survreg model")
 
 
-# ---------------------------------------------------------------------------
-# coefficients and likelihoods
-# ---------------------------------------------------------------------------
-
-
 @singledispatch
 def coef(fit: Any, *, matrix: Any = False) -> Any:
     """``coef``: ``fit$coefficients`` (``NaN`` marks an aliased coefficient, like R's
@@ -206,7 +201,6 @@ def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> Any:
 
 @coef.register(ConcordanceResult)
 def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> Any:
-    # coef.concordance
     return fit.concordance
 
 
@@ -267,7 +261,6 @@ def _vcov_survreg(fit: SurvregModelResult, *, complete: Any = True, matrix: Any 
 
 @vcov.register(ConcordanceResult)
 def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False) -> Any:
-    # vcov.concordance(object, ...): complete is one of the ignored arguments
     return fit.var
 
 
@@ -299,7 +292,6 @@ def _nobs_cox(fit: CoxphModel) -> int:
 
 @nobs.register(SurvregModelResult)
 def _nobs_survreg(fit: SurvregModelResult) -> int:
-    # nobs.survreg: length(fit$linear.predictors)
     return fit.n
 
 
@@ -318,7 +310,6 @@ def _degrees_freedom_cox(fit: CoxphModel) -> float:
 
 @degrees_freedom.register(SurvregModelResult)
 def _degrees_freedom_survreg(fit: SurvregModelResult) -> float:
-    # logLik.survreg: sum(object$df)
     return survreg_df(fit)
 
 
@@ -358,10 +349,6 @@ def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
     del scale
     return [float(degrees_freedom(fit)), aic(fit, k=k)]
 
-
-# ---------------------------------------------------------------------------
-# formula, terms, weights, model matrix and frame
-# ---------------------------------------------------------------------------
 
 _FormulaFits = (
     CoxphModel
@@ -420,7 +407,6 @@ def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str
 def _model_term_names_stored(
     fit: AaregModelResult | PyearsResult | SurvExpResult, terms: Any | None = None
 ) -> list[str]:
-    # labels.aareg
     names = list(fit.term_labels)
     return [names[idx] for idx in _terms_selection(terms, names)]
 
@@ -546,8 +532,6 @@ def _model_matrix_cox(
         if _has_strata(fit):
             if new.strata is None:
                 raise ValueError("data must contain the strata variable(s) of the model")
-            # Prediction uses a valid placeholder for missing strata. Matrix
-            # metadata keeps those rows missing, aligned with na.pass predictors.
             strata = [fit.strata_levels[code] for code in new.strata] if new.strata else None
             if strata and action == "pass":
                 factor = _strata_keep(new.data, _strata_specs(fit.terms))
@@ -559,8 +543,6 @@ def _model_matrix_cox(
             if fit._matrix_rows is not None:
                 labels = list(fit._matrix_rows)
             else:
-                # Older stored fits have the original frame but no expanded
-                # labels. Rebuild its row indices without invoking tt callbacks.
                 frame = _fit_frame(fit)
                 response = aeqSurv(frame.y) if fit.timefix else frame.y
                 if response.start is None:
@@ -619,8 +601,6 @@ def _model_frame_formula(
 ) -> dict[str, list[Any]]:
     if "na.action" in kwargs:
         kwargs["na_action"] = kwargs.pop("na.action")
-    # a Surv2 response has no time/status columns here, so survSplit's timeline
-    # switch stays internal
     frame = _formula_model_frame(formula, data, **kwargs, timeline=False)
     columns: dict[str, Any] = {}
     response_columns: tuple[str, ...] = ()
@@ -702,7 +682,6 @@ def _model_frame_transport(
 
 @model_frame.register(Mapping)
 def _model_frame_grouped(fit: Mapping[Any, Any]) -> dict[str, list[Any]]:
-    # the bridge's grouped survfit curves share the model frame of the call
     if not fit:
         raise TypeError("model_frame requires a non-empty grouped survfit result")
     return model_frame(next(iter(fit.values())))
@@ -746,11 +725,6 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
     return columns
 
 
-# ---------------------------------------------------------------------------
-# predict / residuals / summaries
-# ---------------------------------------------------------------------------
-
-
 def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
     """``predict``: see :func:`survival.r._coxph.predict_coxph` and
     :func:`survival.r._survreg.predict_survreg`.  R's ``se.fit`` and ``na.action``
@@ -782,8 +756,6 @@ def fitted(fit: Any, **kwargs: Any) -> Any:
 
 @fitted.register(CoxphModel)
 def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
-    # fitted.coxph(object, ...) is object$linear.predictors: centred at the overall
-    # means, not padded by naresid, other arguments ignored
     return fit.linear_predictors
 
 
@@ -800,14 +772,11 @@ def residuals(fit: Any, **kwargs: Any) -> Any:
 
 residuals.register(CoxphModel, residuals_coxph)
 residuals.register(SurvregModelResult, residuals_survreg)
-# residuals.survfit; a survfit.coxph curve gets R's "method not found" error from it
 residuals.register(_SurvfitCurves, survfit_residuals)
 
 
 @residuals.register(CoxSurvfitMultiStateResult)
 def _residuals_coxms(fit: CoxSurvfitMultiStateResult, **kwargs: Any) -> Any:
-    # R's residuals.survfit returns the Aalen-Johansen residuals of the data, which
-    # ignore the Cox model and the newdata
     raise TypeError("residuals are not defined for multi-state Cox curves")
 
 
@@ -864,13 +833,7 @@ model_summary.register(TMergeFrame, summary_tmerge)
 
 @model_summary.register(CchModelResult)
 def _model_summary_cch(fit: CchModelResult, **kwargs: Any) -> dict[str, Any]:
-    # summary.cch(object, ...): the further arguments are ignored
     return summary_cch(fit)
-
-
-# ---------------------------------------------------------------------------
-# as_data_frame
-# ---------------------------------------------------------------------------
 
 
 def _add_optional_survfit_column(
@@ -1091,9 +1054,6 @@ def _subset_coxms_curves(
     )
 
 
-# --- the R bridge's grouped view of a stratified curve set --------------------------------
-
-
 def _bare_strata_label(name: str) -> str:
     """``rx=1`` -> ``1`` and ``a=1, b=x`` -> ``1, x`` (the labels the bridge names curves by)."""
 
@@ -1192,7 +1152,6 @@ def _survfit_multistate_structure(
     def flat(name: str) -> list[Any]:
         return [value for _label, curve in curves for value in getattr(curve, name)]
 
-    # R's survfitms component order
     structure: dict[str, Any] = {
         "n": flat("n"),
         "time": [float(value) for value in flat("time")],
@@ -1212,7 +1171,6 @@ def _survfit_multistate_structure(
         structure["n.enter"] = n_enter
     p0_rows = []
     for _label, curve in curves:
-        # A homogeneous p0 is either one state vector or one vector per stratum.
         initial = (
             curve.p0[0]
             if curve.p0 and isinstance(curve.p0[0], list | tuple)
@@ -1287,9 +1245,6 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
         }
         for state_index, state in enumerate(states):
             for label, curve_frame in curve_frames.items():
-                # Each source table has one contiguous time block per state
-                # column. Select the position: state labels may be repeated by
-                # fit[, states], and rescanning labels costs O(time * states²).
                 count = len(result[label].time)
                 start, stop = state_index * count, (state_index + 1) * count
                 frame["strata"].extend([str(label)] * count)
@@ -1338,7 +1293,6 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     ntime = len(result.time)
 
     def column(values: Any, curve: int) -> list[float]:
-        # a one-column matrix (aggregate()'s result) is still a matrix
         if values and isinstance(values[0], list):
             return [float(row[curve]) for row in values]
         return [float(value) for value in values]
@@ -1349,7 +1303,6 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     if result.strata is not None:
         frame["strata"] = []
     optional = {
-        # aggregate() leaves the cumulative hazard out, as R does
         "cumhaz": result.cumhaz or None,
         "std.err": result.std_err,
         "std.chaz": result.std_chaz,
@@ -1599,8 +1552,6 @@ def _survreg_anova_frame(result: SurvregAnovaResult) -> dict[str, list[Any]]:
 
 @as_data_frame.register(Mapping)
 def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
-    # the bridge's grouped survfit curves, or a data frame held as columns (tmerge,
-    # survSplit, finegray)
     if result and all(isinstance(curve, _SurvfitCurves) for curve in result.values()):
         return _grouped_survfit_frame(result)
     columns: dict[str, list[Any]] = {}

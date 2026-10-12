@@ -72,7 +72,6 @@ def _list_model_frame(*args, **kwargs):
 def test_numeric_fits_and_public_methods_match_row_lists(
     monkeypatch, layout, method, formula, options
 ):
-    # Exact fits do not support non-unit weights or robust variance.
     if method == "exact" and "weights" in options:
         options = {
             **{name: value for name, value in options.items() if name != "weights"},
@@ -85,7 +84,6 @@ def test_numeric_fits_and_public_methods_match_row_lists(
             formula, _data(layout), method=method, model=True, **options
         )
     assert actual_warnings == reference_warnings
-    # Native serialization includes every numerical fit field, not just coefficients.
     assert pickle.dumps(actual.fit) == pickle.dumps(reference.fit)
     assert actual.coef_names == reference.coef_names
     assert actual.assign == reference.assign
@@ -101,7 +99,7 @@ def test_numeric_fits_and_public_methods_match_row_lists(
             r.predict(reference, type=kind, se_fit=True)
         )
     assert pickle.dumps(r.residuals(actual)) == pickle.dumps(r.residuals(reference))
-    restored = pickle.loads(pickle.dumps(actual))  # noqa: S301 - local model round trip
+    restored = pickle.loads(pickle.dumps(actual))
     assert r.model_matrix(restored) == r.model_matrix(reference)
     assert pickle.dumps(restored.fit) == pickle.dumps(reference.fit)
 

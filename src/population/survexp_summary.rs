@@ -1,18 +1,7 @@
-//! Time selection for R's `summary.survexp`.
-
 use super::SurvExpResult;
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 
-/// Summarize expected survival curves at the requested times.
-///
-/// Omitted times retain the original rows. Requested times are sorted, with
-/// duplicates retained and missing or out-of-range values removed. Survival
-/// uses the preceding observation (1 before the first); risk counts use the
-/// following observation. Repeated source times use R's averaged, truncated
-/// interpolation indices. A sorted sweep takes O(n + q) after sorting queries.
-/// `scale` divides the selected times, including IEEE zero/nonfinite behavior
-/// as in R's scalar arithmetic.
 pub fn summary_survexp(
     fit: &SurvExpResult,
     times: Option<&[f64]>,
@@ -70,8 +59,6 @@ pub fn summary_survexp(
     result.surv.reserve(requested.len());
     result.n_risk.reserve(requested.len());
 
-    // Average the 1-based indices of every equal-time block, then truncate
-    // for R's matrix subscripts. In zero-based form this is its midpoint.
     let mut levels = Vec::with_capacity(n);
     let mut start = 0;
     while start < n {
@@ -101,7 +88,7 @@ pub fn summary_survexp(
     Ok(result)
 }
 
-/// Python entry point with row-major `time x curve` matrices.
+#[doc = " Python entry point with row-major `time x curve` matrices."]
 #[pyfunction(name = "summary_survexp")]
 #[pyo3(signature = (time, surv, n_risk, times=None, scale=1.0, method=String::new()))]
 pub fn summary_survexp_py(

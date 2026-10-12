@@ -1,14 +1,5 @@
-//! R's `match.arg(arg, choices)` for a single character argument.
-
 use crate::error::{SurvivalError, SurvivalResult};
 
-/// `match.arg(arg, choices)`: the index of the choice `arg` selects under
-/// `pmatch` rules.  Matching is case sensitive; an exact match wins,
-/// otherwise `arg` must be a prefix of exactly one choice (an ambiguous
-/// prefix matches nothing), and the empty string never matches.  A miss is
-/// R's error, `'arg' should be one of "a", "b", ...`, with the ASCII quotes
-/// `dQuote` gives under `options(useFancyQuotes = FALSE)` rather than the
-/// curly ones of a UTF-8 locale.
 pub(crate) fn match_arg(arg: &str, choices: &[&str]) -> SurvivalResult<usize> {
     if let Some(index) = choices.iter().position(|choice| *choice == arg) {
         return Ok(index);
@@ -47,7 +38,6 @@ mod tests {
 
     #[test]
     fn an_exact_match_wins_over_a_longer_choice_it_prefixes() {
-        // residuals.survreg: "dfbeta" is itself a prefix of "dfbetas".
         let residuals = ["response", "deviance", "dfbeta", "dfbetas", "working"];
         assert_eq!(match_arg("dfbeta", &residuals).unwrap(), 2);
         assert_eq!(match_arg("dfbetas", &residuals).unwrap(), 3);
@@ -64,9 +54,6 @@ mod tests {
 
     #[test]
     fn ambiguous_empty_and_case_folded_arguments_fail_with_r_message() {
-        // f <- function(type = c("response", "link", "lp", "linear", "terms",
-        //   "quantile", "uquantile")) match.arg(type); f("l"), f("lin"),
-        // f(""), f("Response") all stop().
         for arg in ["l", "lin", "", "Response", "mystery"] {
             let err = match_arg(arg, &TYPES).unwrap_err();
             assert_eq!(

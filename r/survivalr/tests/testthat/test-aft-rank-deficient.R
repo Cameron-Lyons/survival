@@ -39,7 +39,6 @@ test_that("nonbinary constant aliases retain stock identified AFT fits", {
       expect_equal(unname(naive), unname(expected$naive.var), tolerance = 3e-7)
     } else expect_null(actual$naive_var)
     expect_true(all(vcov(actual)[4L, ] == 0))
-    # Explicit newdata retains stock survreg's propagation of aliased NA.
     expect_true(all(is.na(suppressWarnings(predict(actual, d[1:3, ], type = "lp")))))
   }
 })

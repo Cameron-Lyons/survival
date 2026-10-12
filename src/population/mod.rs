@@ -1,8 +1,3 @@
-//! Population rate tables and the routines of R's `survival` package built
-//! on them: `ratetable`/`is.ratetable`/`ratetableDate`, `match.ratetable`,
-//! the census tables `survexp.us`/`survexp.usr`/`survexp.mn`, `pyears`
-//! with `summary.pyears`, and `survexp` with `survexp.fit`.
-
 pub(crate) mod match_ratetable;
 pub(crate) mod pyears;
 pub(crate) mod pyears_summary;

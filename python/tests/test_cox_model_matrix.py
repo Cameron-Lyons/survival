@@ -41,8 +41,6 @@ def test_complete_model_matrices_match_stock_r(case):
         data = frame(data, case["new_levels"])
     expected = case["expected"]
     if "error" in expected:
-        # Ordinary factor validation uses a Python-oriented message; the error
-        # still precedes matrix construction, as stock R does.
         match = (
             "unknown level|new levels"
             if "new level" in expected["error"]
@@ -72,7 +70,7 @@ def test_sparse_snapshot_is_owned_and_pickle_retains_formula_order(position):
     )
     coefficients, dense, lp = fit.coefficients, fit.x, r.predict(fit)
     matrix = r.model_matrix(fit)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 -- locally created bytes
+    restored = pickle.loads(pickle.dumps(fit))
     assert r.model_matrix(restored) == matrix
     col = next(i for i, name in enumerate(matrix["columns"]) if name.startswith("frailty("))
     assert [row[col] for row in matrix["data"]] == [
@@ -83,7 +81,6 @@ def test_sparse_snapshot_is_owned_and_pickle_retains_formula_order(position):
     assert fit.coefficients == coefficients
     assert r.predict(fit) == lp
     assert r.model_matrix(fit)["data"][0][col] == 1
-    # Old fitted objects that did not retain the raw sparse column still work.
     restored = replace(restored, _sparse_values=None)
     assert r.model_matrix(restored)["data"] == r.model_matrix(fit)["data"]
 

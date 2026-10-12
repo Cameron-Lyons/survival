@@ -67,7 +67,6 @@ def test_prepared_calls_are_independent():
 
 
 def test_missing_strata_levels_do_not_drop_events():
-    # A subset can retain unused factor levels; native codes need not be consecutive.
     result = core.finegray_expand([1, 3, 2, 4], [1, 2, 2, 1], strata=[10, 10, 90, 90])
     assert result.row == [1, 2, 3, 4]
 

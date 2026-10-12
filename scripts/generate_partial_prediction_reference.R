@@ -26,8 +26,6 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
         result <- list(type=type,raw=value)
         if(!is.null(value$r_error)) {
             stopifnot(kind=="coxph",name %in% c("ridge","pspline"),type=="survival")
-            # R's penalized method omits survival from match.arg; derive it
-            # from that method's expected count and its delta-method error.
             expected <- predict(fit,new,type="expected",se.fit=TRUE)
             value <- list(fit=exp(-expected$fit),se.fit=expected$se.fit*exp(-expected$fit))
         }
@@ -35,13 +33,10 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
             intended <- value
             if(kind=="coxph" && name %in% c("strata","strata_interaction") &&
                 type %in% c("expected","survival")) {
-                # R leaves the initial expected count at zero when the
-                # stratum is unknown; the port keeps this prediction missing.
                 intended$fit[is.na(new$sex)] <- NA
                 intended$se.fit[is.na(new$sex)] <- NA
             }
             if(kind=="survreg" && name=="offset" && type!="terms") {
-                # Keep the port's documented correction of omitted AFT offsets.
                 if(type %in% c("response","quantile")) {
                     intended$fit <- intended$fit * exp(new$o)
                     intended$se.fit <- intended$se.fit * exp(new$o)

@@ -91,9 +91,6 @@ from ._types import (
     _ModelStrataTerm,
 )
 
-# ---------------------------------------------------------------------------
-# Rate tables
-# ---------------------------------------------------------------------------
 
 _RATETABLE_ATTRIBUTES = ("dims", "dimid", "dimnames", "cutpoints", "types")
 
@@ -238,13 +235,11 @@ def _day_count(value: Any) -> float:
 def _ratetable_day(value: Any) -> float:
     """``ratetableDate`` of one value: dates become days since 1970-01-01, numbers pass."""
 
-    # pandas' NaT is a date instance, so only a plain date skips the missing check
     if type(value) is _Date:
         return float(value.toordinal() - _EPOCH_ORDINAL)
     if _is_missing_value(value):
         return math.nan
     if isinstance(value, _DateTime) and value.utcoffset() is not None:
-        # R's as.Date.POSIXct uses the UTC calendar date by default.
         value = value.astimezone(UTC)
     if isinstance(value, _Date):
         return float(value.toordinal() - _EPOCH_ORDINAL)
@@ -332,7 +327,6 @@ def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
     literal = _r_literal(text)
     sign, rest = text.strip()[:1], text.strip()[1:]
     if literal is None and sign in {"-", "+"}:
-        # a signed R number, such as -365.25, is a constant too
         number = _r_literal(rest)
         if isinstance(number, float):
             literal = -number if sign == "-" else number
@@ -346,8 +340,6 @@ def _rmap_value(name: str, text: str, data: Any, n: int) -> list[Any]:
     except ValueError as exc:
         raise ValueError(f"rmap {name} = {text}: {exc}") from exc
     if not used:
-        # a string reading no column, such as "1995-03-01", is a label as a quoted R
-        # string is (not the arithmetic 1995 - 3 - 1)
         return [text] * n
     values = {}
     for column in used:
@@ -429,16 +421,10 @@ def _ratetable_argument(ratetable: Any) -> RateTable:
     from ._coxphms import CoxphmsModel
 
     if isinstance(ratetable, CoxphmsModel):
-        # pyears.R and survexp.R refuse a coxphms fit before their coxph branch
         raise ValueError("Invalid rate table")
     if hasattr(ratetable, "coefficients") or hasattr(ratetable, "linear_predictors"):
         raise NotImplementedError("a coxph fit as the ratetable is not supported yet")
     raise ValueError("Invalid rate table")
-
-
-# ---------------------------------------------------------------------------
-# pyears
-# ---------------------------------------------------------------------------
 
 
 def _breaks_vector(expression: str, data: Any) -> list[float]:
@@ -536,8 +522,6 @@ def _r_cut(
         raise ValueError("number of intervals and length of 'labels' differ")
     else:
         levels = [_as_character(label) for label in labels]
-    # .bincode: (b[k-1], b[k]] when right, [b[k-1], b[k]) otherwise; include.lowest
-    # closes the first (right) or last interval
     locate = bisect_left if right else bisect_right
     lowest, highest = breaks[0], breaks[-1]
     codes: list[float] = []
@@ -546,13 +530,12 @@ def _r_cut(
             codes.append(math.nan)
             continue
         code = locate(breaks, value)
-        if code == 0:  # the first break, left out of (b[0], b[1]]
+        if code == 0:
             code = 1 if include_lowest else 0
-        elif code == count:  # the last break, left out of [b[-2], b[-1])
+        elif code == count:
             code = count - 1 if include_lowest else 0
         codes.append(float(code) if code else math.nan)
     if levels is not None and len(set(levels)) < len(levels):
-        # factor() merges intervals that share a label
         merged = list(dict.fromkeys(levels))
         position = [merged.index(level) + 1.0 for level in levels]
         codes = [code if math.isnan(code) else position[int(code) - 1] for code in codes]
@@ -674,13 +657,12 @@ def _pyears_term(
     label = _covariate_term_name(term)
     if term.call is not None:
         call = calls[term.call]
-        # the model frame carries the values at the rows subset and na.action kept
         values = _floats_or_nan(mf.extra[term.call])
         if call.cuts is not None:
             return _PyearsTerm(label, 0, values, call.levels or [], call.cuts)
         if call.levels is not None:
             return _PyearsTerm(label, 1, values, call.levels, [])
-        return _factor_term(label, values)  # cut(labels = FALSE): as.factor of the codes
+        return _factor_term(label, values)
     if term.categorical_wrapper is not None:
         return _factor_call_term(mf, term, label, data)
     source = _column_source(mf.data, term.column) if term.arithmetic is None else None
@@ -688,7 +670,6 @@ def _pyears_term(
         return _PyearsTerm(
             label, 0, list(source.values), list(source.labels), list(source.cutpoints)
         )
-    # pyears' as.factor keeps every declared level of a factor column, empty or not
     if source is None or term.transform is not None:
         return _factor_term(label, _term_values(mf.data, term, mf.n))
     return _factor_term(label, source)
@@ -808,7 +789,6 @@ def _cell_frame(
 def _pyears_frame(result: Any, terms: Sequence[_PyearsTerm]) -> dict[str, list[Any]]:
     """The ``data.frame = TRUE`` layout of the kernel's result."""
 
-    # each getter copies the whole table out of the kernel result: read it once
     tables = {"pyears": result.pyears, "n": result.n}
     if result.expected is not None:
         tables["expected"] = result.expected
@@ -868,7 +848,6 @@ def _rmap_source_names(
         try:
             used = _expression_columns(value)
         except ValueError:
-            # A mapping may contain a literal category or date label.
             continue
         sources.update((name, None) for name in used if name in available)
     return list(sources)
@@ -1044,8 +1023,6 @@ def _population_row_count(
     }
     if sources:
         return _formula_input_row_count(data, formula, sources)
-    # Direct rate vectors correspond to external vectors referenced by R's rmap.
-    # Length-one entries can expand to an explicit frame or another rate vector.
     one = 0
     for name, value in ({} if rmap is None else rmap).items():
         if not isinstance(value, str) and hasattr(value, "__iter__"):
@@ -1080,7 +1057,6 @@ def _pyears_direct_formula(
         return _column_source(source, value) if isinstance(value, str) else value
 
     def add(name: str, value: Any) -> str:
-        # Formula inputs must not overwrite source columns read by rmap/weights.
         while name in source or name in columns:
             name = "_" + name
         columns[name] = value
@@ -1141,8 +1117,6 @@ def _pyears_direct_formula(
                     else f"Surv({start_name}, {time_name}, {event_name})"
                 )
             elif start_name is not None:
-                # Rate positions advance from entry, not merely for the duration.
-                # Without a rate table, retain the historical duration response.
                 lhs = (
                     f"cbind({start_name}, {time_name})"
                     if has_ratetable
@@ -1163,8 +1137,6 @@ def _pyears_direct_formula(
         if size != n:
             raise ValueError("group must have the same length as the response")
         rhs = add("group", values)
-    # The response sets the population size even if data starts with an unused
-    # column of another length. Values are borrowed; model.frame owns selection.
     return f"{lhs} ~ {rhs}", {**columns, **source}
 
 
@@ -1244,8 +1216,6 @@ def pyears(
     elif any(value is not None for value in (time, start, stop, event, group)):
         raise ValueError("formula calls cannot be combined with direct response or group arguments")
     calls = _pyears_calls(formula, data)
-    # the rate variables and the tcut()/cut() values go through subset and na.action
-    # with the formula's variables, so a cut() value outside the breaks drops its row
     extra = (
         {}
         if table is None
@@ -1487,10 +1457,6 @@ def summary_pyears(
         ci_rr=limits(summary.ci_rr_lower, summary.ci_rr_upper),
     )
 
-
-# ---------------------------------------------------------------------------
-# survexp
-# ---------------------------------------------------------------------------
 
 _SURVEXP_METHODS = ("ederer", "hakulinen", "conditional", "individual.h", "individual.s")
 
@@ -1775,8 +1741,6 @@ def survexp(
             rmap, names, data, _population_row_count(formula, data, rmap, names, weights=weights)
         )
         if method_value.startswith("individual"):
-            # predict(type = "expected") also reads the Cox model's response: R's
-            # survexp adds the data's remaining columns to the rate variables
             for name in _formula_columns(ratetable.formula, data):
                 extra.setdefault(name, name)
         row_key = _population_retention_rows(
@@ -1809,8 +1773,6 @@ def survexp(
                 hazard if method_value == "individual.h" else [math.exp(-value) for value in hazard]
             )
             return _pad_rows(values, _excluded_rows(mf.na_action))
-        # Every retained row needs valid Cox prediction terms. A transformation
-        # that becomes missing (log(-1)) is an error, not a silently omitted row.
         _check_interaction_margins(ratetable)
         new, _, _ = _survfit_newdata(
             ratetable,

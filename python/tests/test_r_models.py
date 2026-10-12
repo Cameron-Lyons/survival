@@ -33,7 +33,7 @@ def test_coefficient_accessors(fit):
     assert r.vcov(fit) == fit.var
     assert r.vcov(fit, complete=False) == fit.var
     assert r.loglik(fit) == approx(-27.0418988630084)
-    assert r.nobs(fit) == 12  # the number of events, R's nobs attribute of logLik.coxph
+    assert r.nobs(fit) == 12
     assert r.degrees_freedom(fit) == 2
     assert r.aic(fit) == approx(-2 * -27.0418988630084 + 4)
     assert r.bic(fit) == approx(-2 * -27.0418988630084 + 2 * math.log(12))
@@ -82,7 +82,6 @@ def test_model_frame_matrix_and_terms(ovarian, fit):
     assert r.model_weights(fit) is None
     weighted = r.coxph("Surv(futime, fustat) ~ age", ovarian, weights=[1, 2] * 13)
     assert r.model_weights(weighted) == [1.0, 2.0] * 13
-    # model.frame(fit) rebuilds the frame of a fit made without model=TRUE
     assert r.model_frame(fit) == r.model_frame(
         r.coxph("Surv(futime, fustat) ~ age + factor(rx)", ovarian, model=True)
     )

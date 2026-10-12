@@ -1,7 +1,3 @@
-# The CI helper suite deliberately uses unittest so it needs no built extension
-# or third-party test dependencies; subprocess commands invoke this repository's
-# helper with the same Python interpreter.
-# ruff: noqa: PT009, PT027, S603
 from __future__ import annotations
 
 import importlib.util
@@ -19,8 +15,6 @@ compare_benchmarks = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = compare_benchmarks
 SPEC.loader.exec_module(compare_benchmarks)
 
-# Format verified against the repository's Divan 0.1.21, including nested
-# argument leaves and several suites in the stdout of one `cargo bench` run.
 REPORT = """survival_benchmarks  fastest │ slowest │ median │ mean │ samples │ iters
 ├─ single_curve      4 ns │ 6 ns │ 5 ns │ 5 ns │ 100 │ 51200
 ╰─ curves                │      │      │      │     │

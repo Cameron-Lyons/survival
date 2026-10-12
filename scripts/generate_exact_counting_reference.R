@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent references for the exact counting-process risk-set sweep.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly=TRUE)
@@ -51,8 +50,6 @@ tied$start[rows] <- 0
 add("tied_deaths",tied)
 for (shift in c(-1000,1000)) {
     shifted <- d; shifted$offset <- shifted$offset+shift
-    # R can refuse extreme offsets before fitting. When that happens, removing
-    # their common shift leaves the same partial likelihood and information.
     failure <- tryCatch({
         coxph(Surv(start,stop,status) ~ x1+x2+offset(offset)+strata(stratum),
             shifted,ties="exact",init=initial,control=coxph.control(iter.max=0))

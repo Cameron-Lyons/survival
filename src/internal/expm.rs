@@ -1,20 +1,8 @@
-//! The matrix exponential of a multi-state transition matrix: R's
-//! `survexpm` (`R/survexpm.R`) without its `setup` (Cholesky) branch, and
-//! the Pade approximation it falls back on (`R/pade.R`, a trimmed copy of
-//! the `expm` package's `expm2`, without derivatives).
-
 use ndarray::Array2;
 
 use crate::error::SurvivalResult;
 use crate::internal::matrix::LuDecomposition;
 
-/// `survexpm(rmat)`: `exp(A)` for a transition-rate matrix `A` (non-negative
-/// off the diagonal, rows summing to 0).
-///
-/// Two shapes have a closed form: a single state with departures (the only
-/// non-zero diagonal element), and a single state receiving every
-/// transition.  Anything else goes to [`pade`].  A zero matrix gives the
-/// identity (R's line for it is not returned, and `pade` of 0 is `I` too).
 pub(crate) fn survexpm(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     let n = a.nrows();
     let departing: Vec<usize> = (0..n).filter(|&j| a[(j, j)] != 0.0).collect();
@@ -24,7 +12,6 @@ pub(crate) fn survexpm(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     if let [j] = departing[..] {
         let mut emat = Array2::eye(n);
         let e = a[(j, j)].exp();
-        // `1 - exp(rate)` loses transitions smaller than machine epsilon.
         let departed = -a[(j, j)].exp_m1();
         emat[(j, j)] = e;
         let total: f64 = (0..n).filter(|&k| k != j).map(|k| a[(j, k)]).sum();
@@ -49,8 +36,6 @@ pub(crate) fn survexpm(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     pade(a)
 }
 
-/// The numerator coefficients of the degree 3, 5, 7 and 9 Pade
-/// approximants (`C` of pade.R).
 const PADE_LOW: [&[f64]; 4] = [
     &[120.0, 60.0, 12.0, 1.0],
     &[30240.0, 15120.0, 3360.0, 420.0, 30.0, 1.0],
@@ -71,10 +56,8 @@ const PADE_LOW: [&[f64]; 4] = [
     ],
 ];
 
-/// The 1-norms up to which each low-degree approximant is used.
 const PADE_LOW_NORM: [f64; 4] = [0.015, 0.25, 0.95, 2.1];
 
-/// The degree 13 coefficients (`c.` of pade.R).
 const PADE_13: [f64; 14] = [
     64764752532480000.0,
     32382376266240000.0,
@@ -92,9 +75,6 @@ const PADE_13: [f64; 14] = [
     1.0,
 ];
 
-/// R's `pade(A)`: the smallest-degree Pade approximant of `exp(A)` its
-/// 1-norm allows, and above a norm of 2.1 the degree 13 one on `A / 2^s`,
-/// squared `s = max(0, ceiling(log2(norm / 5.4)))` times.
 pub(crate) fn pade(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     let n = a.nrows();
     let identity = Array2::<f64>::eye(n);
@@ -139,7 +119,6 @@ pub(crate) fn pade(a: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     Ok(x)
 }
 
-/// `solve(a, b)` for a square right-hand side.
 fn solve(a: &Array2<f64>, b: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     let lu = LuDecomposition::decompose(a)?;
     let mut x = Array2::zeros(b.raw_dim());
@@ -166,7 +145,6 @@ mod tests {
         }
     }
 
-    /// `A0 * target / 1.6`: `A0` has 1-norm 1.6.
     fn scaled(target: f64) -> Array2<f64> {
         let a0 = array![[-1.0, 0.6, 0.4], [0.5, -1.0, 0.5], [0.0, 0.0, 0.0]];
         a0 * (target / 1.6)
@@ -174,7 +152,6 @@ mod tests {
 
     #[test]
     fn pade_matches_r_on_every_branch() {
-        // R 4.5.3 / survival 3.8-12: survival:::pade(A0 * target / 1.6)
         let cases: [(f64, [[f64; 3]; 2]); 8] = [
             (
                 0.01,
@@ -253,7 +230,6 @@ mod tests {
 
     #[test]
     fn survexpm_closed_forms() {
-        // one departing state: exp of its rate, the rest split by the rates
         let a = array![[-0.3, 0.1, 0.2], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
         let e = (-0.3f64).exp();
         let expected = array![
@@ -262,14 +238,11 @@ mod tests {
             [0.0, 0.0, 1.0]
         ];
         assert_close(&survexpm(&a).unwrap(), &expected, 1e-15);
-        // one receiving state: competing entries into state 3
         let a = array![[-0.3, 0.0, 0.3], [0.0, -0.5, 0.5], [0.0, 0.0, 0.0]];
         let (e1, e2) = ((-0.3f64).exp(), (-0.5f64).exp());
         let expected = array![[e1, 0.0, 1.0 - e1], [0.0, e2, 1.0 - e2], [0.0, 0.0, 1.0]];
         assert_close(&survexpm(&a).unwrap(), &expected, 1e-15);
-        // both agree with the Pade approximation
         assert_close(&survexpm(&a).unwrap(), &pade(&a).unwrap(), 1e-13);
-        // no departures at all
         assert_eq!(
             survexpm(&Array2::zeros((3, 3))).unwrap(),
             Array2::<f64>::eye(3)

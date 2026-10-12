@@ -162,7 +162,7 @@ def test_native_penalty_results_match_r_fit_summary_and_residuals(case):
 def test_penalty_models_preserve_group_values_and_summary_after_pickle(name):
     case = next(c for c in REFERENCE["cases"] if c["name"] == name)
     fit = fit_case(case)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - our own native model
+    restored = pickle.loads(pickle.dumps(fit))
     assert restored.coef_names == fit.coef_names
     close(r.model_matrix(restored)["data"], r.model_matrix(fit)["data"])
     close(r.residuals(restored), r.residuals(fit))

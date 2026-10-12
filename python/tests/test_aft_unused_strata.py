@@ -78,7 +78,7 @@ def test_unused_scale_strata_match_r_fit_and_methods(case):
 def test_retained_scales_survive_pickle_and_initial_values(kind):
     case = next(c for c in REFERENCE["cases"] if c["name"] == f"trailing_subset/{kind}/weibull")
     fit = fit_case(case)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - round-trip our own model
+    restored = pickle.loads(pickle.dumps(fit))
     assert restored.strata_levels == fit.strata_levels
     close(r.vcov(restored), r.vcov(fit))
     close(
@@ -133,8 +133,6 @@ def test_empty_strata_do_not_change_penalty_effective_sample_size(kind):
     data = frame(case)
     formula = f"Surv(time, status) ~ {kind} + sex + strata(g)"
     full = r.survreg(formula, data, subset=case["subset"])
-    # Keep the same pre-subset penalty basis and scaling. Only recode the group
-    # on rows that will be removed, so no empty level reaches the compact fit.
     compact = {**data, "g": ["a" if g == "c" else g for g in data["g"]]}
     expected = r.survreg(formula, compact, subset=case["subset"])
     close(full.penalized.n_eff, expected.penalized.n_eff)

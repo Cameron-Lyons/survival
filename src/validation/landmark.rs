@@ -1,13 +1,3 @@
-//! Landmark, conditional-survival and life-table summaries of a
-//! Kaplan-Meier curve (no direct R `survival` counterpart).  Every curve
-//! is taken from `surv_analysis::survfitkm`, and the observation times are
-//! binned together with the query times (landmark, evaluation and break
-//! points) by `aeqSurv` (`data_prep::aeq_times`), so near ties are ties
-//! exactly as `survfit`'s `timefix` makes them.
-//!
-//! The `compute_*` functions are the kernels; the `*_py` functions are
-//! the Python entry points and validate the raw arguments.
-
 use crate::constants::{
     PARALLEL_THRESHOLD_SMALL, clamped_normal_ci, exp_ci, z_score_for_confidence,
 };
@@ -20,8 +10,6 @@ use crate::validation::logrank::logrank_test;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-/// The observation times and the `query` times after one joint `aeqSurv`:
-/// a query within tolerance of an observation time compares equal to it.
 fn bin_times(time: &[f64], query: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut all = Vec::with_capacity(time.len() + query.len());
     all.extend_from_slice(time);
@@ -31,9 +19,6 @@ fn bin_times(time: &[f64], query: &[f64]) -> (Vec<f64>, Vec<f64>) {
     (binned, query)
 }
 
-/// One event time of a Kaplan-Meier curve: the survival, the Greenwood
-/// sum `sum d / (n (n - d))` (`std.err^2` of `log S`), the number at risk
-/// and the cumulative number of events.
 struct KmStep {
     time: f64,
     survival: f64,
@@ -42,8 +27,6 @@ struct KmStep {
     cumulative_events: usize,
 }
 
-/// The Kaplan-Meier event times of right-censored data whose times are
-/// already binned.
 fn kaplan_meier_steps(time: &[f64], status: &[i32]) -> SurvivalResult<Vec<KmStep>> {
     let data = SurvfitKMData::right_censored(time.to_vec(), status.to_vec())?;
     let options = SurvfitKMOptions {
@@ -70,14 +53,11 @@ fn kaplan_meier_steps(time: &[f64], status: &[i32]) -> SurvivalResult<Vec<KmStep
     Ok(steps)
 }
 
-/// The last step at or before `at`.
 fn step_at(steps: &[KmStep], at: f64) -> Option<&KmStep> {
     let idx = steps.partition_point(|step| step.time <= at);
     idx.checked_sub(1).map(|i| &steps[i])
 }
 
-/// Greenwood variance of `S(t)` from a step: `S^2 * var(log S)`, 0 once
-/// the curve has reached 0.
 fn survival_variance(step: &KmStep) -> f64 {
     if step.survival > 0.0 && step.greenwood.is_finite() {
         step.survival * step.survival * step.greenwood
@@ -147,7 +127,6 @@ fn validate_finite_scalar(value: f64, name: &str) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// The confidence level, 0.95 by default.
 fn confidence_or_default(confidence_level: Option<f64>) -> SurvivalResult<f64> {
     let confidence = confidence_level.unwrap_or(0.95);
     if !confidence.is_finite() || confidence <= 0.0 || confidence >= 1.0 {
@@ -158,9 +137,6 @@ fn confidence_or_default(confidence_level: Option<f64>) -> SurvivalResult<f64> {
     Ok(confidence)
 }
 
-/// The observations still at risk after `landmark_time`, with the clock
-/// reset to it.  A time within `aeqSurv`'s tolerance of the landmark
-/// counts as the landmark itself and is excluded.
 pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64) -> LandmarkResult {
     let (time, landmark) = bin_times(time, &[landmark_time]);
     let landmark = landmark[0];
@@ -188,7 +164,7 @@ pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64)
     }
 }
 
-/// Python entry point of `compute_landmark`.
+#[doc = " Python entry point of `compute_landmark`."]
 #[pyfunction(name = "landmark_analysis")]
 pub fn landmark_analysis_py(
     time: Vec<f64>,
@@ -211,7 +187,7 @@ pub(crate) fn compute_landmarks_parallel(
         .collect()
 }
 
-/// Python entry point of `compute_landmarks_parallel`.
+#[doc = " Python entry point of `compute_landmarks_parallel`."]
 #[pyfunction(name = "landmark_analysis_batch")]
 pub fn landmark_analysis_batch_py(
     time: Vec<f64>,
@@ -262,9 +238,6 @@ impl ConditionalSurvivalResult {
     }
 }
 
-/// `S(target) / S(given)` from the Kaplan-Meier curve, with a normal
-/// interval on the ratio (its variance from the difference of the
-/// Greenwood sums) clamped to `[0, 1]`.
 pub(crate) fn compute_conditional_survival(
     time: &[f64],
     status: &[i32],
@@ -290,7 +263,6 @@ pub(crate) fn compute_conditional_survival(
         step_at(&steps, given).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
     let (surv_target, var_target) =
         step_at(&steps, target).map_or((1.0, 0.0), |step| (step.survival, step.greenwood));
-    // number still at risk just after the given time
     let n_at_given = time.iter().filter(|&&t| t > given).count();
     let conditional = if surv_given > 0.0 {
         surv_target / surv_given
@@ -315,7 +287,7 @@ pub(crate) fn compute_conditional_survival(
     })
 }
 
-/// Python entry point of `compute_conditional_survival`.
+#[doc = " Python entry point of `compute_conditional_survival`."]
 #[pyfunction(name = "conditional_survival")]
 #[pyo3(signature = (time, status, given_time, target_time, confidence_level=None))]
 pub fn conditional_survival_py(
@@ -376,10 +348,6 @@ impl HazardRatioResult {
     }
 }
 
-/// Log-rank (Peto) estimate of the hazard ratio of the second group
-/// against the first: `exp((O - E) / V)` with the log-rank variance `V`
-/// (`survdiff`, which bins the times itself).  Fewer than two groups give
-/// the neutral ratio 1.
 pub(crate) fn compute_hazard_ratio(
     time: &[f64],
     status: &[i32],
@@ -400,7 +368,6 @@ pub(crate) fn compute_hazard_ratio(
     if unique_groups.len() < 2 {
         return Ok(neutral);
     }
-    // Only the first two groups take part in the comparison.
     let rows: Vec<usize> = (0..time.len())
         .filter(|&i| group[i] == unique_groups[0] || group[i] == unique_groups[1])
         .collect();
@@ -411,7 +378,7 @@ pub(crate) fn compute_hazard_ratio(
     let sum_o_e = test.observed[0] - test.expected[0];
     let sum_var = test.variance[0][0];
     if sum_var <= 0.0 {
-        return Ok(neutral); // no events: nothing to compare
+        return Ok(neutral);
     }
     let log_hr = sum_o_e / sum_var;
     let hazard_ratio = log_hr.exp();
@@ -430,7 +397,7 @@ pub(crate) fn compute_hazard_ratio(
     })
 }
 
-/// Python entry point of `compute_hazard_ratio`.
+#[doc = " Python entry point of `compute_hazard_ratio`."]
 #[pyfunction(name = "hazard_ratio")]
 #[pyo3(signature = (time, status, group, confidence_level=None))]
 pub fn hazard_ratio_py(
@@ -490,9 +457,6 @@ impl SurvivalAtTimeResult {
     }
 }
 
-/// The Kaplan-Meier curve at `eval_times`: the survival with a plain
-/// Greenwood interval clamped to `[0, 1]`, the number at risk at the last
-/// event time reached and the events so far.
 pub(crate) fn compute_survival_at_times(
     time: &[f64],
     status: &[i32],
@@ -535,7 +499,7 @@ pub(crate) fn compute_survival_at_times(
     Ok(results)
 }
 
-/// Python entry point of `compute_survival_at_times`.
+#[doc = " Python entry point of `compute_survival_at_times`."]
 #[pyfunction(name = "survival_at_times")]
 #[pyo3(signature = (time, status, eval_times, confidence_level=None))]
 pub fn survival_at_times_py(
@@ -607,9 +571,6 @@ impl LifeTableResult {
     }
 }
 
-/// Actuarial life table on the intervals `[breaks[j], breaks[j + 1])`
-/// (the last one closed): censored observations count for half an
-/// interval at risk.  Times are binned with the breaks.
 pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -> LifeTableResult {
     let n = time.len();
     let n_intervals = breaks.len().saturating_sub(1);
@@ -630,7 +591,6 @@ pub(crate) fn compute_life_table(time: &[f64], status: &[i32], breaks: &[f64]) -
     let mut n_deaths = vec![0.0; n_intervals];
     let mut n_censored = vec![0.0; n_intervals];
     for (i, &t) in time.iter().enumerate() {
-        // the last interval also holds its upper break
         let j = binned_breaks[1..n_intervals].partition_point(|&b| b <= t);
         if t < binned_breaks[0] || t > binned_breaks[n_intervals] {
             continue;
@@ -719,7 +679,7 @@ fn validate_life_table_inputs(time: &[f64], status: &[i32], breaks: &[f64]) -> S
     Ok(())
 }
 
-/// Python entry point of `compute_life_table`.
+#[doc = " Python entry point of `compute_life_table`."]
 #[pyfunction(name = "life_table")]
 pub fn life_table_py(
     time: Vec<f64>,
@@ -835,7 +795,6 @@ mod tests {
         assert!((actual.ci_lower - expected.ci_lower).abs() < 1e-12);
         assert!((actual.ci_upper - expected.ci_upper).abs() < 1e-12);
         assert_eq!(actual.n_at_risk, expected.n_at_risk);
-        // a query time within tolerance of an event time is that event time
         let shifted =
             compute_conditional_survival(&exact_time, &status, 1.0 + 5e-10, 2.0, 0.95).unwrap();
         assert!((shifted.conditional_survival - expected.conditional_survival).abs() < 1e-12);
@@ -844,7 +803,6 @@ mod tests {
 
     #[test]
     fn test_conditional_survival_matches_the_kaplan_meier_ratio() {
-        // survfit(Surv(c(1,2,3,4,5), c(1,1,0,1,1)) ~ 1): S(1) = .8, S(4) = .3
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let status = vec![1, 1, 0, 1, 1];
         let result = compute_conditional_survival(&time, &status, 1.0, 4.0, 0.95).unwrap();
@@ -868,7 +826,6 @@ mod tests {
         assert!((actual.se_log_hr - expected.se_log_hr).abs() < 1e-12);
         assert!((actual.z_statistic - expected.z_statistic).abs() < 1e-12);
         assert!((actual.p_value - expected.p_value).abs() < 1e-12);
-        // one group, or no events, gives the neutral ratio
         let single = compute_hazard_ratio(&exact_time, &status, &[1; 6], 0.95).unwrap();
         assert_eq!(single.hazard_ratio, 1.0);
         let censored = compute_hazard_ratio(&exact_time, &[0; 6], &group, 0.95).unwrap();
@@ -892,7 +849,6 @@ mod tests {
             assert_eq!(actual.n_at_risk, expected.n_at_risk);
             assert_eq!(actual.n_events, expected.n_events);
         }
-        // the reported time is the one asked for
         let shifted =
             compute_survival_at_times(&exact_time, &status, &[1.0 + 5e-10], 0.95).unwrap();
         assert_eq!(shifted[0].time, 1.0 + 5e-10);
@@ -909,7 +865,6 @@ mod tests {
 
     #[test]
     fn test_survival_at_times_uses_the_greenwood_interval() {
-        // S(2) = .5 with var(log S) = 1/(4*3) + 1/(3*2): se(S) = .5 * sqrt(.25)
         let time = vec![1.0, 2.0, 3.0, 4.0];
         let status = vec![1, 1, 0, 1];
         let at2 = compute_survival_at_times(&time, &status, &[2.0, 4.0], 0.95).unwrap();
@@ -917,7 +872,6 @@ mod tests {
         let z = z_score_for_confidence(0.95);
         assert!((at2[0].ci_lower - (0.5 - z * se)).abs() < 1e-12);
         assert!((at2[0].ci_upper - (0.5 + z * se)).abs() < 1e-12);
-        // once the curve reaches 0 the interval collapses
         assert_eq!(at2[1].survival, 0.0);
         assert_eq!((at2[1].ci_lower, at2[1].ci_upper), (0.0, 0.0));
     }
@@ -957,7 +911,6 @@ mod tests {
 
         assert_eq!(result.n_deaths, vec![0.0, 1.0]);
         assert_eq!(result.n_censored, vec![0.0, 0.0]);
-        // a time within tolerance of a break falls on the break's side
         let near = life_table_py(vec![1.0 + 5e-10], vec![1], vec![0.0, 1.0, 2.0]).unwrap();
         assert_eq!(near.n_deaths, vec![0.0, 1.0]);
         let near_end = life_table_py(vec![2.0 + 5e-10], vec![1], vec![0.0, 1.0, 2.0]).unwrap();

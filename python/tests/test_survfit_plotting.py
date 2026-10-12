@@ -11,7 +11,7 @@ from .test_survfit_plot_data import REFERENCE, options_for, reference_fit
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
-from matplotlib import pyplot as plt  # noqa: E402
+from matplotlib import pyplot as plt
 
 
 @pytest.fixture(autouse=True)

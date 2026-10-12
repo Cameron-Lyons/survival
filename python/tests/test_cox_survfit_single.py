@@ -65,7 +65,6 @@ def check_values(actual, expected):
     for name in ["time", "surv", "cumhaz", "std.err", "n"]:
         value = getattr(actual, name.replace(".", "_"))
         if expected[name] is None:
-            # The native aggregate represents cleared cumulative hazards as [].
             assert value is None or name == "cumhaz" and np.size(value) == 0
         else:
             np.testing.assert_allclose(
@@ -88,7 +87,7 @@ def test_implicit_single_curve_selection_and_serialization_match_stock(case):
     selected = r._subset_cox_survfit(original, _implicit=not noop)
     assert (selected is original) is noop
     check_values(selected, case["expected"]["value"])
-    check_values(pickle.loads(pickle.dumps(selected)), case["expected"]["serialized"])  # noqa: S301
+    check_values(pickle.loads(pickle.dumps(selected)), case["expected"]["serialized"])
     if not noop:
         assert selected.newdata is None
         assert selected.start_time is None
@@ -144,6 +143,5 @@ def test_aggregation_clears_stock_stale_cumulative_hazard_uncertainty(case):
     assert selected.std_chaz is stock["corrected"]["std.chaz"] is None
     if case == "two_groups":
         assert stock["aggregate"]["newdata"][0]["aggregate"] == "a"
-        # Group a consists of source columns 2 and 4, but stock assigns column 1.
         np.testing.assert_array_equal(stock["selected_first"]["std.chaz"], np.asarray(raw)[:6, 0])
         np.testing.assert_array_equal(stock["selected_second"]["std.chaz"], np.asarray(raw)[:6, 1])

@@ -22,12 +22,10 @@ except ImportError:
     pass
 
 
-# survfit(Surv(1:5, c(1, 1, 0, 1, 0)) ~ 1)$surv
 _KM_TIME = [1.0, 2.0, 3.0, 4.0, 5.0]
 _KM_STATUS = [1, 1, 0, 1, 0]
 _KM_SURV = [0.8, 0.6, 0.6, 0.3, 0.3]
 _KM_WEIGHTS = [1.0, 1.0, 2.0, 1.0, 1.5]
-# survfit(..., weights = c(1, 1, 2, 1, 1.5))$surv
 _KM_WEIGHTED_SURV = [11 / 13, 9 / 13, 9 / 13, 5.4 / 13, 5.4 / 13]
 
 
@@ -49,7 +47,6 @@ def test_survfitkm_unaligned_vectors_and_noncanonical_boolean_status(status_dtyp
     times = _unaligned_array(_KM_TIME)
     weights = _unaligned_array(_KM_WEIGHTS)
     if status_dtype == np.bool_:
-        # NumPy permits any nonzero byte as True, including 2 and 255.
         status = np.frombuffer(bytearray([2, 255, 0, 2, 0]), dtype=np.bool_)
     else:
         status = _unaligned_array(_KM_STATUS, status_dtype)
@@ -190,8 +187,6 @@ def test_survfitkm_with_numpy():
 @pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
 def test_survival_curve_status_must_be_integral(estimator):
     fit = getattr(survival.surv_analysis, estimator)
-    # Integral float arrays follow the same checked conversion as other
-    # native estimators; fractional status values must never be truncated.
     result = fit(np.array(_KM_TIME), np.array(_KM_STATUS, dtype=float))
     assert result.time
     with pytest.raises(TypeError):

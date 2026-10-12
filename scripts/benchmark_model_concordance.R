@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete fitted-model calls, with setup and explicit garbage collection excluded.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)
@@ -8,7 +7,6 @@ repeats <- if (length(args) > 1L) as.integer(args[[2L]]) else 7L
 stopifnot(n >= 30L, repeats > 0L)
 baseline <- NULL
 if (length(args) > 2L) {
-  # Optional source containing the previous method and its response helper.
   env <- new.env(parent = asNamespace("survivalr"))
   sys.source(args[[3L]], envir = env)
   baseline <- env$concordance.survival_py_model
@@ -40,7 +38,6 @@ if (!is.null(baseline)) {
   cases$weighted$previous <- function() baseline(weighted)
   cases$newdata$previous <- function() baseline(weighted, newdata = data)
   cases$joint$previous <- function() baseline(first, second)
-  # The previous method discards groups; its grouped result is incorrect.
 }
 canonical <- function(result) {
   result$call <- NULL

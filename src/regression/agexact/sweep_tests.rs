@@ -83,8 +83,6 @@ fn counting_sweep_matches_stock_r_fits_and_zero_iteration_information() {
     }
 }
 
-/// Direct active-set enumeration, with fresh centred moments at every event.
-/// It shares no walk, tree, accumulator, matrix inversion or subset DP code.
 fn enumerate_untied(data: &CoxphData, beta: &[f64]) -> (f64, [f64; 2], [[f64; 2]; 2]) {
     let entry = data.entry.as_ref().unwrap();
     let strata = data.strata.as_ref().unwrap();
@@ -156,7 +154,6 @@ fn generated_input(seed: usize, scheme: usize, shift: f64, permutation: usize) -
         .collect();
     let strata: Vec<i32> = (0..n).map(|row| (row % 3) as i32 - 1).collect();
     let mut stop: Vec<f64> = (0..n).map(|row| row as f64 + 1.0).collect();
-    // Censors share an event time in the same stratum. No event ties arise.
     for row in 0..n - 3 {
         if status[row] == 0 && status[row + 3] == 1 {
             stop[row] = stop[row + 3];
@@ -227,8 +224,6 @@ fn general_and_growing_sweeps_match_independent_risk_set_enumeration() {
 #[test]
 fn dominant_risk_removal_matches_fresh_information_and_surviving_rows() {
     for shift in [-1_000.0, 0.0, 1_000.0] {
-        // The exp(100) row leaves at time 2. The remaining exp(1), exp(-1)
-        // and exp(0) risks must survive its removal, with full-rank covariance.
         let data = CoxphData::try_new(
             vec![1.0, 3.0, 4.0, 4.0],
             Some(vec![0.0, 0.0, 0.0, 2.0]),

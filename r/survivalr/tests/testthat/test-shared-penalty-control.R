@@ -45,7 +45,6 @@ test_that("gamma constructor corrections work for dense and sparse groups", {
     expect_equal(old, ref)
     if (dense) group <- model.matrix(~ factor(group) - 1)
     for (iter in seq_len(if (method == "fixed") 1L else 4L)) {
-      # Match cargs positionally, including gamma's penalized and unpenalized likelihoods.
       inputs <- list(group, rep(c(1, 1, 0), 4), -100 - 3 * (ref$theta - .7)^2)
       if (method == "df") inputs <- c(list(4 * ref$theta / (1 + ref$theta)), inputs)
       if (method == "aic") inputs <- c(inputs, list(8, 2 + ref$theta / 2, -90 - 3 * (ref$theta - .7)^2))

@@ -1,22 +1,11 @@
-//! R's `qr()` (LINPACK `dqrdc2`) and the `qr.qty()` and `qr.resid()`
-//! branches of `dqrsl`.
-
 use crate::internal::simd::{dot_product, sum_of_squares};
 
-/// R's `qr()` (LINPACK `dqrdc2` with `tol = 1e-7`) of an `n`-row matrix
-/// given by its columns.
 pub(crate) struct LinpackQr {
-    /// The Householder vector of each of the first `min(rank, n - 1)`
-    /// columns: column `j` of R's `qr$qr` from row `j` on, with `qraux[j]` in
-    /// place of its diagonal.
     householder: Vec<Vec<f64>>,
     rank: usize,
 }
 
 impl LinpackQr {
-    /// `dqrdc2`: Householder QR with LINPACK's limited pivoting, which moves
-    /// a column whose norm has fallen below `tol` times its original norm to
-    /// the end; `rank` counts the columns left in front.
     pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
         Self::decompose(x, n).0
     }
@@ -30,13 +19,8 @@ impl LinpackQr {
             .iter()
             .map(|&value| if value == 0.0 { 1.0 } else { value })
             .collect();
-        // LINPACK's 1-based `k`: one past the last non-negligible column
         let mut k = p + 1;
         for l in 0..n.min(p) {
-            // LINPACK cycles the negligible columns from `l` on to the end one
-            // at a time until it meets a non-negligible one, never past the
-            // columns already cycled; moving the whole run at once gives the
-            // same order.
             let run = (l..k - 1)
                 .take_while(|&j| qraux[j] < original[j] * TOL)
                 .count();
@@ -91,24 +75,18 @@ impl LinpackQr {
         (Self { householder, rank }, x, pivot)
     }
 
-    /// `qr.qty()`: overwrites `y` with `t(Q) %*% y` (`dqrsl` applying the
-    /// first `min(rank, n - 1)` reflections).
     pub(crate) fn qty(&self, y: &mut [f64]) {
         for (j, vector) in self.householder.iter().enumerate() {
             reflect(vector, &mut y[j..]);
         }
     }
 
-    /// `qr.resid()`: `y` minus its projection on the span of the first
-    /// `rank` columns (`dqrsl` computing `Q'y`, zeroing its first `rank`
-    /// entries and applying `Q`).
     pub(crate) fn residual(&self, y: &[f64]) -> Vec<f64> {
         let mut rsd = y.to_vec();
         if self.rank == 0 {
             return rsd;
         }
         if self.householder.is_empty() {
-            // one row, of full rank
             rsd[0] = 0.0;
             return rsd;
         }
@@ -121,8 +99,6 @@ impl LinpackQr {
     }
 }
 
-/// A coefficient-solving QR. Residual-only callers retain no triangular
-/// factor; least-squares callers reuse it across all response columns.
 pub(crate) struct LinpackLeastSquares {
     qr: LinpackQr,
     upper: Vec<Vec<f64>>,
@@ -134,8 +110,6 @@ impl LinpackLeastSquares {
         self.qr.rank
     }
 
-    /// Diagonal of `P (X'X)^-1 P'`, using triangular solves rather than
-    /// forming normal equations. Only defined for a full-rank design.
     pub(crate) fn prediction_variance(&self, row: &[f64]) -> Option<f64> {
         if self.qr.rank != self.pivot.len() || row.len() != self.pivot.len() {
             return None;
@@ -159,7 +133,6 @@ impl LinpackLeastSquares {
         Self { qr, upper, pivot }
     }
 
-    /// R's `qr.coef`, in original column order, with NaN for aliased columns.
     pub(crate) fn coefficients(&self, y: &[f64]) -> Vec<f64> {
         let mut qty = y.to_vec();
         self.qr.qty(&mut qty);
@@ -175,8 +148,6 @@ impl LinpackLeastSquares {
     }
 }
 
-/// Applies one Householder reflection of `dqrsl` (skipped when its
-/// `qraux` is zero) to `y`.
 fn reflect(vector: &[f64], y: &mut [f64]) {
     if vector[0] == 0.0 {
         return;
@@ -222,7 +193,6 @@ mod tests {
 
     #[test]
     fn aliased_column_matches_r() {
-        // R: q <- qr(cbind(1, 1:4, 2 * (1:4))); q$rank = 2
         let qr = LinpackQr::new(
             vec![
                 vec![1.0, 1.0, 1.0, 1.0],
@@ -251,9 +221,6 @@ mod tests {
 
     #[test]
     fn runs_of_negligible_columns_cycle_as_in_r() {
-        // R: q <- qr(cbind(1, 2, 3, 1:4, 5 + (1:4), c(1, 0, 0, 2)));
-        // q$rank = 3, q$pivot = 1 4 6 2 3 5: columns 2 and 3 are cycled
-        // together at the second step and column 5 at the third
         let qr = LinpackQr::new(
             vec![
                 vec![1.0; 4],

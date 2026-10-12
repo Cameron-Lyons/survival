@@ -2,10 +2,6 @@
 suppressPackageStartupMessages(library(survival))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/aft_unused_strata_reference.json"
-# Stock survreg uses max(strata), then assigns all factor levels to the scales.
-# Correct only the empty-stratum failures: retain the full scale count in fits
-# and methods, and use observed scales for penalized effective sample size.
-# The installed R likelihood and optimization code stays unchanged.
 source <- deparse(survival::survreg)
 stopifnot(sum(grepl("nstrata <- max(strata)", source, fixed = TRUE)) == 1L)
 corrected <- eval(parse(text = sub("nstrata <- max(strata)",

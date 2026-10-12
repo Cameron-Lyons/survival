@@ -51,7 +51,6 @@ def fit_case(case, api, se_fit):
         "entry": case["entry"],
         "time0": case["time0"],
         "se_fit": se_fit,
-        # Point-only calls must leave influence absent even when it was requested.
         "influence": True,
     }
     if case["start_time"] is not None:
@@ -96,8 +95,6 @@ def test_point_only_complete_outputs_preserve_stock_r_estimates(case, api):
             assert snapshot(observed) == expected
         else:
             np.testing.assert_allclose(observed, expected, rtol=2e-12, atol=1e-14, err_msg=name)
-    # Enumerate every exposed Rust field and every facade dataclass component,
-    # covering metadata absent from the stock numerical fixture as well.
     payload, expected = snapshot(actual), snapshot(reference)
     for name in UNCERTAINTY:
         expected[name] = None

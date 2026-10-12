@@ -98,8 +98,6 @@ def aareg(
     coefficient_names = ["Intercept", *frame.names]
     influences = raw.dfbeta
     if influences is not None:
-        # R's rowsum(reorder=FALSE) labels clusters in their first appearance
-        # after sorting by stop time, with events before censors at a tie.
         order = sorted(range(len(response.time)), key=lambda i: (response.time[i], -events[i]))
         codes = list(range(len(order))) if cluster_codes is None else cluster_codes
         cluster_order = list(dict.fromkeys(codes[i] for i in order))
@@ -163,8 +161,6 @@ def _summary_influence_covariance(
     influences = fit.dfbeta
     if influences is None:
         raise ValueError("robust summaries require stored influences")
-    # At most about 1 MiB of floating-point input, except for a single group
-    # whose coefficient-by-time matrix itself exceeds the budget.
     block_size = max(1, 131072 // max(1, width * count))
     for start in range(0, len(influences), block_size):
         if isinstance(influences, np.ndarray):
@@ -179,7 +175,6 @@ def _summary_influence_covariance(
             )
         weighted = np.einsum("gpt,pt->gp", block, twt)
         covariance += weighted.T @ weighted
-        # Release this block before converting the next one.
         del block, weighted
     return covariance.tolist()
 

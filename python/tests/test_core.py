@@ -31,7 +31,6 @@ def _lung30():
     return core.SurvivalData(time, status), covariates, score, age
 
 
-# R: residuals(coxph(Surv(time, status) ~ age + sex, lung[1:30, ]), type = "score")[1:6, ]
 _LUNG30_SCORE_HEAD = [
     [5.583696396479894, -0.1922229604586857],
     [0.6815233759442858, -0.056232271403001799],
@@ -40,7 +39,6 @@ _LUNG30_SCORE_HEAD = [
     [5.1746924061028219, 0.57804450885005298],
     [-21.064442043887876, 0.43388489815172615],
 ]
-# R: residuals(fit, type = "schoenfeld")[1:3, ] and the last row; rownames are event times
 _LUNG30_SCHOENFELD_TIMES = [12, 61, 71, 81, 88, 118, 144, 166, 170, 210, 218, 301, 306, 310]
 _LUNG30_SCHOENFELD_HEAD = [
     [12.131001972201943, -0.27280947092307239],
@@ -72,8 +70,6 @@ def test_typed_inputs_validate_and_expose_their_fields():
         core.SurvivalData([float("nan")], [1])
     with pytest.raises(ValueError, match="status must contain only 0/1 values"):
         core.coxcount1(core.SurvivalData([1.0], [2]))
-    # R: Surv(c(0, 0, 2, 0), c(1, 2, 2, 3), c(1, 1, 1, 0)) warns "Stop time
-    # must be > start time, NA created" for the zero-length third interval
     with pytest.raises(ValueError, match=r"Stop time must be > start time \(row 0: 2 >= 1\)"):
         core.CountingProcessData([2.0], [1.0], [1])
     with pytest.raises(ValueError, match=r"Stop time must be > start time \(row 2: 2 >= 2\)"):
@@ -89,7 +85,6 @@ def test_coxcount1_matches_r_risk_set_expansion():
 
     result = core.coxcount1(core.SurvivalData(time, status), strata)
 
-    # .Call(Ccoxcount1, Y[sorted, ], newstrat), index mapped back to 0-based input rows
     assert result.time == pytest.approx([4.0, 2.5, 2.0, 1.5, 1.0])
     assert result.nrisk == [2, 5, 6, 7, 1]
     assert result.index == [4, 3, 4, 3, 7, 2, 6, 4, 3, 7, 2, 6, 1, 4, 3, 7, 2, 6, 1, 5, 0]
@@ -111,7 +106,6 @@ def test_coxcount2_matches_r_risk_set_expansion():
 
     result = core.coxcount2(counting, [1, 0, 0, 0, 0, 0])
 
-    # .Call(Ccoxcount2, Y, sort.start - 1, sort.end - 1, newstrat)
     assert result.time == pytest.approx([3.0, 2.0, 1.0])
     assert result.nrisk == [3, 3, 1]
     assert result.index == [5, 3, 4, 1, 3, 2, 0]
@@ -129,7 +123,6 @@ def test_coxscore2_matches_r_score_residuals():
 
     assert len(efron) == 30
     np.testing.assert_allclose(efron[:6], _LUNG30_SCORE_HEAD, rtol=1e-9)
-    # lung[1:30, ] has no tied event times, so both tie rules agree
     np.testing.assert_allclose(breslow, efron)
 
     with pytest.raises(ValueError, match='ties must be "breslow" or "efron"'):
@@ -147,7 +140,6 @@ def test_schoenfeld_residuals_match_r():
     assert len(result.time) == sum(data.status) == 28
     np.testing.assert_allclose(result.residuals[:3], _LUNG30_SCHOENFELD_HEAD, rtol=1e-9)
     assert result.strata == [0] * 28
-    # index points at the event rows of the input, in event-time order
     assert [data.time[i] for i in result.index] == pytest.approx(result.time)
     assert all(data.status[i] == 1 for i in result.index)
 
@@ -166,7 +158,6 @@ def test_coxmart_matches_r_martingale_residuals():
 
 
 def test_counting_process_kernels_match_r():
-    # coxph(Surv(start, stop, status) ~ x, ties = "efron") on an 8-row data set
     counting = core.CountingProcessData(
         [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 3.0],
         [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0],
@@ -221,7 +212,6 @@ def test_concordancefit_matches_r_concordance():
     x = core.CovariateMatrix(age, 30, 1)
 
     fit = core.concordancefit(data, x)
-    # concordance(Surv(time, status) ~ age, lung[1:30, ])
     assert fit.concordance == pytest.approx([0.54147465437788023])
     counts = fit.count[0]
     assert (counts.concordant, counts.discordant, counts.tied_x) == (223.0, 187.0, 24.0)
@@ -232,7 +222,6 @@ def test_concordancefit_matches_r_concordance():
     assert fit.count_strata is None
 
     reversed_fit = core.concordancefit(data, x, reverse=True, timewt="S")
-    # R concordance with reverse = TRUE and timewt = "S"
     assert reversed_fit.concordance == pytest.approx([0.45852534562211977])
     assert reversed_fit.count[0].concordant == pytest.approx(187.0)
     assert reversed_fit.count[0].discordant == pytest.approx(223.0)
@@ -258,7 +247,6 @@ def test_concordancefit_counting_matches_r_concordance():
 
     fit = core.concordancefit_counting(counting, x)
 
-    # concordance(Surv(start, stop, status) ~ x)
     assert fit.concordance == pytest.approx([0.44444444444444442])
     assert (fit.count[0].concordant, fit.count[0].discordant) == (4.0, 5.0)
     assert fit.var[0] == pytest.approx([0.018289894833104711])
@@ -270,11 +258,9 @@ def test_nsk_matches_r_natural_spline_basis():
 
     result = core.nsk(x, df=3)
 
-    # nsk(x, df = 3): knots at the 33/67% quantiles, boundary knots at the 5/95% quantiles
     assert result.knots == pytest.approx([4.333333333333333, 6.6666666666666661])
     assert result.boundary_knots == pytest.approx((1.45, 9.5499999999999989))
     assert (result.n_rows, result.n_cols) == (10, 3)
-    # the basis is stored row-major as one flat vector
     basis = np.asarray(result.basis).reshape(result.n_rows, result.n_cols)
     assert basis[0] == pytest.approx(
         [-0.27012195647814957, 0.078804550540842982, -0.010153756890049298]
@@ -292,7 +278,6 @@ def test_pspline_basis_matches_r_spline_des():
 
     result = core.pspline_basis(x, 4, 3, (1.0, 10.0))
 
-    # pspline(x, nterm = 4): evenly spaced knots, spline.des design (R drops the first column)
     assert (result.nterm, result.degree) == (4, 3)
     assert result.boundary_knots == pytest.approx((1.0, 10.0))
     assert result.knots == pytest.approx(

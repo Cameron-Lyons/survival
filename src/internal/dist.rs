@@ -1,42 +1,16 @@
-//! Statistical distribution functions ported from R's `nmath` library.
-//!
-//! Every public function mirrors the R function of the same name (`pnorm`,
-//! `qnorm`, `lgammafn`, `pgamma`, `qgamma`, `pbeta`, `pt`, `qt`, ...) and
-//! follows the same algorithm, so results agree with R to roughly 1e-15
-//! relative error instead of the ~1e-7 of the textbook approximations they
-//! replace.  The `lower_tail` / `log_p` flags have the same meaning as R's
-//! `lower.tail` / `log.p` arguments.
-//!
-//! Two deliberate simplifications: `pbeta` evaluates TOMS 708's `bfrac`
-//! continued fraction with the `brcomp` prefactor for every argument instead
-//! of porting the whole 2000-line `bratio` dispatcher, and `dpois_raw` uses
-//! the single-double deviance `bd0` of R <= 4.0 rather than the table-driven
-//! `ebd0`.  Both are verified against R in the tests below; the latter costs
-//! at most ~2e-13 relative accuracy, and only in tails below 1e-100.
 #![allow(clippy::excessive_precision)]
 
 use std::f64::consts::{FRAC_1_PI, FRAC_PI_2, LN_2, PI, SQRT_2, TAU};
 
-/// `log(sqrt(2*pi))`
 const M_LN_SQRT_2PI: f64 = 0.918938533204672741780329736406;
-/// `log(sqrt(pi/2))`
 const M_LN_SQRT_PID2: f64 = 0.225791352644727432363097614947;
-/// `1/sqrt(2*pi)`
 const M_1_SQRT_2PI: f64 = 0.398942280401432677939946059934;
-/// `sqrt(32)`
 const M_SQRT_32: f64 = 5.656854249492380195206754896838;
-/// `2*pi`
 const M_2PI: f64 = TAU;
-/// `log(2*pi)`
 const M_LN_2PI: f64 = 1.837877066409345483560659472811;
-/// `sqrt(2*pi)`
 const M_SQRT_2PI: f64 = 2.506628274631000502415765284811;
 const DBL_EPSILON: f64 = f64::EPSILON;
 const DBL_MIN: f64 = f64::MIN_POSITIVE;
-
-// ---------------------------------------------------------------------------
-// R's dpq.h helpers (`R_D__0`, `R_DT_qIv`, ...).
-// ---------------------------------------------------------------------------
 
 #[inline]
 fn r_d_0(log_p: bool) -> f64 {
@@ -86,7 +60,6 @@ fn r_d_log(p: f64, log_p: bool) -> f64 {
     if log_p { p } else { p.ln() }
 }
 
-/// `log(1 - exp(x))` in a numerically stable form (R's `R_Log1_Exp`).
 #[inline]
 fn r_log1_exp(x: f64) -> f64 {
     if x > -LN_2 {
@@ -101,7 +74,6 @@ fn r_d_lexp(x: f64, log_p: bool) -> f64 {
     if log_p { r_log1_exp(x) } else { (-x).ln_1p() }
 }
 
-/// Lower-tail probability on the plain scale (R's `R_DT_qIv`).
 #[inline]
 fn r_dt_qiv(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     if log_p {
@@ -111,7 +83,6 @@ fn r_dt_qiv(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// Upper-tail probability on the plain scale (R's `R_DT_CIv`).
 #[inline]
 fn r_dt_civ(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     if log_p {
@@ -139,8 +110,6 @@ fn r_dt_clog(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// R's `R_Q_P01_boundaries`: `Some(value)` when `p` is invalid (NaN) or on a
-/// boundary where the quantile is `left`/`right`.
 #[inline]
 fn q_p01_boundaries(p: f64, left: f64, right: f64, lower_tail: bool, log_p: bool) -> Option<f64> {
     if log_p {
@@ -167,7 +136,6 @@ fn q_p01_boundaries(p: f64, left: f64, right: f64, lower_tail: bool, log_p: bool
     None
 }
 
-/// `sin(pi * x)`, exact at half-integers (R's `sinpi`).
 fn sinpi(x: f64) -> f64 {
     if x.is_nan() {
         return x;
@@ -193,7 +161,6 @@ fn sinpi(x: f64) -> f64 {
     (PI * x).sin()
 }
 
-/// `tan(pi * x)`, exact at quarter-integers (R's `tanpi`).
 fn tanpi(x: f64) -> f64 {
     if x.is_nan() {
         return x;
@@ -220,12 +187,6 @@ fn tanpi(x: f64) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Normal distribution.
-// ---------------------------------------------------------------------------
-
-/// R's `pnorm(x, 0, 1, lower.tail, log.p)`: Cody (1993) rational Chebyshev
-/// approximations, as in `nmath/pnorm.c`.
 pub(crate) fn pnorm(x: f64, lower_tail: bool, log_p: bool) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -241,8 +202,6 @@ pub(crate) fn pnorm(x: f64, lower_tail: bool, log_p: bool) -> f64 {
     if lower_tail { cum } else { ccum }
 }
 
-/// Cody's central rational approximation: `pnorm(x) - 0.5` for
-/// `|x| <= 0.67448975`, computed without the `0.5 + ... - 0.5` round trip.
 fn pnorm_central_offset(x: f64) -> f64 {
     const A: [f64; 5] = [
         2.2352520354606839287,
@@ -273,8 +232,6 @@ fn pnorm_central_offset(x: f64) -> f64 {
     x * (xnum + A[3]) / (xden + B[3])
 }
 
-/// R's `pnorm_both`: returns `(P[X <= x], P[X > x])`; only the tails
-/// requested through `lower`/`upper` are guaranteed to be computed.
 fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
     const C: [f64; 9] = [
         0.39894151208813466764,
@@ -317,7 +274,6 @@ fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
     let mut cum = f64::NAN;
     let mut ccum = f64::NAN;
 
-    // R's `do_del(X)` followed by `swap_tail`.
     let del_and_swap = |big_x: f64, temp: f64| -> (f64, f64) {
         let xsq = (big_x * 16.0).trunc() / 16.0;
         let del = (big_x - xsq) * (big_x + xsq);
@@ -343,7 +299,6 @@ fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
     };
 
     if y <= 0.67448975 {
-        // qnorm(3/4) = .6744....
         let temp = pnorm_central_offset(x);
         if lower {
             cum = 0.5 + temp;
@@ -360,7 +315,6 @@ fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
             }
         }
     } else if y <= M_SQRT_32 {
-        // qnorm(3/4) < |x| <= sqrt(32) ~= 5.657
         let mut xnum = C[8] * y;
         let mut xden = y;
         for i in 0..7 {
@@ -373,8 +327,6 @@ fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
         || (lower && -38.4674 < x && x < 8.2924)
         || (upper && -8.2924 < x && x < 38.4674)
     {
-        // |x| > sqrt(32): asymptotic expansion; the bounds are where the
-        // non-log tail underflows even the denormal range.
         let xsq = 1.0 / (x * x);
         let mut xnum = P[5] * xsq;
         let mut xden = xsq;
@@ -395,9 +347,6 @@ fn pnorm_both(x: f64, lower: bool, upper: bool, log_p: bool) -> (f64, f64) {
     (cum, ccum)
 }
 
-/// R's `qnorm(p, 0, 1, lower.tail, log.p)`: Wichura's AS 241 (`PPND16`) with
-/// R's asymptotic extension for `log.p = TRUE` and extremely small `p`, as
-/// in `nmath/qnorm.c`.
 pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     if p.is_nan() {
         return f64::NAN;
@@ -410,7 +359,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     let q = p_ - 0.5;
 
     if q.abs() <= 0.425 {
-        // 0.075 <= p~ <= 0.925
         let r = 0.180625 - q * q;
         return q
             * (((((((r * 2509.0809287301226727 + 33430.575583588128105) * r
@@ -439,7 +387,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
                 + 1.0);
     }
 
-    // p~ = min(p, 1-p) < 0.075 :  r := sqrt(-log(p~))
     let lp = if log_p && ((lower_tail && q <= 0.0) || (!lower_tail && q > 0.0)) {
         p
     } else {
@@ -452,7 +399,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     };
     let r = (-lp).sqrt();
     let mut val = if r <= 5.0 {
-        // min(p,1-p) >= exp(-25) ~= 1.3888e-11
         let r = r - 1.6;
         (((((((r * 7.7454501427834140764e-4 + 0.0227238449892691845833) * r
             + 0.24178072517745061177)
@@ -479,7 +425,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
                 * r
                 + 1.0)
     } else if r <= 27.0 {
-        // min(p,1-p) >= exp(-729) ~= 2.5e-317
         let r = r - 5.0;
         (((((((r * 2.01033439929228813265e-7 + 2.71155556874348757815e-5) * r
             + 0.0012426609473880784386)
@@ -506,7 +451,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
                 * r
                 + 1.0)
     } else if r >= 6.4e8 {
-        // p is *very extremely* close to 0 or 1: zeroth-order asymptotic.
         r * SQRT_2
     } else {
         let s2 = -2.0 * lp;
@@ -539,10 +483,6 @@ pub(crate) fn qnorm(p: f64, lower_tail: bool, log_p: bool) -> f64 {
     val
 }
 
-/// Error function `erf(x) = 2 pnorm(x sqrt 2) - 1`, evaluated through the
-/// tails of `pnorm` so it keeps relative accuracy for both small and large
-/// `|x|` (R itself has no `erf`; this is the identity its documentation
-/// gives).
 pub(crate) fn erf(x: f64) -> f64 {
     let z = x * SQRT_2;
     if z.abs() <= 0.67448975 {
@@ -554,13 +494,10 @@ pub(crate) fn erf(x: f64) -> f64 {
     }
 }
 
-/// Complementary error function `erfc(x) = 2 pnorm(x sqrt 2, lower = FALSE)`.
 pub(crate) fn erfc(x: f64) -> f64 {
     2.0 * pnorm(x * SQRT_2, false, false)
 }
 
-/// R's `dnorm(x, 0, 1, log)` as in `nmath/dnorm.c` (Welinder's split of `x`
-/// for accuracy in the far tail).
 pub(crate) fn dnorm(x: f64, give_log: bool) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -578,21 +515,14 @@ pub(crate) fn dnorm(x: f64, give_log: bool) -> f64 {
     if x < 5.0 {
         return M_1_SQRT_2PI * (-0.5 * x * x).exp();
     }
-    // Underflow boundary (denormals included) ~= 38.57.
     if x > (-2.0 * LN_2 * ((f64::MIN_EXP + 1 - f64::MANTISSA_DIGITS as i32) as f64)).sqrt() {
         return 0.0;
     }
-    // Split x = x1 + x2 with |x2| <= 2^-16 so x1*x1 is error free.
     let x1 = (x * 65536.0).round_ties_even() / 65536.0;
     let x2 = x - x1;
     M_1_SQRT_2PI * ((-0.5 * x1 * x1).exp() * ((-0.5 * x2 - x1) * x2).exp())
 }
 
-// ---------------------------------------------------------------------------
-// Gamma function family.
-// ---------------------------------------------------------------------------
-
-/// R's `chebyshev_eval` (Clenshaw recurrence).
 fn chebyshev_eval(x: f64, a: &[f64], n: usize) -> f64 {
     if !(1..=1000).contains(&n) || !(-1.1..=1.1).contains(&x) {
         return f64::NAN;
@@ -609,8 +539,6 @@ fn chebyshev_eval(x: f64, a: &[f64], n: usize) -> f64 {
     (b0 - b2) * 0.5
 }
 
-/// R's `lgammacor(x)`: the Stirling-series correction
-/// `log(gamma(x)) - ((x - 0.5) log(x) - x + log(sqrt(2 pi)))` for `x >= 10`.
 fn lgammacor(x: f64) -> f64 {
     const ALGMCS: [f64; 15] = [
         0.1666389480451863247205729650822e+0,
@@ -642,8 +570,6 @@ fn lgammacor(x: f64) -> f64 {
     }
 }
 
-/// R's `gammafn(x)` (SLATEC `gamma` Chebyshev series on [-10, 10], Stirling
-/// with `lgammacor`/`stirlerr` beyond), as in `nmath/gamma.c`.
 pub(crate) fn gammafn(x: f64) -> f64 {
     const GAMCS: [f64; 42] = [
         0.8571195590989331421920062399942e-2,
@@ -703,19 +629,17 @@ pub(crate) fn gammafn(x: f64) -> f64 {
 
     let y = x.abs();
     if y <= 10.0 {
-        // Reduce to gamma(1 + y) for 0 <= y < 1.
         let mut n = x.trunc() as i32;
         if x < 0.0 {
             n -= 1;
         }
-        let y = x - n as f64; // n = floor(x)  ==>  y in [0, 1)
+        let y = x - n as f64;
         n -= 1;
         let mut value = chebyshev_eval(y * 2.0 - 1.0, &GAMCS, NGAM) + 0.9375;
         if n == 0 {
-            return value; // x = 1.dddd = 1+y
+            return value;
         }
         if n < 0 {
-            // gamma(x) for -10 <= x < 1
             if y < XSML {
                 return if x > 0.0 {
                     f64::INFINITY
@@ -728,7 +652,6 @@ pub(crate) fn gammafn(x: f64) -> f64 {
             }
             value
         } else {
-            // gamma(x) for 2 <= x <= 10
             for i in 1..=n {
                 value *= y + i as f64;
             }
@@ -742,7 +665,6 @@ pub(crate) fn gammafn(x: f64) -> f64 {
             return 0.0;
         }
         let value = if y <= 50.0 && y == y.trunc() {
-            // (n - 1)! exactly
             let mut value = 1.0;
             let mut i = 2.0;
             while i < y {
@@ -751,8 +673,6 @@ pub(crate) fn gammafn(x: f64) -> f64 {
             }
             value
         } else {
-            // R writes `(2*y == (int)2*y) ? stirlerr(y) : lgammacor(y)`, and
-            // since the cast binds to the literal 2 the test is always true.
             ((y - 0.5) * y.ln() - y + M_LN_SQRT_2PI + stirlerr(y)).exp()
         };
         if x > 0.0 {
@@ -766,7 +686,6 @@ pub(crate) fn gammafn(x: f64) -> f64 {
     }
 }
 
-/// R's `lgammafn(x)` = `log|gamma(x)|`, as in `nmath/lgamma.c`.
 pub(crate) fn lgammafn(x: f64) -> f64 {
     const XMAX: f64 = 2.5327372760800758e+305;
 
@@ -774,7 +693,7 @@ pub(crate) fn lgammafn(x: f64) -> f64 {
         return x;
     }
     if x <= 0.0 && x == x.trunc() {
-        return f64::INFINITY; // lgamma(-n) = log|gamma(-n)| = +Inf
+        return f64::INFINITY;
     }
     let y = x.abs();
     if y < 1e-306 {
@@ -795,7 +714,6 @@ pub(crate) fn lgammafn(x: f64) -> f64 {
         }
         return M_LN_SQRT_2PI + (x - 0.5) * x.ln() - x + lgammacor(x);
     }
-    // x < -10; y = -x
     let sinpiy = sinpi(y).abs();
     if sinpiy == 0.0 {
         return f64::NAN;
@@ -803,8 +721,6 @@ pub(crate) fn lgammafn(x: f64) -> f64 {
     M_LN_SQRT_PID2 + (x - 0.5) * y.ln() - x - sinpiy.ln() - lgammacor(y)
 }
 
-/// Continued fraction for `sum_{k>=0} x^k / (i + k d)`; auxiliary of
-/// `log1pmx` and `lgamma1p` (R's `logcf`).
 fn logcf(x: f64, i: f64, d: f64, eps: f64) -> f64 {
     let mut c1 = 2.0 * d;
     let mut c2 = i + d;
@@ -844,16 +760,13 @@ fn logcf(x: f64, i: f64, d: f64, eps: f64) -> f64 {
     a2 / b2
 }
 
-/// `2^256`, R's `scalefactor` for continued fractions.
 const SCALEFACTOR: f64 = f64::from_bits(0x4FF0_0000_0000_0000);
 
-/// Accurate `log(1 + x) - x`, particularly for small `x` (R's `log1pmx`).
 pub(crate) fn log1pmx(x: f64) -> f64 {
     const MIN_LOG1_VALUE: f64 = -0.79149064;
     if !(MIN_LOG1_VALUE..=1.0).contains(&x) {
         x.ln_1p() - x
     } else {
-        // Expand in y = [x/(2+x)]^2: log(1+x) - x = x/(2+x) * [2 y S(y) - x]
         let r = x / (2.0 + x);
         let y = r * r;
         if x.abs() < 1e-2 {
@@ -864,13 +777,11 @@ pub(crate) fn log1pmx(x: f64) -> f64 {
     }
 }
 
-/// Accurate `log(gamma(1 + a))` for small `|a|` (R's `lgamma1p`).
 pub(crate) fn lgamma1p(a: f64) -> f64 {
     if a.abs() >= 0.5 {
         return lgammafn(a + 1.0);
     }
     const EULERS_CONST: f64 = 0.5772156649015328606065120900824024;
-    /// `coeffs[i]` holds `(zeta(i+2) - 1) / (i+2)`.
     const COEFFS: [f64; 40] = [
         0.3224670334241132182362075833230126e-0,
         0.6735230105319809513324605383715000e-1,
@@ -914,12 +825,9 @@ pub(crate) fn lgamma1p(a: f64) -> f64 {
         0.1109139947083452201658320007192334e-13,
     ];
     const N: usize = 40;
-    /// `zeta(N + 2) - 1`
     const C: f64 = 0.2273736845824652515226821577978691e-12;
     const TOL_LOGCF: f64 = 1e-14;
 
-    // Abramowitz & Stegun 6.1.33 with a convergence acceleration for the
-    // tail of the zeta series.
     let mut lgam = C * logcf(-a / 2.0, (N + 2) as f64, 1.0, TOL_LOGCF);
     for &coeff in COEFFS.iter().rev() {
         lgam = coeff - a * lgam;
@@ -927,9 +835,6 @@ pub(crate) fn lgamma1p(a: f64) -> f64 {
     (a * lgam - EULERS_CONST) * a - log1pmx(a)
 }
 
-/// Evaluates R's nested Stirling series
-/// `(S0 - (S1 - (S2 - ... - S_k / nn) / nn ...) / nn) / n` for the leading
-/// coefficients in `coeffs`, in exactly R's operation order.
 fn stirlerr_series(n: f64, nn: f64, coeffs: &[f64]) -> f64 {
     let mut acc = 0.0;
     for &coeff in coeffs.iter().rev() {
@@ -938,11 +843,7 @@ fn stirlerr_series(n: f64, nn: f64, coeffs: &[f64]) -> f64 {
     acc / n
 }
 
-/// R's `stirlerr(n)` = `log(n!) - log(sqrt(2 pi n) (n/e)^n)`, the error of
-/// Stirling's formula, as in `nmath/stirlerr.c` (R >= 4.4).
 fn stirlerr(n: f64) -> f64 {
-    /// `S[k]` is the k-th Stirling series coefficient `B_{2k+2} / ((2k+1)(2k+2))`:
-    /// 1/12, 1/360, 1/1260, 1/1680, 1/1188, 691/360360, 1/156, 3617/122400, ...
     const S: [f64; 17] = [
         0.083333333333333333333,
         0.00277777777777777777778,
@@ -963,9 +864,8 @@ fn stirlerr(n: f64) -> f64 {
         382900751.39141414141414141,
     ];
 
-    /// Exact values for n = 0, 0.5, 1.0, ..., 14.5, 15.0.
     const SFERR_HALVES: [f64; 31] = [
-        0.0, // n=0 - wrong, place holder only
+        0.0,
         0.1534264097200273452913848,
         0.0810614667953272582196702,
         0.0548141210519176538961390,
@@ -1010,7 +910,6 @@ fn stirlerr(n: f64) -> f64 {
             }
             return lgamma1p(n) - (n + 0.5) * n.ln() + n - M_LN_SQRT_2PI;
         }
-        // 5.25 < n <= 23.5: the number of series terms R uses per range.
         let terms = if n > 12.8 {
             7
         } else if n > 12.3 {
@@ -1045,8 +944,6 @@ fn stirlerr(n: f64) -> f64 {
     }
 }
 
-/// R's `bd0(x, np)` = `x log(x/np) + np - x`, the deviance term, evaluated
-/// by a Taylor series when `x` is close to `np` (as in `nmath/bd0.c`).
 fn bd0(x: f64, np: f64) -> f64 {
     if !x.is_finite() || !np.is_finite() || np == 0.0 {
         return f64::NAN;
@@ -1055,7 +952,6 @@ fn bd0(x: f64, np: f64) -> f64 {
         let d = x - np;
         let mut v = d / (x + np);
         if d != 0.0 && v == 0.0 {
-            // v underflowed to 0 because x + np overflowed.
             let x_ = x * 0.25;
             let n_ = np * 0.25;
             v = (x_ - n_) / (x_ + n_);
@@ -1067,7 +963,7 @@ fn bd0(x: f64, np: f64) -> f64 {
         let mut ej = x * v;
         v *= v;
         for j in 1..1000 {
-            ej *= v; // = x v^(2j+1)
+            ej *= v;
             let s_ = s;
             s += ej / ((2 * j + 1) as f64);
             if s == s_ {
@@ -1075,7 +971,6 @@ fn bd0(x: f64, np: f64) -> f64 {
             }
         }
     }
-    // |x - np| is not too small
     let lg_x_n = if (x / np).is_finite() {
         (x / np).ln()
     } else {
@@ -1088,11 +983,7 @@ fn bd0(x: f64, np: f64) -> f64 {
     }
 }
 
-/// R's `dpois_raw(x, lambda, log)`: the Poisson density kernel
-/// `lambda^x e^-lambda / gamma(x+1)` for real `x >= 0`, via `stirlerr` and
-/// `bd0` as in `nmath/dpois.c` (R <= 4.0 form: single-double deviance).
 fn dpois_raw(x: f64, lambda: f64, give_log: bool) -> f64 {
-    /// `2^1023 / pi`: above this `2 pi x` overflows.
     const X_LRG: f64 = 2.86111748575702815380240589208115399625e+307;
 
     if lambda == 0.0 {
@@ -1131,9 +1022,7 @@ fn dpois_raw(x: f64, lambda: f64, give_log: bool) -> f64 {
     }
 }
 
-/// R's `dpois_wrap(x_plus_1, lambda, log)` from `nmath/pgamma.c`.
 fn dpois_wrap(x_plus_1: f64, lambda: f64, give_log: bool) -> f64 {
-    /// `M_LN2 * DBL_MAX_EXP / DBL_EPSILON` = 3.196577e18
     const M_CUTOFF: f64 = LN_2 * (f64::MAX_EXP as f64) / DBL_EPSILON;
 
     if !lambda.is_finite() {
@@ -1153,7 +1042,6 @@ fn dpois_wrap(x_plus_1: f64, lambda: f64, give_log: bool) -> f64 {
     }
 }
 
-/// Abramowitz & Stegun 6.5.29 series for `x < 1` (R's `pgamma_smallx`).
 fn pgamma_smallx(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
     let mut sum = 0.0;
     let mut c = alph;
@@ -1191,7 +1079,6 @@ fn pgamma_smallx(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// `sum_{n>=1} x^n / (y (y+1) ... (y+n-1))` (R's `pd_upper_series`).
 fn pd_upper_series(x: f64, y: f64, log_p: bool) -> f64 {
     let mut y = y;
     let mut term = x / y;
@@ -1207,8 +1094,6 @@ fn pd_upper_series(x: f64, y: f64, log_p: bool) -> f64 {
     if log_p { sum.ln() } else { sum }
 }
 
-/// Continued fraction for the scaled upper-tail gamma integral
-/// `~ (y/d) [1 + (1-y)/d + O(((1-y)/d)^2)]` (R's `pd_lower_cf`).
 fn pd_lower_cf(y: f64, d: f64) -> f64 {
     const MAX_IT: usize = 200_000;
 
@@ -1216,7 +1101,6 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
         return 0.0;
     }
     let mut f0 = y / d;
-    // Needed, e.g. for pgamma(10^c(100,295), shape = 1.1, log = TRUE)
     if (y - 1.0).abs() < d.abs() * DBL_EPSILON {
         return f0;
     }
@@ -1224,7 +1108,7 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
         f0 = 1.0;
     }
     let mut c2 = y;
-    let mut c4 = d; // original (y, d), *not* potentially scaled ones
+    let mut c4 = d;
     let mut a1 = 0.0;
     let mut b1 = 1.0;
     let mut a2 = y;
@@ -1238,7 +1122,7 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
     }
 
     let mut i = 0.0;
-    let mut of = -1.0; // far away
+    let mut of = -1.0;
     let mut f = 0.0;
     let mut it = 0;
     while it < MAX_IT {
@@ -1247,7 +1131,6 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
         c2 -= 1.0;
         let mut c3 = i * c2;
         c4 += 2.0;
-        // c2 = y - i,  c3 = i(y - i),  c4 = d + 2i,  for i odd
         a1 = c4 * a2 + c3 * a1;
         b1 = c4 * b2 + c3 * b1;
 
@@ -1255,7 +1138,6 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
         c2 -= 1.0;
         c3 = i * c2;
         c4 += 2.0;
-        // for i even
         a2 = c4 * a1 + c3 * a2;
         b2 = c4 * b1 + c3 * b2;
 
@@ -1268,17 +1150,15 @@ fn pd_lower_cf(y: f64, d: f64) -> f64 {
 
         if b2 != 0.0 {
             f = a2 / b2;
-            // convergence check: relative; "absolute" for very small f
             if (f - of).abs() <= DBL_EPSILON * f0.max(f.abs()) {
                 return f;
             }
             of = f;
         }
     }
-    f // non-convergence; should not happen
+    f
 }
 
-/// `sum_{n>=0} y (y-1) ... (y-n) / lambda^(n+1)` (R's `pd_lower_series`).
 fn pd_lower_series(lambda: f64, y: f64) -> f64 {
     let mut y = y;
     let mut term = 1.0;
@@ -1289,16 +1169,12 @@ fn pd_lower_series(lambda: f64, y: f64) -> f64 {
         y -= 1.0;
     }
     if y != y.floor() {
-        // The series does not converge as the terms start getting bigger
-        // (besides flipping sign) for y < -lambda.
         let f = pd_lower_cf(y, lambda + 1.0 - y);
         sum += term * f;
     }
     sum
 }
 
-/// `dnorm(x) / pnorm(x, lower_tail)` computed accurately (R's `dpnorm`);
-/// `lp` must be `pnorm(x, lower_tail, log_p = TRUE)`.
 fn dpnorm(x: f64, lower_tail: bool, lp: f64) -> f64 {
     let (x, lower_tail) = if x < 0.0 {
         (-x, !lower_tail)
@@ -1306,7 +1182,6 @@ fn dpnorm(x: f64, lower_tail: bool, lp: f64) -> f64 {
         (x, lower_tail)
     };
     if x > 10.0 && !lower_tail {
-        // Abramowitz & Stegun 26.2.12
         let mut term = 1.0 / x;
         let mut sum = term;
         let x2 = x * x;
@@ -1325,11 +1200,9 @@ fn dpnorm(x: f64, lower_tail: bool, lp: f64) -> f64 {
     }
 }
 
-/// Asymptotic expansion for `P[Poisson(lambda) <= x]` when `x` and `lambda`
-/// are both large and close (R's `ppois_asymp`).
 fn ppois_asymp(x: f64, lambda: f64, lower_tail: bool, log_p: bool) -> f64 {
     const COEFS_A: [f64; 8] = [
-        -1e99, // placeholder used for 1-indexing
+        -1e99,
         2.0 / 3.0,
         -4.0 / 135.0,
         8.0 / 2835.0,
@@ -1339,7 +1212,7 @@ fn ppois_asymp(x: f64, lambda: f64, lower_tail: bool, log_p: bool) -> f64 {
         698752.0 / 1477701225.0,
     ];
     const COEFS_B: [f64; 8] = [
-        -1e99, // placeholder
+        -1e99,
         1.0 / 12.0,
         1.0 / 288.0,
         -139.0 / 51840.0,
@@ -1350,9 +1223,6 @@ fn ppois_asymp(x: f64, lambda: f64, lower_tail: bool, log_p: bool) -> f64 {
     ];
 
     let dfm = lambda - x;
-    // If lambda is large, the distribution is highly concentrated about
-    // lambda, so representation error in x or lambda can lead to
-    // arbitrarily large values of pt_.
     let pt_ = -log1pmx(dfm / x);
     let mut s2pt = (2.0 * x * pt_).sqrt();
     if dfm < 0.0 {
@@ -1394,9 +1264,6 @@ fn ppois_asymp(x: f64, lambda: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// R's `pgamma_raw(x, alph, lower_tail, log_p)` for scale 1: Morten
-/// Welinder's implementation choosing between a small-`x` series, the upper
-/// series, the lower continued fraction and a Poisson asymptotic expansion.
 fn pgamma_raw(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
     if x <= 0.0 {
         return r_dt_0(lower_tail, log_p);
@@ -1408,8 +1275,7 @@ fn pgamma_raw(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
     let res = if x < 1.0 {
         pgamma_smallx(x, alph, lower_tail, log_p)
     } else if x <= alph - 1.0 && x < 0.8 * (alph + 50.0) {
-        // incl. large alph compared to x
-        let sum = pd_upper_series(x, alph, log_p); // = x/alph + o(x/alph)
+        let sum = pd_upper_series(x, alph, log_p);
         let d = dpois_wrap(alph, x, log_p);
         if !lower_tail {
             if log_p {
@@ -1423,18 +1289,16 @@ fn pgamma_raw(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
             sum * d
         }
     } else if alph - 1.0 < x && alph < 0.8 * (x + 50.0) {
-        // incl. large x compared to alph
         let d = dpois_wrap(alph, x, log_p);
         let sum = if alph < 1.0 {
             if x * DBL_EPSILON > 1.0 - alph {
                 r_d_1(log_p)
             } else {
                 let f = pd_lower_cf(alph, x - (alph - 1.0)) * x / alph;
-                // = [alph/(x - alph+1) + o(alph/(x-alph+1))] * x/alph = 1 + o(1)
                 if log_p { f.ln() } else { f }
             }
         } else {
-            let sum = pd_lower_series(x, alph - 1.0); // = (alph-1)/x + o((alph-1)/x)
+            let sum = pd_lower_series(x, alph - 1.0);
             if log_p { sum.ln_1p() } else { 1.0 + sum }
         };
         if !lower_tail {
@@ -1445,12 +1309,9 @@ fn pgamma_raw(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
             1.0 - d * sum
         }
     } else {
-        // x >= 1 and x fairly near alph.
         ppois_asymp(alph - 1.0, x, !lower_tail, log_p)
     };
 
-    // We lose a fair amount of accuracy to underflow in the cases where the
-    // final result is very close to DBL_MIN; redo those via log space.
     if !log_p && res < DBL_MIN / DBL_EPSILON {
         pgamma_raw(x, alph, lower_tail, true).exp()
     } else {
@@ -1458,7 +1319,6 @@ fn pgamma_raw(x: f64, alph: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// R's `pgamma(x, shape, scale, lower.tail, log.p)`.
 pub(crate) fn pgamma(x: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bool) -> f64 {
     if x.is_nan() || shape.is_nan() || scale.is_nan() {
         return f64::NAN;
@@ -1471,7 +1331,6 @@ pub(crate) fn pgamma(x: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
         return x;
     }
     if shape == 0.0 {
-        // limit case; useful e.g. in pnchisq()
         return if x <= 0.0 {
             r_dt_0(lower_tail, log_p)
         } else {
@@ -1481,7 +1340,6 @@ pub(crate) fn pgamma(x: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
     pgamma_raw(x, shape, lower_tail, log_p)
 }
 
-/// R's `dgamma(x, shape, scale, log)`.
 pub(crate) fn dgamma(x: f64, shape: f64, scale: f64, give_log: bool) -> f64 {
     if x.is_nan() || shape.is_nan() || scale.is_nan() {
         return f64::NAN;
@@ -1493,7 +1351,6 @@ pub(crate) fn dgamma(x: f64, shape: f64, scale: f64, give_log: bool) -> f64 {
         return r_d_0(give_log);
     }
     if shape == 0.0 {
-        // point mass at 0
         return if x == 0.0 {
             f64::INFINITY
         } else {
@@ -1529,8 +1386,6 @@ pub(crate) fn dgamma(x: f64, shape: f64, scale: f64, give_log: bool) -> f64 {
     }
 }
 
-/// Starting approximation for `qgamma` (AS 91 / Wilson-Hilferty), R's
-/// `qchisq_appr(p, nu, g = lgamma(nu/2), lower_tail, log_p, tol)`.
 fn qchisq_appr(p: f64, nu: f64, g: f64, lower_tail: bool, log_p: bool, tol: f64) -> f64 {
     const C7: f64 = 4.67;
     const C8: f64 = 6.66;
@@ -1547,13 +1402,11 @@ fn qchisq_appr(p: f64, nu: f64, g: f64, lower_tail: bool, log_p: bool, tol: f64)
         return f64::NAN;
     }
 
-    let alpha = 0.5 * nu; // = [pq]gamma() shape
+    let alpha = 0.5 * nu;
     let c = alpha - 1.0;
 
     let p1 = r_dt_log(p, lower_tail, log_p);
     if nu < -1.24 * p1 {
-        // for small chi-squared: log(alpha) + g = lgamma(alpha + 1) suffers
-        // from catastrophic cancellation when alpha << 1
         let lgam1pa = if alpha < 0.5 {
             lgamma1p(alpha)
         } else {
@@ -1561,17 +1414,14 @@ fn qchisq_appr(p: f64, nu: f64, g: f64, lower_tail: bool, log_p: bool, tol: f64)
         };
         ((lgam1pa + p1) / alpha + LN_2).exp()
     } else if nu > 0.32 {
-        // Wilson and Hilferty estimate
         let x = qnorm(p, lower_tail, log_p);
         let p1 = 2.0 / (9.0 * nu);
         let mut ch = nu * (x * p1.sqrt() + 1.0 - p1).powi(3);
-        // approximation for p tending to 1:
         if ch > 2.2 * nu + 6.0 {
             ch = -2.0 * (r_dt_clog(p, lower_tail, log_p) - c * (0.5 * ch).ln() + g);
         }
         ch
     } else {
-        // "small nu": 1.24*(-log(p)) <= nu <= 0.32
         let mut ch = 0.4;
         let a = r_dt_clog(p, lower_tail, log_p) + g + c * LN_2;
         loop {
@@ -1588,13 +1438,10 @@ fn qchisq_appr(p: f64, nu: f64, g: f64, lower_tail: bool, log_p: bool, tol: f64)
     }
 }
 
-/// R's `qgamma(p, shape, scale, lower.tail, log.p)`: AS 91 (Best & Roberts
-/// 1975) seven-term Taylor iteration from `qchisq_appr`, followed by Newton
-/// steps on the log scale for full double precision.
 pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bool) -> f64 {
     const EPS1: f64 = 1e-2;
-    const EPS2: f64 = 5e-7; // final precision of AS 91
-    const EPS_N: f64 = 1e-15; // precision of Newton step / iterations
+    const EPS2: f64 = 5e-7;
+    const EPS_N: f64 = 1e-15;
     const MAXIT: usize = 1000;
     const P_MIN: f64 = 1e-100;
     const P_MAX: f64 = 1.0 - 1e-14;
@@ -1612,21 +1459,18 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
         return f64::NAN;
     }
     if shape == 0.0 {
-        // all mass at 0
         return 0.0;
     }
 
     let mut max_it_newton = if shape < 1e-10 { 7 } else { 1 };
-    let mut p_ = r_dt_qiv(p, lower_tail, log_p); // lower_tail prob (in any case)
-    let g = lgammafn(shape); // log Gamma(v/2)
+    let mut p_ = r_dt_qiv(p, lower_tail, log_p);
+    let g = lgammafn(shape);
 
-    // Phase I: starting approximation
     let mut ch = qchisq_appr(p, 2.0 * shape, g, lower_tail, log_p, EPS1);
     let skip_iteration = if !ch.is_finite() {
         max_it_newton = 0;
         true
     } else if ch < EPS2 || !(P_MIN..=P_MAX).contains(&p_) {
-        // Corrected according to AS 91; do Newton steps only.
         max_it_newton = 20;
         true
     } else {
@@ -1634,11 +1478,9 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
     };
 
     if !skip_iteration {
-        // Phase II: iteration — call pgamma() [AS 239] and calculate a
-        // seven-term Taylor series
         let c = shape - 1.0;
         let s6 = (120.0 + c * (346.0 + 127.0 * c)) * I5040;
-        let ch0 = ch; // save initial approx.
+        let ch0 = ch;
         for _ in 1..=MAXIT {
             let q = ch;
             let p1 = 0.5 * ch;
@@ -1666,13 +1508,11 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
                 break;
             }
             if (q - ch).abs() > 0.1 * ch {
-                // diverging? -- also forces ch > 0
                 ch = if ch < q { 0.9 * q } else { 1.1 * q };
             }
         }
     }
 
-    // Final Newton step(s) on the log scale (PR#2214, Morten Welinder).
     let mut x = 0.5 * scale * ch;
     if max_it_newton > 0 {
         let p = if log_p { p } else { p.ln() };
@@ -1684,12 +1524,11 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
             if (lower_tail && p_ > p * one_p) || (!lower_tail && p_ < p * one_m) {
                 return 0.0;
             }
-            // else: continue, using x = DBL_MIN instead of 0
         } else {
             p_ = pgamma(x, shape, scale, lower_tail, true);
         }
         if p_ == f64::NEG_INFINITY {
-            return 0.0; // PR#14710
+            return 0.0;
         }
         for i in 1..=max_it_newton {
             let p1 = p_ - p;
@@ -1700,12 +1539,10 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
             if g == f64::NEG_INFINITY {
                 break;
             }
-            // delta x = f(x)/f'(x) with f(x) = log P(x) - p, f'(x) = P'/P
             let t = p1 * (p_ - g).exp();
             let t = if lower_tail { x - t } else { x + t };
             p_ = pgamma(t, shape, scale, lower_tail, true);
             if (p_ - p).abs() > p1.abs() || (i > 1 && (p_ - p).abs() == p1.abs()) {
-                // no improvement (the second clause guards against flip-flop)
                 break;
             }
             x = t;
@@ -1714,25 +1551,17 @@ pub(crate) fn qgamma(p: f64, shape: f64, scale: f64, lower_tail: bool, log_p: bo
     x
 }
 
-/// R's `pchisq(x, df, lower.tail, log.p)` = `pgamma(x, df/2, 2)`.
 #[inline]
 pub(crate) fn pchisq(x: f64, df: f64, lower_tail: bool, log_p: bool) -> f64 {
     pgamma(x, df / 2.0, 2.0, lower_tail, log_p)
 }
 
-/// R's `qchisq(p, df, lower.tail, log.p)` = `qgamma(p, df/2, 2)`.
-#[allow(dead_code)] // part of the R distribution surface; exercised by the tests
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn qchisq(p: f64, df: f64, lower_tail: bool, log_p: bool) -> f64 {
     qgamma(p, 0.5 * df, 2.0, lower_tail, log_p)
 }
 
-// ---------------------------------------------------------------------------
-// Beta and Student t.
-// ---------------------------------------------------------------------------
-
-/// R's `lbeta(a, b)` = `log(beta(a, b))`, using `lgammacor` differences for
-/// large arguments to avoid cancellation (as in `nmath/lbeta.c`).
 pub(crate) fn lbeta(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         return f64::NAN;
@@ -1749,7 +1578,6 @@ pub(crate) fn lbeta(a: f64, b: f64) -> f64 {
         return f64::NEG_INFINITY;
     }
     if p >= 10.0 {
-        // p and q are big.
         let corr = lgammacor(p) + lgammacor(q) - lgammacor(p + q);
         q.ln() * -0.5
             + M_LN_SQRT_2PI
@@ -1757,20 +1585,15 @@ pub(crate) fn lbeta(a: f64, b: f64) -> f64 {
             + (p - 0.5) * (p / (p + q)).ln()
             + q * (-p / (p + q)).ln_1p()
     } else if q >= 10.0 {
-        // p is small, but q is big.
         let corr = lgammacor(q) - lgammacor(p + q);
         lgammafn(p) + corr + p - p * (p + q).ln() + (q - 0.5) * (-p / (p + q)).ln_1p()
     } else if p < 1e-306 {
         lgammafn(p) + (lgammafn(q) - lgammafn(p + q))
     } else {
-        // p and q are small: p <= q < 10.
         (gammafn(p) * (gammafn(q) / gammafn(p + q))).ln()
     }
 }
 
-/// `log(x^a y^b / beta(a, b))` with `y = 1 - x`, evaluated as in TOMS 708's
-/// `brcomp`: for `a, b >= 10` via the relative deviances `log1pmx` and the
-/// Stirling corrections so no large terms cancel.
 fn log_beta_front(a: f64, b: f64, x: f64, y: f64) -> f64 {
     if a.min(b) >= 10.0 {
         let (x0, y0, lambda) = if a <= b {
@@ -1806,10 +1629,6 @@ fn log_beta_front(a: f64, b: f64, x: f64, y: f64) -> f64 {
     }
 }
 
-/// Continued fraction for `I_x(a, b) / (x^a y^b / B(a, b))`, in the form of
-/// TOMS 708's `bfrac` (Didonato & Morris 1992).  It is written in terms of
-/// `y = 1 - x` and `lambda = (a + b) y - b >= 0`, so no `1 - x` cancellation
-/// occurs when `x` is close to 1 and `a` is large.
 fn bfrac(a: f64, b: f64, x: f64, y: f64, lambda: f64) -> f64 {
     const MAX_IT: usize = 100_000;
 
@@ -1838,7 +1657,6 @@ fn bfrac(a: f64, b: f64, x: f64, y: f64, lambda: f64) -> f64 {
         p = t + 1.0;
         s += 2.0;
 
-        // update an, bn, anp1, and bnp1
         t = alpha * an + beta * anp1;
         an = anp1;
         anp1 = t;
@@ -1852,7 +1670,6 @@ fn bfrac(a: f64, b: f64, x: f64, y: f64, lambda: f64) -> f64 {
             break;
         }
 
-        // rescale an, bn, anp1, and bnp1
         an /= bnp1;
         bn /= bnp1;
         anp1 = r;
@@ -1861,11 +1678,6 @@ fn bfrac(a: f64, b: f64, x: f64, y: f64, lambda: f64) -> f64 {
     r
 }
 
-/// R's `pbeta(x, a, b, lower.tail, log.p)` (regularized incomplete beta
-/// function), including R's limit cases for `a == 0`, `b == 0`, infinities.
-/// As in TOMS 708's `bratio`, the tail below the mean `a/(a+b)` is evaluated
-/// directly (continued fraction times the `brcomp` prefactor) and the other
-/// tail by complement, so both tails keep relative accuracy.
 pub(crate) fn pbeta(x: f64, a: f64, b: f64, lower_tail: bool, log_p: bool) -> f64 {
     if x.is_nan() || a.is_nan() || b.is_nan() {
         return f64::NAN;
@@ -1877,20 +1689,15 @@ pub(crate) fn pbeta(x: f64, a: f64, b: f64, lower_tail: bool, log_p: bool) -> f6
         return r_dt_1(lower_tail, log_p);
     }
     if a == 0.0 || b == 0.0 || !a.is_finite() || !b.is_finite() {
-        // NB: 0 <= x < 1
         if a == 0.0 && b == 0.0 {
-            // point mass 1/2 at each of {0,1}
             return if log_p { -LN_2 } else { 0.5 };
         }
         if a == 0.0 || a / b == 0.0 {
-            // point mass 1 at 0 ==> P(X <= x) = 1, all x >= 0
             return r_dt_1(lower_tail, log_p);
         }
         if b == 0.0 || b / a == 0.0 {
-            // point mass 1 at 1 ==> P(X <= x) = 0, all x < 1
             return r_dt_0(lower_tail, log_p);
         }
-        // remaining case: a = b = Inf: point mass 1 at 1/2
         return if x < 0.5 {
             r_dt_0(lower_tail, log_p)
         } else {
@@ -1900,9 +1707,7 @@ pub(crate) fn pbeta(x: f64, a: f64, b: f64, lower_tail: bool, log_p: bool) -> f6
     if x <= 0.0 {
         return r_dt_0(lower_tail, log_p);
     }
-    // Now: 0 < a < Inf; 0 < b < Inf and 0 < x < 1
     let y = 0.5 - x + 0.5;
-    // lambda = a - (a+b) x = (a+b) y - b, computed the way that does not cancel.
     let lambda = if a > b {
         (a + b) * y - b
     } else {
@@ -1915,7 +1720,6 @@ pub(crate) fn pbeta(x: f64, a: f64, b: f64, lower_tail: bool, log_p: bool) -> f6
         (a, b, x, y, lambda)
     };
     let log_direct = log_beta_front(aa, bb, xx, yy) + bfrac(aa, bb, xx, yy, lambda).ln();
-    // `log_direct` is log of the lower tail when !swap, of the upper tail when swap.
     if lower_tail != swap {
         r_d_exp(log_direct, log_p)
     } else if log_p {
@@ -1925,8 +1729,6 @@ pub(crate) fn pbeta(x: f64, a: f64, b: f64, lower_tail: bool, log_p: bool) -> f6
     }
 }
 
-/// R's `dt(x, n, log)` (Catherine Loader's saddle-point form), as in
-/// `nmath/dt.c`.
 pub(crate) fn dt(x: f64, n: f64, give_log: bool) -> f64 {
     if x.is_nan() || n.is_nan() {
         return f64::NAN;
@@ -1942,13 +1744,12 @@ pub(crate) fn dt(x: f64, n: f64, give_log: bool) -> f64 {
     }
 
     let t = -bd0(n / 2.0, (n + 1.0) / 2.0) + stirlerr((n + 1.0) / 2.0) - stirlerr(n / 2.0);
-    let x2n = x * x / n; // in [0, Inf]
+    let x2n = x * x / n;
     let lrg_x2n = x2n > 1.0 / DBL_EPSILON;
     let mut ax = 0.0;
     let (l_x2n, u) = if lrg_x2n {
-        // large x^2/n
         ax = x.abs();
-        let l_x2n = ax.ln() - n.ln() / 2.0; // = log(x2n)/2
+        let l_x2n = ax.ln() - n.ln() / 2.0;
         (l_x2n, n * l_x2n)
     } else if x2n > 0.2 {
         let l_x2n = (1.0 + x2n).ln() / 2.0;
@@ -1971,7 +1772,6 @@ pub(crate) fn dt(x: f64, n: f64, give_log: bool) -> f64 {
     (t - u).exp() * M_1_SQRT_2PI * i_sqrt
 }
 
-/// R's `pt(x, n, lower.tail, log.p)` via `pbeta`, as in `nmath/pt.c`.
 pub(crate) fn pt(x: f64, n: f64, lower_tail: bool, log_p: bool) -> f64 {
     if x.is_nan() || n.is_nan() {
         return f64::NAN;
@@ -1992,7 +1792,6 @@ pub(crate) fn pt(x: f64, n: f64, lower_tail: bool, log_p: bool) -> f64 {
 
     let nx = 1.0 + (x / n) * x;
     let val = if nx > 1e100 {
-        // x*x > 1e100 * n: danger of underflow, use Abramowitz & Stegun 26.5.4
         let lval = -0.5 * n * (2.0 * x.abs().ln() - n.ln()) - lbeta(0.5 * n, 0.5) - (0.5 * n).ln();
         if log_p { lval } else { lval.exp() }
     } else if n > x * x {
@@ -2001,13 +1800,12 @@ pub(crate) fn pt(x: f64, n: f64, lower_tail: bool, log_p: bool) -> f64 {
         pbeta(1.0 / nx, n / 2.0, 0.5, true, log_p)
     };
 
-    // Use "1 - v" if lower_tail and x > 0 (but not both):
     let lower_tail = if x <= 0.0 { !lower_tail } else { lower_tail };
     if log_p {
         if lower_tail {
             (-0.5 * val.exp()).ln_1p()
         } else {
-            val - LN_2 // = log(.5 * pbeta(....))
+            val - LN_2
         }
     } else {
         let val = val / 2.0;
@@ -2015,9 +1813,6 @@ pub(crate) fn pt(x: f64, n: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 }
 
-/// R's `qt(p, ndf, lower.tail, log.p)`: Hill's (1970) algorithm 396 with
-/// the Taylor-series improvement of Hill (1981), closed forms for `df` 1 and
-/// 2, and bisection for `df < 1`, as in `nmath/qt.c`.
 pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
     const EPS: f64 = 1e-12;
 
@@ -2032,9 +1827,8 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
     }
 
     if ndf < 1.0 {
-        // based on qnt: bracket then bisect pt()
         const ACCU: f64 = 1e-13;
-        const EPS_BRACKET: f64 = 1e-11; // must be > ACCU
+        const EPS_BRACKET: f64 = 1e-11;
         let p = r_dt_qiv(p, lower_tail, log_p);
         if p > 1.0 - DBL_EPSILON {
             return f64::INFINITY;
@@ -2069,9 +1863,9 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
         return qnorm(p, lower_tail, log_p);
     }
 
-    let mut big_p = if log_p { p.exp() } else { p }; // if exp(p) underflows, we fix below
+    let mut big_p = if log_p { p.exp() } else { p };
     let neg = (!lower_tail || big_p < 0.5) && (lower_tail || big_p > 0.5);
-    let is_neg_lower = lower_tail == neg; // both TRUE or FALSE == !xor
+    let is_neg_lower = lower_tail == neg;
     big_p = if neg {
         2.0 * if log_p {
             if lower_tail { big_p } else { -p.exp_m1() }
@@ -2085,10 +1879,8 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
             r_d_cval(p, lower_tail)
         }
     };
-    // 0 <= P <= 1 ; P = 2*min(P', 1 - P')  in all cases
 
     let q = if (ndf - 2.0).abs() < EPS {
-        // df ~= 2
         if big_p > DBL_MIN {
             if 3.0 * big_p < DBL_EPSILON {
                 1.0 / big_p.sqrt()
@@ -2098,7 +1890,6 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
                 (2.0 / (big_p * (2.0 - big_p)) - 2.0).sqrt()
             }
         } else if log_p {
-            // P << 1, q = 1/sqrt(P)
             if is_neg_lower {
                 (-p / 2.0).exp() / SQRT_2
             } else {
@@ -2108,13 +1899,11 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
             f64::INFINITY
         }
     } else if ndf < 1.0 + EPS {
-        // df ~= 1 (df < 1 excluded above): Cauchy
         if big_p == 1.0 {
             0.0
         } else if big_p > 0.0 {
-            1.0 / tanpi(big_p / 2.0) // == - tan((P+1) * M_PI_2) -- suffers for P ~= 0
+            1.0 / tanpi(big_p / 2.0)
         } else if log_p {
-            // P = 0, but maybe = 2*exp(p): 1/tan(e) ~ 1/e
             if is_neg_lower {
                 FRAC_1_PI * (-p).exp()
             } else {
@@ -2124,7 +1913,6 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
             f64::INFINITY
         }
     } else {
-        // usual case; including, e.g., df = 1.1
         let mut x = 0.0;
         let mut log_p2 = 0.0;
         let a = 1.0 / (ndf - 0.5);
@@ -2133,29 +1921,26 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
         let d = ((94.5 / (b + c) - 3.0) / b + 1.0) * (a * FRAC_PI_2).sqrt() * ndf;
 
         let p_ok1 = big_p > DBL_MIN || !log_p;
-        let mut p_ok = p_ok1; // when true, use "normal scale": log_p = FALSE
+        let mut p_ok = p_ok1;
         let mut y = 0.0;
         if p_ok1 {
             y = (d * big_p).powf(2.0 / ndf);
             p_ok = y >= DBL_EPSILON;
         }
         if !p_ok {
-            // log.p && P very small  ||  (d*P)^(2/df) =: y < eps_c
             log_p2 = if is_neg_lower {
                 r_d_log(p, log_p)
             } else {
                 r_d_lexp(p, log_p)
-            }; // == log(P / 2)
+            };
             x = (d.ln() + LN_2 + log_p2) / ndf;
             y = (2.0 * x).exp();
         }
 
         let mut q = if (ndf < 2.1 && big_p > 0.5) || y > 0.05 + a {
-            // P > P0(df): asymptotic inverse expansion about normal
             x = if p_ok {
                 qnorm(0.5 * big_p, true, false)
             } else {
-                // log_p && P underflowed
                 qnorm(log_p2, lower_tail, true)
             };
             y = x * x;
@@ -2167,10 +1952,8 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
             y = (a * y * y).exp_m1();
             (ndf * y).sqrt()
         } else if !p_ok && x < -LN_2 * f64::MANTISSA_DIGITS as f64 {
-            // 0.5 * log(DBL_EPSILON): y above might have underflown
             ndf.sqrt() * (-x).exp()
         } else {
-            // re-use 'y' from above
             y = ((1.0 / (((ndf + 6.0) / (ndf * y) - 0.089 * d - 0.822) * (ndf + 2.0) * 3.0)
                 + 0.5 / (ndf + 4.0))
                 * y
@@ -2181,8 +1964,6 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
             (ndf * y).sqrt()
         };
 
-        // Now apply 2-term Taylor expansion improvement (1-term = Newton):
-        // as by Hill (1981)
         if p_ok1 {
             let big_m = ((f64::MAX / 2.0).sqrt() - ndf).abs();
             let mut it = 0;
@@ -2210,7 +1991,7 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
                 } else if x.is_finite() && (q + x).is_finite() {
                     q += x;
                 } else {
-                    break; // cannot improve q with a Newton/Taylor step
+                    break;
                 }
             }
         }
@@ -2221,16 +2002,11 @@ pub(crate) fn qt(p: f64, ndf: f64, lower_tail: bool, log_p: bool) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    // The reference tables below are R's own 17-digit output.
     #![allow(clippy::approx_constant, clippy::excessive_precision)]
 
     use super::*;
 
-    /// Relative tolerance against R for ordinary values.
     const TOL: f64 = 1e-13;
-    /// Relative tolerance in the far tails (values below 1e-100 or log
-    /// probabilities below -230), where the last digits depend on the
-    /// single-double deviance term `bd0` (R >= 4.1 uses a double-double one).
     const TAIL_TOL: f64 = 1e-12;
 
     fn assert_matches_r(what: &str, actual: f64, expected: f64) {
@@ -2247,15 +2023,12 @@ mod tests {
             TOL
         };
         let rel = ((actual - expected) / expected).abs();
-        // The absolute fallback only matters for quantiles that are
-        // mathematically zero (e.g. qt(0.5, df)), where R returns noise too.
         assert!(
             rel <= tol || (actual - expected).abs() <= 1e-15,
             "{what}: got {actual:.17e}, R gives {expected:.17e} (rel err {rel:.2e})"
         );
     }
 
-    // pnorm: (x, lower, upper, log_lower, log_upper)
     #[rustfmt::skip]
     const PNORM_REF: &[(f64, f64, f64, f64, f64)] = &[
         (-40.0, 0.0, 1.0, -804.6084420137538, -0.0),
@@ -2286,7 +2059,6 @@ mod tests {
         (1e170, 1.0, 0.0, 0.0, f64::NEG_INFINITY),
     ];
 
-    // qnorm: (p, lower, upper)
     #[rustfmt::skip]
     const QNORM_REF: &[(f64, f64, f64)] = &[
         (1e-300, -37.047096299361201, 37.047096299361201),
@@ -2312,7 +2084,6 @@ mod tests {
         (0.99999999999999989, 8.2095361516013856, -8.2095361516013856),
     ];
 
-    // qnorm with log.p = TRUE: (log_p, lower, upper)
     #[rustfmt::skip]
     const QNORM_LOG_REF: &[(f64, f64, f64)] = &[
         (-100000.0, -447.19789367852508, 447.19789367852508),
@@ -2327,7 +2098,6 @@ mod tests {
         (-9.9999999999999995e-21, 9.2623400897984052, -9.2623400897984052),
     ];
 
-    // lgamma: (x, value)
     #[rustfmt::skip]
     const LGAMMA_REF: &[(f64, f64)] = &[
         (1e-300, 690.77552789821368),
@@ -2366,7 +2136,6 @@ mod tests {
         (-100.3, -363.76620618267623),
     ];
 
-    // gamma: (x, value)
     #[rustfmt::skip]
     const GAMMA_REF: &[(f64, f64)] = &[
         (0.001, 999.42377248459547),
@@ -2385,7 +2154,6 @@ mod tests {
         (-20.5, -2.834656574391336e-19),
     ];
 
-    // pchisq: (x, df, lower, upper, log_lower, log_upper)
     #[rustfmt::skip]
     const PCHISQ_REF: &[(f64, f64, f64, f64, f64, f64)] = &[
         (0.001, 1.0, 0.025227120630039609, 0.97477287936996038, -3.6798356476917045, -0.025550779355950615),
@@ -2438,7 +2206,6 @@ mod tests {
         (10000.0, 200.0, 1.0, 0.0, -0.0, -4515.9120848927378),
     ];
 
-    // qchisq: (p, df, lower, upper)
     #[rustfmt::skip]
     const QCHISQ_REF: &[(f64, f64, f64, f64)] = &[
         (1e-100, 1.0, 1.5707963267948823e-200, 453.94308223879898),
@@ -2485,7 +2252,6 @@ mod tests {
         (0.99999998999999995, 10000.0, 10814.092976949323, 9226.5632928187479),
     ];
 
-    // pgamma (scale 1): (x, shape, lower, upper)
     #[rustfmt::skip]
     const PGAMMA_REF: &[(f64, f64, f64, f64)] = &[
         (0.0001, 0.001, 0.99140311966744343, 0.0085968803325566414),
@@ -2534,7 +2300,6 @@ mod tests {
         (1.0000000000000001e300, 3.0, 1.0, 0.0),
     ];
 
-    // pgamma with log.p = TRUE: (x, shape, log_lower, log_upper)
     #[rustfmt::skip]
     const PGAMMA_LOG_REF: &[(f64, f64, f64, f64)] = &[
         (1e-10, 0.10000000000000001, -2.2527126517432969, -0.11105860856547681),
@@ -2555,7 +2320,6 @@ mod tests {
         (100000.0, 1000.0, -0.0, -94403.797843570952),
     ];
 
-    // qgamma (scale 1): (p, shape, lower, upper)
     #[rustfmt::skip]
     const QGAMMA_REF: &[(f64, f64, f64, f64)] = &[
         (1e-50, 0.001, 0.0, 103.57689269435197),
@@ -2596,7 +2360,6 @@ mod tests {
         (0.99999999989999999, 10000.0, 10649.348143058445, 9376.961683261572),
     ];
 
-    // pbeta: (x, a, b, lower, upper)
     #[rustfmt::skip]
     const PBETA_REF: &[(f64, f64, f64, f64, f64)] = &[
         (0.001, 0.5, 0.5, 0.020135041633377489, 0.97986495836662257),
@@ -2651,7 +2414,6 @@ mod tests {
         (0.999, 0.01, 0.02, 0.70957968101247249, 0.29042031898752751),
     ];
 
-    // pt: (x, df, lower, upper, log_lower)
     #[rustfmt::skip]
     const PT_REF: &[(f64, f64, f64, f64, f64)] = &[
         (-50.0, 0.5, 0.045352606402966393, 0.95464739359703366, -3.0932876310192214),
@@ -2712,7 +2474,6 @@ mod tests {
         (10000000000.0, 1000000.0, 1.0, 0.0, -0.0),
     ];
 
-    // qt: (p, df, lower, upper)
     #[rustfmt::skip]
     const QT_REF: &[(f64, f64, f64, f64)] = &[
         (1e-100, 0.5, -1.0284911563163961e199, f64::INFINITY),
@@ -2773,7 +2534,6 @@ mod tests {
         (0.99999999989999999, 1000000.0, 6.3614068361697171, -6.3614068361697171),
     ];
 
-    // qt with log.p = TRUE: (lp, df, lower)
     #[rustfmt::skip]
     const QT_LOG_REF: &[(f64, f64, f64)] = &[
         (-1000.0, 1.0, f64::NEG_INFINITY),
@@ -2790,7 +2550,6 @@ mod tests {
         (-1.0, 30.0, -0.34062621237207513),
     ];
 
-    // dnorm: (x, value, log_value)
     #[rustfmt::skip]
     const DNORM_REF: &[(f64, f64, f64)] = &[
         (0.0, 0.3989422804014327, -0.91893853320467278),
@@ -2805,7 +2564,6 @@ mod tests {
         (-30.0, 1.4736461348785476e-196, -450.91893853320465),
     ];
 
-    // dt: (x, df, value, log_value)
     #[rustfmt::skip]
     const DT_REF: &[(f64, f64, f64, f64)] = &[
         (0.0, 1.0, 0.31830988618379069, -1.1447298858494002),
@@ -2826,7 +2584,6 @@ mod tests {
         (10000.0, 1000000.0, 0.0, -2307563.4849196714),
     ];
 
-    // dgamma (scale 1): (x, shape, value, log_value)
     #[rustfmt::skip]
     const DGAMMA_REF: &[(f64, f64, f64, f64)] = &[
         (0.001, 0.5, 17.823408838013965, 2.8805126965663681),
@@ -2847,7 +2604,6 @@ mod tests {
         (500.0, 100.0, 1.2044418102251225e-106, -243.8880036257784),
     ];
 
-    // lbeta: (a, b, value)
     #[rustfmt::skip]
     const LBETA_REF: &[(f64, f64, f64)] = &[
         (0.5, 0.5, 1.1447298858494004),
@@ -2860,7 +2616,6 @@ mod tests {
         (1e-08, 5.0, 18.420680723119034),
     ];
 
-    // z_score_for_confidence: (conf, qnorm((1 + conf) / 2))
     #[rustfmt::skip]
     const Z_REF: &[(f64, f64)] = &[
         (0.5, 0.67448975019608171),
@@ -2913,7 +2668,6 @@ mod tests {
 
     #[test]
     fn erf_keeps_relative_accuracy() {
-        // erf(1e-8) = 2/sqrt(pi) * 1e-8 (1 - 1e-16/3); erf(3) = 1 - erfc(3).
         assert!((erf(1e-8) / 1.1283791670955126e-08 - 1.0).abs() < 1e-15);
         assert!((erf(-1e-8) / -1.1283791670955126e-08 - 1.0).abs() < 1e-15);
         assert!((erfc(3.0) / 2.2090496998585394e-05 - 1.0).abs() < 1e-15);
@@ -2939,11 +2693,8 @@ mod tests {
         assert_eq!(lgammafn(-3.0), f64::INFINITY);
         assert!(gammafn(-3.0).is_nan());
         assert!(lgammafn(f64::NAN).is_nan());
-        // lgamma1p(a) = lgamma(1 + a) = -gamma a + zeta(2)/2 a^2 - ... without
-        // the cancellation of log(gamma(1 + a)) for tiny a.
         assert!((lgamma1p(1e-10) / -5.7721566481928617e-11 - 1.0).abs() < 1e-13);
         assert!((lgamma1p(0.3) - lgammafn(1.3)).abs() < 1e-16);
-        // log1pmx(x) = log(1 + x) - x = -x^2/2 + x^3/3 - ...
         assert!((log1pmx(1e-8) / -4.9999999666666669e-17 - 1.0).abs() < 1e-13);
         assert!((log1pmx(0.5) - (1.5f64.ln() - 0.5)).abs() < 1e-16);
     }
@@ -3040,7 +2791,6 @@ mod tests {
                 log_value,
             );
         }
-        // Scale is a plain rescaling of x.
         assert_eq!(
             pgamma(6.0, 2.5, 2.0, true, false),
             pgamma(3.0, 2.5, 1.0, true, false)

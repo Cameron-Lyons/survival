@@ -104,10 +104,9 @@ def test_matrix_rows_keep_missingness_alignment_and_ownership(layout):
 def test_cbind_arithmetic_constants_nested_calls_and_missing_results():
     data = {"time": [0, 2, 6, 8], "denom": [1, 0, 2, 2], "event": [1, 1, 2, 3]}
     formula = "I(cbind(follow = time / denom, events = cbind(event + 1))) ~ 1"
-    # An infinite follow-up is present but invalid at the numerical boundary.
     with pytest.raises(ValueError, match="finite"):
         r.pyears(formula, data, scale=1)
-    data["time"][1] = 0  # 0/0 is missing, and is omitted with its event value.
+    data["time"][1] = 0
     out = r.pyears(formula, data, scale=1, y=True)
     assert out.na_action.rows == (2,)
     assert out.pyears == 7

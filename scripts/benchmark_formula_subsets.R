@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete R-facing calls with a logical subset, compared against stock R.
 args <- commandArgs(trailingOnly = TRUE)
 n <- if (length(args)) as.integer(args[[1L]]) else 50000L
 repeats <- if (length(args) > 1L) as.integer(args[[2L]]) else 7L

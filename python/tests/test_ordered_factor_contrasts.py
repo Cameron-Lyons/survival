@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd  # type: ignore[import-untyped]
+import pandas as pd
 import pytest
 from survival import r
 
@@ -24,9 +24,6 @@ POLYNOMIAL_REFERENCE = json.loads(
 def test_polynomial_basis_matches_stock_r_including_rank_loss(case):
     basis, columns = contrasts._contr_poly(case["n"])
     assert list(columns) == case["columns"]
-    # High powers are ill conditioned, so roundoff from different platform
-    # BLAS implementations is amplified. Rank-limited R Q differs from a full
-    # LAPACK Q by order one; these tolerances still distinguish those bases.
     tolerance = 1e-12 if case["n"] <= 10 else 1e-10 if case["n"] <= 16 else 1e-7
     np.testing.assert_allclose(basis, case["basis"], rtol=1e-9, atol=tolerance)
 
@@ -43,8 +40,6 @@ def test_polynomial_basis_remains_finite_and_orthonormal_at_high_level_counts(n)
 
 
 def independent_basis(n):
-    # Closed-form contrasts from equally spaced monic polynomials, normalized
-    # independently of the implementation's QR factorization.
     columns = {
         2: [[-1, 1]],
         3: [[-1, 0, 1], [1, -2, 1]],
@@ -136,8 +131,6 @@ def test_polynomial_levels_follow_constructor_before_subset_and_missing_omission
         np.asarray(matrix["data"])[:, -expected.shape[1] :], expected, atol=2e-15
     )
     assert tuple(fit.na_action.rows) == (5,)
-    # Plain character new data and changed categorical declarations both use
-    # the fitted ordering, including declared levels absent from training rows.
     for source in (
         fitted_levels[::-1],
         pd.Categorical(fitted_levels[::-1], categories=fitted_levels[::-1], ordered=False),
@@ -164,7 +157,6 @@ def test_ordered_interactions_and_full_dummy_coding_keep_correct_widths(kind, rh
         expected = np.eye(3)[codes]
         assert matrix["columns"] == ["gz", "gm", "ga"]
     elif rhs == "x:g":
-        # With no factor main effect, R includes all indicator columns.
         expected = np.asarray(data["x"])[:, None] * np.eye(3)[codes]
     elif rhs == "x * g":
         expected = np.column_stack(
@@ -197,13 +189,12 @@ def test_explicit_factor_contrasts_override_ordered_default_and_survive_pickle(k
     assert matrix["columns"][-2:] == ["identity(g)one", "identity(g)two"]
     new: dict[str, Any] = {"x": [0.0, 0.5, 1.0], "g": ["a", "z", "m"]}
     prediction = r.predict(fit, new, type="lp")
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - local test-created object
+    restored = pickle.loads(pickle.dumps(fit))
     supplied["data"][0][0] = 999.0
     supplied["columns"][0] = "changed"
     for model in (fit, restored):
         assert r.model_matrix(model, _with_metadata=True)["contrasts"] == expected_metadata
         np.testing.assert_allclose(r.predict(model, new, type="lp"), prediction, atol=1e-15)
-    # factor() constructs a fresh factor, discarding explicit contrast attrs.
     fresh = getattr(r, kind)("Surv(time, status) ~ x + factor(g)", data)
     assert r.model_matrix(fresh, _with_metadata=True)["contrasts"] == {"factor(g)": "contr.poly"}
 
@@ -232,7 +223,7 @@ def test_evaluated_matrix_retains_named_fitted_contrast_when_metadata_is_absent(
     }
     data["g"] = coerce._r_factor(data["g"], ["z", "m", "a"], ordered=True, contrast=supplied)
     fit = getattr(r, kind)("Surv(time, status) ~ g", data)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - local test-created object
+    restored = pickle.loads(pickle.dumps(fit))
     for model in (fit, restored):
         for levels in (["z", "m", "a"], ["a", "m", "z"]):
             frame = bridge._r_model_frame(

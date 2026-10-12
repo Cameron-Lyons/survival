@@ -1,20 +1,6 @@
-//! B-spline design matrices.
-//!
-//! `spline_design` ports `spline_basis` from R's `splines.c` (the C engine
-//! of `splines::splineDesign` / `spline.des`, R 4.5): de Boor's recurrence
-//! for the basis values and the derivative recursion `evaluate` for
-//! `derivs > 0`.  The natural spline basis of [`crate::core::natural_spline`] and the
-//! P-spline basis of [`crate::core::pspline`] are built on it.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::Array2;
 
-/// `n x (n_knots - ord)` design matrix of the B-splines of order `ord`
-/// (degree `ord - 1`) on the non-decreasing `knots`, evaluated at `x`;
-/// `derivs[i % derivs.len()]` is the derivative order for `x[i]`.
-///
-/// Every `x` must lie in `[knots[ord - 1], knots[n_knots - ord]]`, the
-/// range `splineDesign` accepts without `outer.ok`.
 pub(crate) fn spline_design(
     knots: &[f64],
     x: &[f64],
@@ -63,7 +49,6 @@ pub(crate) fn spline_design(
     Ok(design)
 }
 
-/// The `splPTR` work structure of `splines.c`.
 struct Spline<'a> {
     knots: &'a [f64],
     order: usize,
@@ -91,9 +76,6 @@ impl<'a> Spline<'a> {
         }
     }
 
-    /// `set_cursor`: the index of the first knot strictly above `x` (pulled
-    /// back onto the last legitimate interval when `x` sits on the right
-    /// boundary).
     fn set_cursor(&mut self, x: f64) {
         let nknots = self.knots.len();
         let mut curs: isize = -1;
@@ -114,8 +96,6 @@ impl<'a> Spline<'a> {
         self.curs = curs.max(0) as usize;
     }
 
-    /// `diff_table`: distances from `x` to the `ndiff` knots on each side of
-    /// the cursor.
     fn diff_table(&mut self, x: f64, ndiff: usize) {
         for i in 0..ndiff {
             self.rdel[i] = self.knots[self.curs + i] - x;
@@ -123,7 +103,6 @@ impl<'a> Spline<'a> {
         }
     }
 
-    /// `basis_funcs`: the `order` non-zero basis values at `x`, into `b`.
     fn basis_funcs(&mut self, x: f64) {
         self.diff_table(x, self.ordm1);
         self.b[0] = 1.0;
@@ -146,8 +125,6 @@ impl<'a> Spline<'a> {
         }
     }
 
-    /// `evaluate`: the `nder`-th derivative at `x` of the spline whose
-    /// B-spline coefficients on the current interval are in `a`.
     fn evaluate(&mut self, x: f64, nder: usize) -> f64 {
         let mut outer = self.ordm1;
         if self.boundary && nder == self.ordm1 {
@@ -187,7 +164,6 @@ mod tests {
         for row in design.rows() {
             assert!((row.sum() - 1.0).abs() < 1e-12);
         }
-        // R: splineDesign(knots, c(0.5, 1), 4)
         let expected = [
             [
                 0.125,
@@ -237,7 +213,6 @@ mod tests {
     fn second_derivative_at_boundary_knots_is_finite() {
         let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0];
         let constraint = spline_design(&knots, &[0.0, 3.0], 4, &[2, 2]).unwrap();
-        // R: splineDesign(knots, c(0, 3), 4, derivs = c(2, 2))
         let expected = [
             [6.0, -9.0, 3.0, 0.0, 0.0, 0.0],
             [0.0, 0.0, 0.0, 3.0, -9.0, 6.0],
@@ -247,7 +222,6 @@ mod tests {
                 assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
             }
         }
-        // R: splineDesign(knots, 1.3, 4, derivs = 1)
         let first = spline_design(&knots, &[1.3], 4, &[1]).unwrap();
         let expected = [0.0, -0.36749999999999994, -0.3425, 0.6425, 0.0675, 0.0];
         for (actual, expected) in first.row(0).iter().zip(expected) {

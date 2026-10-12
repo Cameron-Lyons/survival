@@ -1,4 +1,3 @@
-//! One Python attachment and NumPy argument batch per callback invocation.
 use super::*;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
 use crate::regression::survreg_distributions::{
@@ -9,8 +8,6 @@ use pyo3::types::{PyBytes, PyDict, PyTuple};
 use std::cell::RefCell;
 
 thread_local! {
-    // Fitting keeps its existing SurvivalError contract. Query calls retain
-    // the original Python exception, including nested query callbacks.
     static DPQR_CALLBACK_ERRORS: RefCell<Vec<Option<(String, PyErr)>>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -32,9 +29,6 @@ fn dpqr_python_call<T>(operation: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
         DPQR_CALLBACK_ERRORS.with(|errors| errors.borrow_mut().last_mut().and_then(Option::take));
     drop(call);
     match (result, callback_error) {
-        // A callback can catch an error from a nested fitting operation and
-        // then return normally. Restore only the surrogate that escaped from
-        // the query callback, never an unrelated later arithmetic warning.
         (Err(mapped), Some((signature, original))) if mapped.to_string() == signature => {
             Err(original)
         }
@@ -275,7 +269,7 @@ fn callable(py: Python<'_>, value: &Py<PyAny>, name: &str) -> PyResult<()> {
 
 #[pymethods]
 impl SurvregDistribution {
-    /// Original-scale density with vector recycling at each arithmetic stage.
+    #[doc = " Original-scale density with vector recycling at each arithmetic stage."]
     #[pyo3(name = "pdf_values")]
     fn pdf_values_py(
         &self,
@@ -289,7 +283,7 @@ impl SurvregDistribution {
         })
     }
 
-    /// Original-scale CDF evaluated with one density callback batch.
+    #[doc = " Original-scale CDF evaluated with one density callback batch."]
     #[pyo3(name = "cdf_values")]
     fn cdf_values_py(
         &self,
@@ -303,7 +297,7 @@ impl SurvregDistribution {
         })
     }
 
-    /// Original-scale quantiles evaluated with one quantile callback batch.
+    #[doc = " Original-scale quantiles evaluated with one quantile callback batch."]
     #[pyo3(name = "quantile_values")]
     fn quantile_values_py(
         &self,
@@ -319,7 +313,7 @@ impl SurvregDistribution {
         })
     }
 
-    /// Draw random observations; a supplied seed uses R's uniform stream.
+    #[doc = " Draw random observations; a supplied seed uses R's uniform stream."]
     #[pyo3(name = "sample", signature = (n, mean, scale, seed=None))]
     fn sample_py(
         &self,
@@ -336,21 +330,21 @@ impl SurvregDistribution {
         })
     }
 
-    /// Pickle and copy support (see `internal::pickle`).
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
     #[cfg(feature = "python")]
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
         self.reduce_callbacks(py)
     }
 
-    /// `survreg.distributions[[name]]` with optional `parms` (see
-    /// [`SurvregDistribution::from_name`]).
+    #[doc = " `survreg.distributions[[name]]` with optional `parms` (see"]
+    #[doc = " [`SurvregDistribution::from_name`])."]
     #[new]
     #[pyo3(signature = (name, parms=None))]
     fn new(name: &str, parms: Option<Vec<f64>>) -> PyResult<Self> {
         Ok(Self::from_name(name, parms.as_deref())?)
     }
 
-    /// Exact named DPQR lookup, with deferred query-only parameter handling.
+    #[doc = " Exact named DPQR lookup, with deferred query-only parameter handling."]
     #[staticmethod]
     #[pyo3(name = "for_query", signature = (name, parms=None, *, _parms_null=false))]
     fn for_query_py(name: &str, parms: Option<FloatVec>, _parms_null: bool) -> PyResult<Self> {
@@ -374,9 +368,9 @@ impl SurvregDistribution {
         result
     }
 
-    /// A user-defined distribution built from a base family, a response
-    /// transform, an optional fixed scale and parameters (see
-    /// [`SurvregDistribution::custom`]).
+    #[doc = " A user-defined distribution built from a base family, a response"]
+    #[doc = " transform, an optional fixed scale and parameters (see"]
+    #[doc = " [`SurvregDistribution::custom`])."]
     #[staticmethod]
     #[pyo3(name = "custom", signature = (name, family, transform, scale=None, parms=None))]
     fn custom_py(
@@ -389,14 +383,14 @@ impl SurvregDistribution {
         Self::custom(name, family, transform, scale, parms.as_deref())
     }
 
-    /// `survregDtest(dlist, verbose = TRUE)`: the problems with this
-    /// definition (empty when it is legal).
+    #[doc = " `survregDtest(dlist, verbose = TRUE)`: the problems with this"]
+    #[doc = " definition (empty when it is legal)."]
     #[pyo3(name = "dtest")]
     fn dtest_py(&self) -> Vec<String> {
         self.dtest()
     }
 
-    /// `variance(parms)` of the standardised base distribution.
+    #[doc = " `variance(parms)` of the standardised base distribution."]
     #[pyo3(name = "variance")]
     fn variance_py(&self) -> PyResult<f64> {
         Ok(self.variance()?)
@@ -408,8 +402,8 @@ impl SurvregDistribution {
             self.name, self.family, self.transform, self.scale, self.parms
         )
     }
-    /// Define a custom family with vectorized NumPy callbacks. Parameters,
-    /// when nonempty, are passed as a final argument (a dict when named).
+    #[doc = " Define a custom family with vectorized NumPy callbacks. Parameters,"]
+    #[doc = " when nonempty, are passed as a final argument (a dict when named)."]
     #[staticmethod]
     #[pyo3(name = "from_callbacks", signature = (name, init, density, deviance, quantile, variance=None, transform=None, scale=None, parms=None, parm_names=None, fitting_variance=None))]
     #[allow(clippy::too_many_arguments)]
@@ -473,7 +467,7 @@ impl SurvregDistribution {
         )?)
     }
 
-    /// Replace the response transform with vectorized trans/dtrans/itrans.
+    #[doc = " Replace the response transform with vectorized trans/dtrans/itrans."]
     #[pyo3(name = "with_transform")]
     fn with_transform_py(
         &self,
@@ -507,7 +501,7 @@ impl SurvregDistribution {
         Ok(self.derived(name, transform, scale)?)
     }
 
-    /// Names used for Python callback parameters, or df for Student-t.
+    #[doc = " Names used for Python callback parameters, or df for Student-t."]
     #[getter]
     fn parm_names(&self) -> Vec<String> {
         if let Some(c) = self.python_callbacks() {
@@ -519,7 +513,7 @@ impl SurvregDistribution {
         }
     }
 
-    /// Restore metadata and separately pickled callables.
+    #[doc = " Restore metadata and separately pickled callables."]
     #[staticmethod]
     #[pyo3(signature = (state, callbacks, transform, query_parms=None))]
     fn _from_callback_state(

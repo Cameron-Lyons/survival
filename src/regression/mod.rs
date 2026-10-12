@@ -1,18 +1,3 @@
-//! Regression models.
-//!
-//! The Cox model lives in `coxph` (fit, predictions, survival curves) with
-//! its residuals in `coxph_diagnostics` (`residuals.coxph` on top of the
-//! `residuals`, `scoring` and `core::coxscho` kernels), `coxph.detail` in
-//! `coxph_detail`, `cox.zph` in `cox_zph` and the case-cohort estimators in
-//! `cch`.  [`TieMethod`] is the one tie-handling enum of the crate, shared
-//! by the fitters and every kernel.
-//! The multi-state Cox model (`coxphms`: the stacked data and its fit) is
-//! in `coxphms`.
-//! Penalised Cox models (R's `coxpenal.fit`: `ridge()`, `pspline()` and
-//! `frailty()` terms) live in `coxpenal` and penalised parametric models
-//! (`survpenal.fit`) in `survpenal`, both on the penalty machinery of
-//! `penalized`.
-
 #[path = "aareg_fit.rs"]
 pub(crate) mod aareg_fit_module;
 pub(crate) mod agexact;

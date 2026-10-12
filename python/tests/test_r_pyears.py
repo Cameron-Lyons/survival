@@ -30,7 +30,6 @@ _RMAP = {"age": "age", "sex": "sex", "year": "year"}
 
 
 def test_pyears_tabulates_factor_and_tcut_terms_like_r():
-    # pyears(Surv(time, status) ~ grp + tcut(age, c(0, 65, 100) * 365.25), d, scale = 365.25)
     result = r.pyears("Surv(time, status) ~ grp + tcut(age, c(0, 65, 100) * 365.25)", _data())
     assert result.dim == [2, 2]
     assert list(result.dimnames) == ["grp", "tcut(age, c(0, 65, 100) * 365.25)"]
@@ -68,7 +67,6 @@ def test_pyears_data_frame_layout_and_plain_response():
     assert frame["pyears"] == pytest.approx([0.2737851, 2.4640657, 1.9164956], rel=1e-6)
     assert frame["n"] == [1, 1, 2]
     assert frame["event"] == [1, 1, 1]
-    # pyears(time ~ 1, d): a plain follow-up, one cell, no events
     plain = r.pyears("time ~ 1", _data())
     assert plain.pyears == pytest.approx(4.654346, rel=1e-6)
     assert plain.n == 4
@@ -79,8 +77,6 @@ def test_pyears_data_frame_layout_and_plain_response():
 
 
 def test_pyears_expected_events_from_a_rate_table():
-    # R's pyears(Surv(time, status) ~ grp, d, ratetable = survexp.us,
-    #     rmap = list(age, sex, year), scale = 1)
     result = r.pyears(
         "Surv(time, status) ~ grp", _data(), ratetable=r.survexp_us(), rmap=_RMAP, scale=1
     )
@@ -96,7 +92,6 @@ def test_pyears_expected_events_from_a_rate_table():
         expect="pyears",
     )
     assert person_years.expected == pytest.approx([976.1598, 689.2017], rel=1e-6)
-    # rmap entries may be vectors or constants, and default to same-named columns
     data = {**_data(), "race": ["white"] * 4}
     usr = r.pyears(
         "Surv(time, status) ~ 1", data, ratetable=r.survexp_usr(), rmap={"race": "white"}, scale=1
@@ -124,8 +119,6 @@ def test_pyears_vector_call_used_by_the_reticulate_bridge():
 
 
 def test_survexp_ederer_hakulinen_and_individual_match_r():
-    # R's survexp(~ 1, d, ratetable = survexp.us, rmap = list(age, sex, year),
-    #     times = c(0, 182.5, 365))
     ederer = r.survexp("~ 1", _data(), ratetable=r.survexp_us(), rmap=_RMAP, times=[0, 182.5, 365])
     assert ederer.method == "Ederer"
     assert ederer.time == [0.0, 182.5, 365.0]
@@ -133,7 +126,6 @@ def test_survexp_ederer_hakulinen_and_individual_match_r():
     assert ederer.n_risk == [4.0, 4.0, 4.0]
     assert ederer.n == 4
     assert ederer.cumhaz[0] == 0.0
-    # ... Surv(time, status) ~ grp, method = "hakulinen"
     hakulinen = r.survexp(
         "Surv(time, status) ~ grp",
         _data(),
@@ -148,7 +140,6 @@ def test_survexp_ederer_hakulinen_and_individual_match_r():
     for row, expected in zip(hakulinen.surv, expected_surv, strict=True):
         assert row == pytest.approx(expected, rel=1e-6)
     assert hakulinen.n_risk == [[2.0, 2.0], [1.0, 2.0], [1.0, 1.0]]
-    # ... time ~ 1, cohort = FALSE: one expected survival per subject
     individual = r.survexp("time ~ 1", _data(), ratetable=r.survexp_us(), rmap=_RMAP, cohort=False)
     assert individual == pytest.approx([0.9960461, 0.9784402, 0.9466927, 0.9569774], rel=1e-6)
     hazards = r.survexp(

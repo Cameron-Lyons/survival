@@ -20,8 +20,8 @@ survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
 
-from survival.r._coxph import survfit_coxph  # noqa: E402
-from survival.r._models import _subset_coxms_curves  # noqa: E402
+from survival.r._coxph import survfit_coxph
+from survival.r._models import _subset_coxms_curves
 
 
 def approx(values, rel=1e-9):
@@ -33,11 +33,6 @@ def approx(values, rel=1e-9):
 
 def cat(values, levels):
     return pd.Categorical(values, categories=levels)
-
-
-# ---------------------------------------------------------------------------
-# data
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -207,11 +202,6 @@ def row(curves, number):
     return curves.pstate[number - 1].tolist()
 
 
-# ---------------------------------------------------------------------------
-# 1-2. competing risks: the curves and their options
-# ---------------------------------------------------------------------------
-
-
 def test_competing_risks_curves(fa1, sf):
     assert isinstance(sf, r.CoxSurvfitMultiStateResult)
     assert len(sf.time) == 268
@@ -268,14 +258,12 @@ def test_curve_options(mg, fa1, sf):
             [0.513208834104228, 0.0270961811904414, 0.45969498470533],
         ]
     )
-    # p (I + A) steps can leave [0, 1], as in R
     assert row(stype1, 268) == approx(
         [
             [0.000457236646148776, 0.287231659939526, 0.712311103414324],
             [-0.000986048753212996, 0.0636597917138248, 0.937326257039388],
         ]
     )
-    # coxsurv1 carries the Efron sum over from the later time (R's result)
     ctype2 = r.survfit(fa1, newdata=ND_MG, ctype=2)
     assert row(ctype2, 50) == approx(
         [
@@ -331,7 +319,6 @@ def test_curve_options(mg, fa1, sf):
         ]
     )
     assert efron.cumhaz.sum() == approx(663.138627470627)
-    # the old-style type, and the method called directly
     assert np.array_equal(r.survfit(fa1, newdata=ND_MG, type="aalen").pstate, sf.pstate)
     with pytest.warns(RuntimeWarning, match="type argument ignored"):
         r.survfit(fa1, newdata=ND_MG, type="aalen", stype=2)
@@ -372,18 +359,12 @@ def test_weights_and_offsets(mg):
         ]
     )
     assert late.cumhaz.sum() == approx(711.811925708033)
-    # R's own curves ignore the offsets
     unpatched = [
         [0.868380911799673, 0.0309325404360924, 0.100686547764235],
         [0.526250585212965, 0.0292390077771042, 0.444510407009931],
     ]
     assert row(curves, 50)[0] != approx(unpatched[0])
     assert row(curves, 50)[1] != approx(unpatched[1])
-
-
-# ---------------------------------------------------------------------------
-# 4-5. counting-process data, the Pade path and shared baselines
-# ---------------------------------------------------------------------------
 
 
 def test_counting_process_curves(fm):
@@ -492,11 +473,6 @@ def test_shared_baselines_out_of_transition_order(my):
     assert curves.cumhaz.sum() == approx(2627.55700811616)
 
 
-# ---------------------------------------------------------------------------
-# 6. coxsurv5.R hand checks
-# ---------------------------------------------------------------------------
-
-
 def test_zero_coefficients_give_the_nelson_aalen_hazards():
     fit = r.coxph("Surv(t1, t2, state) ~ x", _mtest(), id="id", iter_max=0)
     curves = r.survfit(fit, newdata={"x": [1, 2]})
@@ -568,11 +544,6 @@ def test_test2_exact_hazards():
     )
 
 
-# ---------------------------------------------------------------------------
-# 7-8. mstrata.R: proportional baselines and strata
-# ---------------------------------------------------------------------------
-
-
 def test_proportional_baselines_reproduce_single_state_curves(lms):
     single = r.coxph("Surv(time, status) ~ age + sex + factor(ph.ecog)", lms, ties="breslow")
     shared = r.coxph(
@@ -619,7 +590,6 @@ def test_strata(mg, fst, sfs):
         ]
     )
     assert sfs.cumhaz.sum() == approx(1044.17457124504)
-    # the F block is a fit on the women alone with the stratified coefficients
     women = r.coxph(
         "Surv(etime, event) ~ age + mspike",
         mg[mg.sex == "F"],
@@ -676,11 +646,6 @@ def test_partially_stratified_model_counts_every_transition_per_stratum(my):
     assert curves.cumhaz.sum() == approx(2684.46234263243)
 
 
-# ---------------------------------------------------------------------------
-# 9-10. summary, survfit0 and the data frame layout
-# ---------------------------------------------------------------------------
-
-
 def test_summary_at_times(sf):
     summary = r.summary_survfit(sf, times=[100, 200, 400])
     assert isinstance(summary, r.SummarySurvfitCoxmsResult)
@@ -689,7 +654,6 @@ def test_summary_at_times(sf):
     assert summary.n_event == [[0, 73, 634], [0, 34, 197], [0, 8, 28]]
     assert summary.n_censor == [[137, 0, 0], [188, 0, 0], [84, 0, 0]]
     assert summary.pstate.shape == (3, 2, 3)
-    # R's column-major order: time fastest, then newdata row, then state
     assert summary.pstate.ravel(order="F").tolist() == approx(
         [
             0.728209802161815,
@@ -778,7 +742,6 @@ def test_summary_data_frame(sf):
     assert frame["state"] == ["(s0)"] * 4 + ["pcm"] * 4 + ["death"] * 4
     assert frame["age"] == [60, 60, 80, 80] * 3
     assert frame["sex"] == ["F", "F", "M", "M"] * 3
-    # the curves themselves: summary(censored = TRUE, data.frame = TRUE)
     assert len(r.as_data_frame(sf)["time"]) == 268 * 2 * 3
 
 
@@ -791,8 +754,6 @@ def test_survfit0(fa1, sf):
     assert np.array_equal(zero.cumhaz, time0.cumhaz)
     assert (zero.n_event, zero.n_censor) == (time0.n_event, time0.n_censor)
     assert zero.n_transition == time0.n_transition
-    # survfit0 gives its t0 row the first row's number at risk; survfitAJ's time0 row
-    # has none
     assert zero.n_risk[0] == [1384, 0, 0]
     assert time0.n_risk[0] == [0, 0, 0]
     assert r.survfit0(time0) is time0
@@ -912,11 +873,6 @@ def test_summarydf_cox4(fst):
     )
 
 
-# ---------------------------------------------------------------------------
-# 11. aggregate, quantile, residuals, subsetting
-# ---------------------------------------------------------------------------
-
-
 def test_aggregate(fa1, sf):
     """Deviation: without ``by`` the data axis keeps length 1 (R returns a time x state
     matrix)."""
@@ -955,7 +911,6 @@ def test_aggregate(fa1, sf):
 def test_quantile_and_residuals_refuse(sf):
     with pytest.raises(ValueError, match="quantiles are not a well defined quantity"):
         r.quantile_survfit(sf)
-    # deviation: R returns Aalen-Johansen residuals that ignore the Cox model
     with pytest.raises(TypeError, match="residuals are not defined for multi-state Cox"):
         r.residuals(sf, times=100)
 
@@ -980,7 +935,6 @@ def test_subsetting(sf, sfs):
     assert np.shape(death.n_risk) == (268, 1)
     assert np.shape(death.n_censor) == (268, 1)
     assert death.p0 == [[0.0]]
-    # deviation: n_id stays (R drops it)
     assert death.n_id == [1384]
     assert r.summary_survfit(death).states == ["death"]
     assert r.survfit0(death).pstate.shape == (269, 2, 1)
@@ -1052,11 +1006,6 @@ def test_stratum_subset_summary_and_survfit0(sfs):
     assert set(frame["strata"]) == {"M"}
 
 
-# ---------------------------------------------------------------------------
-# 12. missing values
-# ---------------------------------------------------------------------------
-
-
 def test_newdata_with_missing_values(fa1, sf):
     """Deviations: ``newdata`` holds the rows used, and na.pass refuses an incomplete
     row (R segfaults)."""
@@ -1119,11 +1068,6 @@ def test_after_a_first_level_drop(mg):
         ]
     )
     assert curves.cumhaz.sum() == approx(771.942231627105)
-
-
-# ---------------------------------------------------------------------------
-# 13. pbcseq: coxsurv6.R and timeline.R
-# ---------------------------------------------------------------------------
 
 
 def test_shared_hazard_without_events(pbc2):
@@ -1195,7 +1139,6 @@ def test_shared_hazard_without_events(pbc2):
             0.670156483303704,
         ]
     )
-    # 3:5 has no event of its own, yet its shared hazard is positive
     assert curves.cumhaz[-1, 0].tolist() == approx(
         [
             0.666666666666667,
@@ -1254,11 +1197,6 @@ def test_timeline_data(pdata):
     assert same.cumhaz.tolist() == approx(curves.cumhaz.tolist())
 
 
-# ---------------------------------------------------------------------------
-# 14-15. errors and pickling
-# ---------------------------------------------------------------------------
-
-
 def test_errors(mg, fa1, fst):
     cases = [
         (lambda: r.survfit(fa1), "multi-state survival requires a newdata argument"),
@@ -1290,14 +1228,13 @@ def test_errors(mg, fa1, fst):
     for call, message in cases:
         with pytest.raises(ValueError, match=message):
             call()
-    # coxph lets a gap through, survfitAJ does not
     gap = r.coxph("Surv(t1, t2, state) ~ x", _mtest(t1_row3=9.5), id="id", iter_max=0)
     with pytest.raises(ValueError, match="one or more flags are >0 in survcheck"):
         r.survfit(gap, newdata={"x": [1]})
 
 
 def test_pickle(sf):
-    restored = pickle.loads(pickle.dumps(sf))  # noqa: S301 - the test's own pickle
+    restored = pickle.loads(pickle.dumps(sf))
     assert restored == sf
     assert np.array_equal(restored.pstate, sf.pstate)
     assert np.array_equal(restored.cumhaz, sf.cumhaz)

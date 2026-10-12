@@ -24,7 +24,6 @@ def _data():
 
 
 def test_finegray_expands_right_censored_competing_risks_like_r():
-    # finegray(Surv(time, ev) ~ x, d)
     frame = r.finegray("Surv(time, ev) ~ x", _data())
     assert list(frame) == ["x", "fgstart", "fgstop", "fgstatus", "fgwt"]
     assert frame.event == "a"
@@ -39,8 +38,6 @@ def test_finegray_expands_right_censored_competing_risks_like_r():
 
 
 def test_finegray_strata_weights_count_prefix_and_etype_like_r():
-    # finegray(Surv(time, ev) ~ x + strata(g), d, etype = "b", prefix = "cr", count = "n",
-    #          weights = c(1, 2, 1, 2, 1, 2, 1, 2))
     frame = r.finegray(
         "Surv(time, ev) ~ x + strata(g)",
         _data(),
@@ -56,7 +53,6 @@ def test_finegray_strata_weights_count_prefix_and_etype_like_r():
     assert frame["crstart"] == [0, 2, 0, 0, 0, 0, 0, 5, 0, 0]
     assert frame["crstop"] == [2, 6, 2, 4, 6, 2, 5, 7, 5, 7]
     assert frame["crstatus"] == [0, 0, 0, 1, 0, 1, 0, 0, 0, 1]
-    # R multiplies by user.weights[split$row], the row number within the stratum
     assert frame["crwt"] == pytest.approx([1, 2 / 3, 2, 1, 2, 1, 2, 1, 1, 2], rel=1e-6)
     assert frame["n"] == [0, 1, 0, 0, 0, 0, 0, 1, 0, 0]
     with pytest.warns(UserWarning, match="only the first endpoint was used"):
@@ -72,7 +68,6 @@ def test_finegray_counting_process_data_with_delayed_entry():
         "ev": r_coerce._RFactorVector(["censor", "a", "censor", "b", "a"], ["censor", "a", "b"]),
         "x": [1, 2, 3, 4, 5],
     }
-    # finegray(Surv(t1, t2, ev) ~ x, dd, id = id)
     frame = r.finegray("Surv(t1, t2, ev) ~ x", data, id="id")
     assert list(frame) == ["x", "fgstart", "fgstop", "fgstatus", "fgwt"]
     assert frame["fgstart"] == [0, 2, 1, 3, 0]

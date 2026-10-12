@@ -99,8 +99,6 @@ def cox_zph_plot_data(
     if result.transform == "log":
         x, grid = np.exp(x), np.exp(grid)
     elif result.transform != "identity":
-        # R first keeps the first time at each transformed value, then labels
-        # eight evenly spaced positions with rounded original event times.
         _, first = np.unique(x, return_index=True)
         positions = np.linspace(x.min(), x.max(), 17)[1::2]
         times = _interpolate(x[first], time[first], positions)

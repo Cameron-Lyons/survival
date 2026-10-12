@@ -1,29 +1,12 @@
-//! Aalen's additive regression model: R survival's `aareg()`
-//! (`R/aareg.R`).
-//!
-//! At each event time the increments of the cumulative coefficients are
-//! the least-squares solution over the risk set; [`aareg_fit`] computes
-//! them from running risk-set sums of the covariates, with R's `taper`,
-//! `nmin` and `qrtol` rules, the test statistic of R's `test` weighting and,
-//! with `dfbeta`, the per-subject (or per-cluster) influence and the robust
-//! variance of the test.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 
-/// `aareg`'s `test` argument: the weighting of the coefficient increments
-/// in the test statistic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AaregTest {
-    /// R's `twt`: the number at risk over the diagonal of the inverse
-    /// risk-set covariance (the default).
     Aalen,
-    /// The weighted covariate residuals `w (x - xbar)` of the deaths
-    /// (weights for the intercept as `aalen`).
     Variance,
-    /// The number at risk.
     Nrisk,
 }
 
@@ -48,14 +31,10 @@ impl AaregTest {
     }
 }
 
-/// The data of an `aareg` fit, rows in any order: `Surv(stop, status)` or
-/// `Surv(start, stop, status)`, one covariate row per observation.
-/// `cluster` and `test_cluster` are non-negative codes.
 #[derive(Debug, Clone)]
 pub struct AaregData {
     pub stop: Vec<f64>,
     pub status: Vec<i32>,
-    /// `n x nvar` design matrix.
     pub covariates: Array2<f64>,
     pub start: Option<Vec<f64>>,
     pub weights: Option<Vec<f64>>,
@@ -63,17 +42,11 @@ pub struct AaregData {
     pub test_cluster: Option<Vec<i32>>,
 }
 
-/// The `aareg` arguments beyond the data.
 #[derive(Debug, Clone)]
 pub struct AaregOptions {
-    /// Relative pivot tolerance below which a risk-set covariance counts as
-    /// singular.
     pub qrtol: f64,
-    /// Smallest number at risk for a time to be kept; `3 * nvar` when
-    /// absent.
     pub nmin: Option<usize>,
     pub dfbeta: bool,
-    /// Weights of the moving average of the risk-set covariances.
     pub taper: Vec<f64>,
     pub test: AaregTest,
 }
@@ -1075,8 +1048,6 @@ fn influence_values(
     }
 }
 
-/// `aareg(formula, data, weights, qrtol, nmin, dfbeta, taper, test,
-/// cluster)` on explicit data.
 pub fn aareg_fit(data: &AaregData, options: &AaregOptions) -> SurvivalResult<AaregFitResult> {
     let AaregData {
         stop,
@@ -1174,7 +1145,7 @@ pub fn aareg_fit(data: &AaregData, options: &AaregOptions) -> SurvivalResult<Aar
     })
 }
 
-/// [`aareg_fit`] for Python; `taper` defaults to `[1]`.
+#[doc = " [`aareg_fit`] for Python; `taper` defaults to `[1]`."]
 #[pyfunction(name = "aareg_fit")]
 #[pyo3(signature = (
     stop,

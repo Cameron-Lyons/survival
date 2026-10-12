@@ -1,8 +1,3 @@
-//! Non-parametric survival curves and tests: Kaplan-Meier /
-//! Fleming-Harrington (`survfitkm`), Aalen-Johansen (`survfitaj`), the
-//! summaries built on them, the G-rho tests (`survdiff`) and the Cox
-//! baseline curves.
-
 mod aggregate_arithmetic;
 pub(crate) mod aggregate_survfit;
 pub(crate) mod agsurv;

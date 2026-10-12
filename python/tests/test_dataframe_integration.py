@@ -26,7 +26,6 @@ status_data = [1, 1, 0, 1, 0, 1, 1, 0]
 group_data = [0, 0, 0, 0, 1, 1, 1, 1]
 
 
-# survfit(Surv(time, status) ~ 1)$surv on the data above
 _KM_SURV = [0.875, 0.75, 0.75, 0.6, 0.6, 0.4, 0.2, 0.2]
 
 
@@ -107,7 +106,6 @@ def test_logrank_polars():
 
 def test_nelson_aalen_list():
     result = survival.surv_analysis.nelson_aalen(time_data, status_data)
-    # cumulative sum of d/n at the event times 1, 2, 4, 6, 7
     assert result.time == pytest.approx([1.0, 2.0, 4.0, 6.0, 7.0])
     assert result.cumulative_hazard == pytest.approx(
         [
@@ -131,7 +129,6 @@ def test_nelson_aalen_numpy():
 def test_survmean_restricted_mean():
     fit = survival.surv_analysis.survfitkm(time_data, status_data)
     table = survival.surv_analysis.survmean(fit, rmean="6")
-    # summary(fit, rmean = 6)$table["rmean"]: area under the KM curve up to 6
     assert table.rmean == pytest.approx([1 + 0.875 + 0.75 * 2 + 0.6 * 2])
     assert table.rmean[0] > 0
 

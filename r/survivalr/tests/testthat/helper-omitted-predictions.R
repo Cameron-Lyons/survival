@@ -55,8 +55,6 @@
                na.action = case$na_action, se.fit = case$se_fit)
   if (!is.null(case$p)) args$p <- case$p
   if (case$grouped) args$collapse <- c("b", "a", "b", "a")
-  # The penalized wrapper refuses survival; compare the ordinary prediction
-  # method on the same fitted state, as in the existing row-reference suite.
   if (case$type == "survival" && inherits(args[[1L]], "coxph.penal")) class(args[[1L]]) <- "coxph"
   do.call(predict, args)
 }
@@ -107,8 +105,6 @@
     result$value <- value
   }
   if (case$model == "aft_spline" && case$keep == 0L) {
-    # Stock splines fail with empty derivatives when every source value is
-    # missing. Append a valid control row to obtain the missing basis from R.
     nd <- rbind(.omitted_prediction_data(setup, case), setup$data[3L,,drop=FALSE])
     control <- case; control$na_action <- "na.pass"
     value <- .omitted_prediction_call(object, setup, control, nd)
@@ -128,8 +124,6 @@
     }
     result$value <- if (case$se_fit) list(fit = trim(value$fit), se.fit = trim(value$se.fit)) else trim(value)
   }
-  # Keep the existing repair for stock's zero-row attrassign/1:0 term loops.
-  # Reconstruct the empty matrix from independently obtained stock term labels.
   if (is.list(result$value) && !is.null(result$value$error) &&
       startsWith(case$model, "aft") && case$type == "terms" && case$keep == 0L &&
       case$na_action != "na.pass") {

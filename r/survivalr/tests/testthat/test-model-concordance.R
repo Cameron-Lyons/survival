@@ -13,8 +13,6 @@ test_that("fitted Cox concordance retains strata and model clustering", {
     reference <- survival::coxph(formula, data)
     actual <- concordance(fit, influence = 3, ranks = TRUE)
     expected <- reference_concordance(reference, influence = 3, ranks = TRUE)
-    # R carries model-frame row names on a single unstratified rank table.
-    # The shared result exposes event rows without those source labels.
     rownames(expected$ranks) <- NULL
     actual$call <- expected$call
     expect_equal(actual, expected, tolerance = 1e-10)
@@ -69,7 +67,6 @@ test_that("Cox and AFT fitted concordance retain weights, strata and controls", 
                                 ymin = 3, ymax = 25))
       }
       for (keep in list(FALSE, TRUE, 2L, 3L)) {
-        # R's pooled-strata path calls colSums on an already pooled vector.
         expected <- reference_concordance(reference, keepstrata = TRUE)
         if (is.matrix(expected$count) &&
             (identical(keep, FALSE) || (is.numeric(keep) && nrow(expected$count) > keep))) {
@@ -155,8 +152,6 @@ test_that("stored fit rows and newdata omission stay aligned", {
     new$time[2] <- NA; new$x[4] <- NA; new$o[7] <- NA; new$g[9] <- NA
     kept <- new[complete.cases(new), ]
     actual <- concordance(fit, newdata = new, cluster = kept$id, influence = 3)
-    # R's survreg new-data lp path drops formula offsets. Include the offset
-    # explicitly in the reference scores, retaining the existing correction.
     score <- predict(reference, kept, type = "lp")
     if (family == "survreg") score <- score + kept$o
     expected <- survival::concordancefit(survival::Surv(kept$time, kept$status), score,

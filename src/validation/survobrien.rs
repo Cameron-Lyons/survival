@@ -1,10 +1,3 @@
-//! O'Brien's logit-rank expansion, with risk sets restricted to each stratum.
-//!
-//! Formula evaluation and keeper columns belong to the caller. Events retain
-//! R's ordering: chronological without strata, first appearance with strata.
-//! A sweep maintains active rows and ordered covariates within each stratum;
-//! output is written directly into precomputed block slices.
-
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::core::strata_order::validate_intervals;
@@ -13,44 +6,39 @@ use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use pyo3::prelude::*;
 
-/// Inputs of [`survobrien`].
 #[derive(Debug, Clone)]
 pub struct SurvObrienInput<'a> {
-    /// Start times of (start, stop] data; `None` for right-censored data.
     pub start: Option<&'a [f64]>,
     pub time: &'a [f64],
     pub status: &'a [i32],
-    /// Strata codes; risk sets are formed within a stratum.
     pub strata: Option<&'a [i32]>,
-    /// Continuous columns. NaN stays missing; infinities participate in ranks.
-    /// May be empty for [`survobrien_expand`], which computes only risk sets.
     pub continuous: &'a [Vec<f64>],
 }
 
-/// The expanded data set (R's returned data frame).
+#[doc = " The expanded data set (R's returned data frame)."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct SurvObrienExpansion {
-    /// Original (0-based) row of each expanded row; R's `.id.` is `row + 1`.
+    #[doc = " Original (0-based) row of each expanded row; R's `.id.` is `row + 1`."]
     pub row: Vec<usize>,
     pub start: Option<Vec<f64>>,
     pub time: Vec<f64>,
-    /// 1 for the event(s) defining the block, 0 for the rest of the risk set.
+    #[doc = " 1 for the event(s) defining the block, 0 for the rest of the risk set."]
     pub status: Vec<i32>,
-    /// R's `.strata.`: 1-based index of the risk set.
+    #[doc = " R's `.strata.`: 1-based index of the risk set."]
     pub strata: Vec<usize>,
-    /// Transformed columns; empty for [`survobrien_expand`].
+    #[doc = " Transformed columns; empty for [`survobrien_expand`]."]
     pub transformed: Vec<Vec<f64>>,
-    /// The event time defining each risk set, in block order.
+    #[doc = " The event time defining each risk set, in block order."]
     pub event_times: Vec<f64>,
-    /// Half-open output slices: block i occupies `offsets[i]..offsets[i + 1]`.
+    #[doc = " Half-open output slices: block i occupies `offsets[i]..offsets[i + 1]`."]
     pub block_offsets: Vec<usize>,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvObrienExpansion {
-    /// Owned NumPy snapshots, avoiding per-element conversion in an R bridge.
+    #[doc = " Owned NumPy snapshots, avoiding per-element conversion in an R bridge."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;
         let result = pyo3::types::PyDict::new(py);
@@ -112,12 +100,9 @@ fn validate(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<()> 
 }
 
 struct Group {
-    /// Global row numbers, in original order.
     rows: Vec<usize>,
-    /// Local row indices, ordered by stop and start respectively.
     stops: Vec<usize>,
     starts: Vec<usize>,
-    /// Output block numbers, ordered by event time for the sweep.
     events: Vec<usize>,
 }
 
@@ -140,7 +125,6 @@ fn groups(input: &SurvObrienInput<'_>) -> (Vec<Group>, Vec<f64>) {
         });
         groups[group].rows.push(row);
         let at = input.time[row];
-        // IEEE -0 and +0 denote the same event time, as in R's unique().
         let bits = if at == 0.0 { 0 } else { at.to_bits() };
         if input.status[row] == 1 && seen.insert((code, bits)) {
             groups[group].events.push(events.len());
@@ -170,7 +154,6 @@ fn groups(input: &SurvObrienInput<'_>) -> (Vec<Group>, Vec<f64>) {
 }
 
 struct OrderedColumn {
-    /// Local rows sorted by value; missing values have no position.
     rows: Vec<usize>,
     position: Vec<usize>,
     active: BTreeSet<usize>,
@@ -240,14 +223,10 @@ impl OrderedColumn {
     }
 }
 
-/// Expand risk sets and apply the logit of each continuous column's mid-rank
-/// percentile. Missing values are retained and excluded from the denominator.
 pub fn survobrien(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
     expand(input, true)
 }
 
-/// Expand only the risk sets, for callers supplying their own transformation.
-/// No covariate sorting or rank work is performed; `continuous` may be empty.
 pub fn survobrien_expand(input: &SurvObrienInput<'_>) -> SurvivalResult<SurvObrienExpansion> {
     expand(input, false)
 }
@@ -256,7 +235,6 @@ fn expand(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<SurvOb
     validate(input, transform)?;
     let (groups, event_times) = groups(input);
     let mut counts = vec![0; event_times.len()];
-    // Determine output slices without materializing any risk-set row lists.
     for group in &groups {
         let mut entered = if input.start.is_none() {
             group.rows.len()
@@ -374,9 +352,9 @@ fn expand(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<SurvOb
     Ok(output)
 }
 
-/// Python entry point. `continuous` is a list of columns; `transform=False`
-/// skips ranking for custom transforms. Input conversion occurs once and the
-/// expansion runs without the GIL.
+#[doc = " Python entry point. `continuous` is a list of columns; `transform=False`"]
+#[doc = " skips ranking for custom transforms. Input conversion occurs once and the"]
+#[doc = " expansion runs without the GIL."]
 #[pyfunction(name = "survobrien")]
 #[pyo3(signature = (time, status, continuous, start=None, strata=None, transform=true))]
 pub fn survobrien_py(
@@ -417,7 +395,6 @@ mod tests {
         assert_eq!(result.row, vec![0, 1, 2, 3, 1, 2, 3, 3]);
         assert_eq!(result.status, vec![1, 0, 0, 0, 1, 0, 0, 1]);
         assert_eq!(result.strata, vec![1, 1, 1, 1, 2, 2, 2, 3]);
-        // first block: values 4, 1, 1, 3 -> ranks 4, 1.5, 1.5, 3 over n = 4
         let logit = |rank: f64| {
             let p = (rank - 0.5) / 4.0;
             (p / (1.0 - p)).ln()
@@ -425,7 +402,6 @@ mod tests {
         assert!((result.transformed[0][0] - logit(4.0)).abs() < 1e-12);
         assert!((result.transformed[0][1] - logit(1.5)).abs() < 1e-12);
         assert!((result.transformed[0][2] - logit(1.5)).abs() < 1e-12);
-        // a block of one has percentile 0.5 -> logit 0
         assert!(result.transformed[0][7].abs() < 1e-12);
     }
 
@@ -439,7 +415,6 @@ mod tests {
             continuous: &[vec![1.0, 2.0, 3.0]],
         })
         .unwrap();
-        // event at 1: rows with start < 1 <= stop -> rows 0 and 2
         assert_eq!(result.event_times, vec![1.0, 2.0, 3.0]);
         assert_eq!(result.row, vec![0, 2, 0, 1, 1]);
         assert_eq!(

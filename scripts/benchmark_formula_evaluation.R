@@ -50,7 +50,6 @@ inputs <- list(stored = NULL, complete_frame = nd, complete_list = as.list(nd),
 call <- function(object, workload) {
   if (workload == "stored") model.matrix(object) else model.matrix(object, inputs[[workload]])
 }
-# Capture stock outputs before loading the bridge's registered S3 methods.
 references <- expected <- list()
 for (kind in c("coxph", "survreg")) {
   options(na.action = "na.omit")

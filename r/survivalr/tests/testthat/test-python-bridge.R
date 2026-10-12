@@ -825,7 +825,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
     episode = "episode",
     id = "rowid"
   )
-  # R adds the id column for right-censored data only
   expect_equal(names(counting_split), c("group", "start", "stop", "status", "episode"))
   expect_equal(counting_split$group, c("a", "a", "b", "b", "b"))
   expect_equal(as.numeric(counting_split$start), c(0, 3, 2, 3, 6))
@@ -1151,10 +1150,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
     wt = c(2, 2, 1, 1, 3, 3),
     group = c("x", "x", "y", "y", "x", "x")
   )
-  # R 3.8's counting-process branch tests the stop column where it means the
-  # status, so a subject whose last row is censored (c) keeps a weight at every
-  # time; the port uses the status (see src/data_prep/rttright.rs), so only the
-  # last row differs from survival::rttright here.
   weighted_counting_reference <- survival::rttright(
     survival::Surv(start, stop, status) ~ group,
     data = weighted_counting_rtt,
@@ -1689,8 +1684,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
     coxph.wtest(asymmetric_wtest, c(1, 2)),
     survival::coxph.wtest(asymmetric_wtest, c(1, 2))
   )
-  # R drops every coefficient when any is NA (`b[!toss]` on integer indices);
-  # the port drops the NA ones and tests the rest.
   na_wtest <- coxph.wtest(diag(2), c(NA, 2))
   expect_equal(na_wtest$test, 4)
   expect_equal(na_wtest$df, 1)
@@ -1721,7 +1714,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
     dsurvreg(1, mean = 0, distribution = "gaussian"),
     tolerance = 1e-12
   )
-  # rsurvreg draws R's runif, so set.seed() reproduces R's values
   set.seed(1)
   bridged_draws <- rsurvreg(3, 0, 1)
   expect_equal(bridged_draws, c(0.30858, 0.46541, 0.85063), tolerance = 1e-5)
@@ -2265,7 +2257,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_error(survfit_confint(0.5, 0.1, conf.type = "p"), "invalid conf.int type")
   pseudo_data <- data.frame(time = c(1, 2, 3, 4), status = c(1, 0, 1, 1))
   pseudo_fit <- survfit(Surv(time, status) ~ 1, data = pseudo_data, model = TRUE)
-  # the data travels in the call: pseudo re-evaluates the model frame
   reference_pseudo_fit <- eval(bquote(
     reference_survfit(survival::Surv(time, status) ~ 1, data = .(pseudo_data), model = TRUE)
   ))
@@ -2605,7 +2596,6 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_s3_class(cox_default_aggregate, "survival_py_survfit")
   expect_null(dim(cox_default_aggregate))
   expect_equal(cox_default_frame$surv, expected_default_surv, tolerance = 1e-8)
-  # aggregate() drops the cumulative hazard, as R's does
   expect_null(cox_default_frame$cumhaz)
   cox_group_aggregate <- aggregate(cox_aggregate_curves, by = c("lo", "hi", "lo"))
   cox_group_frame <- as.data.frame(cox_group_aggregate)
@@ -5488,11 +5478,6 @@ test_that("data-prep helpers match R survival shapes", {
     id = c(10, 11, 12, 13),
     off = c(0.1, 0.2, 0.3, 0.4)
   )
-  # survival 3.8-11's survobrien has a few typos (stratified risk sets compare the
-  # status column against the event times and, for (start, stop] data, select the
-  # other strata; the strata and cluster columns are looked up by name in an unnamed
-  # vector); the bridge implements the intent, so the reference is R's own code with
-  # those fixed.
   reference_survobrien_strata <- local({
     f <- survival::survobrien
     txt <- paste(deparse(body(f), width.cutoff = 500L), collapse = "\n")
@@ -6030,7 +6015,6 @@ test_that("Fitted-model concordance supports joint Cox and survreg comparisons",
     crossprod(cbind(cox_x_single$dfbeta, cox_z_single$dfbeta)),
     tolerance = 1e-12
   )
-  # cord.work returns neither influence component for joint influence = 3.
   expect_null(cox_joint$dfbeta)
   expect_null(cox_joint$influence)
   expect_equal(dim(concordance(cox_x, cox_z, influence = 1)$dfbeta), c(nrow(data), 2L))
@@ -6922,8 +6906,6 @@ test_that("multi-state survfit tables and summaries agree with R survival", {
     data = data,
     model = TRUE
   )
-  # survival 3.8.x does not retain this requested frame, and reconstructing it
-  # later loses testthat-local data before the residual comparisons run.
   diagnostic_reference$model <- stats::model.frame.default(
     survival::Surv(time, event) ~ 1,
     data = data
@@ -7196,7 +7178,6 @@ test_that("Kaplan-Meier and log-rank bridge results agree with R survival", {
     group = ordered_survfit_data$group,
     se.fit = FALSE
   )
-  # group= orders the curves like a formula's strata (factor levels)
   expect_equal(names(ordered_direct_fit), ordered_reference_strata)
 
   bridged_diff <- survdiff(Surv(time, status) ~ group, data = data)
@@ -7701,7 +7682,6 @@ test_that("cch stratified Borgan fits match survival", {
     expect_true(actual$stratified)
   }
 
-  # ids out of row order: sc has one row per id in sorted id order, as rowsum gives
   shuffled <- transform(data, id = c(7L, 19L, 3L, 12L, 1L, 16L, 9L, 20L, 5L, 14L,
                                      2L, 18L, 11L, 6L, 15L, 4L, 17L, 10L, 13L, 8L))
   for (method in c("I.Borgan", "II.Borgan")) {
@@ -7938,7 +7918,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   skip_if_not(reticulate::py_module_available("survival"), "Python survival package is unavailable")
 
   lung <- survival::lung
-  # na.action defaults to getOption("na.action"): the row with a missing ph.ecog goes
   cox <- coxph(Surv(time, status) ~ age + ph.ecog, data = lung)
   reference_cox <- survival::coxph(survival::Surv(time, status) ~ age + ph.ecog, data = lung)
   expect_equal(unname(coef(cox)), unname(coef(reference_cox)), tolerance = 1e-9)
@@ -7948,7 +7927,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   expect_equal(unname(coef(weibull)), unname(coef(reference_weibull)), tolerance = 1e-6)
   expect_equal(residuals(weibull)[1:5], unname(residuals(reference_weibull)[1:5]), tolerance = 1e-5)
 
-  # na.exclude pads residuals and predictions with NA at the dropped row
   excluded <- coxph(Surv(time, status) ~ age + ph.ecog, data = lung, na.action = na.exclude)
   reference_excluded <- survival::coxph(
     survival::Surv(time, status) ~ age + ph.ecog,
@@ -7960,7 +7938,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   expect_identical(which(is.na(residuals(excluded))), 14L)
   expect_false(any(is.nan(residuals(excluded))))
 
-  # Schoenfeld residuals carry the death times and the deaths per stratum
   stratified <- coxph(Surv(time, status) ~ age + strata(sex), data = lung)
   reference_stratified <- survival::coxph(survival::Surv(time, status) ~ age + strata(sex), data = lung)
   for (type in c("schoenfeld", "scaledsch")) {
@@ -7979,10 +7956,8 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
     ),
     tolerance = 1e-8
   )
-  # fitted.coxph is the linear predictor centred at the overall means
   expect_equal(fitted(stratified)[1:3], c(0.18732190, 0.09003399, -0.10454183), tolerance = 1e-7)
 
-  # vcov of a survreg fit names its scales as R does and keeps them without complete
   scales <- survreg(Surv(time, status) ~ age + strata(sex), data = lung)
   expect_equal(
     vcov(scales),
@@ -7997,7 +7972,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   )
   expect_equal(vcov(aliased, complete = FALSE), vcov(reference_aliased, complete = FALSE), tolerance = 1e-5)
 
-  # summary.coxph.penal: one row per term, pspline split in its linear and nonlinear parts
   penalized <- coxph(Surv(time, status) ~ pspline(age, df = 4) + sex, data = lung)
   reference_penalized <- summary(survival::coxph(
     survival::Surv(time, status) ~ survival::pspline(age, df = 4) + sex,
@@ -8009,7 +7983,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   expect_equal(penalized_summary$logtest, reference_penalized$logtest, tolerance = 1e-6)
   expect_equal(penalized_summary$iter, reference_penalized$iter)
   expect_output(print(penalized_summary), "pspline\\(age, df = 4\\), non")
-  # a penalized survreg fit has one loglik per model and one df per term
   penalized_aft <- survreg(Surv(time, status) ~ pspline(age, df = 3) + sex, data = lung)
   expect_output(
     print(summary(penalized_aft)),
@@ -8017,7 +7990,6 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
     fixed = TRUE
   )
 
-  # multi-state coxph: formula lists, coef/vcov(matrix = TRUE) and the curves' dim and [
   mgus <- survival::mgus2
   mgus$etime <- with(mgus, ifelse(pstat == 0, futime, ptime))
   mgus$event <- factor(

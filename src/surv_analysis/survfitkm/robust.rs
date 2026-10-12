@@ -1,17 +1,5 @@
-//! Robust variance without materializing individual influence vectors.
-//!
-//! For right-censored data with one row per cluster, everyone still at risk
-//! has influence `weight * a`, with a shared coefficient `a` for each estimate.
-//! After leaving the risk set, hazard influence is constant and survival
-//! influence is multiplied by each subsequent product-limit factor. Keeping
-//! the sum of squared departed influences therefore replaces a scan of every
-//! cluster at every event with a linear sweep. Repeated clusters, delayed
-//! entry and requests for the influence matrix use the general kernel.
-
 use super::{CurveRows, HazardType, KernelData, KernelOptions, SurvType};
 
-/// Derivatives with respect to event and risk weights, shared with the
-/// general infinitesimal-jackknife kernel (including the FH tie correction).
 pub(super) fn hazard_influence_terms(
     d0: f64,
     d1: f64,
@@ -66,8 +54,6 @@ pub(super) fn independent_variance(
         std_chaz.fill(0.0);
         return;
     }
-    // Sum backwards, avoiding cancellation as the last subjects leave.
-    // Normalizing weights also avoids overflowing their squares.
     let mut risk_squares = vec![0.0; order.len() + 1];
     for k in (0..order.len()).rev() {
         let weight = data.wt[order[k]] / scale;
@@ -79,7 +65,6 @@ pub(super) fn independent_variance(
     let (mut var_surv, mut var_chaz) = (0.0_f64, 0.0_f64);
     let mut km = 1.0;
     for (i, &time) in times.iter().enumerate() {
-        // In reverse curves deaths leave before censorings at the same time.
         while person < order.len() {
             let row = order[person];
             if !(data.time2[row] < time

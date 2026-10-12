@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-survival near-tie and complete-fit references at large scales.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -63,5 +62,4 @@ add("counting_huge_zero_interval", c(1e308 * (1 + 1e-12), 1.2e308),
 dir.create(dirname(output), recursive = TRUE, showWarnings = FALSE)
 write_json(list(r_version = as.character(getRversion()),
     survival_version = as.character(packageVersion("survival")), cases = cases), output,
-    # 17 significant digits retain finite xmax instead of rounding it to Inf.
     auto_unbox = TRUE, digits = 17, pretty = TRUE, null = "null", na = "null")

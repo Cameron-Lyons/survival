@@ -95,13 +95,11 @@ test_that("AFT matrix callbacks execute through the shared Python fitter", {
   expect_gt(count, 0L)
   expect_true(all(unlist(seen) == nrow(data$x)))
   expect_equal(unserialize(serialize(fit, NULL)), fit)
-  # Display names do not override an explicitly supplied callback.
   distribution$name <- "Gaussian"
   count <- 0L
   expect_equal(bridge(data$x, data$y, NULL, NULL, NULL, control, distribution,
                          parms = c(unused = 3)), reference, tolerance = 2e-7)
   expect_gt(count, 0L)
-  # A complete intercept-only start needs no initializer or distribution probe.
   distribution$init <- NULL
   expect_length(bridge(data$x[, 1L, drop = FALSE], data$y, NULL, NULL,
                            c(2, .1), control, distribution, parms = c(unused = 3))$coefficients, 2L)
@@ -113,8 +111,6 @@ test_that("AFT callback intervals and validation do not fall back to R", {
   skip_if_not(reticulate::py_module_available("survival"))
   data <- aft_matrix_data()
   control <- survival::survreg.control()
-  # Stock R's callback-density interval path has an unsafe C indexing defect;
-  # use its equivalent built-in Gaussian path as the reference.
   interval <- cbind(data$y[, 1L], data$y[, 1L] + .4, rep(c(1, 0, 2, 3), 3))
   expected <- survival::survreg.fit(data$x, interval, NULL, NULL, NULL, control, "gaussian")
   custom <- survival::survreg.distributions$gaussian

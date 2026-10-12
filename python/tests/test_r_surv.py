@@ -42,11 +42,7 @@ def test_missing_status_is_rejected_before_native_fit(name, rhs, options, row, m
         getattr(r, name)(f"Surv(time, status) ~ {rhs}", data, na_action="na.pass", **options)
 
 
-# --- Surv ------------------------------------------------------------------
-
-
 def test_surv_right_censoring_codes_follow_r():
-    # Surv(1:4, c(1,0,1,1)); Surv(1:4, c(2,1,2,2)); Surv(1:4, c(TRUE,FALSE,TRUE,TRUE))
     for status in ([1, 0, 1, 1], [2, 1, 2, 2], [True, False, True, True]):
         surv = r.Surv([1, 2, 3, 4], status)
         assert surv.type == "right"
@@ -58,12 +54,10 @@ def test_surv_right_censoring_codes_follow_r():
 
 
 def test_surv_invalid_status_becomes_na_with_r_warning():
-    # Surv(c(1, 2, 3), c(1, 0, 5)): "Invalid status value, converted to NA"
     with pytest.warns(UserWarning, match="Invalid status value, converted to NA"):
         surv = r.Surv([1, 2, 3], [1, 0, 5])
     assert surv.event == (1, 0, None)
     assert r.is_na_surv(surv) == [False, False, True]
-    # is.na(Surv(c(1, NA, 3), c(1, 0, NA)))
     assert r.is_na_surv(r.Surv([1, None, 3], [1, 0, None])) == [False, True, True]
     with pytest.raises(ValueError, match="Invalid status value, must be logical or numeric"):
         r.Surv([1, 2], ["a", "b"])
@@ -90,7 +84,6 @@ def test_surv_counting_and_argument_count_rules():
 
 
 def test_surv_interval_and_interval2_match_r_columns():
-    # Surv(1:5, c(2, NA, 6, NA, 7), c(3, 0, 3, 1, 2), type = "interval")
     interval = r.Surv([1, 2, 3, 4, 5], [2, None, 6, None, 7], [3, 0, 3, 1, 2], type="interval")
     assert interval.type == "interval"
     assert interval.as_matrix() == [
@@ -100,7 +93,6 @@ def test_surv_interval_and_interval2_match_r_columns():
         [4.0, 1.0, 1],
         [5.0, 1.0, 2],
     ]
-    # R's Surv(c(1, NA, 3, 4, 5), c(2, 3, NA, 4, 8), type = "interval2")
     interval2 = r.Surv([1, None, 3, 4, 5], [2, 3, None, 4, 8], type="interval2")
     assert interval2.type == "interval"
     assert interval2.as_matrix() == [
@@ -127,7 +119,6 @@ def test_surv_multistate_uses_factor_levels_and_states():
     counting = r.Surv([0, 1, 2, 0], [3, 4, 5, 2], event)
     assert counting.type == "mcounting"
     assert counting.as_matrix()[2] == [2.0, 5.0, 2]
-    # type = "mstate" sorts the levels of a plain vector: c("b", "a", "c") -> a, b, c
     sorted_levels = r.Surv([1, 2, 3], ["b", "a", "c"], type="mstate")
     assert sorted_levels.states == ("b", "c")
     assert sorted_levels.event == (1, 0, 2)
@@ -149,21 +140,17 @@ def test_surv_subset_and_replace_times_keep_metadata():
 
 
 def test_format_surv_matches_r_as_character():
-    # R's format(Surv(c(1, 2, 3), c(1, 0, 1))); format(Surv(c(0, 1), c(3, 4), c(1, 0)))
     assert r.format_surv(r.Surv([1, 2, 3], [1, 0, 1])) == ["1 ", "2+", "3 "]
     assert r.format_surv(r.Surv([0, 1], [3, 4], [1, 0])) == ["(0,3] ", "(1,4+]"]
-    # R's format(Surv(c(1, NA, 3), c(2, 3, NA), type = "interval2"))
     assert r.format_surv(r.Surv([1, None, 3], [2, 3, None], type="interval2")) == [
         "[1, 2]",
         "3-    ",
         "3+    ",
     ]
-    # R's format(Surv(c(1, 2), factor(c("a", "censor"), levels = c("censor", "a"))))
     assert r.format_surv(r.Surv([1, 2], _factor(["a", "censor"], ["censor", "a"]))) == [
         "1:a     ",
         "2:censor",
     ]
-    # R's format(Surv(c(1.5, 2.25, 10), c(1, 0, 1), type = "left"))
     assert r.format_surv(r.Surv([1.5, 2.25, 10], [1, 0, 1], type="left")) == [
         " 1.50 ",
         " 2.25-",
@@ -172,41 +159,29 @@ def test_format_surv_matches_r_as_character():
     assert r.format_surv(r.Surv([1, 2], [1, None])) == ["1 ", "2?"]
 
 
-# --- strata ----------------------------------------------------------------
-
-
 def test_strata_matches_r_level_order_labels_and_padding():
-    # R's strata(sex = c(1, 2, 1), grp = c("a", "b", "b"))
     named = r.strata({"sex": [1, 2, 1], "grp": ["a", "b", "b"]})
     assert named.levels == ["sex=1, grp=a", "sex=1, grp=b", "sex=2, grp=b"]
     assert named.codes == [0, 2, 1]
     assert named.counts == [1, 1, 1]
-    # strata(c(1, 2, 1, 2, NA), c("a", "a", "b", "b", "a")): NA rows are NA
     plain = r.strata([1, 2, 1, 2, None], ["a", "a", "b", "b", "a"], labels=["x", "y"])
     assert plain.codes == [0, 2, 1, 3, None]
     assert plain.labels[4] is None
-    # ... na.group = TRUE adds an "NA" level
     grouped = r.strata(
         [1, 2, 1, 2, None], ["a", "a", "b", "b", "a"], na_group=True, labels=["x", "y"]
     )
     assert grouped.levels[-1] == "x=NA, y=a"
     assert grouped.codes == [0, 2, 1, 3, 4]
-    # strata(c("x", "y", "x")): character arguments get short labels
     assert r.strata(["x", "y", "x"]).levels == ["x", "y"]
-    # strata(c(10, 2, 10), c("b", "a", "b"), sep = "/"): numeric levels sort numerically
     assert r.strata([10, 2, 10], ["b", "a", "b"], sep="/", labels=["n", "s"]).levels == [
         "n=2/s=a",
         "n=10/s=b",
     ]
-    # the second variable's labels are padded to a common width, as R's format() does
     padded = r.strata([1, 1], ["a", "bb"], labels=["v", "w"])
     assert padded.levels == ["v=1, w=a ", "v=1, w=bb"]
     assert list(padded) == padded.labels
     with pytest.raises(ValueError, match="all arguments must be the same length"):
         r.strata([1, 2], ["a"])
-
-
-# --- Surv2 and the timeline conversions --------------------------------------
 
 
 def test_surv2_codes_states_and_repeated_option():

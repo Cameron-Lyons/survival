@@ -28,7 +28,6 @@ def _weighted():
     }
 
 
-# R: f <- survfit(Surv(time, status) ~ 1, d, cluster = cl, weights = w, influence = TRUE)
 R_INFLUENCE_SURV = [
     [-0.070000000000000007, -0.21000000000000002, -0.1925, -0.1925]
     + [-0.12833333333333335, -0.085555555555555579, -0.085555555555555579],
@@ -47,7 +46,6 @@ R_INFLUENCE_CHAZ = [
     [-0.030000000000000006, -0.10407407407407407, -0.14574074074074073, -0.14574074074074073]
     + [-0.36796296296296294, -0.36796296296296299, -0.36796296296296299],
 ]
-# R: the same with stype = 2 and influence = 1, which is -influence.chaz * surv
 R_STYPE2_INFLUENCE_SURV = [
     [-0.063338619262517173, -0.17594624715335638, -0.161878361968436, -0.161878361968436]
     + [-0.11599091485478169, -0.083111122235549534, -0.083111122235549534],
@@ -69,14 +67,12 @@ def test_km_influence_is_a_read_only_view_with_r_values():
     assert isinstance(surv, np.ndarray)
     np.testing.assert_allclose(surv, R_INFLUENCE_SURV, rtol=1e-12, atol=1e-15)
     np.testing.assert_allclose(chaz, R_INFLUENCE_CHAZ, rtol=1e-12, atol=1e-15)
-    # R's layout, and no copy: every read views the engine's matrix
     assert surv.flags.f_contiguous
     assert np.shares_memory(surv, fit.influence_surv[0].values)
     assert np.shares_memory(surv, fit.engine.influence_surv[0].values)
     assert not surv.flags.writeable
     with pytest.raises(ValueError, match="read-only"):
         surv[0, 0] = 1.0
-    # the view keeps the matrix alive after the fit is gone
     del fit
     np.testing.assert_allclose(surv, R_INFLUENCE_SURV, rtol=1e-12, atol=1e-15)
 
@@ -100,7 +96,6 @@ def test_km_stype2_survival_influence_matches_r_alone_and_with_the_hazard():
 
 
 def test_survfit0_prepends_a_zero_column_to_the_influence():
-    # R: survfit0(f)$influence.surv
     fit = r.survfit(
         "Surv(time, status) ~ 1", _weighted(), cluster="cl", weights="w", influence=True
     )
@@ -112,7 +107,6 @@ def test_survfit0_prepends_a_zero_column_to_the_influence():
 
 
 def test_strata_influence_matches_r_and_split_curves_share_it():
-    # R: survfit(Surv(time, status) ~ g, d, influence = TRUE)$influence.chaz
     fit = r.survfit("Surv(time, status) ~ g", _weighted(), influence=True)
     first, second = (matrix.values for matrix in fit.influence_chaz)
     np.testing.assert_allclose(first, [[0.1875] * 4] + [[-0.0625] * 4] * 3, rtol=1e-12)
@@ -130,18 +124,12 @@ def test_strata_influence_matches_r_and_split_curves_share_it():
     assert np.shares_memory(split, second)
 
 
-# ---------------------------------------------------------------------------
-# summary and survmean of an influence fit
-# ---------------------------------------------------------------------------
-
-
 def _groups():
     data = _weighted()
     return {key: data[key] for key in ("time", "status", "g")}
 
 
 def test_summary_of_an_influence_fit_matches_r():
-    # R: s <- summary(survfit(Surv(time, status) ~ g, d, influence = TRUE))
     fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True)
     summary = r.summary_survfit(fit)
     assert summary.time == [1, 6, 2, 3, 5]
@@ -156,7 +144,6 @@ def test_summary_of_an_influence_fit_matches_r():
         ],
         rtol=1e-12,
     )
-    # R: the same at times 2 and 5 with rmean 6
     at = r.summary_survfit(fit, times=[2, 5], rmean=6)
     assert at.surv == pytest.approx([0.75, 0.75, 0.75, 0.25], rel=1e-12)
     assert at.std_err == pytest.approx([se] * 4, rel=1e-12)
@@ -171,7 +158,6 @@ def test_summary_of_an_influence_fit_matches_r():
 
 
 def test_summary_is_the_same_with_and_without_influence():
-    # influence = TRUE implies robust = TRUE: the fits differ only by the matrices
     data = _groups()
     for times in (None, [2, 5]):
         with_influence = r.summary_survfit(
@@ -190,8 +176,6 @@ def test_summary_is_the_same_with_and_without_influence():
 
 
 def test_summary_rows_leave_the_influence_matrices_out():
-    # R's summary object carries the fit's matrices (survfit0's with times) along unchanged,
-    # though they do not line up with its rows; the summary rows here have none
     engine = r.survfit("Surv(time, status) ~ g", _groups(), influence=True).engine
     for rows in (
         sa.summary_survfit(engine),
@@ -211,12 +195,10 @@ def test_summary_rows_leave_the_influence_matrices_out():
             for rmean in ("none", "common", "individual", "4.5")
             for start_time in (None, 1.5)
         ),
-        # before the second curve's first time (2): nothing of it is kept but its t0 row
         ("1.5", None),
     ],
 )
 def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
-    # summary.survfit reads survmean(survfit0(fit)); the table is that of the fit itself
     fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True, start_time=start_time)
     plain = sa.survmean(fit.engine, 1.0, rmean)
     with_t0 = sa.survmean(sa.survfit0(fit.engine), 1.0, rmean)
@@ -228,24 +210,17 @@ def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
 
 
 def test_summary_rmean_checks_the_first_time_of_a_start_time_fit():
-    # R: f <- survfit(Surv(time, status) ~ 1, d, influence = TRUE, start.time = 1.5)
     fit = r.survfit("Surv(time, status) ~ 1", _groups(), influence=True, start_time=1.5)
     with pytest.raises(
         ValueError, match="Truncation point for the mean time in state is < smallest"
     ):
         r.summary_survfit(fit, rmean=1.8)
-    # summary(f, rmean = 4)$table
     table = r.summary_survfit(fit, rmean=4).table
     np.testing.assert_allclose(
         table.values[0],
         [7, 7, 7, 4, 2.04285714285714270, 0.28317236609754631, 5, 3, np.nan],
         rtol=1e-12,
     )
-
-
-# ---------------------------------------------------------------------------
-# Aalen-Johansen: the influence of an estimated p0
-# ---------------------------------------------------------------------------
 
 
 def _mixed_istate():
@@ -262,9 +237,6 @@ def _mixed_istate():
 
 
 def test_estimated_p0_influence_matches_r_across_curves():
-    # R: f <- survfit(Surv(start, stop, ev) ~ g, d, id = id, istate = istate, influence = TRUE)
-    # p0 is estimated per curve at t0 = 2 from rows interleaved between the curves, where
-    # survfitAJ.R reads the rows of curve k at the curve's offset in the sorted data
     fit = r.survfit(
         "Surv(start, stop, ev) ~ g", _mixed_istate(), id="id", istate="istate", influence=True
     )
@@ -290,7 +262,6 @@ def test_estimated_p0_influence_matches_r_across_curves():
         atol=1e-15,
     )
     assert not second.i0.flags.writeable
-    # f$influence.pstate[[2]][, , 1]
     np.testing.assert_allclose(
         second.values[:, :, 0],
         [

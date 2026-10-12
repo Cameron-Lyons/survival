@@ -35,11 +35,6 @@ def zph_rows(result):
     return [row["name"] for row in result.table], [row["chisq"] for row in result.table]
 
 
-# ---------------------------------------------------------------------------
-# data
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def mg():
     m = pd.DataFrame(datasets.load_mgus2())
@@ -139,11 +134,6 @@ def fwm(my_w):
     return r.coxph("Surv(tstart, tstop, event) ~ trt + sex", my_w, id="id", weights="w")
 
 
-# ---------------------------------------------------------------------------
-# predict
-# ---------------------------------------------------------------------------
-
-
 def test_predict(mg, fa1, fm, fna, fnax, fst):
     p = r.predict(fa1)
     assert len(p.values) == 1384
@@ -178,7 +168,6 @@ def test_predict(mg, fa1, fm, fna, fnax, fst):
         approx([-0.135898289767822, -0.672766532050543]),
         approx([-0.0306572950065711, 0.364247629951917]),
     ]
-    # se.fit is ignored, as in R
     assert r.predict(fa1, se_fit=True).values == p.values
     assert fa1.predict(**{"se.fit": True}).values == p.values
 
@@ -191,7 +180,6 @@ def test_predict(mg, fa1, fm, fna, fnax, fst):
         approx([-0.0312506555700437, 0.015635169227796, 0.215699959827038]),
         approx([0.0, 0.0, 0.0]),
     ]
-    # no napredict padding under na.exclude; rows missing a covariate are NaN
     for fit in (fna, fnax):
         pn = r.predict(fit)
         assert (len(pn.values), len(pn.colnames)) == (1006, 3)
@@ -229,11 +217,6 @@ def test_predict_leaves_out_ph_rows(mg):
     assert len(p.values) == 1384
     beta = [0.0106778897372408, 0.0624086063114782]
     assert p.values[0] == approx([(88 - 70.4234104046243) * b for b in beta])
-
-
-# ---------------------------------------------------------------------------
-# residuals
-# ---------------------------------------------------------------------------
 
 
 def test_martingale_residuals(fa1, fm):
@@ -313,8 +296,6 @@ def test_martingale_columns_follow_the_transition(mg):
         [0.785829687583495, 0.813729991091707, 0.692809463846103]
     )
     assert values.sum(axis=0).tolist() == approx([-11.1568550023307, 11.1568550023224], rel=1e-9)
-    # deviation: with one coefficient R fails ("object 'rr' not found", "'dimnames'
-    # applied to non-array"); the residuals stay one-column matrices
     score = np.array(r.residuals(fnc, type="score").values)
     assert score.shape == (1384, 1)
     assert score.sum() == pytest.approx(0.0, abs=1e-6)
@@ -420,7 +401,6 @@ def test_score_and_dfbeta_residuals(fa1, fm):
         ),
         approx([0, 0, 0, 0, -0.3592163136580092, 0.4316357317877835]),
     ]
-    # a collapse vector groups in order of first appearance
     groups = [3, 1, 2, 1] * 346
     by_vector = r.residuals(fa1, type="score", collapse=groups)
     assert by_vector.rownames == ["3", "1", "2"]
@@ -573,7 +553,6 @@ def test_missing_values(my_na, fna, fnax):
 
 
 def test_row_labels_are_the_data_row_names(mg):
-    # rownames(mf) after subset: row 110 is not in the subset
     fit = r.coxph("Surv(etime, event) ~ age + sex", mg, id="id", subset=mg.age > 60)
     labels = ["105", "106", "107", "108", "109", "111", "112", "113"]
     score = r.residuals(fit, type="score")
@@ -589,7 +568,6 @@ def test_row_labels_are_the_data_row_names(mg):
         approx([-0.00847549190912838, 0.444901211443099]),
     ]
 
-    # a data frame's own row names, with na.exclude padding the removed rows back in
     data = mg.iloc[:200].copy()
     data.index = [f"r{row}" for row in range(1, 201)]
     data.loc[["r3", "r7"], "age"] = np.nan
@@ -611,8 +589,6 @@ def test_row_labels_are_the_data_row_names(mg):
 
 
 def test_factor_collapse_order(mg, fa1):
-    # rowsum(reorder = TRUE) keeps a factor's level order for the score family, the
-    # martingale residuals keep the order of first appearance (reorder = FALSE)
     groups = cat(np.where(mg.id % 2 == 0, "b", "a"), ["b", "a"])
     score = r.residuals(fa1, type="score", collapse=groups)
     assert score.rownames == ["b", "a"]
@@ -631,9 +607,6 @@ def test_factor_collapse_order(mg, fa1):
 
 
 def test_float_nan_collapse_is_one_group(mg, fa1):
-    # every NaN is the one NA group: first appearance for the martingale residuals
-    # (rowsum reorder = FALSE), last for the score family (reorder = TRUE; R stops
-    # setting the dimnames, these are rowsum of its uncollapsed residuals)
     groups = np.where(mg.age > 80, np.nan, np.where(mg.age > 65, 2.0, 1.0))
     mart = r.residuals(fa1, collapse=groups)
     assert mart.rownames == ["NA", "2", "1"]
@@ -744,7 +717,6 @@ def test_schoenfeld_residuals(mg, fa1, fm, fst):
     assert len(stratified.values) == 969
     assert stratified.strata[:5] == [1, 1, 1, 1, 1]
 
-    # deviation: each event is labelled by its own transition, not its block's first
     fsh = r.coxph(["Surv(etime, event) ~ age", "1:2 + 1:3 ~ 1 / shared"], mg, id="id")
     shared = r.residuals(fsh, type="schoenfeld")
     assert table(sorted(shared.transition)) == {"1:2": 115, "1:3": 860}
@@ -769,11 +741,6 @@ def test_anova_refuses(mg, fa1):
     ):
         with pytest.raises(NotImplementedError, match="anova not yet available for multistate"):
             call()
-
-
-# ---------------------------------------------------------------------------
-# cox.zph / coxph.detail
-# ---------------------------------------------------------------------------
 
 
 def test_cox_zph(my, fa1, fm):
@@ -850,7 +817,6 @@ def test_cox_zph_common_and_ph_coefficients(my, lms):
     assert chisq == approx(
         [1.67685697390792, 1.74514715563413, 0.271449948954891, 0.911366844209396, 4.26740061394963]
     )
-    # deviation: R fails with terms=TRUE ("length of 'dimnames' [2] not equal to array extent")
     fl2 = r.coxph(
         ["Surv(time, state) ~ 1", "1:4 + 2:4 + 3:4 ~ age + sex / common + shared"],
         lms,
@@ -917,11 +883,6 @@ def test_coxph_detail(fa1):
     assert (len(detail.x), len(detail.x[0])) == (2768, 4)
     assert (len(detail.y), len(detail.y[0])) == (2768, 3)
     assert detail.strata == {"1": 88, "2": 203}
-
-
-# ---------------------------------------------------------------------------
-# the other generics
-# ---------------------------------------------------------------------------
 
 
 def test_model_generics(mg, my_na, fa1, fna, fnax, fw):

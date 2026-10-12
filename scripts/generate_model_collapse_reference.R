@@ -54,9 +54,6 @@ for (name in names(specs)) {
   if (isTRUE(spec$id)) call$id <- data$cl
   if (isTRUE(spec$subset)) call$subset <- seq_len(nrow(data)) %% 3 != 0
   fit <- do.call(if (model == "coxph") coxph else survreg, call)
-  # Build the dense view from the already fitted sparse model. Its coefficients,
-  # covariance and martingale residuals retain the fitted frailty contribution.
-  # This avoids predict.coxph.penal's duplicate collapse and terms reconstruction.
   dense <- fit
   if (name == "sparse") {
     dense$x <- fit$x[, "x", drop = FALSE]

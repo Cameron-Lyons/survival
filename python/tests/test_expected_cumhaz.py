@@ -22,9 +22,8 @@ def test_expected_cumulative_hazards_match_r_logarithm(case):
     fit = r.SurvExpResult(
         list(range(len(values))), values.tolist(), np.ones_like(values).tolist(), "cohort", 1
     )
-    for result in (fit, pickle.loads(pickle.dumps(fit))):  # noqa: S301
+    for result in (fit, pickle.loads(pickle.dumps(fit))):
         np.testing.assert_allclose(result.cumhaz, np.asarray(case["cumhaz"], dtype=float))
-        # Cumulative hazard snapshots do not mutate the survival curve or each other.
         hazard = result.cumhaz
         if values.ndim == 1:
             hazard[0] = 999
@@ -55,8 +54,6 @@ def test_exhausted_cox_groups_retain_missing_expected_hazards(case):
     assert fit.strata == case["labels"]
     np.testing.assert_allclose(fit.surv, expected_surv, rtol=2e-12)
     np.testing.assert_allclose(fit.cumhaz, expected_hazard, rtol=2e-12)
-    # ph.ecog=3 has no subject at risk after time 118; missing values persist
-    # through time queries and full-precision report tables.
     summary = r.summary_survexp(fit, times=case["time"])
     np.testing.assert_allclose(summary.surv, expected_surv, rtol=2e-12)
     for report in (r.print_survexp(fit), r.print_summary_survexp(summary)):

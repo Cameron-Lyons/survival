@@ -1,45 +1,30 @@
-//! R's `strata` (`R/strata.R`): combine one or more categorical variables
-//! into a single factor whose levels are the observed combinations, in
-//! the lexicographic order of the component levels, labelled
-//! `name=level` (or the bare level with `shortlabel`) joined by `sep`.
-//!
-//! Each variable arrives as zero-based level codes (`None` for `NA`) with
-//! its level labels, so the caller decides the level order the way R's
-//! `factor()` would for that data type.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
-/// One variable of a `strata(...)` call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrataVariable {
-    /// The argument name (what was typed, or the name of a named argument).
     pub name: String,
-    /// The level labels, in level order.
     pub levels: Vec<String>,
-    /// Zero-based level code of each observation, `None` for `NA`.
     pub codes: Vec<Option<usize>>,
 }
 
-/// The strata factor.
+#[doc = " The strata factor."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct StrataResult {
-    /// Zero-based stratum of each observation, `None` where any component
-    /// is missing (and `na_group` is off).
+    #[doc = " Zero-based stratum of each observation, `None` where any component"]
+    #[doc = " is missing (and `na_group` is off)."]
     #[pyo3(get)]
     pub codes: Vec<Option<usize>>,
-    /// Label of each observed stratum, in level order.
+    #[doc = " Label of each observed stratum, in level order."]
     #[pyo3(get)]
     pub levels: Vec<String>,
-    /// Number of observations in each stratum.
+    #[doc = " Number of observations in each stratum."]
     #[pyo3(get)]
     pub counts: Vec<usize>,
 }
 
-/// R's `format()` of a character vector: pad every string to the width of
-/// the longest.
 fn pad_to_common_width(labels: &mut [String]) {
     let width = labels.iter().map(|s| s.chars().count()).max().unwrap_or(0);
     for label in labels.iter_mut() {
@@ -48,7 +33,6 @@ fn pad_to_common_width(labels: &mut [String]) {
     }
 }
 
-/// Build the strata factor.
 pub fn strata(
     variables: &[StrataVariable],
     na_group: bool,
@@ -66,7 +50,6 @@ pub fn strata(
             "all arguments must be the same length",
         ));
     }
-    // Per-variable labels (with an "NA" level when requested) and codes.
     let mut labels: Vec<Vec<String>> = Vec::with_capacity(variables.len());
     let mut codes: Vec<Vec<Option<usize>>> = Vec::with_capacity(variables.len());
     for (k, variable) in variables.iter().enumerate() {
@@ -102,7 +85,6 @@ pub fn strata(
                 code.get_or_insert(na_code);
             }
         }
-        // R formats every variable but the first to a common width.
         if !shortlabel && k > 0 {
             pad_to_common_width(&mut level_labels);
         }
@@ -110,8 +92,6 @@ pub fn strata(
         codes.push(level_codes);
     }
 
-    // The combined level number is the radix code of the tuple, so the
-    // observed combinations sorted as tuples are R's `sort(unique(levs))`.
     let mut observed: BTreeMap<Vec<usize>, usize> = BTreeMap::new();
     let mut tuples: Vec<Option<Vec<usize>>> = Vec::with_capacity(n);
     for row in 0..n {
@@ -145,8 +125,8 @@ pub fn strata(
     })
 }
 
-/// Python entry point of [`strata`]: parallel lists of names, level labels
-/// and per-observation codes.
+#[doc = " Python entry point of [`strata`]: parallel lists of names, level labels"]
+#[doc = " and per-observation codes."]
 #[pyfunction(name = "strata")]
 #[pyo3(signature = (names, levels, codes, na_group=false, shortlabel=false, sep=", "))]
 pub fn strata_py(
@@ -222,7 +202,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.codes, vec![Some(2), Some(0), Some(1), None]);
-        // R pads the labels of later variables to a common width.
         assert_eq!(result.levels, vec!["a=1, b=x ", "a=2, b=x ", "a=2, b=yy"]);
         assert_eq!(result.counts, vec![1, 1, 1]);
 

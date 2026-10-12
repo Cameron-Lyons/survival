@@ -1,44 +1,23 @@
-//! R's `rttright` (`R/rttright.R`): redistribute-to-the-right weights.
-//! Each censored observation hands its case weight on to the observations
-//! still at risk, so that the weighted sum of events reproduces the
-//! Kaplan-Meier (or Aalen-Johansen) estimate; the weights are the case
-//! weights divided by the left-continuous censoring distribution `G`.
-//!
-//! Right-censored, multi-state (`mright`) and counting-process data with
-//! an `id` are supported as far as R's compact algorithm reaches: every
-//! subject enters at the same time in the same state.  One deviation from
-//! R 3.8: for counting-process data at reporting times R tests `Y[, 2] > 0`
-//! (the stop time) where it means the status, so every subject's last row
-//! keeps a weight there even when it is censored; this port uses the
-//! status, as R's single-time-point branch does.
-
 use super::aeq_surv::aeq_surv;
 use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use pyo3::prelude::*;
 
-/// The response of an `rttright` call.
 pub struct RttrightInput<'a, I> {
-    /// Entry times of counting-process data (`Surv(tstart, tstop, status)`).
     pub start: Option<&'a [f64]>,
     pub time: &'a [f64],
-    /// `0` for censored; any positive code is an event (multi-state).
     pub status: &'a [i32],
-    /// Zero-based stratum of each observation (the formula's right-hand
-    /// side); `None` for a single stratum.
     pub strata: Option<&'a [usize]>,
     pub weights: Option<&'a [f64]>,
-    /// Subject identifier, required for counting-process data.
     pub id: Option<&'a [I]>,
-    /// Reporting times; `None` gives the final weights.
     pub times: Option<&'a [f64]>,
     pub timefix: bool,
     pub renorm: bool,
 }
 
-/// The weights: one row per observation and one column per reporting
-/// time (a single column when no times were requested).
+#[doc = " The weights: one row per observation and one column per reporting"]
+#[doc = " time (a single column when no times were requested)."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct RttrightResult {
@@ -48,27 +27,18 @@ pub struct RttrightResult {
     pub times: Vec<f64>,
 }
 
-/// The censoring distribution `G` of one stratum as a step function:
-/// `G(t-)` is the product over censoring times strictly before `t`.
 struct CensoringCurve {
     times: Vec<f64>,
     surv: Vec<f64>,
 }
 
 impl CensoringCurve {
-    /// `G` just before `t` (left continuous).
     fn before(&self, t: f64) -> f64 {
         let k = self.times.partition_point(|&c| c < t);
         if k == 0 { 1.0 } else { self.surv[k - 1] }
     }
 }
 
-/// R's `survfitKM` on `y2`, one stratum's response with each censoring
-/// moved just past the events tied with it (R adds half the smallest gap
-/// between the times) and scored as the event: the Kaplan-Meier estimate of
-/// the censoring distribution.  As in `survfitkm.c`, the weighted number at
-/// risk is accumulated backwards over the distinct `y2` stop times, less
-/// the rows that enter at or after each one.
 fn censoring_curve(
     rows: &[usize],
     start: Option<&[f64]>,
@@ -76,8 +46,6 @@ fn censoring_curve(
     censor: &[bool],
     weight: &[f64],
 ) -> CensoringCurve {
-    // y2's order (R's stable `order`): by stop, a censoring after the other
-    // rows tied with it.
     let mut by_stop = rows.to_vec();
     by_stop.sort_by(|&a, &b| stop[a].total_cmp(&stop[b]).then(censor[a].cmp(&censor[b])));
     let entry = start.map(|s| {
@@ -87,7 +55,6 @@ fn censoring_curve(
     });
     let mut next_entry = entry.as_ref().map_or(0, |(_, order)| order.len());
     let mut at_risk = 0.0;
-    // (censoring time, weighted number at risk, weighted censorings), latest first.
     let mut steps = Vec::new();
     let y2_times = by_stop.chunk_by(|&a, &b| stop[a] == stop[b] && censor[a] == censor[b]);
     for group in y2_times.rev() {
@@ -100,8 +67,6 @@ fn censoring_curve(
             }
         }
         if let Some((s, by_start)) = &entry {
-            // A censoring's y2 time lies just past `time`, so a row starting
-            // at `time` is already at risk then.
             while next_entry > 0 {
                 let entered = s[by_start[next_entry - 1]];
                 if entered < time || (censored && entered == time) {
@@ -128,7 +93,6 @@ fn censoring_curve(
     CensoringCurve { times, surv }
 }
 
-/// Redistribute-to-the-right weights.
 pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<RttrightResult> {
     let n = input.time.len();
     validate_length(n, input.status.len(), "status")?;
@@ -168,7 +132,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
         }
     }
 
-    // Near-tie fix, on both time columns together.
     let (start, stop) = match (input.start, input.timefix) {
         (Some(s), true) => {
             let fixed = aeq_surv(s, Some(input.time), None)?;
@@ -178,9 +141,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
         (s, false) => (s.map(<[f64]>::to_vec), input.time.to_vec()),
     };
 
-    // Subject bookkeeping (counting-process data): the last row of each
-    // subject, one entry time for everybody and one weight per subject.
-    // With (time, status) data every row is its own subject, as in R.
     let subjects = match input.id {
         Some(id) => {
             validate_length(n, id.len(), "id")?;
@@ -227,7 +187,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     let censor: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] == 0).collect();
     let has_weight: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] > 0).collect();
 
-    // The rows of each stratum, in data order.
     let stratum_of = |i: usize| input.strata.map_or(0, |s| s[i]);
     let n_strata = (0..n).map(stratum_of).max().map_or(0, |s| s + 1);
     let mut stratum_rows = vec![Vec::new(); n_strata];
@@ -235,7 +194,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
         stratum_rows[stratum_of(i)].push(i);
     }
     if input.renorm {
-        // `counted_in` holds the last stratum that counted each subject.
         let mut counted_in = vec![usize::MAX; subjects.as_ref().map_or(0, |(_, k)| *k)];
         for (s, rows) in stratum_rows.iter().enumerate() {
             if rows.is_empty() {
@@ -243,7 +201,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
             }
             let mut total = 0.0;
             for &i in rows {
-                // R counts a subject once per stratum.
                 if let Some((codes, _)) = &subjects {
                     if counted_in[codes[i]] == s {
                         continue;
@@ -269,7 +226,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     for rows in &stratum_rows {
         let curve = censoring_curve(rows, start.as_deref(), &stop, &censor, &casewt);
         if input.times.is_none() {
-            // A single column: the final weight of every event.
             for &i in rows {
                 if has_weight[i] {
                     weights[i][0] = casewt[i] / curve.before(stop[i]);
@@ -282,7 +238,6 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
             let g_row = curve.before(stop[i]);
             for (col, (&t, &g_col)) in query_times.iter().zip(&gwt).enumerate() {
                 weights[i][col] = if has_weight[i] {
-                    // The last, uncensored row of a subject keeps its weight.
                     casewt[i] / g_row.max(g_col)
                 } else {
                     let inside = match &start {
@@ -300,7 +255,7 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     })
 }
 
-/// Python entry point of [`rttright`].
+#[doc = " Python entry point of [`rttright`]."]
 #[pyfunction(name = "rttright")]
 #[pyo3(signature = (time, status, start=None, strata=None, weights=None, id=None, times=None, timefix=true, renorm=true))]
 #[allow(clippy::too_many_arguments)]
@@ -358,16 +313,12 @@ mod tests {
 
     #[test]
     fn final_weights_reproduce_the_kaplan_meier_estimate() {
-        // aml maintained: events at 9, 13, 18, 23, 31, 34, 48; censored at 13, 28, 45, 161.
         let time = [
             9.0, 13.0, 13.0, 18.0, 23.0, 28.0, 31.0, 34.0, 45.0, 48.0, 161.0,
         ];
         let status = [1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0];
         let result = simple(&time, &status, None);
         let w = column(&result, 0);
-        // Kaplan-Meier at 48 from the redistributed weights: survfit gives
-        // S(48) = 0.1840909 for this group, and the weight of the trailing
-        // censor at 161 is not redistributed to anyone (R's sum is 0.8159091).
         let km_48: f64 = 1.0
             - w.iter()
                 .zip(&time)
@@ -389,12 +340,10 @@ mod tests {
         let status = [0, 1, 0, 1];
         let result = simple(&time, &status, Some(&[1.5, 3.5]));
         assert_eq!(result.times, vec![1.5, 3.5]);
-        // At 1.5: the censor at 1 has given 1/4 to the three others.
         assert_eq!(
             column(&result, 0),
             vec![0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
         );
-        // At 3.5: the event at 2 keeps 1/3; the censor at 3 gives its 1/3 to row 4.
         assert_eq!(column(&result, 1), vec![0.0, 1.0 / 3.0, 0.0, 2.0 / 3.0]);
     }
 
@@ -464,10 +413,6 @@ mod tests {
             renorm: true,
         })
         .unwrap();
-        // Three subjects, so each starts with weight 1/3; only subject 2's
-        // last row at 3 is a censoring.  As in R, a subject's last event row
-        // carries its weight at every reporting time, even before the row's
-        // interval has started.
         let close = |actual: Vec<f64>, expected: &[f64]| {
             assert!(
                 actual
@@ -498,8 +443,6 @@ mod tests {
         assert!(no_id.is_err());
     }
 
-    /// The censoring curve by definition: the weighted risk set rebuilt at
-    /// every censoring time (rows open just after the events at `c`).
     fn censoring_curve_by_definition(
         start: Option<&[f64]>,
         stop: &[f64],

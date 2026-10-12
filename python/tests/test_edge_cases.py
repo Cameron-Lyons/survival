@@ -228,7 +228,6 @@ def test_survobrien_expands_one_risk_set_per_event_time():
         [1.0, 1.0, 2.0, 3.0], [1, 1, 0, 0], [[10.0, 30.0, 20.0, 40.0]]
     )
 
-    # one risk set (all four rows) at the single event time 1, logit mid-rank transform
     assert expansion.event_times == pytest.approx([1.0])
     assert expansion.row == [0, 1, 2, 3]
     assert expansion.status == [1, 1, 0, 0]

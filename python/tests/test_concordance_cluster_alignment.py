@@ -80,7 +80,7 @@ def test_categorical_clusters_survive_subset_missingness_and_serialization(layou
     retained = [row for row in selected if row not in (3, 7)]
     fit = r.coxph(formula, data, subset=selected, na_action="na.exclude", model=True, **kwargs)
     assert fit.cluster_levels == tuple(levels)
-    for model in (fit, pickle.loads(pickle.dumps(fit))):  # noqa: S301 - local round trip
+    for model in (fit, pickle.loads(pickle.dumps(fit))):
         actual = r.concordance(model, influence=1)
         expected = r.concordance(
             model, cluster=_r_factor([labels[row] for row in retained], levels), influence=1
@@ -106,7 +106,6 @@ def test_joint_factor_order_does_not_change_covariance(levels, influence):
     assert actual.dfbeta == expected.dfbeta
     assert actual.influence == expected.influence
     assert actual.ranks == expected.ranks
-    # The first model determines the reported group order.
     reverse = r.concordance(reordered, first, influence=influence)
     np.testing.assert_allclose(reverse.var, np.asarray(expected.var)[::-1, ::-1], atol=1e-14)
 

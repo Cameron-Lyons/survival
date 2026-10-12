@@ -1,7 +1,3 @@
-//! The `survmean` table (`R/print.survfit.R`) from stacked curve vectors,
-//! and a comparison of the restricted means of several groups built on it.
-//! The port itself is `surv_analysis::survmean`.
-
 use super::kaplan_meier;
 use crate::data_types::{FloatVec, IntVec};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -13,9 +9,9 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
-/// One row of the table.  `NaN` stands for R's `NA` (a median the curve
-/// never reaches); the restricted mean is absent when `rmean` is `None`
-/// and the limits when the curve has none.
+#[doc = " One row of the table.  `NaN` stands for R's `NA` (a median the curve"]
+#[doc = " never reaches); the restricted mean is absent when `rmean` is `None`"]
+#[doc = " and the limits when the curve has none."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct SurvfitSummaryRow {
@@ -25,7 +21,7 @@ pub struct SurvfitSummaryRow {
     pub events: f64,
     pub rmean: Option<f64>,
     pub se_rmean: Option<f64>,
-    /// The truncation time used for the restricted mean.
+    #[doc = " The truncation time used for the restricted mean."]
     pub end_time: Option<f64>,
     pub median: f64,
     pub lower: Option<f64>,
@@ -33,7 +29,6 @@ pub struct SurvfitSummaryRow {
 }
 
 impl SurvfitSummaryRow {
-    /// The rows of a [`SurvmeanTable`], one per curve.
     fn from_table(table: &SurvmeanTable) -> Vec<Self> {
         let column = |values: &Option<Vec<f64>>, curve: usize| values.as_ref().map(|v| v[curve]);
         (0..table.records.len())
@@ -53,7 +48,7 @@ impl SurvfitSummaryRow {
     }
 }
 
-/// Restricted mean of one group with a normal confidence interval.
+#[doc = " Restricted mean of one group with a normal confidence interval."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct RmstGroupResult {
@@ -66,15 +61,15 @@ pub struct RmstGroupResult {
     pub upper: f64,
 }
 
-/// Comparison of the restricted means of `k` groups: each group against
-/// the first (reference) group, and a global Wald test on `k - 1` degrees
-/// of freedom.
+#[doc = " Comparison of the restricted means of `k` groups: each group against"]
+#[doc = " the first (reference) group, and a global Wald test on `k - 1` degrees"]
+#[doc = " of freedom."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct RmstComparisonResult {
     pub tau: f64,
     pub groups: Vec<RmstGroupResult>,
-    /// `rmean[g] - rmean[reference]` for every non-reference group.
+    #[doc = " `rmean[g] - rmean[reference]` for every non-reference group."]
     pub difference: Vec<f64>,
     pub difference_se: Vec<f64>,
     pub difference_lower: Vec<f64>,
@@ -85,11 +80,6 @@ pub struct RmstComparisonResult {
     pub p_value: f64,
 }
 
-/// Compare the restricted mean survival times (up to `tau`) of the groups
-/// of right-censored data.  Groups are ordered by their sorted labels;
-/// the first is the reference.  Each group's mean and standard error are
-/// `summary(survfit(Surv(time, status) ~ 1, subset = group), rmean =
-/// tau)$table`.
 pub fn rmst_comparison(
     time: &[f64],
     status: &[i32],
@@ -98,8 +88,6 @@ pub fn rmst_comparison(
     tau: f64,
     conf_level: f64,
 ) -> SurvivalResult<RmstComparisonResult> {
-    // Group selection indexes these original vectors before the KM fitter
-    // validates a subset, so every observation must be aligned here.
     validate_length(time.len(), status.len(), "status")?;
     validate_length(time.len(), group.len(), "group")?;
     if let Some(weights) = weights {
@@ -108,8 +96,6 @@ pub fn rmst_comparison(
     if !tau.is_finite() || tau <= 0.0 {
         return Err(SurvivalError::invalid_input("tau must be positive"));
     }
-    // Gather each group's rows once, keeping their input order and the
-    // sorted labels that determine the reference group.
     let mut grouped_rows = BTreeMap::<i32, Vec<usize>>::new();
     for (row, &label) in group.iter().enumerate() {
         grouped_rows.entry(label).or_default().push(row);
@@ -155,7 +141,6 @@ pub fn rmst_comparison(
         .zip(&difference_se)
         .map(|(d, se)| 2.0 * pnorm((d / se).abs(), false, false))
         .collect();
-    // Wald test: the differences share the reference group's variance.
     let mut covariance = Array2::from_elem((k, k), reference.se_rmean.powi(2));
     for (i, g) in groups[1..].iter().enumerate() {
         covariance[[i, i]] += g.se_rmean.powi(2);
@@ -186,12 +171,12 @@ pub fn rmst_comparison(
     })
 }
 
-/// Python entry point of `survmean` on the stacked vectors of one
-/// `survfit` object: `strata` gives the number of rows of each curve
-/// (`None` for a single curve), `n` is `fit$n`, `n_id` the optional
-/// `fit$n.id` and `start_time` the `t0` the area under the curve starts
-/// from.  `rmean` is `"none"`, `"common"`, `"individual"` or a number;
-/// `rmean_at` gives a numeric truncation time directly.
+#[doc = " Python entry point of `survmean` on the stacked vectors of one"]
+#[doc = " `survfit` object: `strata` gives the number of rows of each curve"]
+#[doc = " (`None` for a single curve), `n` is `fit$n`, `n_id` the optional"]
+#[doc = " `fit$n.id` and `start_time` the `t0` the area under the curve starts"]
+#[doc = " from.  `rmean` is `\"none\"`, `\"common\"`, `\"individual\"` or a number;"]
+#[doc = " `rmean_at` gives a numeric truncation time directly."]
 #[pyfunction(name = "survmean_curves")]
 #[pyo3(signature = (time, surv, n_risk, n_event, n, lower=None, upper=None, strata=None, n_id=None, start_time=0.0, rmean="common", rmean_at=None, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
@@ -237,8 +222,8 @@ pub fn survmean_curves_py(
     })?)
 }
 
-/// Python entry point: `rmst_comparison(time, status, group, tau,
-/// weights=None, conf_level=0.95)`.
+#[doc = " Python entry point: `rmst_comparison(time, status, group, tau,"]
+#[doc = " weights=None, conf_level=0.95)`."]
 #[pyfunction(name = "rmst_comparison")]
 #[pyo3(signature = (time, status, group, tau, weights=None, conf_level=0.95))]
 pub fn rmst_comparison_py(
@@ -284,7 +269,6 @@ mod tests {
 
     #[test]
     fn restricted_mean_is_the_area_under_the_curve() {
-        // survfit(Surv(c(1,2,3,4), c(1,1,0,1)) ~ 1): steps 0.75, 0.5, 0.25
         let time = [1.0, 2.0, 3.0, 4.0];
         let surv = [0.75, 0.5, 0.5, 0.0];
         let n_risk = [4.0, 3.0, 2.0, 1.0];
@@ -299,13 +283,11 @@ mod tests {
             RmeanOption::Common,
         );
         let row = &common[0];
-        // 1*1 + 0.75*1 + 0.5*1 + 0.5*1 = 2.75
         assert!((row.rmean.unwrap() - 2.75).abs() < 1e-12);
         assert_eq!(row.records, 4.0);
         assert_eq!(row.n_max, 4.0);
         assert_eq!(row.n_start, 4.0);
         assert_eq!(row.events, 3.0);
-        // median: surv hits exactly 0.5 at t=2 and drops below at t=4 -> 3
         assert!((row.median - 3.0).abs() < 1e-12);
         assert_eq!(row.lower, None);
         assert_eq!(row.end_time, Some(4.0));
@@ -376,7 +358,6 @@ mod tests {
             (result.difference[0] - (result.groups[1].rmean - result.groups[0].rmean)).abs()
                 < 1e-12
         );
-        // summary(survfit(Surv(time, status) ~ 1, subset = group == 0), rmean = 5)$table
         assert!((result.groups[0].rmean - 2.75).abs() < 1e-12);
         assert!((result.groups[0].se_rmean - 0.649519052838329).abs() < 1e-12);
         assert!(rmst_comparison(&time, &status, &[0; 12], None, 5.0, 0.95).is_err());

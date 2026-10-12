@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Rate positions, cutpoints, summaries and validation errors from survival.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

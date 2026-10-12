@@ -115,8 +115,6 @@ for(input in names(inputs))for(selection in names(selections))for(action in c("o
       fit <- do.call(function_name,arguments)
       if(routine!="frame")stopifnot(!any(grepl("^survival_py",class(fit))))
       if(routine=="survfit" && is.null(fit$model)) {
-        # Stock ignores model=TRUE for this fitter. The port's retained frame
-        # extension is compared with stock model.frame on the identical call.
         fit$model <- do.call(stats::model.frame,
           arguments[intersect(names(arguments),c("formula","data","weights","subset","na.action"))])
       }
@@ -150,9 +148,6 @@ for(formula in c("~1","~x"))for(kind in c("list","frame"))for(size in c(0L,1L,4L
     weights=if(size)I(rep(1,size))else NULL),result)
 }
 prediction_inputs <- list(complete=lapply(base,function(value)value[c(12L,3L,8L,3L,6L,2L,11L,1L)]))
-# Keep new-data offsets zero for unmodified stock prediction comparisons:
-# stock drops AFT new offsets and adds Cox expected offsets outside exp().
-# Those documented numerical differences have dedicated corrected references.
 prediction_inputs$complete$off[] <- 0
 prediction_inputs$missing <- prediction_inputs$complete
 prediction_inputs$missing$x[2L] <- NA_real_
@@ -236,8 +231,6 @@ for(input in names(special_inputs))for(selection in c("all","reordered")) {
   fit <- stock("coxph")(formula,data=data,weights=wt,subset=selected,na.action=stats::na.pass,
     model=FALSE,x=TRUE)
   stopifnot(!any(grepl("^survival_py",class(fit))))
-  # A separate stock method rebuilds the unretained model frame, including the
-  # formally evaluated z that was removed from the design by +z-z.
   fit$model <- stock("model.frame.coxph")(fit)
   source_frame <- if(input=="typed_double")frame_columns(stats::model.frame(
     as.formula("Surv(time,status)~x+offset(off)",env=asNamespace("survival")),

@@ -1,6 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete R prediction calls, including the Python/Rust boundary. Fit and
-# setup are outside timing; numerical equality is checked before measurement.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-survival confidence transforms and missing-value edges.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

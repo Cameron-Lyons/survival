@@ -1,14 +1,3 @@
-//! Probability-in-state curves from a multi-state Cox model: the kernel of
-//! R's `survfit.coxphms` (`R/survfit.coxphms.R`), its `multihaz`, and the
-//! risk-set counts of `coxsurv1` and `coxsurv2` (`src/coxsurv1.c`,
-//! `src/coxsurv2.c`).
-//!
-//! R recentres X at each newdata row, restacks the data and recounts every
-//! risk set.  A newdata row only multiplies the risk scores of transition
-//! `k` by `exp(-c[k])`, with `c[k] = (x_new - means) beta_k + offset_new`,
-//! so the counts are made once per stratum, transition and time, with the
-//! risk scores centred at `means`, and scaled per newdata row.
-
 use ndarray::{Array2, Array3, ArrayView2};
 use rayon::prelude::*;
 
@@ -27,52 +16,34 @@ use {
     pyo3::prelude::*,
 };
 
-/// The unstacked data of a multi-state fit and its coefficients.
 pub(crate) struct CoxmsCurveData<'a> {
     pub start: Option<&'a [f64]>,
     pub time: &'a [f64],
-    /// 1-based state each row moves to, 0 when censored.
     pub endpoint: &'a [usize],
-    /// 1-based current state of each row (survcheck2's).
     pub istate: &'a [usize],
     pub weights: &'a [f64],
     pub offset: &'a [f64],
-    /// The curve (user stratum) of each row; `None` for a row in none.
     pub strata: &'a [Option<usize>],
     pub nstrata: usize,
-    /// `n x nx`, NaN for a missing value.
     pub x: ArrayView2<'a, f64>,
     pub design: &'a MsDesign,
-    /// Codes of each `strata()` term, -1 for a missing value.
     pub strata_term_codes: &'a [Vec<i32>],
     pub beta: &'a [f64],
     pub means: &'a [f64],
-    /// `fit$share$scale`: the hazard multiplier of each transition.
     pub share_scale: Option<&'a [f64]>,
 }
 
-/// `pstate` (`m x ntime x nstate`) and `cumhaz` (`m x ntime x ntrans`),
-/// newdata row outermost; the strata's times are stacked.
 pub(crate) struct CoxmsCurves {
     pub pstate: Array3<f64>,
     pub cumhaz: Array3<f64>,
 }
 
-/// The counts `multihaz` reads for one transition within one stratum, per
-/// output time: `n[2]` (the weighted risk-score sum of the risk set),
-/// `n[4]` (the weighted events) and `n[8]` (the Efron mean risk set).
-/// Risk scores are `exp(eta0)`, centred at the fit's means.
 struct TransitionCounts {
     at_risk: Vec<f64>,
     events: Vec<f64>,
     efron: Vec<f64>,
 }
 
-/// The Efron mean risk set of coxsurv1/2: `n2` for one event, else the mean
-/// of `n2 - k n5 / n3^2` over `k = 0 .. n3 - 1`, the sum started from
-/// `carried`.  coxsurv2 starts it from 0; coxsurv1 does not reset `n[8]`
-/// between output times and starts it from the value of the previous
-/// (later) time, which R's right-censored curves inherit.
 fn efron_mean(carried: f64, n2: f64, n3: usize, n5: f64) -> f64 {
     if n3 <= 1 {
         return n2;
@@ -83,11 +54,6 @@ fn efron_mean(carried: f64, n2: f64, n3: usize, n5: f64) -> f64 {
     total / count
 }
 
-/// coxsurv1/coxsurv2 for one transition: walk the rows backwards from the
-/// last output time, adding a row to the risk set once `stop >= t` (and,
-/// for counting data, `start < t`) and removing it once `start >= t`.
-/// `rows` are the data rows at risk for the transition, `risk` their
-/// `exp(eta0)`, and an event is an endpoint of `to` at `stop == t`.
 fn transition_counts(
     d: &CoxmsCurveData<'_>,
     rows: &[usize],
@@ -162,16 +128,6 @@ fn transition_counts(
     counts
 }
 
-/// The curves of `survfit.coxphms` for every row of `newx` (`m x nx`, with
-/// `newoffset`), on the time grid `utime` of each stratum (survfitAJ's),
-/// starting from each stratum's `p0`.
-///
-/// Transition `k` uses the rows whose current state is its `from` state,
-/// without a missing value in a covariate it uses or in a strata term its
-/// block uses (R's `stacker(dropzero = FALSE)`), all counted within each
-/// user stratum.  `stype` 1 updates `p` by `p (I + A)`, 2 by `p expm(A)`;
-/// `ctype` 2 uses the Efron risk set.  Shared baselines pool the events and
-/// the scaled risk sets of their transitions.
 pub(crate) fn coxms_curves(
     d: &CoxmsCurveData<'_>,
     utime: &[Vec<f64>],
@@ -237,7 +193,6 @@ pub(crate) fn coxms_curves(
         return Err(SurvivalError::invalid_input("strata code out of range"));
     }
 
-    // each transition's X coefficients, and its constant ph() term
     let coefficient = |c: usize, k: usize| {
         let index = design.cmap[(c, k)];
         (index > 0).then(|| d.beta[index as usize - 1])
@@ -256,8 +211,6 @@ pub(crate) fn coxms_curves(
                 .sum()
         })
         .collect();
-    // the strata terms of each transition's block: those of its first
-    // transition (the stacker's rule)
     let block_terms: Vec<Vec<usize>> = (0..ntrans)
         .map(|k| {
             let first = (0..ntrans)
@@ -269,7 +222,6 @@ pub(crate) fn coxms_curves(
         })
         .collect();
 
-    // the counts per stratum and transition
     let mut rows_by: Vec<Vec<Vec<usize>>> = vec![vec![Vec::new(); nstate + 1]; d.nstrata];
     for i in 0..n {
         if let Some(s) = d.strata[i] {
@@ -307,7 +259,6 @@ pub(crate) fn coxms_curves(
         })
         .collect();
 
-    // shared baselines: R's `sharemat`, set when a baseline repeats
     let mut groups: Vec<(i32, Vec<usize>)> = Vec::new();
     for (k, &b) in design.baseline.iter().enumerate() {
         match groups.iter_mut().find(|(baseline, _)| *baseline == b) {
@@ -332,7 +283,6 @@ pub(crate) fn coxms_curves(
         .par_chunks_mut((ntime * ntrans).max(1));
     pstate_rows.zip(cumhaz_rows).enumerate().try_for_each(
         |(j, (pstate_j, cumhaz_j))| -> SurvivalResult<()> {
-            // exp(-c[k]): the factor this row puts on transition k's risks
             let factor: Vec<f64> = (0..ntrans)
                 .map(|k| {
                     let c: f64 = x_terms[k]
@@ -416,19 +366,19 @@ pub(crate) fn coxms_curves(
     Ok(CoxmsCurves { pstate, cumhaz })
 }
 
-/// `survfit(<coxphms>, newdata)`: survfitAJ's time grid, counts and `p0`,
-/// then the curves of every `newx` row.
-///
-/// The per-row vectors are the unstacked data of the fit at the rows the
-/// curves use: `endpoint` (1-based state of `states` reached, 0 when
-/// censored), `istate` (survcheck2's 1-based current state), `id` (subject
-/// codes), `strata` (0-based user strata codes) and `strata_terms`.  The
-/// design (`cmap`, `baseline`, `trans_from`, `trans_to`, `strata_use`) is as
-/// for `coxphms_fit`.  `start_time`, `p0` and `time0` go to survfitAJ, which
-/// runs without standard errors or timefix.
-///
-/// Returns survfitAJ's result, then `pstate` and `cumhaz` as
-/// `(ntime, m, nstate)` and `(ntime, m, ntrans)` arrays.
+#[doc = " `survfit(<coxphms>, newdata)`: survfitAJ's time grid, counts and `p0`,"]
+#[doc = " then the curves of every `newx` row."]
+#[doc = ""]
+#[doc = " The per-row vectors are the unstacked data of the fit at the rows the"]
+#[doc = " curves use: `endpoint` (1-based state of `states` reached, 0 when"]
+#[doc = " censored), `istate` (survcheck2's 1-based current state), `id` (subject"]
+#[doc = " codes), `strata` (0-based user strata codes) and `strata_terms`.  The"]
+#[doc = " design (`cmap`, `baseline`, `trans_from`, `trans_to`, `strata_use`) is as"]
+#[doc = " for `coxphms_fit`.  `start_time`, `p0` and `time0` go to survfitAJ, which"]
+#[doc = " runs without standard errors or timefix."]
+#[doc = ""]
+#[doc = " Returns survfitAJ's result, then `pstate` and `cumhaz` as"]
+#[doc = " `(ntime, m, nstate)` and `(ntime, m, ntrans)` arrays."]
 #[cfg(feature = "python")]
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
@@ -524,7 +474,6 @@ pub fn coxphms_curves<'py>(
     let share_scale = share_scale.map(|v| v.into_inner());
     let (engine, curves) = py.detach(|| -> SurvivalResult<_> {
         let engine = survfitaj(&data, &options)?;
-        // each row's curve: the position of its code among the fitted strata
         let curve_of: Vec<Option<usize>> = match (&strata, &engine.strata_codes) {
             (Some(codes), Some(fitted)) => codes
                 .iter()
@@ -583,11 +532,6 @@ mod tests {
         }
     }
 
-    /// Competing risks a and b with tied events of a at time 2:
-    /// `coxph(Surv(time, status) ~ x, id = id, init = c(0.5, -0.3), iter = 0,
-    /// ties = "efron")` and its curves for x = 0 and 1 with the Efron risk
-    /// sets (R 4.5.3 / survival 3.8-12).  At time 2 coxsurv1 starts the Efron
-    /// sum from the value of time 3, and R's hazards carry that.
     #[test]
     fn efron_curves_match_r() {
         let time = [1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0];
@@ -662,7 +606,6 @@ mod tests {
     #[test]
     fn efron_mean_is_the_mean_risk_set_of_the_tied_events() {
         assert_eq!(efron_mean(0.0, 10.0, 1, 3.0), 10.0);
-        // (10 + (10 - 4 / 4)) / 2
         assert_eq!(efron_mean(0.0, 10.0, 2, 4.0), 9.5);
         assert_eq!(efron_mean(5.0, 10.0, 2, 4.0), 12.0);
     }

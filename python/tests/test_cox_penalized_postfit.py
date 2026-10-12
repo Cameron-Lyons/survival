@@ -81,7 +81,6 @@ def _columns(summary):
 
 def test_pchisq_is_r_nmath_pchisq():
     pchisq = survival.validation.pchisq
-    # R: pchisq(3.6432229393649322, 3.0886431277535298, lower.tail = FALSE)
     assert pchisq(3.6432229393649322, 3.0886431277535298, lower_tail=False) == approx(
         0.31611266250077846, rel=1e-14
     )
@@ -126,7 +125,6 @@ def test_anova_of_one_penalized_model_refits_its_terms_unpenalized(lung):
     assert df[1] == approx(1.9863723944321767)
     assert p[1] == approx(0.00084225868726461655)
 
-    # the pspline basis is refitted as 12 plain columns; the sex row then loses df
     names, loglik, chisq, df, p = _table(r.anova(_fit("pspline(age, df=4) + sex", lung)))
     assert names == ["NULL", "pspline(age, df=4)", "sex"]
     assert loglik == approx([-749.90980139039470, -743.05294395802741, -741.02663431408791])
@@ -142,14 +140,12 @@ def test_anova_of_one_penalized_model_refits_its_terms_unpenalized(lung):
 
 
 def test_anova_rows_of_a_frailty(lung_inst, lung_ecog, kidney):
-    # a sparse frailty last: the full model's row absorbs it
     names, loglik, chisq, df, p = _table(r.anova(_fit("age + frailty(inst)", lung_inst)))
     assert names == ["NULL", "age", "frailty(inst)"]
     assert loglik == approx([-744.79993370264594, -742.70538003012962, -742.70531888212656])
     assert df[1:] == approx([1.0, 7.3832232073023363e-05])
     assert p[1:] == approx([0.04068451432977959054, 0.00033680611962798372])
 
-    # in the middle it is refitted from the group codes of R's model matrix
     names, loglik, chisq, df, p = _table(r.anova(_fit("age + frailty(inst) + sex", lung_inst)))
     assert names == ["NULL", "age", "frailty(inst)", "sex"]
     assert loglik == approx(
@@ -208,7 +204,6 @@ def test_summary_of_a_pspline_fit_splits_linear_and_nonlinear(lung):
 
 
 def test_summary_of_a_combined_pspline_regresses_on_its_own_columns(lung):
-    # combine leaves six basis columns, five of them coefficients, so five centres
     label = "pspline(age, df=3, combine=c(1,1,2,2,3,3,4,4,5,5))"
     summary = r.model_summary(_fit(f"{label} + sex", lung))
     names, (coef, se, se2, chisq, df, p) = _columns(summary)
@@ -225,14 +220,11 @@ def test_summary_of_a_combined_pspline_regresses_on_its_own_columns(lung):
         [17.588746134000303, 3.9826879941503579, 0.0014608699659437213]
     )
 
-    # a pspline that keeps its intercept column has one centre too few, and R's
-    # printfun stops in coxph.wtest
     with pytest.raises(ValueError, match="Argument lengths do not match"):
         r.model_summary(_fit("pspline(age, df=3, intercept=TRUE) + sex", lung))
 
 
 def test_summary_of_an_unpenalized_pspline_beside_a_frailty(lung_inst):
-    # pspline(penalty=FALSE) is a plain matrix term: a Wald row per column
     label = "pspline(age, nterm=4, penalty=FALSE)"
     fit = _fit(f"{label} + frailty(inst)", lung_inst)
     summary = r.model_summary(fit)
@@ -277,7 +269,6 @@ def test_summary_of_an_unpenalized_pspline_beside_a_frailty(lung_inst):
     assert summary["print2"] == ["Variance of random effect= 5e-07   I-likelihood = -739.8"]
     assert summary["logtest"]["df"] == approx(6.0000693914216106)
 
-    # terms=TRUE: one row on the term's df, p on 1 df as R
     names, (coef, _, _, chisq, df, p) = _columns(r.model_summary(fit, terms=True))
     assert names == [label, "frailty(inst)"]
     assert math.isnan(coef[0])
@@ -306,7 +297,6 @@ def test_summary_of_frailty_fits(lung_inst, lung_ecog, kidney):
     assert p == approx([0.042801271481548803, 0.4251357699680971])
     assert summary["print2"] == ["Variance of random effect= 0.001302083"]
 
-    # a dense frailty's test is coxph.wtest on its block of the variance
     summary = r.model_summary(_fit("age + frailty(ph.ecog, sparse=False)", lung_ecog))
     names, (_, _, se2, chisq, df, p) = _columns(summary)
     assert names == ["age", "frailty(ph.ecog, sparse=False)"]
@@ -320,7 +310,6 @@ def test_summary_of_frailty_fits(lung_inst, lung_ecog, kidney):
     ]
     assert summary["conf_int"][1]["exp(coef)"] == approx(0.6848777960028396)
 
-    # a frailty alone: no coefficients, so no conf.int
     summary = r.model_summary(_fit("frailty(id)", kidney))
     names, (_, _, _, chisq, df, p) = _columns(summary)
     assert names == ["frailty(id)"]
@@ -349,7 +338,6 @@ def test_summary_of_ridge_fits_and_terms(lung_ecog):
     assert summary["print2"] == []
     assert summary["logtest"]["df"] == approx(2.9863354762019778)
 
-    # terms=TRUE: one Wald row for the multi-column ridge term, p on 1 df as R
     names, (coef, _, _, chisq, df, p) = _columns(r.model_summary(fit, terms=True))
     assert names == ["ridge(age, ph.ecog, theta=1)", "sex"]
     assert math.isnan(coef[0])
@@ -380,15 +368,12 @@ def test_terms_predictions_carry_a_sparse_frailty(kidney):
     assert r.predict(fit, type="terms", terms=[3, 1])[0] == approx(
         [0.370387746942514, -0.0824536042289293]
     )
-    # new data get no frailty
     newdata = {key: values[:3] for key, values in kidney.items()}
     new = r.predict(fit, newdata, type="terms", se_fit=True)
     assert [row[2] for row in new.fit] == [0.0, 0.0, 0.0]
     assert [row[2] for row in new.se_fit] == [0.0, 0.0, 0.0]
     assert new.fit[0][:2] == approx([-0.0824536042289293, 1.169728429127768])
 
-    # the frailty alone predicts the linear predictor, with the frailty's se (for the
-    # risk too, as R)
     alone = _fit("frailty(id)", kidney)
     assert r.model_term_names(alone) == ["frailty(id)"]
     pred = r.predict(alone, type="terms", se_fit=True)

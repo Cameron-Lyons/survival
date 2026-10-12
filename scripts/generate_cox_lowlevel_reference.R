@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Bare fit components, warnings and shapes from the exported survival fitters.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

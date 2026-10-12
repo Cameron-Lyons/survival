@@ -91,7 +91,6 @@ def test_logical_coding_and_matrix_metadata_match_stock(case, container):
                 getattr(r, case["kind"])("Surv(futime,fustat)~" + case["rhs"], data, **options)
             return
         fit = getattr(r, case["kind"])("Surv(futime,fustat)~" + case["rhs"], data, **options)
-    # R's paste() adds spaces around the variable list in convergence warnings.
     assert [re.sub(r"\s+", "", str(w.message)) for w in caught] == [
         re.sub(r"\s+", "", message) for message in case["fit_warnings"]
     ]

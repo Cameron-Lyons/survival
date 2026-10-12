@@ -1,13 +1,3 @@
-//! Natural cubic splines parameterised by the spline's values at the knots.
-//!
-//! [`nsk_basis`] ports R's `nsk()` (survival 3.8-12, `nsk.R`): it builds the
-//! `splines::ns` natural spline basis (a B-spline basis with the second
-//! derivative constrained to zero at the boundary knots, `ns` below ports
-//! `ns.R`) and re-expresses it so that the coefficients are the fitted
-//! values at the knots.  R's `ns` applies the constraint through a
-//! LINPACK Householder QR (`dqrdc2`/`dqrsl`), reproduced here so the
-//! intermediate basis matches R to rounding.
-
 use crate::core::bspline::spline_design;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::lu_inverse;
@@ -17,18 +7,18 @@ use ndarray::{Array2, s};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A natural spline basis matrix with the attributes R attaches to it.
+#[doc = " A natural spline basis matrix with the attributes R attaches to it."]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object)]
 pub struct SplineBasisResult {
-    /// Row-major `n_rows x n_cols` basis values (`NaN` rows for missing x).
+    #[doc = " Row-major `n_rows x n_cols` basis values (`NaN` rows for missing x)."]
     #[pyo3(get)]
     pub basis: Vec<f64>,
     #[pyo3(get)]
     pub n_rows: usize,
     #[pyo3(get)]
     pub n_cols: usize,
-    /// Interior knots.
+    #[doc = " Interior knots."]
     #[pyo3(get)]
     pub knots: Vec<f64>,
     #[pyo3(get)]
@@ -37,9 +27,9 @@ pub struct SplineBasisResult {
 
 crate::internal::pickle::picklable!(SplineBasisResult);
 
-/// The knot specification of an `nsk` term: interior knots (or a target
-/// `df`), boundary knots (`None` = the 5%/95% quantiles of the data, R's
-/// `b = 0.05` default) and whether the basis carries an intercept column.
+#[doc = " The knot specification of an `nsk` term: interior knots (or a target"]
+#[doc = " `df`), boundary knots (`None` = the 5%/95% quantiles of the data, R's"]
+#[doc = " `b = 0.05` default) and whether the basis carries an intercept column."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct NaturalSplineKnot {
@@ -71,12 +61,12 @@ impl NaturalSplineKnot {
         )?)
     }
 
-    /// The basis evaluated at `x`; `NaN` entries of `x` give `NaN` rows.
+    #[doc = " The basis evaluated at `x`; `NaN` entries of `x` give `NaN` rows."]
     pub fn basis(&self, x: Vec<f64>) -> PyResult<SplineBasisResult> {
         Ok(self.evaluate(&x)?)
     }
 
-    /// `basis(x) %*% coef`.
+    #[doc = " `basis(x) %*% coef`."]
     pub fn predict(&self, x: Vec<f64>, coef: Vec<f64>) -> PyResult<Vec<f64>> {
         validate_finite(&coef, "coef")?;
         let basis = self.evaluate(&x)?;
@@ -139,8 +129,8 @@ impl NaturalSplineKnot {
     }
 }
 
-/// R's `nsk(x, df = NULL, knots = NULL, Boundary.knots = <5%/95%>)` without
-/// an intercept column.
+#[doc = " R's `nsk(x, df = NULL, knots = NULL, Boundary.knots = <5%/95%>)` without"]
+#[doc = " an intercept column."]
 #[pyfunction]
 #[pyo3(signature = (x, df=None, knots=None, boundary_knots=None))]
 pub fn nsk(
@@ -152,10 +142,6 @@ pub fn nsk(
     Ok(nsk_basis(&x, df, knots.as_deref(), false, boundary_knots)?)
 }
 
-/// R's `nsk(x, df, knots, intercept, Boundary.knots)`.  `boundary_knots =
-/// None` uses the 5% and 95% quantiles of the non-missing `x` (R's default
-/// `b = 0.05`); explicit interior knots outside the boundary widen it as in
-/// R.  Missing (`NaN`) `x` values give `NaN` rows.
 pub fn nsk_basis(
     x: &[f64],
     df: Option<usize>,
@@ -182,7 +168,6 @@ pub fn nsk_basis(
             (quantile_type7(&sorted, 0.05), quantile_type7(&sorted, 0.95))
         }
     };
-    // Widen the boundary to enclose explicit interior knots (nsk.R).
     let mut kx: Vec<f64> = knots.map(<[f64]>::to_vec).unwrap_or_default();
     if kx.is_empty() {
         kx = vec![boundary.0, boundary.1];
@@ -211,8 +196,6 @@ pub fn nsk_basis(
         ns(&observed, df, Some(&iknot), intercept, bknot)?
     };
     iknot = basis.knots.clone();
-    // Duplicate knots are not allowed but can come out of `ns` when many
-    // tied values sit near an end; collapse them and refit.
     let mut all: Vec<f64> = vec![bknot.0, bknot.1];
     all.extend(&iknot);
     let mut unique = Vec::with_capacity(all.len());
@@ -230,8 +213,6 @@ pub fn nsk_basis(
         iknot = basis.knots.clone();
     }
 
-    // Reparameterise so the coefficients are the spline values at the
-    // knots: gamma = kbasis beta, hence basis beta = (basis kbasis^-1) gamma.
     let mut kx = vec![bknot.0];
     kx.extend(&iknot);
     kx.push(bknot.1);
@@ -283,15 +264,11 @@ fn singular_knot_basis() -> SurvivalError {
     )
 }
 
-/// The `splines::ns` basis and the interior knots it settled on.
 pub(crate) struct NaturalSplineBasis {
     pub(crate) values: Array2<f64>,
     pub(crate) knots: Vec<f64>,
 }
 
-/// R's `ns(x, df, knots, intercept, Boundary.knots)` for finite `x`
-/// (`ns.R`, R 4.5).  Interior knots come from `knots`, else from `df` as
-/// the equally spaced quantiles of the `x` inside the boundary, else none.
 pub(crate) fn ns(
     x: &[f64],
     df: Option<usize>,
@@ -328,7 +305,6 @@ pub(crate) fn ns(
         }
         (None, None) => Vec::new(),
     };
-    // Computed knots that fall on a boundary knot are shoved inside.
     if computed_from_df {
         shove_boundary_knots(&mut knots, low, high)?;
     }
@@ -342,7 +318,6 @@ pub(crate) fn ns(
     let mut basis = Array2::zeros((n, n_basis));
     let inside: Vec<usize> = (0..n).filter(|&i| !outside[i]).collect();
     if inside.len() < n {
-        // Linear extrapolation beyond the boundary knots.
         for (pivot, rows) in [
             (low, (0..n).filter(|&i| x[i] < low).collect::<Vec<_>>()),
             (high, (0..n).filter(|&i| x[i] > high).collect::<Vec<_>>()),
@@ -371,7 +346,6 @@ pub(crate) fn ns(
         constraint = constraint.slice(s![.., 1..]).to_owned();
         basis = basis.slice(s![.., 1..]).to_owned();
     }
-    // basis <- t(qr.qty(qr(t(const)), t(basis)))[, -(1:2)]
     let qr = LinpackQr::new(
         constraint
             .rows()
@@ -389,8 +363,6 @@ pub(crate) fn ns(
     Ok(NaturalSplineBasis { values, knots })
 }
 
-/// `ns.R`: interior knots computed from `df` that coincide with a boundary
-/// knot are moved 1/8 of the way to the nearest other knot.
 fn shove_boundary_knots(knots: &mut [f64], low: f64, high: f64) -> SurvivalResult<()> {
     if knots.is_empty() {
         return Ok(());
@@ -425,7 +397,6 @@ fn shove_boundary_knots(knots: &mut [f64], low: f64, high: f64) -> SurvivalResul
     Ok(())
 }
 
-/// R's `quantile(x, p, type = 7)` on sorted data, with R's rounding fuzz.
 fn quantile_type7(sorted: &[f64], probability: f64) -> f64 {
     let n = sorted.len();
     let fuzz = 4.0 * f64::EPSILON;
@@ -462,7 +433,6 @@ mod tests {
 
     #[test]
     fn ns_matches_r_for_explicit_knots() {
-        // R: ns(c(1, 2.5, 4, 7, 10), knots = c(3, 6), Boundary.knots = c(1, 10))
         let basis = ns(
             &[1.0, 2.5, 4.0, 7.0, 10.0],
             None,
@@ -503,9 +473,6 @@ mod tests {
                 );
             }
         }
-        // With an intercept and points beyond the boundary knots (linear
-        // extrapolation): ns(c(0.5, 2.5, 4, 7, 12), knots = c(3, 6),
-        // Boundary.knots = c(1, 10), intercept = TRUE)
         let basis = ns(
             &[0.5, 2.5, 4.0, 7.0, 12.0],
             None,
@@ -589,7 +556,6 @@ mod tests {
         assert!((result.boundary_knots.1 - 4.8).abs() < 1e-12);
         assert!((result.knots[0] - 2.6666666666666665).abs() < 1e-12);
         assert!((result.knots[1] - 3.333333333333333).abs() < 1e-12);
-        // R: nsk(1:5, df = 3)
         let expected = [
             [
                 -0.30663390663390655,

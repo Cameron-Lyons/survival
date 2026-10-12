@@ -1,7 +1,4 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_student_t_normal_reference.R [output.json]
-# Direct negative tails exercise approximation boundaries without 1-CDF
-# cancellation. R is only required for regeneration, not for Python tests.
 suppressPackageStartupMessages(library(jsonlite))
 stopifnot(getRversion() == "4.6.1")
 args <- commandArgs(trailingOnly = TRUE)

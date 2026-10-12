@@ -1,57 +1,28 @@
-//! `coxpenal.df` (`R/coxpenal.df.R`): the effective degrees of freedom of
-//! each term of a penalised model (both `coxpenal.fit` and `survpenal.fit`
-//! call it), after Gray (1992), together with the two variance estimates
-//! `H^{-1}` (`var`) and `H^{-1} I H^{-1}` (`var2`), where `H` is the
-//! penalised information and `I` the information of the likelihood alone.
-//!
-//! The inputs are the dense slices of the Cholesky factor of `H` and of its
-//! inverse (`hmat`, `hinv`: `nvar` rows, `nfrail + nvar` columns, as the
-//! penalised Newton kernels return them — R's matrices transposed),
-//! `D^{-1}` of the factorisation (`fdiag`) and the penalty second
-//! derivatives.  With a sparse frailty term only the dense corner of the
-//! inverse is formed.
-
 use super::terms::PenaltyShape;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::coxph_wtest::wald_tests;
 use ndarray::Array2;
 
-/// What `coxpenal.df` returns.
 #[derive(Debug, Clone)]
 pub(crate) struct TermDf {
-    /// `H^{-1}` for the dense coefficients (empty without them).
     pub var: Array2<f64>,
-    /// `H^{-1} I H^{-1}`.
     pub var2: Array2<f64>,
-    /// Degrees of freedom per model term.
     pub df: Vec<f64>,
-    /// Trace of the `H^{-1}` block per model term.
     pub trh: Vec<f64>,
-    /// The diagonal of the frailty block of `H^{-1}` (`fvar`).
     pub fvar: Option<Vec<f64>>,
 }
 
-/// The inputs of [`coxpenal_df`].
 pub(crate) struct DfInput<'a> {
     pub hmat: &'a Array2<f64>,
     pub hinv: &'a Array2<f64>,
     pub fdiag: &'a [f64],
-    /// Design columns (in the dense matrix) of each model term; the sparse
-    /// term's entry is not read.
     pub assign: &'a [Vec<usize>],
     pub shape: PenaltyShape,
-    /// The sparse term's second derivative (`coxlist1$second`).
     pub pen1: &'a [f64],
-    /// The dense terms' second derivative (`coxlist2$second`: `nvar` or
-    /// `nvar * nvar` entries).
     pub pen2: &'a [f64],
-    /// Position of the sparse term in `assign`.
     pub sparse_term: Option<usize>,
 }
 
-/// `coxph.wtest(var, b)$solve` with R's default tolerance: the generalised
-/// solve `var^{-1} b`.  A 1x1 `var` takes coxph.wtest's scalar branch,
-/// `b / var` (R/coxph.wtest.R:28-31), which is `NaN` for an aliased column.
 fn generalised_solve(var: &Array2<f64>, b: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     if var.len() == 1 && b.nrows() == 1 {
         return Ok(b.mapv(|value| value / var[(0, 0)]));
@@ -74,14 +45,11 @@ fn trace(matrix: &Array2<f64>) -> f64 {
     matrix.diag().sum()
 }
 
-/// `sum(diag(C_jj^{-1} var2_jj))`: the degrees of freedom of one term.
 fn term_df(c: &Array2<f64>, var2: &Array2<f64>, columns: &[usize]) -> SurvivalResult<f64> {
     let solve = generalised_solve(&submatrix(c, columns), &submatrix(var2, columns))?;
     Ok(trace(&solve))
 }
 
-/// `pen2` as an `nvar x nvar` penalty matrix: the diagonal when it has
-/// `nvar` entries, else R's column-major `matrix(pen2, nvar)`.
 fn penalty_matrix(pen2: &[f64], nvar: usize) -> Array2<f64> {
     if pen2.len() == nvar {
         Array2::from_diag(&ndarray::Array1::from_vec(pen2.to_vec()))
@@ -100,8 +68,6 @@ pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
         .iter()
         .map(|&d| if d == 0.0 { 0.0 } else { 1.0 / d })
         .collect();
-    // t(hmat) %*% (dinv * hmat): the dense block of H (the full matrix when
-    // there is no sparse term).
     let h22 = Array2::from_shape_fn((nvar, nvar), |(i, k)| {
         (0..nvar2)
             .map(|j| hmat[(i, j)] * dinv[j] * hmat[(k, j)])
@@ -109,7 +75,6 @@ pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
     });
 
     if input.shape.sparse && nvar == 0 {
-        // Only the sparse term: everything is diagonal.
         let hdiag: Vec<f64> = fdiag.iter().map(|d| 1.0 / d).collect();
         let df = hdiag
             .iter()
@@ -127,7 +92,6 @@ pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
     }
 
     if !input.shape.sparse {
-        // Dense terms only: H^{-1} = hinv D^{-1} hinv'.
         let hinv_full = Array2::from_shape_fn((nvar, nvar), |(j, k)| {
             (0..nvar)
                 .map(|i| hinv[(i, j)] * fdiag[i] * hinv[(i, k)])
@@ -155,9 +119,6 @@ pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
         });
     }
 
-    // A sparse term plus other variables (see the notation of Gray's paper):
-    // A.diag = diag of the frailty block of H^{-1}, B its cross block, C
-    // the dense corner.
     let d1 = &fdiag[..nf];
     let d2 = &fdiag[nf..];
     let a_diag: Vec<f64> = (0..nf)
@@ -179,16 +140,12 @@ pub(crate) fn coxpenal_df(input: DfInput<'_>) -> SurvivalResult<TermDf> {
                 .map(|j| b[(j, l)] * input.pen1[j] * b[(j, k)])
                 .sum::<f64>()
     });
-    // trace[B' A^{-1} B P2], zero without dense penalties.
     let mut temp2 = 0.0;
     if input.shape.dense {
         let h22_inverse = generalised_solve(&h22, &Array2::eye(nvar))?;
         let temp = &c - &h22_inverse;
         let p2 = penalty_matrix(input.pen2, nvar);
         var2 = &var2 - &c.dot(&p2).dot(&c);
-        // R: sum(diag(temp) * pen2) for a diagonal penalty and
-        // sum(diag(temp * pen2)) (an elementwise product) for a full one;
-        // both are the diagonal-by-diagonal sum.
         temp2 = (0..nvar).map(|l| temp[(l, l)] * p2[(l, l)]).sum();
     }
     let mut df = Vec::new();
@@ -218,8 +175,6 @@ mod tests {
 
     #[test]
     fn dense_df_is_the_trace_of_the_smoother() {
-        // H = [[2, 0.5], [0.5, 3]] = F D F' with a penalty of 1 on each
-        // coefficient: I = H - P.
         let h = Array2::from_shape_vec((2, 2), vec![2.0, 0.5, 0.5, 3.0]).unwrap();
         let f21 = 0.5 / 2.0;
         let d = [2.0, 3.0 - f21 * f21 * 2.0];
@@ -258,7 +213,6 @@ mod tests {
         let var2 = hinv_full.dot(&imat).dot(&hinv_full);
         assert!((out.var2[(0, 1)] - var2[(0, 1)]).abs() < 1e-12);
 
-        // Two terms: the per-term solve reproduces the same total.
         let split = coxpenal_df(DfInput {
             hmat: &hmat,
             hinv: &hinv,
@@ -309,7 +263,6 @@ mod tests {
             sparse_term: Some(0),
         })
         .unwrap();
-        // df = sum((1/fdiag - pen1) * fdiag) = (2 - 1) 0.5 + (4 - 1) 0.25.
         assert!((out.df[0] - 1.25).abs() < 1e-12);
         assert!((out.trh[0] - 0.75).abs() < 1e-12);
         assert_eq!(out.fvar, Some(vec![0.5, 0.25]));

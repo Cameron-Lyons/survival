@@ -58,10 +58,6 @@ for (spec in specs) {
   raw_summary<-summary(fit)$coefficients
   information_reference<-NULL
   if(kind%in%c("weighted","counting")) {
-    # coxfit5b omits the event weight from the sparse indicator diagonal.
-    # Form that diagonal and the dense/cross blocks from the independent
-    # weighted risk-set covariance, then use the documented sparse block
-    # approximation and gamma penalty's second derivatives.
     codes<-match(fit$x[,2],sort(unique(fit$x[,2])))
     groups<-max(codes)
     basis<-cbind(diag(groups)[codes,,drop=FALSE],fit$x[,1])
@@ -101,8 +97,6 @@ for (spec in specs) {
     fit$df<-c(fit$var2/fit$var,groups-sum(fit$fvar*fit$coxlist1$second))
     information_reference<-"Independent weighted risk-set covariance with the sparse frailty diagonal approximation and stock gamma penalty derivatives; stock coxfit5b omits the event weight in that diagonal."
   }
-  # The stock penalized cleanup residuals do not satisfy the risk-set sum
-  # identity here. Use the ordinary R Cox kernel at its exact fitted LP.
   expanded<-data.frame(t=fit$y[,1],event=fit$y[,2],group=fit$strata,lp=fit$linear.predictors)
   residual_fit<-coxph(Surv(t,event)~offset(lp)+strata(group),expanded,weights=fit$weights,
     ties=spec$method,control=coxph.control(iter.max=0))

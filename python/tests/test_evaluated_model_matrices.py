@@ -103,8 +103,6 @@ def test_evaluated_frames_match_stock_values_metadata_and_warnings(case, action,
             if "error" in expected["value"]:
                 message = expected["value"]["error"][0]
                 if message == "number of variables != number of variable names":
-                    # Stock AFT's reduced terms/predvars mismatch fails before
-                    # resolving this untagged frame's absent raw stratum.
                     assert case["kind"] == "survreg"
                     assert case["rhs"] == "age + strata(g) + strata(g):flag"
                     assert input_name == "untagged"

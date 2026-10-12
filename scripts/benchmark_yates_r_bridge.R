@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete R-facing Yates calls, including formula preparation and conversion.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)
@@ -19,7 +18,6 @@ fits <- list(
 fits$survival <- fits$risk
 population <- d[rep(seq_len(nrow(d)), length.out = n), c("b", "z")]
 reference <- function(fit, ...) {
-  # survival::yates evaluates this name in its caller's frame.
   yates_setup <- if (inherits(fit, "coxph")) survival:::yates_setup.coxph else if (inherits(fit, "glm")) survival:::yates_setup.glm else survival:::yates_setup.default
   survival::yates(fit, ...)
 }
@@ -47,7 +45,6 @@ for (kind in names(fits)) {
     stopifnot(isTRUE(all.equal(actual$summary$surv,
       unname(expected$summary$surv[-1L, , drop = FALSE]), tolerance = 3e-8)))
   }
-  # R's JIT can compile a closure after its first call; warm every path three times.
   for (warmup in seq_len(2L)) for (call in calls) invisible(call())
   elapsed <- lapply(calls, function(call) numeric(repeats))
   for (i in seq_len(repeats)) {

@@ -1,5 +1,3 @@
-//! Cox model inputs, options and result types.
-
 use crate::concordance::ConcordanceFit;
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::strata_order::{grouped_sum, order_within_strata, validate_intervals};
@@ -12,15 +10,11 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
-/// Validated inputs of a Cox fit, in the caller's row order (`Surv(time,
-/// status) ~ x` or `Surv(entry, time, status) ~ x`); the fit checks the
-/// predictor values and weights ([`CoxphData::check_fit_input`]).
 #[derive(Debug, Clone)]
 pub struct CoxphData {
     pub time: Vec<f64>,
     pub entry: Option<Vec<f64>>,
     pub status: Vec<i32>,
-    /// `n x nvar` design matrix (no intercept column).
     pub x: Array2<f64>,
     pub weights: Option<Vec<f64>>,
     pub strata: Option<Vec<i32>>,
@@ -50,8 +44,6 @@ impl CoxphData {
         Ok(data)
     }
 
-    /// Structural checks run again at fitting boundaries because callers may
-    /// construct or modify the public fields after using `try_new`.
     pub(crate) fn validate(&self) -> SurvivalResult<()> {
         let n = self.n();
         if n == 0 {
@@ -86,10 +78,6 @@ impl CoxphData {
         self.time.len()
     }
 
-    /// The checks `coxph()` makes only once the data have events (data
-    /// without events get their fit first): finite predictors, and the
-    /// fitters' positive case weights (`coxph.fit`, `agreg.fit`,
-    /// `coxpenal.fit`).
     pub fn check_fit_input(&self) -> SurvivalResult<()> {
         if let Some(value) = self.x.iter().find(|value| !value.is_finite()) {
             return Err(SurvivalError::invalid_input(format!(
@@ -107,24 +95,15 @@ impl CoxphData {
     }
 }
 
-/// Fitting options: the `coxph()` arguments beyond the data.
 #[derive(Debug, Clone)]
 pub struct CoxphOptions {
     pub method: TieMethod,
-    /// Initial coefficients (`init`); zero when absent.
     pub init: Option<Vec<f64>>,
-    /// `coxph.control(iter.max, eps, toler.chol)`.
     pub iter_max: usize,
     pub eps: f64,
     pub toler_chol: f64,
-    /// R's `nocenter`: a column whose values all belong to this set is
-    /// neither centred nor scaled inside the fitter (its mean is reported
-    /// as 0).  `None` is R's `nocenter = NULL`: centre every column.
     pub nocenter: Option<Vec<f64>>,
-    /// Cluster codes for the robust sandwich variance (`cluster()`).
     pub cluster: Option<Vec<i32>>,
-    /// Robust variance; defaults to `cluster.is_some()`.  `Some(true)`
-    /// without a cluster clusters on the observations.
     pub robust: Option<bool>,
 }
 
@@ -143,17 +122,11 @@ impl Default for CoxphOptions {
     }
 }
 
-/// Rows grouped by stratum and sorted by (stratum, time, original index),
-/// the order every C kernel of the package expects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SortedRows {
-    /// Original row indices in sorted order.
     pub order: Vec<usize>,
-    /// `[start, end)` positions in `order` of each stratum.
     pub bounds: Vec<(usize, usize)>,
-    /// Stratum code of each stratum, ascending.
     pub codes: Vec<i32>,
-    /// Stratum position (index into `codes`) of each original row.
     pub stratum_index: Vec<usize>,
 }
 
@@ -184,8 +157,6 @@ impl SortedRows {
         }
     }
 
-    /// The rows in (stratum, time, original index) order, the order the
-    /// engine sorts them in.
     pub(crate) fn by_time(time: &[f64], strata: Option<&[i32]>) -> Self {
         let order = match strata {
             Some(strata) => order_within_strata(strata, |a, b| time[a].total_cmp(&time[b])),
@@ -202,61 +173,57 @@ impl SortedRows {
         self.codes.len()
     }
 
-    /// Position of a stratum code, if the fit has it.
     pub(crate) fn position_of(&self, code: i32) -> Option<usize> {
         self.codes.binary_search(&code).ok()
     }
 }
 
-/// A fitted Cox model (R's `coxph` object).  As in R, the coefficient of a
-/// redundant (aliased) covariate is `NaN` (R's `NA`) with a zero row and
-/// column in `var`; every computation on the fit treats it as 0.
+#[doc = " A fitted Cox model (R's `coxph` object).  As in R, the coefficient of a"]
+#[doc = " redundant (aliased) covariate is `NaN` (R's `NA`) with a zero row and"]
+#[doc = " column in `var`; every computation on the fit treats it as 0."]
 #[pyclass(module = "survival._survival", skip_from_py_object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxPHFit {
-    /// Coefficients; `NaN` marks an aliased covariate.
+    #[doc = " Coefficients; `NaN` marks an aliased covariate."]
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
-    /// Variance of the coefficients; the robust sandwich when `naive_var`
-    /// is present.
     pub var: Array2<f64>,
-    /// Model-based variance, kept when `var` is the robust one.
     pub naive_var: Option<Array2<f64>>,
-    /// Log partial likelihood at the initial and the final coefficients.
+    #[doc = " Log partial likelihood at the initial and the final coefficients."]
     #[pyo3(get)]
     pub loglik: [f64; 2],
-    /// Score test at the initial coefficients.
+    #[doc = " Score test at the initial coefficients."]
     #[pyo3(get)]
     pub score: f64,
-    /// Robust score test (present with the robust variance).
+    #[doc = " Robust score test (present with the robust variance)."]
     #[pyo3(get)]
     pub rscore: Option<f64>,
     #[pyo3(get)]
     pub wald_test: f64,
     #[pyo3(get)]
     pub iter: usize,
-    /// Rank of the information matrix (`< nvar` marks aliased columns),
-    /// `-2` converged while step halving, `1000` did not converge.
+    #[doc = " Rank of the information matrix (`< nvar` marks aliased columns),"]
+    #[doc = " `-2` converged while step halving, `1000` did not converge."]
     #[pyo3(get)]
     pub flag: i32,
-    /// `agreg.fit`'s `info` for a (start, stop] Breslow or Efron fit: the
-    /// rank of the information matrix at the initial coefficients, the
-    /// number of recentrings of the risk scores, the number of step
-    /// halvings, and 1 when the iterations ran out.  `None` for the other
-    /// fitters.
+    #[doc = " `agreg.fit`'s `info` for a (start, stop] Breslow or Efron fit: the"]
+    #[doc = " rank of the information matrix at the initial coefficients, the"]
+    #[doc = " number of recentrings of the risk scores, the number of step"]
+    #[doc = " halvings, and 1 when the iterations ran out.  `None` for the other"]
+    #[doc = " fitters."]
     #[pyo3(get)]
     pub info: Option<[i32; 4]>,
-    /// `x %*% coef + offset - sum(coef * means)`.
+    #[doc = " `x %*% coef + offset - sum(coef * means)`."]
     #[pyo3(get)]
     pub linear_predictors: Vec<f64>,
-    /// Martingale residuals.
+    #[doc = " Martingale residuals."]
     #[pyo3(get)]
     pub residuals: Vec<f64>,
-    /// Column centres (weighted means for right-censored data, plain means
-    /// for counting-process data; 0 for `nocenter` columns).
+    #[doc = " Column centres (weighted means for right-censored data, plain means"]
+    #[doc = " for counting-process data; 0 for `nocenter` columns)."]
     #[pyo3(get)]
     pub means: Vec<f64>,
-    /// Score vector at the final coefficients (`agreg.fit`'s `first`).
+    #[doc = " Score vector at the final coefficients (`agreg.fit`'s `first`)."]
     #[pyo3(get)]
     pub first: Vec<f64>,
     #[pyo3(get)]
@@ -271,7 +238,6 @@ pub struct CoxPHFit {
     pub entry: Option<Vec<f64>>,
     #[pyo3(get)]
     pub status: Vec<i32>,
-    /// Design matrix in the caller's row order.
     pub x: Array2<f64>,
     #[pyo3(get)]
     pub weights: Vec<f64>,
@@ -279,26 +245,23 @@ pub struct CoxPHFit {
     pub strata: Option<Vec<i32>>,
     #[pyo3(get)]
     pub offset: Vec<f64>,
-    /// Columns that were neither centred nor scaled (`nocenter`).
+    #[doc = " Columns that were neither centred nor scaled (`nocenter`)."]
     #[pyo3(get)]
     pub nocenter: Vec<bool>,
     #[pyo3(get)]
     pub cluster: Option<Vec<i32>>,
-    /// The concordance of the linear predictors with the outcome, as
-    /// `coxph()` computes it: `concordancefit(Y, lp, strata, weights,
-    /// cluster, reverse = TRUE, timefix = FALSE)`.  R's `fit$concordance`
-    /// vector is `(colSums(count), concordance, sqrt(var))` of this object,
-    /// and `summary(fit)$concordance` its last two entries.
+    #[doc = " The concordance of the linear predictors with the outcome, as"]
+    #[doc = " `coxph()` computes it: `concordancefit(Y, lp, strata, weights,"]
+    #[doc = " cluster, reverse = TRUE, timefix = FALSE)`.  R's `fit$concordance`"]
+    #[doc = " vector is `(colSums(count), concordance, sqrt(var))` of this object,"]
+    #[doc = " and `summary(fit)$concordance` its last two entries."]
     #[pyo3(get)]
     pub concordance: ConcordanceFit,
     pub(crate) sorted: SortedRows,
-    /// Per-stratum baseline curves at `x - means`, `risk = exp(lp)`, for the
-    /// hazard type matching the tie method.
     #[serde(skip)]
     pub(super) curves: OnceLock<Vec<AgsurvCurve>>,
 }
 
-/// `predict.coxph`'s `reference` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredictReference {
     Strata,
@@ -319,8 +282,6 @@ impl PredictReference {
     }
 }
 
-/// New observations for `predict()` / `survfit()`: covariate rows plus the
-/// optional stratum, offset and (for expected counts) follow-up.
 #[derive(Debug, Clone)]
 pub struct CoxNewData {
     pub x: Array2<f64>,
@@ -341,8 +302,6 @@ impl CoxNewData {
         Self::validated(x, strata, offset, time, entry, false)
     }
 
-    /// Prediction rows may contain NaN covariates or offsets. Missing values
-    /// propagate only into predictions that use them; times remain finite.
     pub fn try_new_prediction(
         x: Array2<f64>,
         strata: Option<Vec<i32>>,
@@ -372,8 +331,6 @@ impl CoxNewData {
         Ok(data)
     }
 
-    /// Every consuming method validates public fields under its own missing-value
-    /// policy. A permissive prediction input cannot bypass curve validation.
     pub(super) fn validate(&self, allow_missing: bool) -> SurvivalResult<()> {
         let m = self.nrows();
         if m == 0 {
@@ -423,7 +380,7 @@ impl CoxNewData {
     }
 }
 
-/// `predict(type = "lp" | "risk" | "expected" | "survival")` output.
+#[doc = " `predict(type = \"lp\" | \"risk\" | \"expected\" | \"survival\")` output."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxPrediction {
@@ -434,8 +391,6 @@ pub struct CoxPrediction {
 }
 
 impl CoxPrediction {
-    /// Sum predictions by ascending group, combining standard errors in
-    /// quadrature before results cross a language boundary.
     pub fn collapse(self, group: &[i32]) -> SurvivalResult<Self> {
         let sum = |values: &[f64], squares| {
             let column = ArrayView2::from_shape((values.len(), 1), values)
@@ -449,24 +404,24 @@ impl CoxPrediction {
     }
 }
 
-/// `predict(type = "terms")` output: one column per term.
+#[doc = " `predict(type = \"terms\")` output: one column per term."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxTermsPrediction {
-    /// Column count retained independently of the row count.
+    #[doc = " Column count retained independently of the row count."]
     #[pyo3(get)]
     pub n_columns: usize,
     #[pyo3(get)]
     pub fit: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub se_fit: Option<Vec<Vec<f64>>>,
-    /// `sum(coefficients * means)`, R's `attr(pred, "constant")`.
+    #[doc = " `sum(coefficients * means)`, R's `attr(pred, \"constant\")`."]
     #[pyo3(get)]
     pub constant: f64,
 }
 
-/// `basehaz(fit)`: the cumulative hazard at each event or censoring time
-/// per stratum, rows concatenated in stratum order.
+#[doc = " `basehaz(fit)`: the cumulative hazard at each event or censoring time"]
+#[doc = " per stratum, rows concatenated in stratum order."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct Basehaz {
@@ -474,20 +429,20 @@ pub struct Basehaz {
     pub time: Vec<f64>,
     #[pyo3(get)]
     pub hazard: Vec<f64>,
-    /// Stratum code of each row (absent for an unstratified fit).
+    #[doc = " Stratum code of each row (absent for an unstratified fit)."]
     #[pyo3(get)]
     pub strata: Option<Vec<i32>>,
 }
 
-/// One curve of `survfit(fit, newdata)`: `surv`, `cumhaz` and `std_err`
-/// have one row per time and one column per new observation.
+#[doc = " One curve of `survfit(fit, newdata)`: `surv`, `cumhaz` and `std_err`"]
+#[doc = " have one row per time and one column per new observation."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct CoxSurvfitCurve {
-    /// Stratum code the curve belongs to.
+    #[doc = " Stratum code the curve belongs to."]
     #[pyo3(get)]
     pub stratum: i32,
-    /// Number of observations in the stratum.
+    #[doc = " Number of observations in the stratum."]
     #[pyo3(get)]
     pub n: usize,
     #[pyo3(get)]
@@ -502,23 +457,17 @@ pub struct CoxSurvfitCurve {
     pub surv: Vec<Vec<f64>>,
     #[pyo3(get)]
     pub cumhaz: Vec<Vec<f64>>,
-    /// Standard error of the cumulative hazard (`std.err` with `logse`).
+    #[doc = " Standard error of the cumulative hazard (`std.err` with `logse`)."]
     #[pyo3(get)]
     pub std_err: Option<Vec<Vec<f64>>>,
 }
 
-/// `survfit.coxph` arguments.
 #[derive(Debug, Clone, Copy)]
 pub struct SurvfitOptions {
-    /// 1 = product limit (Kalbfleisch-Prentice), 2 = `exp(-cumhaz)`.
     pub stype: u8,
-    /// 1 = Breslow, 2 = Efron; defaults to the fit's tie method.
     pub ctype: Option<u8>,
     pub se_fit: bool,
-    /// `censor = FALSE` drops the rows without an event.
     pub censor: bool,
-    /// `start.time`: the curves are built from the rows whose stop time is
-    /// at or after it; the risk scores stay those of the whole fit.
     pub start_time: Option<f64>,
 }
 

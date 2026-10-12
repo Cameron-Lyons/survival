@@ -1,14 +1,3 @@
-//! No-op replacements for PyO3's attribute macros, used by the `survival`
-//! crate when it is compiled without the `python` feature (see
-//! `src/pyo3_shim.rs` for the full contract).
-//!
-//! `pyclass`, `pyfunction` and `pymethods` return their item unchanged except
-//! that the helper attributes PyO3 itself consumes (`#[pyo3(...)]`, `#[new]`,
-//! `#[staticmethod]`, `#[getter]`, `#[setter]`) are stripped recursively, so
-//! the compiler never sees an unknown attribute. The helpers only ever appear
-//! inside one of those three items, which is why they need no macro of their
-//! own.
-
 use proc_macro::{Delimiter, Group, TokenStream, TokenTree};
 
 #[proc_macro_attribute]

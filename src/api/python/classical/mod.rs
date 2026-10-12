@@ -6,9 +6,6 @@ macro_rules! register_classes {
     };
 }
 
-/// The `ties` argument of the residual kernels: the C code's
-/// `method == "efron"` flag, so only `"breslow"` and `"efron"` (an exact
-/// fit's residuals come from `CoxPHFit`).
 fn kernel_ties(ties: &str) -> PyResult<crate::regression::TieMethod> {
     match ties {
         "breslow" => Ok(crate::regression::TieMethod::Breslow),

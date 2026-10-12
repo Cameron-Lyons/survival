@@ -166,8 +166,6 @@ fn deep_surv_construction_and_fits_validate_public_configuration_fields() {
 
         for (config, parameter) in cases {
             assert_config_error(construct_deep(&config), parameter);
-            // A valid constructor does not protect a later fit: all fields
-            // above were changed directly through the public Rust API.
             assert_config_error(
                 DeepSurv::fit(
                     py,
@@ -292,11 +290,8 @@ fn deep_surv_rejects_network_dimensions_that_depend_on_training_data() {
     Python::attach(|py| {
         let f32_capacity = isize::MAX as usize / size_of::<f32>();
         for (n_vars, width, batch_size, validation_fraction) in [
-            // The first weight matrix exceeds capacity despite a valid width.
             (3, f32_capacity / 3 + 1, 1, 0.0),
-            // Weights fit, but a six-row training activation matrix does not.
             (2, f32_capacity / 6 + 1, 6, 0.0),
-            // One-row batches fit, but the three-row validation matrix does not.
             (2, f32_capacity / 3 + 1, 1, 0.5),
         ] {
             let mut input = training_input();
@@ -310,7 +305,6 @@ fn deep_surv_rejects_network_dimensions_that_depend_on_training_data() {
             })
             .unwrap();
 
-            // These checks must happen before any network buffer is allocated.
             assert_config_error(
                 DeepSurv::fit(
                     py,
@@ -402,8 +396,6 @@ fn deep_surv_preserves_empty_hidden_layers_and_zero_patience() {
         assert_eq!(risk.len(), input.n_obs);
         assert!(risk.iter().all(|value| value.is_finite()));
 
-        // These bounds are properties of the backend representation, not an
-        // arbitrary upper limit such as one for the neural learning rate.
         construct_deep(&DeepSurvConfig {
             learning_rate: f32::MAX as f64,
             l2_reg: f32::MAX as f64,

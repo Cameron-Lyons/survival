@@ -1,10 +1,3 @@
-//! Consistency checks for multi-state survival data.
-//!
-//! Faithful port of `survcheck2` (R survival `R/survcheck.R`) and the C
-//! helper `multicheck` (`src/multicheck.c`).  The formula/model-frame layer
-//! of R's `survcheck` (response construction, `na.action`, row renumbering)
-//! belongs to the caller; this module receives the already-built response.
-
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
@@ -12,40 +5,28 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-/// The initial state of every row, given as codes into a level set (an R
-/// factor).  Codes are 1-based like `as.integer(factor)`.
 #[derive(Debug, Clone)]
 pub struct SurvCheckIstate<'a> {
     pub codes: &'a [i32],
     pub levels: &'a [String],
 }
 
-/// Inputs of [`survcheck`]: a (multi-state) survival response plus the
-/// subject identifier.  `time1` is `None` for right-censored data, in which
-/// case every observation starts at time 0 (R's `ncol(y) == 2` branch).
 #[derive(Debug, Clone)]
 pub struct SurvCheckInput<'a> {
     pub id: &'a [i64],
     pub time1: Option<&'a [f64]>,
     pub time2: &'a [f64],
-    /// `0` = censored, `k` = the `k`-th entry of `states` (1-based), i.e. the
-    /// integer codes of R's multi-state `Surv` status column.
     pub status: &'a [i32],
-    /// Names of the event states (`attr(y, "states")`).
     pub states: &'a [String],
     pub istate: Option<SurvCheckIstate<'a>>,
-    /// Name of the initial state when `istate` is absent (R `istate0`).
     pub istate0: &'a str,
-    /// Label of the censoring column of the transitions table (without the
-    /// parentheses R adds).
     pub censor_label: &'a str,
-    /// Apply R's `aeqSurv` near-tie rounding to the times first.
     pub timefix: bool,
 }
 
-/// Rows and subject ids of one kind of data problem (R's `overlap`, `gap`,
-/// `jump` and `teleport` components).  Rows are 0-based indices into the
-/// input; `id` lists the distinct subjects in order of first appearance.
+#[doc = " Rows and subject ids of one kind of data problem (R's `overlap`, `gap`,"]
+#[doc = " `jump` and `teleport` components).  Rows are 0-based indices into the"]
+#[doc = " input; `id` lists the distinct subjects in order of first appearance."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct SurvCheckProblem {
@@ -53,7 +34,7 @@ pub struct SurvCheckProblem {
     pub id: Vec<i64>,
 }
 
-/// Counts of each problem type (R's `flag` vector).
+#[doc = " Counts of each problem type (R's `flag` vector)."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckFlags {
@@ -64,43 +45,43 @@ pub struct SurvCheckFlags {
     pub duplicate: usize,
 }
 
-/// R's `transitions` table: `from` states by `to` states (plus the
-/// censoring column), rows and columns that are entirely zero removed.
+#[doc = " R's `transitions` table: `from` states by `to` states (plus the"]
+#[doc = " censoring column), rows and columns that are entirely zero removed."]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckTransitions {
     pub from_states: Vec<String>,
     pub to_states: Vec<String>,
-    /// `counts[i][j]` = number of transitions from `from_states[i]` to
-    /// `to_states[j]`.
+    #[doc = " `counts[i][j]` = number of transitions from `from_states[i]` to"]
+    #[doc = " `to_states[j]`."]
     pub counts: Vec<Vec<usize>>,
 }
 
-/// R's `events` table: for each state (and `(any)` when there is more than
-/// one event state) the number of subjects with `count[j]` visits.
+#[doc = " R's `events` table: for each state (and `(any)` when there is more than"]
+#[doc = " one event state) the number of subjects with `count[j]` visits."]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckEvents {
     pub states: Vec<String>,
-    /// The distinct visit counts labelling the columns.
+    #[doc = " The distinct visit counts labelling the columns."]
     pub count: Vec<usize>,
     pub subjects: Vec<Vec<usize>>,
 }
 
 crate::internal::pickle::picklable!(SurvCheckFlags, SurvCheckTransitions, SurvCheckEvents);
 
-/// Result of [`survcheck`], mirroring R's `survcheck` object.
+#[doc = " Result of [`survcheck`], mirroring R's `survcheck` object."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct SurvCheckResult {
-    /// All state names, initial states that are never destinations first.
+    #[doc = " All state names, initial states that are never destinations first."]
     pub states: Vec<String>,
     pub transitions: SurvCheckTransitions,
-    /// `None` when there are no events at all (R returns `NULL`).
+    #[doc = " `None` when there are no events at all (R returns `NULL`)."]
     pub events: Option<SurvCheckEvents>,
     pub flag: SurvCheckFlags,
-    /// The current state at the start of every observation, chained
-    /// forward from the initial state (R's `istate` component).
+    #[doc = " The current state at the start of every observation, chained"]
+    #[doc = " forward from the initial state (R's `istate` component)."]
     pub istate: Vec<String>,
     pub n_id: usize,
     pub n_observations: usize,
@@ -111,20 +92,12 @@ pub struct SurvCheckResult {
     pub teleport: Option<SurvCheckProblem>,
 }
 
-/// Output of the `multicheck` C routine, one entry per input row.
 struct MultiCheck {
-    /// 2 when the row is the last observation of its subject, else 0
-    /// (the C code adds 2 to the previous subject's final row).
     dupid: Vec<i32>,
-    /// -1: starts before the prior interval ended, 1: after, 0: contiguous
-    /// or first row of the subject.
     gap: Vec<i32>,
-    /// Current state code (1-based into `states`).
     cstate: Vec<i32>,
 }
 
-/// Port of `src/multicheck.c`: walk the rows in `sort` order and chain the
-/// state forward, ignoring censored rows as a state change.
 fn multicheck(
     time1: &[f64],
     time2: &[f64],
@@ -171,8 +144,6 @@ fn multicheck(
     MultiCheck { dupid, gap, cstate }
 }
 
-/// R's `order(id, time2, time1)` (or `order(id, time1)` for right-censored
-/// data, where `time1` is all zero): a stable sort, 0-based.
 fn observation_order(id: &[i64], time1: &[f64], time2: &[f64]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..id.len()).collect();
     order.sort_by(|&a, &b| {
@@ -184,7 +155,6 @@ fn observation_order(id: &[i64], time1: &[f64], time2: &[f64]) -> Vec<usize> {
     order
 }
 
-/// Distinct ids in order of first appearance (R's `unique`).
 fn unique_ids(id: &[i64]) -> Vec<i64> {
     let mut seen = HashMap::new();
     let mut unique = Vec::new();
@@ -204,10 +174,8 @@ fn problem(rows: Vec<usize>, id: &[i64]) -> Option<SurvCheckProblem> {
     Some(SurvCheckProblem { row: rows, id: ids })
 }
 
-/// The `events` table: number of subjects by number of visits to each state.
 fn events_table(id: &[i64], status: &[i32], event_states: &[String]) -> Option<SurvCheckEvents> {
     let n_states = event_states.len();
-    // table(id, factor(status, 0:nstate))[, -1]: rows in sorted id order.
     let mut per_subject: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (&subject, &state) in id.iter().zip(status) {
         let counts = per_subject
@@ -222,7 +190,6 @@ fn events_table(id: &[i64], status: &[i32], event_states: &[String]) -> Option<S
         return None;
     }
     if n_states == 1 {
-        // table(tab1): the distinct visit counts that occur, in order.
         let mut by_count: BTreeMap<usize, usize> = BTreeMap::new();
         for counts in &tab1 {
             *by_count.entry(counts[0]).or_insert(0) += 1;
@@ -233,8 +200,6 @@ fn events_table(id: &[i64], status: &[i32], event_states: &[String]) -> Option<S
             subjects: vec![by_count.values().copied().collect()],
         });
     }
-    // Add the "(any)" column, tabulate every column over the union of the
-    // observed counts, and drop states nobody ever visits.
     let with_any: Vec<Vec<usize>> = tab1
         .iter()
         .map(|counts| {
@@ -274,8 +239,6 @@ fn events_table(id: &[i64], status: &[i32], event_states: &[String]) -> Option<S
     })
 }
 
-/// The `transitions` table, compacted like R: from-states with neither
-/// arrivals nor departures and all-zero columns are dropped.
 fn transitions_table(
     states: &[String],
     censor_column: &str,
@@ -400,10 +363,6 @@ fn validate(input: &SurvCheckInput<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Check a multi-state (or plain) survival response for consistency, as
-/// R's `survcheck` does: build the current-state vector, the transitions
-/// and events tables, and flag overlapping, gapped, jumped and teleported
-/// intervals.
 pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> {
     validate(input)?;
     let n = input.id.len();
@@ -423,11 +382,8 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
         )));
     }
 
-    // The full state list: initial states that are not destinations first,
-    // then the destination states in the user's order.
     let (istate_levels, istate_codes): (Vec<String>, Vec<i32>) = match &input.istate {
         Some(istate) => {
-            // istate[, drop = TRUE]: only the levels actually used, in order.
             let used: Vec<usize> = (0..istate.levels.len())
                 .filter(|&level| istate.codes.iter().any(|&code| code as usize == level + 1))
                 .collect();
@@ -460,12 +416,10 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
             .position(|s| s == name)
             .map_or(0, |position| position as i32 + 1)
     };
-    // cstate2 <- factor(cstate, states)
     let cstate2: Vec<i32> = istate_codes
         .iter()
         .map(|&code| state_index(&istate_levels[(code - 1) as usize]))
         .collect();
-    // stat2: status re-indexed into the full state list.
     let sindx: Vec<i32> = input.states.iter().map(|name| state_index(name)).collect();
     let stat2: Vec<i32> = input
         .status
@@ -491,8 +445,6 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
     let order = observation_order(input.id, &time1, &time2);
     let check = multicheck(&time1, &time2, &stat2, &id2, &cstate2, &order);
 
-    // Without a user istate on (start, stop] data, the chained state is the
-    // current state; for right-censored data every row starts at istate0.
     let cstate2 = if input.istate.is_none() && counting {
         check.cstate.clone()
     } else {
@@ -553,8 +505,8 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
     })
 }
 
-/// Python entry point.  `istate` holds 1-based codes into `istate_levels`
-/// (defaulting to the sorted distinct codes, as labels).
+#[doc = " Python entry point.  `istate` holds 1-based codes into `istate_levels`"]
+#[doc = " (defaulting to the sorted distinct codes, as labels)."]
 #[pyfunction(name = "survcheck")]
 #[pyo3(signature = (id, time2, status, states, time1=None, istate=None, istate_levels=None, istate0="(s0)", censor_label="censored", timefix=true))]
 #[allow(clippy::too_many_arguments)]
@@ -636,7 +588,6 @@ mod tests {
 
     #[test]
     fn chains_states_forward_and_tabulates_transitions() {
-        // subject 1: (0,10,b] (10,15,censor] (15,20,c] gives states a, b, b
         let result = check(
             &[1, 1, 1, 2],
             Some(&[0.0, 10.0, 15.0, 0.0]),
@@ -650,7 +601,6 @@ mod tests {
         assert_eq!(result.n_id, 2);
         assert_eq!(result.n_observations, 4);
         assert_eq!(result.n_transitions, 2);
-        // a destination state keeps its (empty) row, like R
         assert_eq!(result.transitions.from_states, names(&["a", "b", "c"]));
         assert_eq!(
             result.transitions.to_states,

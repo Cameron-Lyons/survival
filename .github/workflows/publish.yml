@@ -49,8 +49,6 @@ jobs:
           set -euo pipefail
 
           if [[ "$EVENT_NAME" == "release" ]]; then
-            # The release event records the original tagged commit. A moved
-            # tag must not silently change what this run publishes.
             release_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
             if [[ "$release_commit" != "$EVENT_SHA" ]]; then
               echo "Release tag no longer points to the release event commit." >&2
@@ -123,8 +121,6 @@ jobs:
           target: ${{ matrix.platform.target }}
           rust-toolchain: '1.95.0'
           manylinux: ${{ runner.os == 'Linux' && '2014' || '' }}
-          # setup-python only selects the host interpreter. Linux builds run in
-          # manylinux and must use the requested CPython ABI inside that image.
           args: >-
             --release --locked --out dist --features extension-module,ml
             --interpreter "${{ runner.os == 'Linux' && format('/opt/python/{0}-{0}/bin/python', matrix.python.abi) || 'python' }}"
@@ -228,7 +224,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
-          # A retry must finish missing wheel uploads after a partial upload.
           skip-existing: true
 
   publish-crates:

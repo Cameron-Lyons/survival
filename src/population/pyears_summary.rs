@@ -1,26 +1,14 @@
-//! The data side of R's `summary.pyears` and `print.pyears`
-//! (`R/summary.pyears.R`, `R/print.pyears.R`): totals, event rates,
-//! observed/expected ratios and their Poisson confidence limits for the
-//! tables produced by [`super::pyears::pyears`].  Layout and printing stay
-//! with the caller.
-
 use super::pyears::PyearsResult;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::validation::cipoisson::{CipoissonMethod, cipoisson_one};
 use pyo3::prelude::*;
 
-/// The logical switches of `summary.pyears`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PyearsSummaryOptions {
-    /// Append marginal totals (`pytot`).
     pub totals: bool,
-    /// `scale * event / pyears`.
     pub rate: bool,
-    /// Poisson confidence limits of the rate.
     pub ci_r: bool,
-    /// `event / expected`.
     pub rr: bool,
-    /// Poisson confidence limits of the ratio.
     pub ci_rr: bool,
     pub conf_level: f64,
     pub scale: f64,
@@ -40,9 +28,9 @@ impl Default for PyearsSummaryOptions {
     }
 }
 
-/// The tables of `summary.pyears`, each in column-major order over `dims`
-/// (which include the "Total" margins when they were requested).  A
-/// missing entry (R's `NA`) is `NaN`.
+#[doc = " The tables of `summary.pyears`, each in column-major order over `dims`"]
+#[doc = " (which include the \"Total\" margins when they were requested).  A"]
+#[doc = " missing entry (R's `NA`) is `NaN`."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct PyearsSummary {
@@ -68,10 +56,10 @@ pub struct PyearsSummary {
     pub ci_rr_lower: Option<Vec<f64>>,
     #[pyo3(get)]
     pub ci_rr_upper: Option<Vec<f64>>,
-    /// `print.pyears`: `sum(x$event)`, `NaN` without events.
+    #[doc = " `print.pyears`: `sum(x$event)`, `NaN` without events."]
     #[pyo3(get)]
     pub total_events: f64,
-    /// `print.pyears`: `sum(x$pyears)`.
+    #[doc = " `print.pyears`: `sum(x$pyears)`."]
     #[pyo3(get)]
     pub total_pyears: f64,
     #[pyo3(get)]
@@ -80,8 +68,6 @@ pub struct PyearsSummary {
     pub observations: usize,
 }
 
-/// Addressable f64 cells, including each extent of an empty table. A zero
-/// extent makes the product zero without multiplying the unused extents.
 fn checked_cells(dims: &[usize]) -> SurvivalResult<usize> {
     let maximum = isize::MAX as usize / size_of::<f64>();
     let invalid = || SurvivalError::invalid_input("table dimensions exceed addressable memory");
@@ -99,10 +85,6 @@ fn checked_cells(dims: &[usize]) -> SurvivalResult<usize> {
     })
 }
 
-/// R's `pytot`: append a "Total" margin to the first two dimensions (or
-/// the only one).  With `na` the totals are `NA`, which `summary.pyears`
-/// uses for `n` when time-dependent cuts make it meaningless. The caller
-/// checks the expanded shape once before any component is allocated.
 fn pytot(x: &[f64], dims: &[usize], na: bool, n_cells: usize) -> (Vec<f64>, Vec<usize>) {
     let total = |values: &[f64]| if na { f64::NAN } else { values.iter().sum() };
     if dims.len() == 1 {
@@ -147,8 +129,6 @@ fn pytot(x: &[f64], dims: &[usize], na: bool, n_cells: usize) -> (Vec<f64>, Vec<
     (out, new_dims)
 }
 
-/// R's `summary.pyears` on a [`PyearsResult`]; `tcut` says whether any
-/// term was a `tcut`, in which case totals of `n` are `NA`.
 pub fn summary_pyears(
     result: &PyearsResult,
     tcut: bool,
@@ -225,8 +205,6 @@ pub fn summary_pyears(
     let ratio = |num: &[f64], den: &[f64]| -> Vec<f64> {
         num.iter().zip(den).map(|(a, b)| a / b).collect()
     };
-    // `cipoisson(k, time, p = conf.level) * scale`: an empty cell (`time`
-    // of 0) has missing limits.
     let limits = |num: &[f64], den: &[f64], scale: f64| -> (Vec<f64>, Vec<f64>) {
         num.iter()
             .zip(den)
@@ -272,8 +250,8 @@ pub fn summary_pyears(
     })
 }
 
-/// Python entry point of [`summary_pyears`]: the tables of a `pyears`
-/// result as column-major cells over `dims` (empty for a single cell).
+#[doc = " Python entry point of [`summary_pyears`]: the tables of a `pyears`"]
+#[doc = " result as column-major cells over `dims` (empty for a single cell)."]
 #[pyfunction(name = "summary_pyears")]
 #[pyo3(signature = (
     pyears,
@@ -358,12 +336,10 @@ mod tests {
         assert_eq!(dims, vec![4]);
         assert!(pytot(&[1.0, 2.0], &[2], true, 3).0[2].is_nan());
 
-        // 2 x 2 column-major: [[1, 3], [2, 4]] in R's display.
         let (two, dims) = pytot(&[1.0, 2.0, 3.0, 4.0], &[2, 2], false, 9);
         assert_eq!(dims, vec![3, 3]);
         assert_eq!(two, vec![1.0, 2.0, 3.0, 3.0, 4.0, 7.0, 4.0, 6.0, 10.0]);
 
-        // 2 x 2 x 2: each slab gets its own margins.
         let x: Vec<f64> = (1..=8).map(f64::from).collect();
         let (three, dims) = pytot(&x, &[2, 2, 2], false, 18);
         assert_eq!(dims, vec![3, 3, 2]);
@@ -400,7 +376,6 @@ mod tests {
         let ci_r_lower = summary.ci_r_lower.unwrap();
         let ci_r_upper = summary.ci_r_upper.unwrap();
         assert_eq!(ci_r_lower[0], 0.0);
-        // cipoisson(1, 20) * 100: qgamma(0.025, 1) / 20 and qgamma(0.975, 2) / 20.
         assert!((ci_r_lower[1] - 0.1265890399).abs() < 1e-6);
         assert!((ci_r_upper[1] - 27.8582169547).abs() < 1e-6);
         let ci_rr_upper = summary.ci_rr_upper.unwrap();
@@ -414,10 +389,6 @@ mod tests {
     #[test]
     #[allow(clippy::excessive_precision)]
     fn empty_cells_have_missing_rates_and_limits() {
-        // R: p <- pyears(Surv(time, status) ~ g, rmap = list(age, sex, year),
-        // ratetable = survexp.us, scale = 365.25) with g's third level empty;
-        // summary(p, rate = TRUE, ci.r = TRUE, ci.rr = TRUE, totals = TRUE,
-        // scale = 1000) prints "." and ". - ." for it.
         let pyears = PyearsResult {
             pyears: vec![2.8747433264887063, 2.1765913757700206, 0.0],
             n: vec![3.0, 3.0, 0.0],

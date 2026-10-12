@@ -46,11 +46,6 @@ def _mstate_data():
     }
 
 
-# ---------------------------------------------------------------------------
-# survfit for right-censored data: Kaplan-Meier
-# ---------------------------------------------------------------------------
-
-
 def test_survfit_formula_matches_r_kaplan_meier_by_group():
     fit = r.survfit("Surv(time, status) ~ group", _toy_data())
 
@@ -277,7 +272,6 @@ def test_survfit_weights_report_unweighted_counts_and_robust_se():
 def test_survfit_start_time_conditions_the_curves():
     fit = r.survfit("Surv(time, status) ~ group", _toy_data(), start_time=2)
 
-    # survfitKM records start.time only as t0 (fit$start.time is NULL in R)
     assert fit.t0 == 2.0
     assert not hasattr(fit, "start_time")
     assert fit.call.start_time == 2.0
@@ -287,8 +281,6 @@ def test_survfit_start_time_conditions_the_curves():
 
 
 def test_survfit_start_time_removing_a_whole_curve_matches_r():
-    # survfit(Surv(time, status) ~ group, start.time = 5): every group A row ends before 5,
-    # so R keeps n = c(0, 4) but strata = c("group=B" = 4) (temp$strata[temp$strata > 0])
     fit = r.survfit("Surv(time, status) ~ group", _toy_data(), start_time=5)
 
     assert fit.n == [0, 4]
@@ -371,16 +363,10 @@ def test_survfit_subset_and_na_action_follow_r_model_frame():
 
 
 def test_survfit_time0_is_accepted_and_ignored_by_survfitkm():
-    # survfitKM takes time0 but never uses it, so survfit0 still adds the time 0 row
     fit = r.survfit("Surv(time, status) ~ 1", _toy_data(), time0=True)
     assert fit.time0 is False
     assert fit.time[0] == 1.0
     assert r.survfit0(fit).time[0] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# survfitAJ and survfitTurnbull
-# ---------------------------------------------------------------------------
 
 
 def test_survfit_multistate_matches_r_aalen_johansen():
@@ -443,7 +429,6 @@ def test_survfit_interval_censored_uses_turnbull():
     assert fit.strata is None
     _close(fit.time, [1.5, 2.5, 4.0])
     _close(fit.surv, [0.625, 0.25, 0.25])
-    # R: survfit0, quantile and summary of the same fit
     fit0 = r.survfit0(fit)
     _close(fit0.time, [0.0, 1.5, 2.5, 4.0])
     _close(fit0.surv, [1.0, 0.625, 0.25, 0.25])
@@ -456,11 +441,6 @@ def test_survfit_interval_censored_uses_turnbull():
     table = r.summary_survfit(fit).table.values[0]
     _close(table[:8], [4, 4, 4, 3, 2.5, 0.484122918275927, 2.5, 1.5])
     assert math.isnan(table[8])
-
-
-# ---------------------------------------------------------------------------
-# survfit0, summary.survfit, quantile.survfit
-# ---------------------------------------------------------------------------
 
 
 def test_survfit0_inserts_the_starting_row_per_curve():
@@ -497,7 +477,6 @@ def test_summary_survfit_table_matches_r():
     ]
     _close(summary.table.values[0], [4, 4, 4, 3, 2.75, 0.649519052838329, 3, 1, math.nan], 1e-6)
     _close(summary.table.values[1], [4, 4, 4, 2, 7.0, 0.471404520791032, 7, 6, math.nan], 1e-6)
-    # event rows only, std.err on the survival scale
     _close(summary.time, [1, 2, 4, 6, 7])
     assert summary.strata == ["group=A"] * 3 + ["group=B"] * 2
     _close(summary.std_err[:2], [0.75 * 0.288675134594813, 0.25], rel=1e-6)
@@ -562,11 +541,6 @@ def test_quantile_survfit_matches_r():
         r.quantile_survfit(fit, probs=[1.5])
     with pytest.raises(ValueError, match="quantiles are not a well defined quantity"):
         r.quantile_survfit(r.survfit("Surv(time, ev) ~ 1", _mstate_data()))
-
-
-# ---------------------------------------------------------------------------
-# aggregate.survfit, survfit_confint, the bridge influence helpers
-# ---------------------------------------------------------------------------
 
 
 def test_aggregate_survfit_averages_the_data_margin():

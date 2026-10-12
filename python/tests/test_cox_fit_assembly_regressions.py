@@ -65,11 +65,7 @@ def _fit_quietly(*args, **kwargs):
     return fit, _messages(record)
 
 
-# --- the offset is centred before the fit -------------------------------------
-
-
 def test_offsets_near_the_exp_limit_fit_as_in_r(ovarian):
-    # coxph(Surv(futime, fustat) ~ age + rx + offset(o), ovarian), o = 707 + ecog.ps
     fit, messages = _fit_quietly("Surv(futime, fustat) ~ age + rx + offset(o)", ovarian)
     assert messages == []
     assert fit.coefficients == approx([0.146610093918191, -0.907891623259919])
@@ -80,7 +76,6 @@ def test_offsets_near_the_exp_limit_fit_as_in_r(ovarian):
     assert r.residuals(fit)[:3] == approx([0.895219554461548, 0.695456121672056, 0.584419162782667])
     assert _concordance(fit) == approx([168, 50, 0, 0, 0, 0.7706422018348624, 0.0820389984083848])
     assert fit.offset == approx(ovarian["o"])
-    # o = -740 + ecog.ps underflowed every risk score
     low = r.coxph("Surv(futime, fustat) ~ age + rx + offset(o_low)", ovarian)
     assert low.coefficients == approx([0.146610093918191, -0.907891623259919])
     assert low.loglik == approx([-35.2529266085066, -28.0501454820662])
@@ -122,9 +117,6 @@ def test_offset_centring_reaches_init_robust_counting_exact_and_penalized_fits(o
 
 @pytest.mark.parametrize("shift", [50.0, 707.0, -740.0])
 def test_curves_are_on_survfit_scale_for_any_offset(ovarian, shift):
-    # survfit.coxph's risk = exp(X %*% beta + offset - xcenter), with the mean offset in
-    # xcenter, so R gives the same curves for every shift; risks of exp(lp) would round
-    # the baseline survival to 1 (shift 50) or overflow (707, -740)
     data = dict(ovarian, o=[shift + value for value in ovarian["ecog.ps"]])
     fit = r.coxph("Surv(futime, fustat) ~ age + rx + offset(o)", data)
     curve = r.survfit(fit)
@@ -157,7 +149,6 @@ def test_curves_are_on_survfit_scale_for_any_offset(ovarian, shift):
 
 
 def test_expected_counts_keep_their_scale_with_an_offset(ovarian):
-    # R 3.8-12 gives these for shift 50; for 707 its agsurv call gets an infinite risk
     data = dict(ovarian, o=[50.0 + value for value in ovarian["ecog.ps"]])
     fit = r.coxph("Surv(futime, fustat) ~ age + rx + offset(o)", data)
     expected = r.predict(fit, type="expected", se_fit=True)
@@ -167,9 +158,6 @@ def test_expected_counts_keep_their_scale_with_an_offset(ovarian):
     assert survival_prob.se_fit[:3] == approx(
         [0.0954857261059137, 0.1692714321196184, 0.1653284140605831]
     )
-
-
-# --- data without events --------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -197,7 +185,6 @@ def test_data_without_events_get_coxph_skeleton(censored, formula):
     assert fit.var == [[0.0]]
     assert fit.loglik == [0.0, 0.0]
     assert (fit.iter, fit.score, fit.wald_test, fit.nevent) == (0, 0.0, 0.0, 0)
-    # colMeans(X), unweighted; the linear predictors are the centred offset
     assert fit.means == [2.5]
     assert fit.linear_predictors == approx([-0.15, -0.05, 0.05, 0.15])
     assert fit.residuals == [0.0] * 4
@@ -208,7 +195,6 @@ def test_data_without_events_get_coxph_skeleton(censored, formula):
 
 
 def test_data_without_events_skip_init_penalties_and_nocenter(censored):
-    # R returns before checking init, before coxpenal.fit and with plain colMeans
     fit = r.coxph("Surv(stop, status) ~ x", censored, init=[1.0, 2.0])
     assert math.isnan(fit.coefficients[0])
     ridge = r.coxph("Surv(start, stop, status) ~ ridge(x, theta=1)", censored)
@@ -220,7 +206,6 @@ def test_data_without_events_skip_init_penalties_and_nocenter(censored):
 
 @pytest.mark.parametrize("response", ["Surv(stop, status)", "Surv(start, stop, status)"])
 def test_data_without_events_skip_the_predictor_and_weight_checks(censored, response):
-    # coxph() returns before its infinite-predictor check and the fitters' weights > 0
     infinite = r.coxph(f"{response} ~ xi", censored)
     assert math.isnan(infinite.coefficients[0])
     assert infinite.means == [math.inf]
@@ -237,9 +222,6 @@ def test_data_without_events_skip_the_predictor_and_weight_checks(censored, resp
         r.coxph(f"{response} ~ x", with_event, weights="w0")
     with pytest.raises(ValueError, match="Invalid weights, must be >0"):
         r.coxph(f"{response} ~ ridge(x, theta=1)", with_event, weights="w0")
-
-
-# --- one concordance ------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -270,7 +252,6 @@ def test_data_without_events_skip_the_predictor_and_weight_checks(censored, resp
 def test_penalized_concordance_uses_the_final_predictors_and_the_cluster(lung, formula, expected):
     fit, _ = _fit_quietly(formula, lung, na_action="omit")
     assert _concordance(fit) == approx(expected, rel=1e-6)
-    # the engine fit carries the same concordance
     stored = fit.fit.concordance
     assert stored.concordance[0] == fit.concordance["concordance"]
     assert stored.count[0].concordant == fit.concordance["concordant"]
@@ -287,9 +268,6 @@ def test_ignored_cluster_still_enters_the_concordance(lung):
     )
 
 
-# --- timefix ---------------------------------------------------------------------
-
-
 def test_timefix_merges_near_tied_times(lung):
     times = [float(value) for value in lung["time"]]
     noisy = dict(lung, time=[t * (1.0 + 1e-12 * (i % 3)) for i, t in enumerate(times)])
@@ -299,9 +277,6 @@ def test_timefix_merges_near_tied_times(lung):
     assert fixed.coefficients == approx(exact.coefficients, rel=1e-10)
     assert len(set(fixed.y.time)) == len(set(exact.y.time)) < len(set(unfixed.y.time))
     assert unfixed.coefficients != approx(exact.coefficients, rel=1e-6)
-
-
-# --- coxph.control ---------------------------------------------------------------
 
 
 def test_coxph_control_defaults_and_checks(separated):
@@ -315,7 +290,6 @@ def test_coxph_control_defaults_and_checks(separated):
         "survcheckallow": "gap",
     }
     assert r.coxph_control(**{"toler.inf": 1e-3, "outer.max": 5})["outer.max"] == 5
-    # as.integer() truncates
     truncated = r.coxph_control(iter_max=2.7, outer_max=5.9)
     assert (truncated["iter.max"], truncated["outer.max"]) == (2, 5)
     fit, messages = _fit_quietly("Surv(t, s) ~ x + z", separated, **{"iter.max": 2.7})
@@ -338,7 +312,6 @@ def test_coxph_control_defaults_and_checks(separated):
         r.coxph_control(toler_inf=0)
     with pytest.raises(ValueError, match="invalid value for outer.max"):
         r.coxph_control(outer_max=0)
-    # where as.integer() gives NA
     with pytest.raises(ValueError, match="Invalid value for iterations"):
         r.coxph_control(iter_max=math.inf)
     with pytest.raises(ValueError, match="Invalid value for iterations"):
@@ -358,7 +331,6 @@ def test_toler_inf_reaches_the_convergence_warning(separated):
     assert messages == [loud]
     for kwargs in ({"control": {"toler.inf": 1e6}}, {"toler.inf": 1e6}, {"toler_inf": 1e6}):
         assert _fit_quietly("Surv(t, s) ~ x + z", separated, **kwargs)[1] == []
-    # with control given, coxph's ... options are ignored, as in R
     ignored = _fit_quietly(
         "Surv(t, s) ~ x + z", separated, control=r.coxph_control(), toler_inf=1e6
     )[1]
@@ -405,7 +377,6 @@ def test_robust_fits_test_convergence_with_the_naive_variance(separated):
             beta,
             [0.4437300297044401, 0.1924055464165384, 0.450706103605473],
         ),
-        # an id with repeated events makes the fit robust by default
         (
             "Surv(start, t, s) ~ x + z",
             {"id": "id"},
@@ -429,12 +400,8 @@ def test_eps_below_toler_chol_warns(separated):
         "Ran out of iterations and did not converge",
         "For numerical accuracy, tolerance should be < eps",
     ]
-    # each warning points at the caller, whether coxph() or the user called coxph_control
     assert {item.filename for item in record} == {__file__}
     assert fit.iter == 21
-
-
-# --- the inner loop of a penalized fit --------------------------------------------
 
 
 def test_inner_loop_failures_warn_as_coxpenal_fit(lung):
@@ -454,9 +421,6 @@ def test_inner_loop_failures_warn_as_coxpenal_fit(lung):
         assert _fit_quietly(formula, kidney, iter_max=iter_max)[1] == []
 
 
-# --- the model frame ---------------------------------------------------------------
-
-
 def test_model_frame_is_rebuilt_without_model_true(ovarian):
     formula = "Surv(futime, fustat) ~ age + strata(rx) + offset(o)"
     subset = [age > 50 for age in ovarian["age"]]
@@ -472,5 +436,4 @@ def test_model_frame_is_rebuilt_without_model_true(ovarian):
         else:
             assert rebuilt[name] == expected
     assert "_frame" not in repr(fit)
-    # the fit does not keep the n x p design rows for it
     assert fit._frame.x == []

@@ -1,8 +1,3 @@
-//! The Nelson-Aalen cumulative hazard as a stand-alone estimate: the
-//! `cumhaz` / `std.chaz` components of `survfit(..., ctype = 1)` restricted
-//! to the event times, with a plain normal band.  Everything is computed by
-//! [`survfitkm`](super::survfitkm::survfitkm).
-
 use super::survfit_confint::{ConfType, survfit_confint};
 use super::survfitkm::{HazardType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use crate::error::SurvivalResult;
@@ -10,11 +5,11 @@ use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 
-/// Nelson-Aalen estimate at the distinct event times.
-///
-/// `n_risk` and `n_events` are unweighted counts; `cumulative_hazard` and
-/// `variance` (`std.chaz^2`, the Poisson variance `sum d / n^2`) use the
-/// case weights when given.
+#[doc = " Nelson-Aalen estimate at the distinct event times."]
+#[doc = ""]
+#[doc = " `n_risk` and `n_events` are unweighted counts; `cumulative_hazard` and"]
+#[doc = " `variance` (`std.chaz^2`, the Poisson variance `sum d / n^2`) use the"]
+#[doc = " case weights when given."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct NelsonAalenResult {
@@ -36,15 +31,12 @@ pub struct NelsonAalenResult {
 
 #[pymethods]
 impl NelsonAalenResult {
-    /// `exp(-cumulative_hazard)`, the Fleming-Harrington survival estimate.
+    #[doc = " `exp(-cumulative_hazard)`, the Fleming-Harrington survival estimate."]
     pub fn survival(&self) -> Vec<f64> {
         self.cumulative_hazard.iter().map(|&h| (-h).exp()).collect()
     }
 }
 
-/// Nelson-Aalen cumulative hazard with a `confidence_level` plain band
-/// (`H +- z * se`, lower limit floored at 0).  An empty input gives empty
-/// vectors.
 pub fn nelson_aalen(
     time: &[f64],
     status: &[i32],
@@ -76,7 +68,6 @@ pub fn nelson_aalen(
         ctype: HazardType::NelsonAalen,
         conf_int: confidence_level,
         conf_type: ConfType::None,
-        // the Poisson variance whatever the weights, as a plain estimate
         robust: Some(false),
         ..Default::default()
     };
@@ -116,7 +107,7 @@ pub fn nelson_aalen(
     })
 }
 
-/// Python binding of [`nelson_aalen`].
+#[doc = " Python binding of [`nelson_aalen`]."]
 #[pyfunction(name = "nelson_aalen")]
 #[pyo3(signature = (time, status, weights=None, confidence_level=0.95))]
 pub fn nelson_aalen_py(

@@ -1,6 +1,6 @@
 use super::*;
 
-/// Sum rows by ascending integer group; squares returns error quadrature.
+#[doc = " Sum rows by ascending integer group; squares returns error quadrature."]
 #[pyfunction(name = "grouped_sum")]
 #[pyo3(signature = (values, group, *, squares=false))]
 fn grouped_sum_py(
@@ -14,14 +14,14 @@ fn grouped_sum_py(
     )?))
 }
 
-/// `coxcount1`: risk sets of right-censored data for `tt()` terms.
+#[doc = " `coxcount1`: risk sets of right-censored data for `tt()` terms."]
 #[pyfunction(name = "coxcount1")]
 #[pyo3(signature = (survival, strata=None))]
 fn coxcount1_py(survival: &SurvivalData, strata: Option<Vec<i32>>) -> PyResult<CoxCountOutput> {
     Ok(crate::core::coxcount1(survival, strata.as_deref())?)
 }
 
-/// `coxcount2`: risk sets of (start, stop] data for `tt()` terms.
+#[doc = " `coxcount2`: risk sets of (start, stop] data for `tt()` terms."]
 #[pyfunction(name = "coxcount2")]
 #[pyo3(signature = (counting, strata=None))]
 fn coxcount2_py(
@@ -31,7 +31,7 @@ fn coxcount2_py(
     Ok(crate::core::coxcount2(counting, strata.as_deref())?)
 }
 
-/// The B-spline basis of a `pspline()` term.
+#[doc = " The B-spline basis of a `pspline()` term."]
 #[pyfunction(name = "pspline_basis")]
 fn pspline_basis_py(
     x: Vec<f64>,
@@ -47,8 +47,8 @@ fn pspline_basis_py(
     )?)
 }
 
-/// Rebuilds an object pickled by its class's `__reduce__` from the class
-/// and the state `internal::pickle` encoded.
+#[doc = " Rebuilds an object pickled by its class's `__reduce__` from the class"]
+#[doc = " and the state `internal::pickle` encoded."]
 #[pyfunction(name = "_unpickle")]
 fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<PyAny>> {
     use crate::internal::pickle::decode;

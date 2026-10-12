@@ -1,9 +1,3 @@
-//! Combine transition-specific curves, as R's `survfit.matrix` does.
-//!
-//! Each transition contains one KM result per prediction column, with strata
-//! stacked inside each result. Curves are scanned once over the union of event
-//! times: no time-by-transition jump matrix or repeated curve summaries.
-
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 
@@ -13,12 +7,9 @@ use crate::internal::expm::survexpm;
 use crate::internal::numpy_utils::{FloatMatrix, IntVec};
 use crate::internal::validation::{validate_finite, validate_length};
 
-/// How a cumulative-hazard increment updates the state probabilities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvfitMatrixMethod {
-    /// Multiply by `I + dA`, with R's cap on the diagonal departure probability.
     Discrete,
-    /// Multiply by `exp(dA)`.
     MatrixExponential,
 }
 
@@ -34,8 +25,6 @@ impl SurvfitMatrixMethod {
     }
 }
 
-/// A nonempty cell of the transition matrix. State indices are zero-based.
-/// `curves` contains one result per prediction column (one for KM curves).
 #[derive(Debug, Clone, Copy)]
 pub struct SurvfitMatrixTransition<'a> {
     pub from: usize,
@@ -43,21 +32,6 @@ pub struct SurvfitMatrixTransition<'a> {
     pub curves: &'a [SurvfitKMResult],
 }
 
-/// Join transition curves into a multistate curve. Strata vary fastest, then
-/// prediction columns. `p0` has either one row, reused for every output curve,
-/// or one row per output curve. The default puts everyone in the first state.
-///
-/// As in R, event times are unioned across transitions and times at or before
-/// `start_time` are excluded. The default start is `min(0, event times)`.
-/// Risk and event counts use R's right-continuous lookup, including its reuse
-/// of a transition's previous event count at another transition's event time.
-/// The last transition in column-major state order supplies each source's risk
-/// count. No standard errors or observation-level influence are inferred.
-///
-/// The result also retains transition cumulative hazards. `n_censor` is zero:
-/// the matrix method does not reconstruct censoring histories. `n_id` uses the
-/// first transition's sample sizes to keep the shared curve representation;
-/// these are not estimates of unique subjects across transitions.
 pub fn survfit_matrix(
     transitions: &[SurvfitMatrixTransition<'_>],
     states: &[String],
@@ -83,8 +57,6 @@ pub fn survfit_matrix(
     if let Some(start) = start_time {
         validate_finite(&[start], "start_time")?;
     }
-    // R traverses a matrix in column-major order, which matters for counts
-    // when several transitions depart from the same state.
     let mut transitions = transitions.to_vec();
     transitions.sort_by_key(|t| (t.to, t.from));
     for (i, t) in transitions.iter().enumerate() {
@@ -104,7 +76,6 @@ pub fn survfit_matrix(
     if groups == 0 {
         return Err(invalid("each transition needs at least one stratum"));
     }
-    // Public Rust result fields can be edited, so check every field we index.
     for t in &transitions {
         if t.curves.len() != columns {
             return Err(invalid("all curves must be of the same dimension"));
@@ -279,8 +250,6 @@ pub fn survfit_matrix(
                         }
                     }
                 }
-                // Update the hazard cursors even for excluded times so that
-                // the first retained jump does not include earlier hazards.
                 if time <= curve_start {
                     continue;
                 }

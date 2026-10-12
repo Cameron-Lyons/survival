@@ -1,17 +1,3 @@
-//! The multi-state Cox model (R's `coxphms` object): the stacked data of
-//! `R/stacker.R` and the fit and shared-hazard summary of the multi-state
-//! part of `R/coxph.R`.
-//!
-//! Every transition of a multi-state model is a Cox model on the rows at
-//! risk for it (those whose current state is the transition's starting
-//! state).  R fits them all at once: `stacker` puts one block of rows per
-//! transition into a single data set, each with its own copy of the
-//! covariates (`cmap` says which coefficient a covariate takes for a
-//! transition) and its own stratum (`smap`), and the ordinary fitter runs
-//! on the result, `coxph.fit` for `Surv(time, state)` data and `agreg.fit`
-//! for `Surv(start, stop, state)` data.  [`coxphms_fit`] does the same with
-//! [`CoxPHFit::fit`].
-
 use std::collections::BTreeMap;
 
 use ndarray::{Array2, ArrayView1, ArrayView2, Axis, ShapeBuilder};
@@ -23,21 +9,12 @@ use crate::internal::validation::validate_length;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
 
-/// The transition maps of a multi-state model: `parsecovar3`'s `cmap`,
-/// `coxph()`'s `smap`, and the states of each transition.
 #[derive(Debug, Clone)]
 pub(crate) struct MsDesign {
-    /// `nrow x ntrans`: the 1-based coefficient each covariate takes for a
-    /// transition, 0 for none.  Rows `0..nx` are the columns of X, the rest
-    /// the constructed `ph()` covariates of proportional baselines.
     pub cmap: Array2<i32>,
     pub nx: usize,
-    /// `smap[1, ]`: the (shared) baseline hazard of each transition.
     pub baseline: Vec<i32>,
-    /// `nstrataterm x ntrans` (`smap[-1, ]`): the `strata()` terms that
-    /// stratify each transition.
     pub strata_use: Array2<bool>,
-    /// 1-based state index of the start and the end of each transition.
     pub from: Vec<usize>,
     pub to: Vec<usize>,
 }
@@ -47,44 +24,21 @@ impl MsDesign {
         self.cmap.ncols()
     }
 
-    /// The number of coefficients, `max(cmap)`.
     pub(crate) fn ncoef(&self) -> usize {
         self.cmap.iter().copied().max().unwrap_or(0).max(0) as usize
     }
 }
 
-/// `stacker()`'s result: one row per (transition, row at risk for it).
 #[derive(Debug, Clone)]
 pub(crate) struct MsStack {
-    /// `n2 x ncoef` stacked design.
     pub x: Array2<f64>,
-    /// 0-based source row of each stacked row.
     pub rindex: Vec<usize>,
-    /// 1 when the row's transition happened.
     pub status: Vec<i32>,
-    /// 1-based shared-baseline block (R's `xstack$shared`, `rmap[, 2]`).
     pub block: Vec<usize>,
-    /// 0-based transition (R's `xstack$hazard - 1`).
     pub hazard: Vec<usize>,
-    /// 0-based stratum codes, in R's (block, user strata) order.
     pub strata: Vec<i32>,
 }
 
-/// R's `stacker(cmap, smap, istate, X, Y, mf, states, dropzero)`.
-///
-/// `istate` is the 1-based current state of each row and `endpoint` the
-/// 1-based state it moves to (0 for censored); `strata_codes` holds the
-/// codes of each `strata()` term, -1 where it is missing.  With `dropzero`
-/// a transition without coefficients gets no rows.  A block holds every
-/// transition that shares its baseline (kept or not) in transition order,
-/// and each of them the rows at risk for it in data order.  Stacked rows
-/// with a missing covariate they receive, or a missing value of a strata
-/// term their block uses, are dropped (they arise when a covariate enters
-/// only some transitions).
-///
-/// With strata terms each block is stratified by the terms its first
-/// transition uses; R reads the b-th column of `smap` for block b, which is
-/// another transition when blocks and transitions do not line up.
 pub(crate) fn stacker(
     design: &MsDesign,
     istate: &[usize],
@@ -157,10 +111,6 @@ pub(crate) fn stacker(
         }
     }
 
-    // The strata: the block, then the codes of the terms the block's first
-    // transition uses, ranked as `strata(newstrat, unlist(temp),
-    // shortlabel = TRUE)` levels them.  A row missing one of those codes has
-    // none.
     let mut keep: Vec<bool> = (0..n2)
         .map(|r| xs.row(r).iter().all(|value| !value.is_nan()))
         .collect();
@@ -230,21 +180,12 @@ impl MsStack {
     }
 }
 
-/// `fit$share` of a model with shared baseline hazards: `vtype` is 0 for a
-/// fixed covariate, 1 for a time-dependent one and 2 for a "gamma"
-/// coefficient, one that is constant within each transition of a shared
-/// hazard; `scale` is the hazard multiplier those give each transition.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MsShare {
     pub vtype: Vec<i32>,
     pub scale: Vec<f64>,
 }
 
-/// The `share` section of `coxph()` (R/coxph.R, "shared hazards"): `None`
-/// without a shared baseline or without a gamma coefficient.
-///
-/// `x` is the unstacked design (NaN for missing), `id` the 1-based subject
-/// codes and `x_assign` the term of each column of `x`.
 pub(crate) fn share(
     design: &MsDesign,
     stack: &MsStack,
@@ -262,8 +203,6 @@ pub(crate) fn share(
     if !duplicated {
         return None;
     }
-    // 1. only time-dependent covariates (and the ph() rows) are eligible:
-    // a column varies within some subject
     let nid = id.iter().copied().max().unwrap_or(0).max(0) as usize;
     let tdvar: Vec<bool> = (0..design.nx)
         .map(|c| {
@@ -291,7 +230,6 @@ pub(crate) fn share(
     for (r, &k) in stack.hazard.iter().enumerate() {
         hazard_rows[k].push(r);
     }
-    // 2. which of them are constant within each transition
     let multipliers = |isgamma: &mut Vec<bool>| -> Vec<f64> {
         let mut scale = vec![1.0; ntrans];
         for (j, rows) in hazard_rows.iter().enumerate() {
@@ -313,7 +251,6 @@ pub(crate) fn share(
     };
     let mut isgamma = tdvar2.clone();
     let mut scale = multipliers(&mut isgamma);
-    // 3. the columns of one term are gammas all together or not at all
     let mut all_of_term: BTreeMap<i32, bool> = BTreeMap::new();
     for c in (0..design.nx).filter(|&c| tdvar[c]) {
         *all_of_term.entry(x_assign[c]).or_insert(true) &= isgamma[c];
@@ -338,31 +275,21 @@ pub(crate) fn share(
     })
 }
 
-/// The unstacked data of a multi-state fit, as `coxph()` holds it before
-/// `stacker`.
 #[derive(Debug, Clone)]
 pub(crate) struct MsData {
     pub time: Vec<f64>,
     pub entry: Option<Vec<f64>>,
-    /// 1-based target state of each row, 0 when censored.
     pub endpoint: Vec<usize>,
-    /// 1-based current state of each row.
     pub istate: Vec<usize>,
-    /// Unstacked design, NaN for a missing value.
     pub x: Array2<f64>,
-    /// Codes of each `strata()` term, -1 for a missing value.
     pub strata_terms: Vec<Vec<i32>>,
-    /// 1-based subject codes, `match(id, unique(id))`.
     pub id: Vec<i32>,
-    /// The term of each column of `x`.
     pub x_assign: Vec<i32>,
     pub weights: Option<Vec<f64>>,
     pub offset: Option<Vec<f64>>,
     pub cluster: Option<Vec<i32>>,
 }
 
-/// A multi-state Cox fit: the fit of the stacked data, the stacking and
-/// the shared-hazard summary.
 #[derive(Debug, Clone)]
 pub(crate) struct MsFit {
     pub fit: CoxPHFit,
@@ -374,12 +301,6 @@ fn take<T: Copy>(values: &[T], rows: &[usize]) -> Vec<T> {
     rows.iter().map(|&r| values[r]).collect()
 }
 
-/// The multi-state part of `coxph()` after `parsecovar3`: stack, check the
-/// stacked predictors and `init`, fit the stacked data, then compute
-/// `share`.  `coxph()` centres the offset at its unstacked mean and adds
-/// that mean back to the linear predictors; the fit centres the stacked
-/// offset instead, which leaves the partial likelihood and the linear
-/// predictors the same.
 pub(crate) fn coxphms_fit_data(
     data: MsData,
     design: &MsDesign,
@@ -404,8 +325,6 @@ pub(crate) fn coxphms_fit_data(
     if data.istate.contains(&0) {
         return Err(SurvivalError::invalid_input("istate codes must be 1-based"));
     }
-    // endpoint 0 is censoring; any other code must be a state the data or
-    // the transitions name, or the stacker would count the event as censored
     let nstate = data
         .istate
         .iter()
@@ -440,7 +359,6 @@ pub(crate) fn coxphms_fit_data(
     let rows = &stack.rindex;
     let offset = data.offset.as_deref().map(|offset| take(offset, rows));
     if let Some(init) = &options.init {
-        // coxph() centres the offset at its unstacked mean before stacking
         let mean = data
             .offset
             .as_ref()
@@ -475,9 +393,6 @@ pub(crate) fn coxphms_fit_data(
     Ok(MsFit { fit, stack, share })
 }
 
-/// `coxph()`'s check of `init` on the stacked design: `X %*% init -
-/// sum(colMeans(X) * init) + offset` must neither overflow the exponential
-/// nor underflow it everywhere.
 fn check_init(init: &[f64], x: &Array2<f64>, offset: Option<&[f64]>) -> SurvivalResult<()> {
     if init.len() != x.ncols() {
         return Err(SurvivalError::invalid_input(
@@ -527,11 +442,6 @@ fn column_major(values: IntVec, nrow: usize, name: &str) -> SurvivalResult<Array
         .map_err(|err| SurvivalError::invalid_input(err.to_string()))
 }
 
-/// The transition maps of a model with `nx` columns of X, as the bindings
-/// receive them: `cmap` flat and column-major with `cmap_nrow` rows,
-/// `baseline` (`smap[1, ]`), the 1-based states of each transition, and
-/// `strata_use` (`smap[-1, ]`, flat and column-major) for `nterm` strata
-/// terms.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ms_design(
     nx: usize,
@@ -573,21 +483,21 @@ pub(crate) fn ms_design(
     Ok(design)
 }
 
-/// The fit of `coxph()` for a multi-state response, from the unstacked data
-/// and the transition maps (R's `cmap` and `smap`).
-///
-/// `endpoint` is the 1-based state each row moves to (0 when censored),
-/// `istate` its 1-based current state; `cmap` (flat, column-major, with
-/// `cmap_nrow` rows) maps covariates to coefficients per transition,
-/// `baseline` is `smap[1, ]`, `strata_use` (flat, column-major, one row per
-/// entry of `strata_terms`) is `smap[-1, ]`, and `trans_from`/`trans_to`
-/// are the 1-based states of each transition.  `id` are 1-based subject
-/// codes and `x_assign` the term of each column of `x`; `cluster` holds
-/// integer codes.  Every per-row vector is unstacked.
-///
-/// Returns the fit of the stacked data, then, per stacked row, its 0-based
-/// source row, 1-based block, 0-based transition and stratum, and
-/// `share$vtype` and `share$scale` when the model has them.
+#[doc = " The fit of `coxph()` for a multi-state response, from the unstacked data"]
+#[doc = " and the transition maps (R's `cmap` and `smap`)."]
+#[doc = ""]
+#[doc = " `endpoint` is the 1-based state each row moves to (0 when censored),"]
+#[doc = " `istate` its 1-based current state; `cmap` (flat, column-major, with"]
+#[doc = " `cmap_nrow` rows) maps covariates to coefficients per transition,"]
+#[doc = " `baseline` is `smap[1, ]`, `strata_use` (flat, column-major, one row per"]
+#[doc = " entry of `strata_terms`) is `smap[-1, ]`, and `trans_from`/`trans_to`"]
+#[doc = " are the 1-based states of each transition.  `id` are 1-based subject"]
+#[doc = " codes and `x_assign` the term of each column of `x`; `cluster` holds"]
+#[doc = " integer codes.  Every per-row vector is unstacked."]
+#[doc = ""]
+#[doc = " Returns the fit of the stacked data, then, per stacked row, its 0-based"]
+#[doc = " source row, 1-based block, 0-based transition and stratum, and"]
+#[doc = " `share$vtype` and `share$scale` when the model has them."]
 #[allow(clippy::type_complexity)]
 #[pyfunction]
 #[pyo3(signature = (time, endpoint, istate, x, cmap, cmap_nrow, baseline, trans_from, trans_to, id, x_assign, entry=None, strata_terms=None, strata_use=None, weights=None, offset=None, cluster=None, method="breslow", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, robust=None))]
@@ -688,8 +598,6 @@ pub fn coxphms_fit(
 mod tests {
     use super::*;
 
-    /// tests/coxsurv5.R's `mtest` data (states censor, a, b, c): after
-    /// survcheck the current states are (s0) = 1, a = 2, b = 3, c = 4.
     fn mtest() -> (Vec<usize>, Vec<usize>, Array2<f64>) {
         let istate = vec![1, 2, 3, 1, 1, 1, 2, 4, 1, 3];
         let endpoint = vec![2, 3, 2, 3, 4, 2, 4, 0, 3, 0];
@@ -698,8 +606,6 @@ mod tests {
         (istate, endpoint, x)
     }
 
-    /// The six transitions of `mtest` (`x_1:2 x_3:2 x_1:3 x_2:3 x_1:4
-    /// x_2:4`), one coefficient each.
     fn mtest_design() -> MsDesign {
         MsDesign {
             cmap: Array2::from_shape_vec((1, 6), vec![1, 2, 3, 4, 5, 6]).unwrap(),
@@ -721,13 +627,11 @@ mod tests {
             sizes[b - 1] += 1;
         }
         assert_eq!(sizes, [5, 2, 5, 2, 5, 2]);
-        // R's rmap: (1,1), (4,1), (5,1), ... for the (s0) rows of 1:2
         assert_eq!(&stack.rindex[..5], &[0, 3, 4, 5, 8]);
         assert_eq!(&stack.status[..5], &[1, 0, 0, 1, 0]);
         assert_eq!(&stack.strata[..7], &[0, 0, 0, 0, 0, 1, 1]);
         assert_eq!(stack.x[(3, 0)], 0.0);
         assert_eq!(stack.x[(4, 0)], 2.0);
-        // the (b) rows of 3:2 take coefficient 2
         assert_eq!(stack.rindex[5..7], [2, 9]);
         assert_eq!(stack.x[(6, 1)], 2.0);
         assert_eq!(stack.x[(6, 0)], 0.0);
@@ -749,12 +653,10 @@ mod tests {
     #[test]
     fn stacker_drops_rows_with_a_missing_covariate_they_use() {
         let (istate, endpoint, mut x) = mtest();
-        // row 2 (a) is at risk for 2:3 and 2:4 only
         x[(1, 0)] = f64::NAN;
         let stack = stacker(&mtest_design(), &istate, &endpoint, x.view(), &[], true).unwrap();
         assert_eq!(stack.rindex.len(), 19);
         assert!(!stack.rindex.contains(&1));
-        // shared blocks: a NaN in a column the transition does not use is kept
         let design = MsDesign {
             cmap: Array2::from_shape_vec((2, 2), vec![1, 0, 0, 2]).unwrap(),
             nx: 2,
@@ -770,8 +672,6 @@ mod tests {
 
     #[test]
     fn strata_codes_rank_block_and_term_codes() {
-        // two transitions from state 1, both stratified by two terms; the
-        // second term is missing on row 2
         let design = MsDesign {
             cmap: Array2::from_shape_vec((1, 2), vec![1, 2]).unwrap(),
             nx: 1,
@@ -791,16 +691,12 @@ mod tests {
             true,
         )
         .unwrap();
-        // block 1 keys (1, [1, 0]), (1, [0, 1]), (1, [0, 1]); row 3 dropped;
-        // block 2 keys (2, [1]), (2, [0]), (2, [1]), (2, [0])
         assert_eq!(stack.rindex, [0, 1, 3, 0, 1, 2, 3]);
         assert_eq!(stack.strata, [1, 0, 0, 3, 2, 3, 2]);
     }
 
     #[test]
     fn misaligned_block_uses_its_first_transition_strata() {
-        // 1:2 and 1:3 share a baseline (block 1); 2:3 is block 2 and alone
-        // uses the strata term.  R would read smap column 2 (1:3) for block 2.
         let design = MsDesign {
             cmap: Array2::from_shape_vec((1, 3), vec![1, 2, 3]).unwrap(),
             nx: 1,
@@ -861,8 +757,6 @@ mod tests {
 
     #[test]
     fn share_marks_constant_ph_covariates_and_scales_the_hazard() {
-        // 1:2 and 1:3 share a baseline: coefficient 1 is x for 1:2 and 2 for
-        // 1:3, coefficient 3 the ph(1:3/1:2) indicator
         let design = MsDesign {
             cmap: Array2::from_shape_vec((2, 2), vec![1, 2, 0, 3]).unwrap(),
             nx: 1,
@@ -884,7 +778,6 @@ mod tests {
         .unwrap();
         assert_eq!(share.vtype, [0, 2]);
         assert_eq!(share.scale, [1.0, (-1.5f64).exp()]);
-        // without a shared baseline there is nothing to report
         let separate = MsDesign {
             baseline: vec![1, 2],
             ..design

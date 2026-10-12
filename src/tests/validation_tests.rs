@@ -143,7 +143,6 @@ mod tests {
         let time = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let status = vec![1, 1, 1, 1, 1, 1];
         let result = median(&time, &status);
-        // the curve sits exactly at 0.5 from 3 to 4: midpoint rule
         assert!(approx_eq(result.quantile[0][0], 3.5, TOLERANCE));
     }
     #[test]

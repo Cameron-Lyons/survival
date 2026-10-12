@@ -1,15 +1,3 @@
-//! R's `tmerge` (`R/tmerge.R` and `src/tmerge.c`): add a time-dependent
-//! covariate (`tdc`, `cumtdc`) or an event indicator (`event`, `cumevent`)
-//! to a `(tstart, tstop]` data set, splitting intervals at the new time
-//! points.
-//!
-//! One call of [`tmerge_step`] processes one `name = kind(time, value)`
-//! argument of an R `tmerge` call against the current data set, the way
-//! R's loop over its `...` arguments does; the caller applies the returned
-//! row map and value sources to columns of any type.  The C kernels are
-//! [`tmerge_cumulative`] (`tmerge`), [`tmerge_lookup`] (`tmerge2`) and
-//! [`tmerge_carry_forward`] (`tmerge3`).
-
 use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use super::neardate::{NeardateBest, neardate};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -18,21 +6,15 @@ use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
-/// The kind of a `tmerge` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TmergeKind {
-    /// Time-dependent covariate: the most recent value carried forward.
     Tdc,
-    /// Cumulative time-dependent covariate: a running sum.
     Cumtdc,
-    /// An event at the end of an interval.
     Event,
-    /// A cumulative count of events.
     Cumevent,
 }
 
 impl TmergeKind {
-    /// Parse the R keyword.
     pub fn parse(value: &str) -> SurvivalResult<Self> {
         match value {
             "tdc" => Ok(Self::Tdc),
@@ -46,18 +28,12 @@ impl TmergeKind {
     }
 }
 
-/// The current `(id, tstart, tstop)` data set (R's `newdata`), with the
-/// rows of each subject contiguous and ordered by time.
 pub struct TmergeBase<'a, I> {
     pub id: &'a [I],
     pub start: &'a [f64],
     pub stop: &'a [f64],
 }
 
-/// The rows of `data2` behind one argument: `time` (`NaN` for `NA`) and,
-/// for `cumtdc`/`cumevent` or numeric `tdc`/`event`, the numeric `value`
-/// (`NaN` for `NA`).  Values of another type are described only by their
-/// missingness in `missing`.
 pub struct TmergeUpdate<'a, I> {
     pub id: &'a [I],
     pub time: &'a [f64],
@@ -65,15 +41,10 @@ pub struct TmergeUpdate<'a, I> {
     pub missing: Option<&'a [bool]>,
 }
 
-/// R's `tmerge.control` options that affect one step.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TmergeOptions {
-    /// Delay added to covariate change times after a subject's entry.
     pub delay: f64,
-    /// Drop update rows with a missing value.
     pub na_rm: bool,
-    /// Whether this is not the first call, so update rows whose id is
-    /// absent from the data set are dropped and counted as `missid`.
     pub check_ids: bool,
 }
 
@@ -87,40 +58,39 @@ impl Default for TmergeOptions {
     }
 }
 
-/// R's `tcount` columns.
 pub const TCOUNT_NAMES: [&str; 9] = [
     "early", "late", "gap", "within", "boundary", "leading", "trailing", "tied", "missid",
 ];
 
-/// The outcome of one `tmerge` argument.
+#[doc = " The outcome of one `tmerge` argument."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct TmergeStep {
-    /// Zero-based row of the input data set behind each output row; rows
-    /// split by an event time appear several times.
+    #[doc = " Zero-based row of the input data set behind each output row; rows"]
+    #[doc = " split by an event time appear several times."]
     #[pyo3(get)]
     pub row: Vec<usize>,
     #[pyo3(get)]
     pub start: Vec<f64>,
     #[pyo3(get)]
     pub stop: Vec<f64>,
-    /// Output rows created as the earlier part of a split, whose existing
-    /// event variables must be reset to their censoring value.
+    #[doc = " Output rows created as the earlier part of a split, whose existing"]
+    #[doc = " event variables must be reset to their censoring value."]
     #[pyo3(get)]
     pub censor_rows: Vec<usize>,
-    /// R's `tcount` row for this argument, in [`TCOUNT_NAMES`] order.
+    #[doc = " R's `tcount` row for this argument, in [`TCOUNT_NAMES`] order."]
     #[pyo3(get)]
     pub tcount: Vec<usize>,
-    /// `tdc`: for each output row, the zero-based update row whose value
-    /// applies (`None` when no value precedes the interval).
+    #[doc = " `tdc`: for each output row, the zero-based update row whose value"]
+    #[doc = " applies (`None` when no value precedes the interval)."]
     #[pyo3(get)]
     pub source: Vec<Option<usize>>,
-    /// `cumtdc`: the new variable.
+    #[doc = " `cumtdc`: the new variable."]
     #[pyo3(get)]
     pub cumulative: Vec<f64>,
-    /// `event`/`cumevent`: output rows receiving an event, the update row
-    /// each came from, and its numeric value (`1` without values, the
-    /// running count for `cumevent`).
+    #[doc = " `event`/`cumevent`: output rows receiving an event, the update row"]
+    #[doc = " each came from, and its numeric value (`1` without values, the"]
+    #[doc = " running count for `cumevent`)."]
     #[pyo3(get)]
     pub event_row: Vec<usize>,
     #[pyo3(get)]
@@ -129,11 +99,6 @@ pub struct TmergeStep {
     pub event_value: Vec<f64>,
 }
 
-/// `tmerge.c`: cumulative sum of `x` over the update rows of a subject
-/// whose time is at or before each base interval's start.  Both data sets
-/// are ordered by time within id, with ids as comparable codes; a base
-/// row with no preceding update keeps `newx` (and `NaN` entries that do
-/// get one are replaced rather than incremented).
 pub fn tmerge_cumulative(
     id: &[usize],
     time1: &[f64],
@@ -176,10 +141,6 @@ pub fn tmerge_cumulative(
     Ok(result)
 }
 
-/// `tmerge2`: for each base row, the last update row of the same subject
-/// whose time is at or before the interval start (last value carried
-/// forward), or `None`.  Both inputs are ordered by time within subject
-/// code, as R's `tmerge` arranges them.
 pub fn tmerge_lookup(
     id: &[usize],
     time1: &[f64],
@@ -198,11 +159,6 @@ pub fn tmerge_lookup(
             index[i] = Some(k);
             k += 1;
         }
-        // The C code ends every row with `k--`: the row that supplied this
-        // interval's value is carried forward to the subject's later
-        // intervals when no newer update precedes them.  Without a match
-        // the scan stopped on a row that is still ahead of the next base
-        // row, so it stays where it is.
         if let Some(last) = index[i] {
             k = last;
         }
@@ -210,10 +166,6 @@ pub fn tmerge_lookup(
     Ok(index)
 }
 
-/// `tmerge3`: last value carried forward within subject; for each row,
-/// the most recent non-missing row of the same subject (itself when not
-/// missing), or `None` when the subject has had no value yet.  `id` must
-/// be sorted.
 pub fn tmerge_carry_forward(id: &[usize], missing: &[bool]) -> SurvivalResult<Vec<Option<usize>>> {
     validate_length(id.len(), missing.len(), "missing")?;
     let mut index = vec![None; id.len()];
@@ -234,19 +186,14 @@ pub fn tmerge_carry_forward(id: &[usize], missing: &[bool]) -> SurvivalResult<Ve
     Ok(index)
 }
 
-/// R's `itype` categories of an update time relative to a subject's
-/// intervals, with the boundary subtypes spelled out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Placement {
     Early,
     Late,
     Gap,
     Within,
-    /// Touches the shared end of `(a, b]` and start of `(b, d]`.
     Boundary,
-    /// Equals the start of an interval that follows a gap.
     Leading,
-    /// Equals the end of an interval that precedes a gap.
     Trailing,
 }
 
@@ -263,14 +210,11 @@ impl Placement {
         }
     }
 
-    /// R's `subtype == 1 | subtype == 3`: the rows that receive an event.
     fn receives_event(self) -> bool {
         matches!(self, Self::Boundary | Self::Trailing)
     }
 }
 
-/// Where every event time falls: `indx1 <- neardate(..., dstart, "prior")`,
-/// `indx2 <- neardate(..., dstop, "after")` and the classification.
 struct Classification {
     indx1: Vec<Option<usize>>,
     indx2: Vec<Option<usize>>,
@@ -320,7 +264,6 @@ fn classify(
     })
 }
 
-/// Process one `tmerge` argument.
 pub fn tmerge_step<I: SubjectId>(
     base: &TmergeBase<'_, I>,
     update: &TmergeUpdate<'_, I>,
@@ -360,7 +303,6 @@ pub fn tmerge_step<I: SubjectId>(
         ));
     }
 
-    // Subjects as codes in order of first appearance in the data set.
     let (base_codes, representatives) = first_appearance_codes(base.id);
     let base_position: std::collections::HashMap<I::Key, usize> = representatives
         .iter()
@@ -368,10 +310,8 @@ pub fn tmerge_step<I: SubjectId>(
         .map(|(code, id)| (id.key(), code))
         .collect();
 
-    // Which update rows are usable, and how many were dropped for an
-    // unknown id.
     let mut missid = 0;
-    let mut kept: Vec<(usize, usize)> = Vec::with_capacity(n2); // (subject code, update row)
+    let mut kept: Vec<(usize, usize)> = Vec::with_capacity(n2);
     for row in 0..n2 {
         let Some(&code) = base_position.get(&update.id[row].key()) else {
             if options.check_ids {
@@ -392,7 +332,6 @@ pub fn tmerge_step<I: SubjectId>(
         }
         kept.push((code, row));
     }
-    // order(match(id, baseid), etime), a stable sort.
     kept.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| update.time[a.1].total_cmp(&update.time[b.1]))
@@ -423,7 +362,6 @@ pub fn tmerge_step<I: SubjectId>(
     for p in &placement {
         tcount[p.tcount_column()] += 1;
     }
-    // Ties: duplicated times within subject.
     tcount[7] = event_codes
         .windows(2)
         .zip(etime.windows(2))
@@ -431,7 +369,6 @@ pub fn tmerge_step<I: SubjectId>(
         .count();
     tcount[8] = missid;
 
-    // Split the intervals that contain an event time strictly inside.
     let mut cuts: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
     for (k, p) in placement.iter().enumerate() {
         if *p == Placement::Within {
@@ -492,7 +429,6 @@ pub fn tmerge_step<I: SubjectId>(
             step.source = index.iter().map(|k| k.map(|k| event_rows[k])).collect();
         }
         TmergeKind::Cumtdc => {
-            // Changes after the last interval are ignored.
             let keep: Vec<usize> = (0..etime.len())
                 .filter(|&k| placement[k] != Placement::Late)
                 .collect();
@@ -537,9 +473,9 @@ pub fn tmerge_step<I: SubjectId>(
     Ok(step)
 }
 
-/// Python entry point of [`tmerge_step`].  `prior` is the existing numeric
-/// variable for `cumtdc` and `default` its value for rows without an
-/// update (`NaN` for `NA`).
+#[doc = " Python entry point of [`tmerge_step`].  `prior` is the existing numeric"]
+#[doc = " variable for `cumtdc` and `default` its value for rows without an"]
+#[doc = " update (`NaN` for `NA`)."]
 #[pyfunction(name = "tmerge_step")]
 #[pyo3(signature = (id, start, stop, update_id, update_time, kind, value=None, missing=None, prior=None, default=f64::NAN, delay=0.0, na_rm=true, check_ids=true))]
 #[allow(clippy::too_many_arguments)]
@@ -647,15 +583,10 @@ mod tests {
 
     #[test]
     fn lookup_carries_the_last_value_forward() {
-        // (0,5], (5,10], (10,15] with updates at -1 and 7: the first update
-        // serves the first two intervals, the second the last (the tmerge2
-        // comment's example, without the gap).
         assert_eq!(
             tmerge_lookup(&[0, 0, 0], &[0.0, 5.0, 10.0], &[0, 0], &[-1.0, 7.0]).unwrap(),
             vec![Some(0), Some(0), Some(1)]
         );
-        // The tmerge2 comment: (0,5), (5,10), (15,20) and updates at
-        // -1, 5, 11, 12 give rows 1, 2 and 4; the third is never used.
         assert_eq!(
             tmerge_lookup(
                 &[0, 0, 0],
@@ -666,8 +597,6 @@ mod tests {
             .unwrap(),
             vec![Some(0), Some(1), Some(3)]
         );
-        // A subject without updates, one whose only update is carried over
-        // every interval, and one whose first interval precedes its update.
         assert_eq!(
             tmerge_lookup(
                 &[0, 0, 1, 1, 1, 2, 2],
@@ -679,8 +608,6 @@ mod tests {
             vec![None, None, Some(0), Some(0), Some(0), None, Some(1)]
         );
 
-        // Through tmerge_step: an update at 7 splits (5,10] and the value
-        // from time -1 covers every interval before it.
         let out = step(
             (
                 &[1i64, 1, 1][..],
@@ -698,7 +625,6 @@ mod tests {
 
     #[test]
     fn events_split_intervals_and_land_on_their_end() {
-        // The synthetic fixture: four subjects with one interval each.
         let base = (
             &[1i64, 2, 3, 4][..],
             &[0.0, 0.0, 0.0, 0.0][..],
@@ -742,7 +668,6 @@ mod tests {
             ]
         );
 
-        // cumtdc on the split data counts the changes.
         let split = (
             &[1i64, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4, 4, 4][..],
             &out.start[..],
@@ -786,11 +711,9 @@ mod tests {
         let base = (&[1i64, 1][..], &[0.0, 7.0][..], &[5.0, 10.0][..]);
         let times = [-1.0, 0.0, 3.0, 5.0, 6.0, 7.0, 8.0, 8.0, 10.0, 11.0];
         let out = step(base, (&[1i64; 10], &times, None), TmergeKind::Event);
-        // early, leading, within, trailing, gap, leading, within x2, trailing, late
         assert_eq!(out.tcount, vec![1, 1, 1, 3, 0, 2, 2, 1, 0]);
         assert_eq!(out.row, vec![0, 0, 1, 1]);
         assert_eq!(out.stop, vec![3.0, 5.0, 8.0, 10.0]);
-        // Events land on trailing edges and (after splitting) boundaries.
         assert_eq!(out.event_row, vec![0, 1, 2, 2, 3]);
 
         let shared = (&[1i64, 1][..], &[0.0, 5.0][..], &[5.0, 10.0][..]);
@@ -899,7 +822,6 @@ mod tests {
             f64::NAN,
         )
         .unwrap();
-        // The late change is ignored; the NaN prior is replaced, not added.
         assert_eq!(with_prior.cumulative, vec![1.0, 2.0]);
         let with_default = tmerge_step(
             &TmergeBase {
@@ -914,7 +836,6 @@ mod tests {
             -1.0,
         )
         .unwrap();
-        // A non-missing default is incremented, as in tmerge.c.
         assert_eq!(with_default.cumulative, vec![-1.0, 1.0]);
     }
 }

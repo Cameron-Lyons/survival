@@ -36,7 +36,6 @@ def main():
         parser.error("baseline rows and columns must match this run")
 
     n = args.rows
-    # Unsorted outcomes with event-time and predictor ties; fractional weights.
     times = [1.0 + ((i * 4999) % n) // 4 for i in range(n)]
     status = [int(i % 4 != 0) for i in range(n)]
     weights = core.Weights([0.5 + (i % 7) / 4 for i in range(n)])

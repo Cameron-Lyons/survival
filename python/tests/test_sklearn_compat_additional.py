@@ -99,7 +99,6 @@ def test_score_uses_rust_concordancefit(monkeypatch):
         np.array([0.7, 0.2, 0.5, 0.1], dtype=np.float64),
     )
 
-    # concordance(Surv(time, status) ~ risk, reverse = TRUE): 4 concordant of 5 comparable pairs
     assert score == pytest.approx(0.8)
     assert len(calls) == 1
     time, status, risk, kwargs = calls[0]
@@ -116,7 +115,6 @@ def test_concordance_index_counts_tied_risk_scores_as_half():
         np.array([1, 1, 1], dtype=np.int32),
         np.array([0.5, 0.5, 0.1], dtype=np.float64),
     )
-    # pairs (1,2) tied in x (1/2), (1,3) concordant, (2,3) concordant
     assert score == pytest.approx(2.5 / 3.0)
 
 
@@ -126,14 +124,12 @@ def test_coxph_estimator_matches_r_coxph():
     estimator.fit(x, y)
 
     assert isinstance(estimator.model_, core.CoxPHFit)
-    # coxph(Surv(t, s) ~ x, d)
     assert estimator.coef_ == pytest.approx([-2.5113057727233947])
 
     risk = estimator.predict(x)
     times, survival = estimator.predict_survival_function(x)
     median = estimator.predict_median_survival_time(x)
 
-    # predict(fit, type = "lp") on the training rows
     assert risk == pytest.approx(
         [
             -0.031391322159042501,
@@ -149,7 +145,6 @@ def test_coxph_estimator_matches_r_coxph():
     assert times.tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     assert survival.shape == (x.shape[0], x.shape[0])
     assert median.shape == (x.shape[0],)
-    # R concordance of the fitted model
     assert estimator.score(x, y) == pytest.approx(0.68181818181818188)
 
     breslow = CoxPHEstimator(ties="breslow").fit(x, y)
@@ -163,11 +158,9 @@ def test_coxph_estimator_survival_curves_match_r_survfit():
     estimator.fit(x, y)
     new_x = np.array([[0.25], [0.75]], dtype=np.float64)
 
-    # R linear predictor on new data
     assert estimator.predict(new_x) == pytest.approx([0.59643512102180618, -0.65921776533989118])
 
     times, survival = estimator.predict_survival_function(new_x)
-    # survfit(fit, newdata = data.frame(x = c(.25, .75)))$surv, one column per new row
     assert times.tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     assert survival[0] == pytest.approx(
         [
@@ -193,7 +186,6 @@ def test_coxph_estimator_survival_curves_match_r_survfit():
             0.40907197828345665,
         ]
     )
-    # summary(survfit(...))$table[, "median"]
     assert estimator.predict_median_survival_time(new_x).tolist() == pytest.approx([5.0, 8.0])
 
     custom_times = np.array([0.5, 2.0, 3.5, 100.0], dtype=np.float64)

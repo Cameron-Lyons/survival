@@ -59,14 +59,11 @@ test_that("empty AFT probabilities preserve both fit and standard-error matrix w
       .aft_probability_compare(actual, empty)
       null_error <- is.null(p) && spec$dist %in% c("gaussian", "lognormal", "t")
       if (null_error) {
-        # qnorm(NULL) and qt(NULL) reject NULL even without standard errors.
         expect_error(predict(stock, newdata, type = type, p = p, se.fit = FALSE),
                      "Non-numeric argument to mathematical function", fixed = TRUE)
       } else {
         .aft_probability_compare(actual, predict(stock, newdata, type = type, p = p, se.fit = FALSE))
       }
-      # The independently specified oracle retains two rows and zero columns
-      # for both outputs, including stock's failing estimated-scale SE path.
       actual_se <- predict(fit, newdata, type = type, p = p, se.fit = TRUE)
       .aft_probability_compare(actual_se, list(fit = empty, se.fit = empty))
       if (null_error) {
@@ -80,8 +77,6 @@ test_that("empty AFT probabilities preserve both fit and standard-error matrix w
         if (type == "quantile" && spec$dist != "gaussian") {
           .aft_probability_compare(actual_se, stock_se)
         } else {
-          # Fixed-scale uquantiles (and identity quantiles) incorrectly retain
-          # one location SE per row despite an empty probability vector.
           expect_identical(dim(stock_se$fit), c(2L, 0L))
           expect_null(dim(stock_se$se.fit))
           expect_length(stock_se$se.fit, 2L)

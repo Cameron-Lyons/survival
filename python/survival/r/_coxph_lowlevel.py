@@ -131,8 +131,6 @@ def _fit(
         raise TypeError("method must be a string")
     if method not in {"efron", "breslow", "exact"}:
         raise ValueError("method must be 'efron', 'breslow' or 'exact'")
-    # The bare R fitters use the test method == 'efron'. Only agexact.fit
-    # selects exact likelihood; even the label 'exact' otherwise means Breslow.
     engine_method = "exact" if kind == "agexact" else "efron" if method == "efron" else "breslow"
     strata_values = None if strata is None else _materialize_labels(strata, "strata")
     if strata_values:

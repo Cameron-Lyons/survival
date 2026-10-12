@@ -158,7 +158,7 @@ def test_stored_predictors_own_input_and_roundtrip_concurrently():
     fit = replace(model(case, case["models"][0]), linear_predictors=source)
     expected = r.concordance(fit, influence=3)
     source[:] = np.nan
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own round-trip data
+    restored = pickle.loads(pickle.dumps(fit))
     with ThreadPoolExecutor(3) as pool:
         results = list(pool.map(lambda _: r.concordance(restored, influence=3), range(3)))
     for actual in results:

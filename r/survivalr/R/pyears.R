@@ -243,8 +243,6 @@
   out
 }
 
-# Numeric two-column responses follow R's two kernels: (time, event)
-# without a rate table, and (start, stop) without events with a rate table.
 .pyears_formula_response_args <- function(response, has_ratetable) {
   if (inherits(response, "Surv")) {
     type <- attr(response, "type")
@@ -314,8 +312,6 @@
     tcut = any(categories$factors == 0L), summary = summary)
 }
 
-# Build a mapping call without parsing/deparsing variable names. Added variables
-# pass through model.frame's subset and missing-data handling with the response.
 .pyears_rate_call <- function(rate_call, ratetable) {
   names <- names(dimnames(ratetable))
   if (is.null(names)) names <- attr(ratetable, "dimid")
@@ -365,8 +361,6 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
     for (name in all.vars(rate_call)) model_formula[[3L]] <- call("+", model_formula[[3L]], as.name(name))
     formula_terms <- if (missing(data)) stats::terms(model_formula) else stats::terms(model_formula, data = data)
     if (!attr(formula_terms, "response")) base::stop("Follow-up time must appear in the formula", call. = FALSE)
-    # Cache a possibly Python-backed response and let model.frame evaluate other
-    # terms once. This also supports response functions in a formula environment.
     response <- eval(attr(formula_terms, "variables")[[2L]], if (missing(data)) NULL else data, environment(formula_terms))
     if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
     predvars <- attr(formula_terms, "variables")
@@ -406,13 +400,11 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       group_name = if (length(term_labels) == 1L) term_labels[[1L]] else NULL,
       group_info = group_info, model_frame = mf, x_values = x_values, y_values = y_values,
       include_model = model, include_x = x, include_y = y)
-    # R drops dimensions when the full category grid has only one cell.
     if (!isTRUE(data.frame) && length(result$pyears) == 1L) {
       for (name in c("pyears", "n", "event", "expected")) {
         if (!is.null(out[[name]])) out[[name]] <- as.numeric(out[[name]])
       }
     }
-    # No synthetic group column belongs to a formula with no covariates.
     if (isTRUE(data.frame) && !length(term_labels)) out$data$group <- NULL
     return(out)
   }

@@ -32,9 +32,6 @@ def lung():
     return datasets.load_lung()
 
 
-# fit <- coxph(Surv(time, status) ~ pspline(age, df = 4) + sex, lung)
-# z <- cox.zph(fit); z$table; z$var; head(z$y, 3); tail(z$y, 2)
-# cox.zph(fit, terms = FALSE)$table; cox.zph(fit, singledf = TRUE)$table
 def test_pspline_fit_adds_the_penalty_and_takes_df_from_the_fit(lung):
     fit = r.coxph("Surv(time, status) ~ pspline(age, df=4) + sex", lung)
     zph = r.cox_zph(fit)
@@ -60,7 +57,6 @@ def test_pspline_fit_adds_the_penalty_and_takes_df_from_the_fit(lung):
     ]
     assert r.as_data_frame(zph)["df"] == _column(zph, "df")
 
-    # R indexes fit$df by position, so past its two entries the df are NA
     by_coefficient = r.cox_zph(fit, terms=False)
     assert _column(by_coefficient, "chisq")[:3] == pytest.approx(
         [0.000534234624748221, 0.004658672921705095, 0.003635278625629485], rel=1e-8
@@ -80,13 +76,6 @@ def test_pspline_fit_adds_the_penalty_and_takes_df_from_the_fit(lung):
     assert _column(single, "p")[0] == pytest.approx(0.000377360883008123, rel=1e-8)
 
 
-# R reads a diagonal-only coxlist2$second with matrix(second, nvar), which
-# recycles it into pmat[i, j] = second[i] (R prints 3.548 for the first fit);
-# these references come from cox.zph with that line replaced by
-#   tmat <- if (length(second) == nc) diag(second, nc) else matrix(second, nc)
-# fit <- coxph(Surv(time, status) ~ ridge(age, sex, theta = 1), lung)
-# fit2 <- coxph(Surv(time, status) ~ ridge(age, ph.ecog, theta = 1) + sex,
-#               lung[!is.na(lung$ph.ecog), ])
 def test_ridge_penalty_enters_as_its_diagonal(lung):
     zph = r.cox_zph(r.coxph("Surv(time, status) ~ ridge(age, sex, theta=1)", lung))
     assert _column(zph, "chisq") == pytest.approx([2.51379658992081, 2.51379658992081], rel=1e-9)
@@ -109,12 +98,6 @@ def test_ridge_penalty_enters_as_its_diagonal(lung):
     assert zph.var[1] == pytest.approx([-0.283527210244434, 4.613112064330112], rel=1e-9)
 
 
-# cox.zph(coxph(Surv(time, status) ~ age + sex + frailty(id), kidney))$table
-# lung2 <- lung[!is.na(lung$inst), ]
-# cox.zph(coxph(Surv(time, status) ~ pspline(age, df = 3) + sex + frailty(inst), lung2))$table
-# R reads fit$df by position among the tested terms and accepts only fits
-# whose frailty is the last term ("subscript out of bounds" otherwise); any
-# other order must give the same table.
 @pytest.mark.parametrize(
     ("kidney_terms", "lung_terms"),
     [
@@ -136,8 +119,6 @@ def test_sparse_frailty_fits_take_df_from_the_fit(lung, kidney_terms, lung_terms
         [0.5784717733961282, 0.0517397893344987, 0.9993869328697095], rel=1e-9
     )
 
-    # With a sparse term coxpenal.fit keeps no coxlist2: the dense pspline
-    # penalty is not added to the information.
     zph = r.cox_zph(r.coxph(f"Surv(time, status) ~ {lung_terms}", _complete(lung, "inst")))
     assert _column(zph, "chisq") == pytest.approx(
         [91.63862907179184, 2.91898671262468, 91.81326620248043], rel=1e-9
@@ -147,9 +128,6 @@ def test_sparse_frailty_fits_take_df_from_the_fit(lung, kidney_terms, lung_terms
     )
 
 
-# lung$big <- lung$age + 1e6; heart$big <- heart$age + 1e6
-# cox.zph(coxph(Surv(time, status) ~ big + sex, lung))$table
-# cox.zph(coxph(Surv(start, stop, event) ~ big + surgery, heart))$table
 def test_a_large_covariate_mean_does_not_lose_precision(lung):
     data = dict(lung, big=[age + 1e6 for age in lung["age"]])
     zph = r.cox_zph(r.coxph("Surv(time, status) ~ big + sex", data))
@@ -168,9 +146,6 @@ def sqrt_times(times):
     return [math.sqrt(t) for t in times]
 
 
-# sqrt_times <- function(t) sqrt(t)
-# z <- cox.zph(coxph(Surv(time, status) ~ age + sex, lung), transform = sqrt_times)
-# z2 <- cox.zph(coxph(Surv(start, stop, event) ~ age + surgery, heart), transform = sqrt_times)
 def test_a_function_transform_is_applied_to_the_stop_times(lung):
     fit = r.coxph("Surv(time, status) ~ age + sex", lung)
     zph = r.cox_zph(fit, transform=sqrt_times)
@@ -199,11 +174,6 @@ def test_a_function_transform_is_applied_to_the_stop_times(lung):
         r.cox_zph(fit, transform=2)
 
 
-# d <- lung[!is.na(lung$ph.karno), ]; d$wt <- d$ph.karno / 100; d$age2 <- d$age * s
-# cox.zph(coxph(Surv(time, status) ~ age2 + wt + sex, d))$table["GLOBAL", ]
-# gives chisq 10.3589845408429 on 3 df (p 0.0157486420131667) for every s up to
-# 1e5; at s = 1e6 R's solve() stops: the system is computationally singular
-# (reciprocal condition number 1.85494e-17).
 @pytest.mark.parametrize("scale", [1.0, 1e2, 1e3, 1e4, 1e5])
 def test_badly_scaled_covariates_follow_r_solve_rule(lung, scale):
     data = _complete(lung, "ph.karno")

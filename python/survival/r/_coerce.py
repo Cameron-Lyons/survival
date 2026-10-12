@@ -20,8 +20,6 @@ from .. import _survival as _core
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
 _PACKAGE_PREFIX = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
-# R recognizes NA by the low-word payload 1954, including after arithmetic
-# quiets the NaN. Keep that marker distinct from genuine numerical NaNs.
 _NA_REAL = struct.unpack("=d", struct.pack("=Q", 0x7FF80000000007A2))[0]
 _MASKED_FLOAT_WARNING = "Warning: converting a masked element to nan."
 
@@ -198,7 +196,6 @@ def _r_factor_levels(values: Sequence[Any]) -> list[Any]:
     """The levels ``as.factor`` gives ``values``: R factor levels when present, else sorted."""
 
     categories = _mstate_categories(values)
-    # Repeated group labels need their missingness checked only once.
     present = {value for value in set(values) if not _is_missing_value(value)}
     if categories is not None:
         return [level for level in _materialize_1d(categories, "levels") if level in present]
@@ -224,8 +221,6 @@ def _quantile_vector(values: Any, name: str) -> list[float]:
         return _float_vector(values, name)
 
 
-# R's getOption("na.action"), the na.action of every model function that does not
-# name its own
 _DEFAULT_NA_ACTION = "na.omit"
 
 
@@ -372,7 +367,6 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
                 category=UserWarning,
             )
             try:
-                # a numeric column is missing only where it is NaN
                 missing.update(compress(range(n), map(math.isnan, materialized)))
             except (TypeError, OverflowError):
                 missing.update(
@@ -564,7 +558,6 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
     keep: a factor's levels, and a ``tcut``'s cutpoints and labels (``[.tcut``)."""
 
     if isinstance(source, _core.TcutResult):
-        # scale 1 keeps the already scaled values and cutpoints
         return _core.tcut(kept, list(source.cutpoints), list(source.labels), 1.0)
     categories = _mstate_categories(source)
     return (
@@ -735,11 +728,6 @@ def _match_string_arg(
     raise ValueError(message)
 
 
-# ---------------------------------------------------------------------------
-# R's factor() / as.character() / format(): the single level and label path.
-# ---------------------------------------------------------------------------
-
-
 def _categories(values: Any) -> list[Any] | None:
     """The declared levels of a factor-like column, or ``None``.
 
@@ -806,7 +794,7 @@ def _r_format_numbers(values: Sequence[Any], digits: int = 7) -> list[str]:
     out: list[str] = []
     for number in numbers:
         if number is None or math.isnan(number):
-            out.append("NA")  # NaN is the package's numeric NA
+            out.append("NA")
         elif math.isinf(number):
             out.append("Inf" if number > 0.0 else "-Inf")
         elif fixed:
@@ -890,7 +878,7 @@ def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
     observed = array if present is None else array[present]
     levels, inverse = np.unique(observed, return_inverse=True)
     if levels.dtype.kind == "f":
-        levels = levels + 0.0  # -0 and 0 are one level, labelled "0"
+        levels = levels + 0.0
     if present is None or present.all():
         return inverse.tolist(), levels
     full = np.zeros(len(array), dtype=np.int64)
@@ -931,8 +919,6 @@ def _factor(
     return codes, [_as_character(level) for level in levels]
 
 
-# Older spellings kept for the modules that still import them; each is an alias of
-# the single implementation above.
 _strata_value_label = _as_character
 _strata_level_sort_key = _r_sort_key
 _mstate_event_label = _as_character

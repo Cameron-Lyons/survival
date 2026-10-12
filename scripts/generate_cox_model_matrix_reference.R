@@ -41,13 +41,8 @@ matrix_result <- function(fun) {
   result
 }
 reconstructed_matrix <- function(fit, nd, formula, model, unpenalized) {
-  # The stock Cox method misspells contrasts.arg when removing strata. Use
-  # stats' ordinary matrix constructor with the fitted contrasts explicitly.
   Terms <- delete.response(terms(fit))
   if (unpenalized) {
-    # makepredictcall.pspline drops df and penalty=FALSE, which can make a
-    # valid fitted basis fail (default df=4 with nterm=3). Retain the original
-    # constructor options and add the fitted Boundary.knots instead.
     original <- attr(terms(formula), "variables")
     training <- model.frame(formula, d)
     pv <- attr(Terms, "predvars")

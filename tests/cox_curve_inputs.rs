@@ -1,6 +1,3 @@
-//! Public Cox curve components remain checked after Rust callers mutate them.
-//! Numerical controls rebuild weighted risk sets directly at each stop time.
-
 use ndarray::{Array2, array};
 use survival::surv_analysis::{
     AgsurvCurve, AgsurvData, CoxSurvType, IndividualInterval, agsurv, expand_curve,
@@ -493,8 +490,6 @@ fn unit_risk_kp_curve_has_hand_calculated_increments() {
         CoxSurvType::KalbfleischPrentice,
     )
     .unwrap();
-    // All risks equal one, so KP's estimating equation gives 1 - d/Y,
-    // including weighted tied deaths: .6, 1, 0 at times 2, 3, 4.
     let expanded = expand_curve(
         &curve,
         CoxSurvType::KalbfleischPrentice,
@@ -503,8 +498,6 @@ fn unit_risk_kp_curve_has_hand_calculated_increments() {
         None,
     )
     .unwrap();
-    // The tied KP estimate is found by 35 bisection steps. Compare the exact
-    // equation's solution at a tolerance above that solver's final bracket.
     for (row, column, expected) in [(0, 0, 0.6), (1, 0, 0.6), (0, 1, 0.36), (1, 1, 0.36)] {
         assert!((expanded.surv[[row, column]] - expected).abs() < 1e-10);
     }

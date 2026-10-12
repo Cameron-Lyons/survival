@@ -138,7 +138,6 @@ if (getRversion() >= "2.15.1") {
   if (inherits(value, "formula")) {
     paste(deparse(value, width.cutoff = 500L), collapse = " ")
   } else if (is.list(value)) {
-    # a multi-state coxph's list of formulas
     lapply(unname(value), .as_formula_string)
   } else if (is.character(value)) {
     paste(value, collapse = " ")
@@ -266,9 +265,6 @@ if (getRversion() >= "2.15.1") {
   if (typeof(column) %in% c("double", "integer") && !is.object(column) &&
       is.null(dim(column)) && length(column) <= .Machine$integer.max &&
       (typeof(column) == "double" || !anyNA(column))) {
-    # A one-dimensional R array crosses in bulk as a NumPy array, including
-    # empty and single-row columns. Double arrays retain R's NA payload;
-    # missing integers keep their source type and scalar missing markers.
     value <- as.vector(column)
     dim(value) <- length(value)
     return(value)
@@ -286,7 +282,6 @@ if (getRversion() >= "2.15.1") {
   if (is.list(data)) {
     if (!length(data)) return(reticulate::dict())
     return(lapply(data, function(column) {
-      # Keep nested/dimensioned inputs on their established conversion path.
       if (is.null(column) || !is.atomic(column) || !is.null(dim(column))) return(column)
       .as_python_data_column(column)
     }))
@@ -381,7 +376,6 @@ if (getRversion() >= "2.15.1") {
       as.integer(value)
     }
   }, integer(1))
-  # the Python codes are 0-based
   factor(code_values + 1L, levels = seq_along(result$levels), labels = as.character(result$levels))
 }
 
@@ -479,8 +473,6 @@ attrassign <- function(object, tt) {
       stop("multi-state Surv response is missing its states", call. = FALSE)
     }
     if (!(ncol(value) %in% c(2L, 3L))) stop("unsupported Surv matrix shape", call. = FALSE)
-    # Already coded Surv columns need no per-row string/factor reconstruction.
-    # Preserve an absent censor label on legacy responses as well as named labels.
     sequence <- function(column) as.list(.as_python_vector(column))
     result <- .python_attr("Surv")$`_from_normalized`(
       time = as.list(as.numeric(value[, ncol(value) - 1L])),
@@ -593,7 +585,6 @@ attrassign <- function(object, tt) {
     !missing(stop) || !missing(status)
 
   if (use_named_response) {
-    # time1/start, stop and status are this package's aliases for R's time, time2, event
     if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
       base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
     }
@@ -821,8 +812,6 @@ attrassign <- function(object, tt) {
   values
 }
 
-# summary.coxph.penal from the Python summary: one row per term (coef, se(coef), se2,
-# Chisq, DF, p; NA where R leaves the cell empty), conf.int for the coefficients
 .as_coxph_penal_summary <- function(result, conf.int) {
   coefficients <- .as_coefficient_table(result$coefficients, penalized = TRUE)
   coefficients[is.nan(coefficients)] <- NA_real_
@@ -1053,8 +1042,6 @@ attrassign <- function(object, tt) {
   }
   frame <- as.data.frame.survival_py_survfit(object, optional = TRUE)
 
-  # Repeated display names identify distinct stratum blocks. Keep their unique
-  # keys while accumulating summary rows, then restore the original labels.
   display_labels <- if (.is_cox_curves(object)) .result_field(object, "strata_labels") else NULL
   if (!is.null(display_labels) && "strata" %in% names(frame)) {
     blocks <- .result_field(object, "strata")
@@ -1242,8 +1229,6 @@ attrassign <- function(object, tt) {
     id_values <- seq_len(count + length(omitted))
     if (length(omitted)) id_values <- id_values[-omitted]
   }
-  # Exclusion restores observation rows before pseudo values reach R. R's
-  # naresid uses omitted positions as row names, also for explicit string ids.
   if (length(omitted) && n == length(id_values) + length(omitted) &&
       identical(as.character(.result_field(action, "kind")), "exclude")) {
     labels <- as.character(seq_len(n))
@@ -1533,8 +1518,6 @@ attrassign <- function(object, tt) {
   NULL
 }
 
-# residuals.coxph's Schoenfeld matrix: rows named by the death times and, for a
-# stratified fit, attr(, "strata") the deaths per stratum, table(strat[deaths]).
 .as_schoenfeld_residuals <- function(value) {
   result <- .as_numeric_result(
     .result_field(value, "values"),
@@ -1584,8 +1567,6 @@ attrassign <- function(object, tt) {
   )
 }
 
-# An R na.action as Python spells it; NULL is model.frame's default, the
-# na.action option (na.omit unless changed).
 .as_na_action <- function(value) {
   if (is.null(value)) {
     value <- getOption("na.action", "na.pass")
@@ -1656,8 +1637,6 @@ attrassign <- function(object, tt) {
   .snapshot_python(value)
 }
 
-# `id = id` names a column of the data: pass the name, so the Python fit records
-# it (R labels the residuals' id dimension after it, "(id)" for a vector).
 .name_id_column <- function(evaluated_dots, dots, data) {
   id_expr <- dots[["id"]]
   if (!is.null(id_expr) && is.name(id_expr) && !is.null(data) &&
@@ -1728,9 +1707,6 @@ attrassign <- function(object, tt) {
   .python_attr("_r_term_subscript")(values, kind, levels)
 }
 
-# A stratified survfit is a named list of per-stratum curves on this side (keyed by
-# the bare levels); the Python object it came from rides along for the calls that
-# take the whole fit back (pseudo, residuals, summary, ...).
 .split_survfit_strata <- function(result) {
   curves <- .python_attr("_survfit_strata_curves")(result)
   if (is.list(curves) && !inherits(curves, "python.builtin.object")) {
@@ -2560,9 +2536,6 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (is.factor(y1) || is.factor(y2)) {
     stop("y1 and y2 must be sortable", call. = FALSE)
   }
-  # Plain numeric dates already preserve the common order. Character and
-  # classed dates need the common ranks used by survival::neardate, including
-  # R's locale collation and Date/POSIXt coercion before the native match.
   plain_numeric <- function(values) {
     !is.object(values) && (is.numeric(values) || is.logical(values))
   }
@@ -2600,7 +2573,6 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   if (is.null(names(args))) names(args) <- c("time", "time2", "event")[seq_along(args)]
   args <- lapply(args, function(value) if (inherits(value, "difftime")) as.numeric(value) else value)
   if (!is.numeric(args$time)) stop("Time variable is not numeric", call. = FALSE)
-  # Preserve scalar vectors and bulk numeric arrays, including missing statuses.
   args <- lapply(args, function(value) {
     if (is.factor(value)) {
       .as_python_factor(value)
@@ -2653,7 +2625,6 @@ Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop
     !missing(stop) || !missing(status)
 
   if (use_named_response) {
-    # time1/start, stop and status are this package's aliases for R's time, time2, event
     if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
       base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
     }
@@ -3326,7 +3297,6 @@ cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
 }
 
 lvcf <- function(id, x, time, first = TRUE) {
-  # R's lvcf as it is: any orderable time, the first value of a subject filled in
   if (!missing(time)) {
     indx <- order(id, time)
   } else {
@@ -3423,8 +3393,6 @@ blog <- function(edge = 0.05) {
   NULL
 }
 
-# The Python RateTable for an R ratetable: dates become ratetable days and the
-# legacy `factor` attribute becomes R's type codes (1 factor, 2 continuous, 4 US year).
 .as_python_ratetable <- function(ratetable) {
   atts <- attributes(ratetable)
   cutpoints <- lapply(atts$cutpoints, function(value) {
@@ -3994,10 +3962,6 @@ totimeline <- function(formula, data, id, istate) {
   newdata[, -indx]
 }
 
-# R's surv2counting (fromtimeline.R): a timeline model frame as a counting-process one.
-# The kernel pairs each subject's rows (row j + 1 gives the end and outcome of the
-# interval row j starts) and, for each covariate carried forward, names the input row
-# whose value each output row takes.
 .surv2counting_model_frame <- function(frame, repeated = FALSE, lvcf = TRUE) {
   response <- stats::model.response(frame)
   if (!(inherits(response, "Surv") || inherits(response, "Surv2"))) {
@@ -4028,7 +3992,6 @@ totimeline <- function(formula, data, id, istate) {
     value <- .as_python_vector(value)
     if (is.list(value)) value else as.list(value)
   }
-  # LVCF on every column but the response and the "(...)" ones, (id) and (cluster)
   carried <- list()
   if (lvcf) {
     skip <- c(1L, which(substring(names(frame), 1L, 1L) == "("))
@@ -4754,8 +4717,6 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     status = as.list(status),
     covariates = .coxph_fit_covariates(design, nrow(design)),
     subcohort = as.list(as.integer(subcoh)),
-    # codes in sorted id order: the Borgan score residuals collapse by id as
-    # rowsum() does, one row per id in that order
     id = as.list(as.integer(factor(id)) - 1L),
     start = if (is.null(start_time)) NULL else as.list(start_time),
     method = method
@@ -4792,7 +4753,6 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
     coefficient_names,
     coefficient_names
   )
-  # the Cox fit of the pseudo-cohort R's cch builds
   cox_fit <- .result_field(result, "fit")
   fit_x <- .as_numeric_matrix(.result_field(cox_fit, "x"))
   colnames(fit_x) <- coefficient_names
@@ -5339,7 +5299,6 @@ coxsurv.fit <- function(ctype, stype, se.fit, varmat, cluster, y, x, wt, risk,
                     risknames = names(risk2),
                     value_names = if (length(value_names)) value_names[[i]] else NULL)
   })
-  # R's historical list form assigns original stratum names even for IDs.
   names(output) <- if (is.null(original_strata) || length(original_strata) == 0L) "0" else
     if (is.factor(original_strata)) levels(original_strata) else sort(unique(original_strata))
   output
@@ -5387,8 +5346,6 @@ survfitcoxph.fit <- function(y, x, wt, x2, risk, newrisk, strata, se.fit,
       arguments <- c(list(parameters, info$iter, state), unname(values[requested]))
       state <<- do.call(attribute$cfun, arguments)
     }
-    # Keep R's arbitrary history and its attributes on the R side. The native
-    # fit owns its numerical controller state and passes the correct iteration.
     .compact_null(list(theta = unname(state$theta), done = state$done))
   }
   penalty <- function(coef, theta, neff) {
@@ -5420,7 +5377,6 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   if (!length(pcols) || length(pcols) != length(pattr)) {
     stop("Invalid pcols or pattr arg", call. = FALSE)
   }
-  # Sort as R does before invoking user controllers or returning their history.
   locations <- vapply(pcols, function(columns) {
     hit <- which(vapply(assign, function(group) {
       identical(as.numeric(columns), as.numeric(group))
@@ -5497,8 +5453,6 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   if (!is.list(dist) || !is.function(dist$density)) {
     stop("Missing density function in the definition of the distribution", call. = FALSE)
   }
-  # Explicit lists retain their callbacks, even when their display name is
-  # shared with a built-in family. R parameters keep their names and shape.
   definition <- dist
   density <- function(z) {
     if (length(parms)) {
@@ -6545,9 +6499,6 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
 residuals.survival_py_survfit <- function(object, times, type = "pstate",
                                           collapse = FALSE, weighted = collapse,
                                           data.frame = FALSE, extra = FALSE, ...) {
-  # reticulate derives the class vector from each Python class's
-  # `__module__.__name__`; CoxSurvfitResult lives in survival.r._types and is
-  # re-exported by survival.r_api, so accept both spellings.
   if (inherits(object, c("survival.r_api.CoxSurvfitResult",
                          "survival.r._types.CoxSurvfitResult"))) {
     stop("residuals method for coxph survival curve not found", call. = FALSE)
@@ -6567,7 +6518,6 @@ residuals.survival_py_survfit <- function(object, times, type = "pstate",
     ...
   )
   if (isTRUE(data.frame)) {
-    # the Python side lays the long-format columns out as R does
     return(as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE))
   }
   resid <- .survival_py_survfit_residual_matrix(result)
@@ -6659,7 +6609,6 @@ model.frame.formula <- function(formula, ...) {
 
   columns <- .pybridge_attr("_surv_columns")(.restore_python(x))
   surv_type <- columns$type
-  # a missing time is NaN on the Python side and NA in an R Surv
   time <- .surv_na_times(.as_numeric_vector(columns$time))
   status <- as.integer(columns$event)
   start <- columns$start
@@ -7463,8 +7412,6 @@ survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRU
   result
 }
 
-# Prepared factor/Surv input and raw output shapes; all estimation, confidence
-# limits and influence calculations run through the shared Rust engine.
 survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
                       se.fit = TRUE, conf.int = 0.95,
                       conf.type = c("log", "log-log", "plain", "none", "logit", "arcsin"),
@@ -7487,7 +7434,6 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
   if (!missing(cluster)) args$cluster <- .as_python_vector(cluster)
   if (!missing(robust)) args$robust <- robust
   if (!missing(type)) args$type <- type
-  # time0 is intentionally unused by survival::survfitKM.
   result <- .call_python_with_warnings("survfitKM", .compact_null(args))
 
   numeric_field <- function(name) .as_numeric_vector(.result_field(result, name))
@@ -7556,7 +7502,6 @@ survfit0 <- function(x, ...) {
 
 survfit_confint <- function(p, se, logse = TRUE, conf.type, conf.int = 0.95,
                             selow, ulimit = TRUE) {
-  # R's survfit_confint as it is, vector recycling and ifelse shapes included
   if (!is.numeric(conf.int) || length(conf.int) != 1L || is.na(conf.int)) {
     stop("invalid value for conf.int", call. = FALSE)
   }
@@ -7638,8 +7583,6 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   )
 }
 
-# The second dimension of a multi-state pseudo array: the states, or the
-# transitions for the cumulative hazard.
 .pseudo_columns <- function(fit, type) {
   if (!.is_survival_py_multistate_survfit(fit)) {
     return(NULL)
@@ -7655,10 +7598,6 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   .survival_py_multistate_states(fit)
 }
 
-# The Python pseudo values as R lays them out: a named vector for one time, a
-# subjects x times matrix (named `id` x `times` when the fit has an id), a
-# subjects x states matrix for one time of a multi-state curve and a
-# subjects x states x times array otherwise.
 .as_pseudo_result <- function(value, fit, times, columns = NULL) {
   n <- length(value)
   python_fit <- .unwrap_grouped_survfit(fit)
@@ -7668,7 +7607,6 @@ pseudo <- function(fit, times, type, collapse = TRUE, data.frame = FALSE, ...) {
   if (is.null(rows)) {
     rows <- as.character(seq_len(n))
   }
-  # R names the id dimension after the id variable, "(id)" for an id vector
   id_dim_name <- if (!has_id) {
     ""
   } else {
@@ -8147,7 +8085,6 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     }
     values <- output[[event_name]]
     if (is.character(values)) {
-      # the Python side labels the states; anything else is the censoring level
       values[!(values %in% states)] <- clabel
       output[[event_name]] <- factor(values, levels = c(clabel, states))
     } else {
@@ -8495,8 +8432,6 @@ survregDtest <- function(dlist, verbose = FALSE) {
 .check_dpqr_null_query <- function(value, distribution, quantile = FALSE) {
   if (!is.null(value) || !is.character(distribution) || length(distribution) != 1L) return(invisible(NULL))
   name <- casefold(distribution)
-  # NULL differs from numeric(0) for the stock R mathematical primitives.
-  # Numeric transport uses an empty list for both; retain these R-only errors.
   if (quantile && name %in% c("gaussian", "lognormal", "t"))
     stop("Non-numeric argument to mathematical function")
   if (!quantile && name %in% c("weibull", "exponential", "rayleigh", "lognormal", "loglogistic"))
@@ -8546,7 +8481,6 @@ qsurvreg <- function(p, mean, scale = 1, distribution = "weibull", parms) {
   ))
 }
 
-# R's rsurvreg: quantiles of runif(n), drawn here so set.seed() applies
 rsurvreg <- function(n, mean, scale = 1, distribution = "weibull", parms) {
   if (missing(parms)) {
     qsurvreg(stats::runif(n), mean, scale, distribution)
@@ -8830,8 +8764,6 @@ survConcordance.fit <- function(y, x, strata, weight) {
   ))
 }
 
-# survConcordance.fit's counts: a named vector, or with strata a matrix with a row
-# per non-empty stratum.
 .as_survconcordance_stats <- function(stats) {
   columns <- c("concordant", "discordant", "tied.risk", "tied.time", "std(c-d)")
   if (!is.list(stats[[1L]])) {
@@ -8845,9 +8777,6 @@ survConcordance.fit <- function(y, x, strata, weight) {
   )
 }
 
-# The ranks data frame from the Python columns.  Several fits come as one table
-# with a fit column, several predictors as one table each; both are stacked as
-# cord.work does, the fit column labelled with the bridge's names.
 .concordance_ranks_frame <- function(ranks, fit_names = NULL) {
   if (is.null(names(ranks))) {
     frames <- Map(function(table, name) {
@@ -8918,8 +8847,6 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   out
 }
 
-# R's concordance object from the Python result: the count table and the
-# influence, dfbeta and ranks in R's shapes.
 .as_concordance_list <- function(result, input_score_names = NULL) {
   count_names <- c("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
   concordance <- .as_numeric_vector(.result_field(result, "concordance"))
@@ -9048,7 +8975,6 @@ coxph.wtest <- function(var, b, toler.chol = 1e-09) {
 coef.survival_py_model <- function(object, ...) {
   values <- .call_r_api("coef", object, ...)
   if (.is_coxphms_fit(object) && isTRUE(list(...)$matrix)) {
-    # coef.coxphms(matrix = TRUE): cmap's layout, with the states
     values <- .as_named_matrix(values)
     attr(values, "states") <- as.character(.result_field(object, "states"))
     return(values)
@@ -9066,7 +8992,6 @@ coef.survival_py_model <- function(object, ...) {
 vcov.survival_py_model <- function(object, ..., complete = TRUE) {
   values <- .call_r_api("vcov", object, complete = complete, ...)
   if (.is_coxphms_fit(object) && isTRUE(list(...)$matrix)) {
-    # vcov.coxphms(matrix = TRUE): one nrow(cmap)-square block per transition
     blocks <- lapply(values, .as_named_matrix)
     return(array(
       unlist(blocks, use.names = FALSE),
@@ -9088,7 +9013,6 @@ vcov.survival_py_model <- function(object, ..., complete = TRUE) {
   inherits(object, "survival.r._coxphms.CoxphmsModel")
 }
 
-# A survival.r NamedMatrix as an R matrix with its dimnames
 .as_named_matrix <- function(value) {
   values <- .as_numeric_matrix(.result_field(value, "values"))
   rownames <- .result_field(value, "rownames")
@@ -9162,8 +9086,6 @@ weights.survival_py_model <- function(object, ...) {
 
 model.matrix.survival_py_model <- function(object, data = NULL, ...) {
   dots <- list(...)
-  # The stock new-data methods build model.frame without forwarding na.action.
-  # It therefore comes from options(), while stored matrices retain their rows.
   if (!is.null(data)) dots$na.action <- NULL
   action <- if (is.null(data)) "omit" else .as_na_action(NULL)
   result <- do.call(.call_r_api, c(list("model_matrix", fit = object,
@@ -9178,7 +9100,6 @@ model.matrix.survival_py_model <- function(object, data = NULL, ...) {
     groups <- result[["strata"]]
     labels <- unlist(groups, use.names = FALSE)
     if (length(labels) != nrow(values)) {
-      # unlist drops Python None/NULL entries. Fill those positions in bulk.
       retained <- lengths(groups) != 0L
       padded <- rep(NA_character_, length(groups))
       padded[retained] <- labels
@@ -9212,7 +9133,6 @@ model.frame.survival_py_model <- function(formula, ...) {
       if (identical(kind, "logical")) columns[[name]] <- .as_nullable_logical_vector(values)
       else if (identical(kind, "character")) columns[[name]] <- .as_nullable_character_vector(values)
       else if (identical(kind, "numeric")) {
-        # A scalar NaN is a source value, distinct from a missing list slot.
         columns[[name]] <- vapply(values, function(value) {
           if (is.null(value) || length(value) == 0L) NA_real_ else as.numeric(value)[[1L]]
         }, numeric(1))
@@ -9242,7 +9162,6 @@ model.frame.survival_py_survfit <- function(formula, ...) {
 
 fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
   if (inherits(object, "survival_py_coxph")) {
-    # fitted.coxph: the linear predictors, other arguments ignored
     return(.as_numeric_vector(.call_r_api("fitted", fit = object)))
   }
   dots <- list(...)
@@ -9280,8 +9199,6 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
   }
   result <- .call_r_api("model_summary", object)
   if (inherits(result, "python.builtin.object") && !reticulate::py_has_attr(result, "model_type")) {
-    # summary.coxph returns a null model as it is: R's coxph.null object has no
-    # coefficients component, so hand back the fit as an R list
     fields <- list(
       loglik = .as_numeric_vector(.result_field(object, "loglik")),
       n = as.integer(.result_field(object, "n")),
@@ -9380,8 +9297,6 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
-  # Explicit p=NULL denotes an empty probability vector, whereas an omitted
-  # p uses the prediction defaults. Keep it through .compact_null dispatch.
   if (inherits(object, "survival_py_survreg") && "p" %in% names(dots) && is.null(dots$p)) {
     dots["p"] <- list(numeric(0))
   }
@@ -9454,8 +9369,6 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     as.character(label)[[1L]], character(1)))
   label <- function(x) {
     if (is.matrix(x)) {
-      # R's dimname setters normalize character(0) to NULL. The empty rowsum
-      # primitive preserves the explicitly empty group-label vector instead.
       if (length(labels)) rownames(x) <- labels else x <- rowsum(x, labels)
     } else if (is.numeric(x)) names(x) <- labels
     x
@@ -9463,8 +9376,6 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   if (is.list(value)) lapply(value, label) else label(value)
 }
 
-# naresid/napredict pad a na.exclude fit's values with NA at the rows it dropped;
-# Python pads them with NaN.
 .excluded_rows_na <- function(object, value) {
   action <- .result_field(object, "na_action")
   if (is.null(action) || !identical(as.character(.result_field(action, "kind")), "exclude")) {
@@ -9495,7 +9406,6 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
 
 residuals.survival_py_model <- function(object, ..., type = NULL) {
   if (is.null(type)) {
-    # residuals.coxph and residuals.survreg defaults
     type <- if (inherits(object, "survival_py_survreg")) "response" else "martingale"
   }
   dots <- list(...)
@@ -9808,7 +9718,6 @@ summary.survival_py_anova <- function(object, ...) {
   if (any(lengths != data_count)) {
     stop("arguments must have the same length", call. = FALSE)
   }
-  # Match stock tapply coding, including declared factor order and absent combinations.
   groups <- tapply(by_list[[1L]], by_list)
   groups <- match(groups, sort(unique(groups)))
   if (all(groups == groups[[1L]])) {
@@ -9846,8 +9755,6 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
         !identical(registered, canonical)) fast <- character()
   }
   if (default_fun && !length(fast) && is.null(groups$by) && !.is_coxms_curves(x)) {
-    # Stock's default ordinary survival path still validates mean, including
-    # overridden methods, before rowMeans bypasses those methods for curve values.
     test <- tapply(seq.int(data_count), rep.int(1L, data_count), FUN)
     if (is.list(test) || length(test) != 1L || !is.numeric(test)) {
       stop("FUN must return a single value summary", call. = FALSE)
@@ -9856,8 +9763,6 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
   } else if (length(fast) == 1L) {
     summary <- if (default_fun) NULL else fast
   } else {
-    # Native preflight visits each group's one-based data indices before reducing
-    # curve values. Preserve R's integer indices and numeric curve vectors.
     remaining <- groups$count
     curve_names <- .result_field(x, "colnames")
     group_rows <- if (is.null(curve_names)) NULL else split(seq_len(data_count),
@@ -9875,11 +9780,7 @@ aggregate.survival_py_survfit <- function(x, by = NULL, FUN = mean, ...) {
           value_calls <<- value_calls + 1L
         }
       }
-      # Stock tapply calls FUN through base lapply. Its evaluation environment
-      # determines which default S3 method is visible to mean/median dispatch.
       answer <- lapply(list(values), FUN)[[1L]]
-      # Stock tapply simplifies integer/double scalars, dropping classes such as
-      # factor/Date. Converting here also preserves NA_integer_ through reticulate.
       if (typeof(answer) %in% c("integer", "double") && length(answer) == 1L) {
         answer <- as.numeric(answer)
       }
@@ -9949,8 +9850,6 @@ dim.survival_py_survfit <- function(x) {
   NULL
 }
 
-# summary.survfitms of survfit.coxphms curves: pstate and cumhaz as (time, newdata
-# row, state or transition) arrays, the counts as (time, state) matrices.
 .as_summary_coxms_curves <- function(result, object = NULL) {
   states <- as.character(.result_field(result, "states"))
   transitions <- .result_field(result, "n_transition")
@@ -10158,8 +10057,6 @@ dim.survival_py_survfit <- function(x) {
   ))
 }
 
-# [.survfitms for survfit.coxphms curves: one subscript per dimension of dim(x)
-# (strata when stratified, data, states), or a leading 1 when there are no strata.
 .subset_coxms_curves <- function(x, subscripts) {
   dims <- dim(x)
   if (length(subscripts) == 1L) {
@@ -10217,7 +10114,6 @@ dim.survival_py_survfit <- function(x) {
     stop("invalid variable requested", call. = FALSE)
   }
   selected <- seq_along(variable_names)[i]
-  # R applies the subscript to the table as well, whose last row is GLOBAL
   table_rows <- seq_len(length(.result_field(x, "table")))[i]
   result <- x$subset(as.list(as.integer(selected - 1L)), as.list(as.integer(table_rows - 1L)))
   .wrap_python(result, c("survival_py_cox_zph", "survival_py_object"))
@@ -10341,7 +10237,6 @@ dim.survival_py_survfit <- function(x) {
 as.data.frame.survival_py_survfit <- function(x, row.names = NULL, optional = FALSE, ...) {
   frame <- .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
   if (.is_grouped_survival_py_survfit(x) && "strata" %in% names(frame)) {
-    # the curves are named by the bare levels on this side
     full_names <- names(reticulate::py_to_r(.result_field(.unwrap_grouped_survfit(x), "strata")))
     frame$strata <- names(unclass(x))[match(as.character(frame$strata), full_names)]
   }
@@ -10418,7 +10313,6 @@ print.survival_py_model <- function(x, ...) {
     print(call)
   }
   if (inherits(x, "survival_py_survreg") && !is.null(.result_field(x, "penalized"))) {
-    # print.survreg.penal: the per-term table
     printed <- .call_r_api("print_survreg_penal", x, ...)
     cat("\n", paste(.result_field(printed, "lines"), collapse = "\n"), "\n", sep = "")
     return(invisible(x))
@@ -10450,7 +10344,6 @@ print.survival_py_object <- function(x, ...) {
   invisible(x)
 }
 
-# print.summary.coxph.penal
 .print_summary_coxph_penal <- function(x, digits, maxlabel = 25) {
   saved_digits <- options(digits = digits)
   on.exit(options(saved_digits))

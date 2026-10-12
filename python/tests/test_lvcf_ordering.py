@@ -38,8 +38,6 @@ _r_factor = importlib.import_module("survival.r._coerce")._r_factor
     ],
 )
 def test_initial_values_follow_r_missing_times_last(ids, values, times, expected):
-    # R/xtras.R initializes the first observation after order(id, time), whose
-    # default puts missing times last. Equal times keep their input order.
     assert r.lvcf(ids, values, time=times) == expected
 
 
@@ -77,8 +75,6 @@ def test_first_false_keeps_unknown_initial_values():
 
 
 def test_initialization_uses_native_subject_identity():
-    # Numeric and character IDs remain distinct in the Python native API;
-    # integral floating-point IDs have the same identity as integers.
     assert r.lvcf([1, "1", 1.0, "1"], [None, None, 1, 1]) == [0, 0, 1, 1]
 
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Complete calls, including formula preparation, rate conversion and result assembly.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(pkgload::load_all("r/survivalr", quiet = TRUE))
 args <- commandArgs(trailingOnly = TRUE)

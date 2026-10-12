@@ -37,9 +37,6 @@ test_that("neardate calendar classes use common stock ranks", {
     args <- list(id1 = rep(1, 6), id2 = rep(1, 6), y1 = case[[1]], y2 = case[[2]],
       best = best, nomatch = -1L)
     if (inherits(case[[1]], "POSIXt")) {
-      # Stock passes the two-element POSIXt class vector to methods::as.
-      # Check its failure separately and compare intended matching through
-      # independently prepared epoch seconds instead.
       expect_error(do.call(survival::neardate, args), "length\\(class2\\) == 1L")
       numeric_args <- args
       numeric_args$y1 <- as.numeric(as.POSIXct(case[[1]]))

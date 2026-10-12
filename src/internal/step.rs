@@ -1,9 +1,3 @@
-//! R's small vector helpers for step functions: `findInterval`, reading a
-//! right-continuous curve at a time, `rank(ties.method = "average")` and
-//! `sort(unique(x))`.
-
-/// R's `findInterval(t, times, left.open = left_open)`: the number of the
-/// sorted `times` that are `<= t` (`< t` when `left_open`).
 pub(crate) fn find_interval(times: &[f64], t: f64, left_open: bool) -> usize {
     if left_open {
         times.partition_point(|&x| x < t)
@@ -12,9 +6,6 @@ pub(crate) fn find_interval(times: &[f64], t: f64, left_open: bool) -> usize {
     }
 }
 
-/// Value at `t` of the right-continuous step function that is `initial`
-/// before the first of the sorted `times` and `values[i]` from `times[i]`
-/// on: `c(initial, values)[findInterval(t, times) + 1]`.
 pub(crate) fn step_at(times: &[f64], values: &[f64], t: f64, initial: f64) -> f64 {
     match find_interval(times, t, false) {
         0 => initial,
@@ -22,8 +13,6 @@ pub(crate) fn step_at(times: &[f64], values: &[f64], t: f64, initial: f64) -> f6
     }
 }
 
-/// R's `rank(values)` with the default `ties.method = "average"`: tied
-/// values share the mean of the ranks they span (ranks are one-based).
 pub(crate) fn rank_average(values: &[f64]) -> Vec<f64> {
     let n = values.len();
     let mut order: Vec<usize> = (0..n).collect();
@@ -44,7 +33,6 @@ pub(crate) fn rank_average(values: &[f64]) -> Vec<f64> {
     ranks
 }
 
-/// `sort(unique(values))` (exact comparison, as R's `unique`).
 pub(crate) fn sort_unique(values: impl IntoIterator<Item = f64>) -> Vec<f64> {
     let mut sorted: Vec<f64> = values.into_iter().collect();
     sorted.sort_by(f64::total_cmp);
@@ -58,8 +46,6 @@ mod tests {
 
     #[test]
     fn find_interval_matches_r() {
-        // R: findInterval(c(0, 1, 1.5, 3, 4), c(1, 2, 3)) = 0 1 1 3 3,
-        // and with left.open = TRUE 0 0 1 2 3.
         let times = [1.0, 2.0, 3.0];
         let at = [0.0, 1.0, 1.5, 3.0, 4.0];
         let closed: Vec<usize> = at
@@ -85,7 +71,6 @@ mod tests {
 
     #[test]
     fn rank_average_matches_r() {
-        // R: rank(c(3, 1, 3, 2, 3, -1)) = 5 2 5 3 5 1
         assert_eq!(
             rank_average(&[3.0, 1.0, 3.0, 2.0, 3.0, -1.0]),
             [5.0, 2.0, 5.0, 3.0, 5.0, 1.0]

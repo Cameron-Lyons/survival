@@ -5,9 +5,6 @@ scales are independently referenced by generate_survreg_density_reference.R.
 No SciPy dependency is needed for these user callbacks.
 """
 
-# Pickles below are produced locally by these tests.
-# ruff: noqa: S301
-
 import copy
 import json
 import math
@@ -298,7 +295,6 @@ def test_density_calls_are_batches_through_fitting_postfit_and_dpqr():
     dlist = definition()
     dlist["density"] = callback
     fit = fit_case(REFERENCE["cases"][0], dist=dlist)
-    # Ten probe points, 40 response rows, or 48 endpoints including intervals.
     assert set(callback.shapes) <= {(10,), (40,), (48,)}
     callback.shapes.clear()
     r.residuals(fit, type="matrix")

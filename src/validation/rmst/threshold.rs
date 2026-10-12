@@ -1,9 +1,3 @@
-//! Data-driven choice of the truncation time of a restricted mean: a
-//! piecewise-exponential changepoint search on the hazard (no R
-//! counterpart).  Times are binned with `aeqSurv` first, as `survfit`
-//! does, and the restricted mean at the chosen horizon is
-//! `summary(survfit(Surv(time, status) ~ 1), rmean = tau)$table`.
-
 use super::kaplan_meier;
 use crate::data_prep::aeq_times;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -12,7 +6,7 @@ use crate::internal::validation::{validate_binary_i32, validate_finite, validate
 use crate::surv_analysis::{RmeanOption, survmean};
 use pyo3::prelude::*;
 
-/// A hazard changepoint retained by the search.
+#[doc = " A hazard changepoint retained by the search."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct ChangepointInfo {
@@ -23,7 +17,7 @@ pub struct ChangepointInfo {
     pub p_value: f64,
 }
 
-/// The chosen horizon and the restricted mean survival time up to it.
+#[doc = " The chosen horizon and the restricted mean survival time up to it."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct RMSTOptimalThresholdResult {
@@ -34,8 +28,6 @@ pub struct RMSTOptimalThresholdResult {
     pub se_rmean: f64,
 }
 
-/// Restricted mean up to `tau` and its standard error from the
-/// Kaplan-Meier curve.
 fn restricted_mean(time: &[f64], status: &[i32], tau: f64) -> SurvivalResult<(f64, f64)> {
     let km = kaplan_meier(time, status, None, 0.95)?;
     let table = survmean(&km, 1.0, RmeanOption::At(tau))?;
@@ -113,8 +105,6 @@ fn compute_hazard_in_interval(
     }
 }
 
-/// Search for hazard changepoints and report the restricted mean up to
-/// the last one retained (or the maximum follow-up when none is).
 pub fn rmst_optimal_threshold(
     time: &[f64],
     status: &[i32],

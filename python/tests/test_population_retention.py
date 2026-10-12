@@ -13,7 +13,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 r = survival.r_api
-from survival.r._coerce import _r_factor  # noqa: E402
+from survival.r._coerce import _r_factor
 
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/population_retention_reference.json").read_text()
@@ -190,8 +190,6 @@ def test_model_precedence_skips_unused_flags_and_keeps_table_layout():
 
 
 def test_cox_individual_exclude_restores_subset_rows(cox):
-    # R errors when rows are removed in this branch; the supported Python
-    # extension uses the same subset-relative exclusion convention as rate tables.
     data = {"time": [2, math.nan, 4], "status": [1, 0, 1], "z": [1, 2, 3]}
     omitted = r.survexp(
         "time ~ 1",

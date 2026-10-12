@@ -36,7 +36,7 @@ def previous_lvcf(path):
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "lvcf"
     )
     namespace = dict(vars(_data_prep))
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)  # noqa: S102 -- explicitly supplied repository revision
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
     return namespace[function.name]
 
 

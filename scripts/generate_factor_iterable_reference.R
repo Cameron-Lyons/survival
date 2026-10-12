@@ -40,7 +40,6 @@ for (margin in c("surv","pstate")) for (name in names(by_sources)) {
   for (fun in c("mean","median","min","max")) {
     fit <- aggregate(curves,by=by,FUN=get(fun))
     value <- fit[[margin]]
-    # Explicit row-major nesting avoids jsonlite's array dimension convention.
     rows <- if (margin=="surv") lapply(seq_len(nrow(value)),function(row) I(value[row,])) else
       lapply(seq_len(dim(value)[1]),function(row) {
         lapply(seq_len(dim(value)[2]),function(column) I(value[row,column,]))

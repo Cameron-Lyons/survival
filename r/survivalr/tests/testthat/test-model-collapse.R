@@ -21,8 +21,6 @@
 .collapse_compare <- function(actual, expected, group) {
   expect_identical(dim(actual), dim(expected))
   labels <- if (is.matrix(expected)) rownames(expected) else names(expected)
-  # Some stock methods discard row names when dropping a one-column matrix.
-  # The group labels themselves remain independently available from base rowsum.
   if (is.null(labels)) labels <- rownames(suppressWarnings(rowsum(seq_along(group), group)))
   expect_identical(if (is.matrix(actual)) rownames(actual) else names(actual),
                    labels)

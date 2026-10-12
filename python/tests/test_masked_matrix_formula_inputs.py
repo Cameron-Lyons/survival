@@ -119,8 +119,6 @@ def test_masked_response_rows_match_independent_stock(case, layout, method):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if "error" in expected["value"]:
-            # Stock pyears na.pass reaches its kernel with missing responses;
-            # the port rejects that invalid kernel input explicitly.
             pattern = "missing" if case["na_action"] == "fail" else "non-finite|finite|NaN"
             if method == "frame":
                 with pytest.raises(ValueError, match=pattern):
@@ -131,8 +129,6 @@ def test_masked_response_rows_match_independent_stock(case, layout, method):
         elif method == "frame":
             actual = r.model_frame(case["formula"], data, **kwargs(case))
             assert_values(actual, expected["value"]["columns"])
-            # A fresh source lets the internal frame expose the omitted row
-            # action and labels independently of the public raw-column schema.
             prepared, _, _ = response(case, layout)
             frame = formula.model_frame(case["formula"], prepared, **kwargs(case))
             assert record(frame.na_action) == expected["value"]["na_action"]
@@ -143,8 +139,6 @@ def test_masked_response_rows_match_independent_stock(case, layout, method):
                 payload = frame.y.view(np.uint64)
                 na_payload = np.asarray(coerce._NA_REAL).view(np.uint64)
                 np.testing.assert_array_equal(np.isnan(frame.y), expected_mask)
-                # Plain arrays supply genuine numerical NaN; masks and nullable
-                # cells supply R NA. Both have the same stock omission rows.
                 np.testing.assert_array_equal(
                     payload == na_payload,
                     expected_mask if layout != "numeric_array" else np.zeros_like(expected_mask),
@@ -172,8 +166,6 @@ def test_masked_response_rows_match_independent_stock(case, layout, method):
             stored = r.pyears(case["formula"], retained, scale=1, model=True, **kwargs(case))
             assert_values(stored.model, value["model"]["columns"])
             assert_values(r.model_frame(stored), value["model"]["columns"])
-            # Both public frame and retained model are independent writable
-            # output snapshots, including after masking or row selection.
             stored.model["Y"][0][0] = -12345
             fit.y[0][0] = -12345
     assert caught == []

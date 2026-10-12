@@ -183,7 +183,6 @@ def test_ml_fit_rejects_invalid_status_before_model_setup(monkeypatch, name, inv
 )
 def test_binary_status_types_preserve_fitted_results(name, status_type):
     x, y = _data()
-    # Object storage preserves the status scalar types alongside floating-point times.
     typed_y = y.astype(object)
     typed_y[:, 1] = [status_type(value) for value in y[:, 1]]
     expected = _estimator(name).fit(x, y)

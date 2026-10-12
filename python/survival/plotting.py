@@ -255,8 +255,6 @@ def _draw(
                 )[0]
             )
         if curve.lower is not None and curve.upper is not None and conf_times is not None:
-            # Use the current device's range, as R does, and f=1 interpolation
-            # for interval bars (censor marks use f=0 instead).
             offset = (
                 (i - (len(data.curves) - 1) / 2) * offsets[0]
                 if len(offsets) == 1

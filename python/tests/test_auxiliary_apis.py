@@ -26,7 +26,6 @@ def test_statistical_test_helpers():
     assert lrt.p_value == pytest.approx(0.0455, rel=1e-3)
     assert lrt.test_name == "LikelihoodRatioTest"
 
-    # coxph.wtest(var, coef): coef' V^-1 coef with V diagonal (1, 2)
     wald = survival.validation.wald_test([1.0, 2.0], [[1.0, 0.0], [0.0, 2.0]])
     assert wald.statistic == pytest.approx(3.0)
     assert wald.df == 2

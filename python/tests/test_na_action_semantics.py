@@ -42,9 +42,6 @@ def weibull_exclude(lung):
     return r.survreg("Surv(time, status) ~ age + ph.ecog", lung, na_action="na.exclude")
 
 
-# --- na.omit is the default ----------------------------------------------------------------
-
-
 def test_coxph_omits_missing_rows_by_default(lung):
     fit = r.coxph("Surv(time, status) ~ age + ph.ecog", lung)
     assert fit.n == 227
@@ -75,7 +72,7 @@ def test_survreg_interval_response_and_covariates_share_one_na_action():
         "g": ["a", "b", "a", "b", "a", "b", "a", "b", "a", "b", None],
     }
     fit = r.survreg('Surv(left, right, type = "interval2") ~ g', data)
-    assert fit.n == 10  # the missing endpoints are censoring codes
+    assert fit.n == 10
     assert fit.na_action == r.NaAction(rows=(11,), kind="omit")
     assert r.coef(fit) == approx([1.398092952664020, 0.378164150584612])
 
@@ -118,7 +115,6 @@ def test_clogit_builds_its_constant_time_after_na_action():
 
 
 def test_cch_keeps_refusing_missing_values():
-    # R's cch has no na.action argument and fails on a missing covariate
     nwtco = datasets.load_nwtco()
     keep = [
         i
@@ -146,9 +142,6 @@ def test_tt_expansion_reads_only_the_formula_columns():
     fit = r.coxph("Surv(futime, fustat) ~ age + tt(age)", missing)
     assert fit.na_action == r.NaAction(rows=(27,), kind="omit")
     assert fit.coefficients == approx(expected)
-
-
-# --- NaN made by log, sqrt and arithmetic -------------------------------------------------
 
 
 def _shifted(values, shift):
@@ -187,7 +180,6 @@ def test_a_nan_made_by_a_transform_is_missing_at_fit_time(lung):
     assert offset.n == 202
     assert offset.na_action.rows == tuple(sorted({*rows, 17, 139, 182, 225}))
     assert offset.coefficients == approx([0.0250684861996581])
-    # log(0) is -Inf, not NA; 0/0 is NaN, a nonzero value over 0 is Inf
     with (
         pytest.warns(UserWarning, match="NaNs produced"),
         pytest.raises(ValueError, match="data contains an infinite predictor"),
@@ -202,7 +194,6 @@ def test_a_nan_made_by_a_transform_is_missing_at_fit_time(lung):
         r.survreg("Surv(time, status) ~ log(wt.loss)", data)
     with pytest.raises(ValueError, match="data contains an infinite predictor"):
         r.survreg("Surv(time, status) ~ I(wt.loss/ph.ecog)", data)
-    # d is 0 where wt.loss is, so wt.loss/d is 0/0 there
     wt_loss = _shifted(data["wt.loss"], 0)
     data["d"] = [None if value is None else float(value != 0) for value in wt_loss]
     ratio = r.coxph("Surv(time, status) ~ I(wt.loss/d) + sex", data)
@@ -219,7 +210,6 @@ def _zero_in_row_4(lung):
 
 
 def test_a_nan_made_by_response_arithmetic_is_missing(lung):
-    # (time * z) / z is 0/0 in row 4, so is.na(Surv) is true there
     data = _zero_in_row_4(lung)
     omitted = r.NaAction(rows=(4,), kind="omit")
     weibull = r.survreg("Surv((time*z)/z, status) ~ age", data)
@@ -254,8 +244,6 @@ def test_a_nan_made_by_response_arithmetic_is_missing(lung):
     table = r.pyears("(time*z)/z ~ sex", data, scale=1)
     assert table.pyears == approx([38876, 30507])
     assert table.n == approx([137, 90])
-    # an interval-censored response is missing only where is.na(Surv) says so: a NaN
-    # lower end with an upper end is left censored
     data["lo"] = list(data["time"])
     data["hi"] = [t if s == 2 else None for t, s in zip(data["time"], data["status"], strict=True)]
     interval = r.survreg('Surv((lo*z)/z, hi, type="interval2") ~ age', data)
@@ -280,7 +268,6 @@ def test_an_na_inside_response_arithmetic_is_missing(lung):
     assert r.coef(interval) == approx([7.0326698204154239, -0.0162139566499659])
     assert interval.scale == approx([0.74739471937042])
     assert interval.loglik == approx([-1145.27198127864, -1142.48727077039])
-    # under na.pass the NA reaches the design, which both fitters refuse as R does
     for fitter in (r.coxph, r.survreg):
         with pytest.raises(ValueError, match="data contains an infinite predictor"):
             fitter("Surv(time, status) ~ I(wt.loss/10)", lung, na_action="na.pass")
@@ -295,7 +282,6 @@ def test_an_na_inside_response_arithmetic_is_missing(lung):
     ],
 )
 def test_na_pass_keeps_a_numeric_variable_with_a_missing_value_numeric(lung, formula):
-    # the NA reaches the design matrix rather than making ph.ecog a factor
     for fitter in (r.coxph, r.survreg):
         with pytest.raises(ValueError, match="data contains an infinite predictor"):
             fitter(formula, lung, na_action="na.pass")
@@ -318,7 +304,6 @@ def test_predict_counts_a_nan_made_by_a_transform_as_missing(lung):
 
 
 def test_predict_keeps_strata_and_response_aligned_past_nan_rows(lung):
-    # row 2 is Inf - Inf, row 3 has a missing age
     newdata = {
         "age": [60, math.inf, None, 70],
         "wt.loss": [5, math.inf, 3, 10],
@@ -365,7 +350,6 @@ def test_predict_reads_offsets_and_interactions_past_nan_rows(lung):
     assert fit.n == 202
     assert fit.coefficients == approx([-0.0553399261978555])
     assert fit.loglik == approx([-672.542493944414, -669.484838764443])
-    # row 2 has log(-1) in the offset, row 3 sqrt(-1), row 4 a missing age
     newdata = {"age": [60, 70, -1, None, 50], "sex": [1, 2, 1, 2, 2], "w4": [10, -1, 20, 5, 3]}
     lp = [0.0609138141136284, -1.4970225068203580]
     with pytest.warns(UserWarning, match="NaNs produced"):
@@ -378,9 +362,6 @@ def test_predict_reads_offsets_and_interactions_past_nan_rows(lung):
         risk = r.predict(fit, newdata, type="risk", se_fit=True, na_action="na.exclude")
     assert risk.fit == approx([1.062807311249649, NAN, NAN, NAN, 0.223795518737215])
     assert risk.se_fit == approx([0.0777658955671311, NAN, NAN, NAN, 0.0335864780219077])
-
-
-# --- na.exclude: naresid / napredict -------------------------------------------------------
 
 
 def test_coxph_na_exclude_pads_residuals_and_predictions(cox_exclude):
@@ -442,7 +423,6 @@ def test_coxph_na_exclude_pads_residuals_and_predictions(cox_exclude):
             [0.0508665813639166, 0.00561296651420406],
         ],
     )
-    # Schoenfeld residuals are per event, never padded
     assert len(r.residuals(cox_exclude, type="schoenfeld").values) == 164
 
 
@@ -491,9 +471,6 @@ def test_survreg_na_exclude_pads_residuals_and_predictions(weibull_exclude):
     assert [collapsed[i] for i in (0, 5, 6, 7)] == approx(
         [-163.841809556079, 108.777807995626, NAN, -117.312404447319]
     )
-
-
-# --- incomplete newdata: predict's na.pass -------------------------------------------------
 
 
 @pytest.mark.parametrize("missing", [None, NAN])
@@ -570,7 +547,6 @@ def test_survreg_predict_gives_na_rows_of_the_right_width_for_all_missing_newdat
 
 
 def test_survreg_design_matrix_predict_reads_missing_values_as_na(lung):
-    # R: survreg(Surv(time, status) ~ age, lung) and newdata age = c(50, NA)
     y = r.Surv(lung["time"], lung["status"])
     fit = r.survreg(y, x=[[1.0, age] for age in lung["age"]])
     assert r.coef(fit) == approx([6.8871206208890206, -0.0136082883341056])

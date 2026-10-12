@@ -1,5 +1,3 @@
-//! Infinite KM endpoints, uncertainty and queries retain independent stock rows.
-
 use serde_json::Value;
 use survival::surv_analysis::{
     HazardType, InfluenceRequest, StackedCurves, SurvType, SurvfitKMData, SurvfitKMOptions,
@@ -344,7 +342,6 @@ fn queried_summaries_reject_origins_after_counting_entry_rows() {
         let fit = survfitkm(&data, &options).unwrap();
         assert_eq!(fit.time, expected_times);
         assert_eq!(fit.t0, origin);
-        // Preserve the public initial-row operation, including R's order.
         let zero = survfit0(&fit);
         assert_eq!(zero.time[0], origin);
         assert_eq!(&zero.time[1..], fit.time.as_slice());
@@ -358,8 +355,6 @@ fn queried_summaries_reject_origins_after_counting_entry_rows() {
         )
         .unwrap();
         assert!(survfit0(&valid).time.is_sorted());
-        // Both sparse interval searches and dense sweeps must fail before
-        // reading the unsorted curve; the valid no-entry curve still works.
         for queries in [
             vec![0.0, 2.0, f64::INFINITY],
             vec![f64::INFINITY],

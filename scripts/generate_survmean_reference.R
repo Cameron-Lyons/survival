@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-R tables for streaming restricted-mean calculations.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -19,8 +18,6 @@ fits <- list(
     counting=survfit(Surv(start,time,status)~group,counting,weights=weight),
     conditional=survfit(Surv(time,status)~group,data,start.time=2.5),
     negative=survfit(Surv(time-5,status)~group,data))
-# Directly exercise the midpoint/tolerance and missing confidence-band rules
-# on a valid stock fit; the numerical table function accepts these bands.
 plateau <- fits$one
 plateau$surv <- c(1,.75,.5,.5,.5-1e-10,.25,.1,0,0,0)
 plateau$lower <- c(NA,.5,.5,.49,.4,.3,.2,.1,0,0)
@@ -39,7 +36,6 @@ for (name in names(fits)) for (zero in c(FALSE,TRUE)) {
                        gsub("\\.","_",fields))
     source$t0 <- if (is.null(fit$t0)) min(0,fit$time) else fit$t0
     sources[[key]] <- source
-    # Include an exact observed cutoff and a cutoff beyond all observations.
     cutoffs <- list("none","common","individual",
         fit$time[ceiling(length(fit$time)/2)],max(fit$time)+2)
     for (scale in c(1,.1,2.5,365.25)) for (cutoff in cutoffs) {

@@ -1,5 +1,3 @@
-//! SAS-style type III tests from the overparameterized indicator design.
-
 use super::{YatesContrast, estimates, quadratic_form, transpose};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatRows, FloatVec};
@@ -7,37 +5,28 @@ use crate::internal::qr::{LinpackLeastSquares, LinpackQr};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 
-/// Inputs to [`yates_sgtt`]. Formula expansion stays with the caller.
 pub struct YatesSgttInput<'a> {
-    /// Full indicator model matrix, in R's SAS column order.
     pub x: &'a [Vec<f64>],
-    /// Term number of every full indicator column (zero for the intercept).
     pub assign: &'a [usize],
-    /// Later categorical terms sharing a variable, indexed by term minus one.
     pub adjustment_terms: &'a [Vec<usize>],
     pub beta: &'a [f64],
     pub vmat: &'a [Vec<f64>],
-    /// Term number of each non-aliased fitted coefficient.
     pub coefficient_assign: &'a [usize],
-    /// Term numbers and labels to test.
     pub test_terms: &'a [(usize, String)],
     pub sigma2: Option<f64>,
-    /// False for a Cox model, whose baseline absorbs the intercept.
     pub include_intercept: bool,
 }
 
-/// The estimable SAS hypothesis matrix and one test per requested term.
+#[doc = " The estimable SAS hypothesis matrix and one test per requested term."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object, get_all)]
 pub struct YatesSgttResult {
     pub sas: Vec<Vec<f64>>,
-    /// Original full-design column numbers retained by the QR (zero based).
+    #[doc = " Original full-design column numbers retained by the QR (zero based)."]
     pub columns: Vec<usize>,
     pub test: Vec<YatesContrast>,
 }
 
-/// R's SGTT branch of `yates`: solve `X D = X`, residualize each categorical
-/// term against later related terms, and test the retained estimable rows.
 pub fn yates_sgtt(input: &YatesSgttInput<'_>) -> SurvivalResult<YatesSgttResult> {
     let n = input.x.len();
     let p = input.assign.len();
@@ -89,8 +78,6 @@ pub fn yates_sgtt(input: &YatesSgttInput<'_>) -> SurvivalResult<YatesSgttResult>
     }
     let xcolumns = transpose(input.x);
     let qr = LinpackLeastSquares::new(xcolumns.clone(), n);
-    // Each fitted response is a row of B = t(D). Missing coefficient columns
-    // have the same positions for every response.
     let mut b: Vec<Vec<f64>> = xcolumns
         .iter()
         .map(|column| qr.coefficients(column))
@@ -152,7 +139,7 @@ pub fn yates_sgtt(input: &YatesSgttInput<'_>) -> SurvivalResult<YatesSgttResult>
     Ok(YatesSgttResult { sas, columns, test })
 }
 
-/// Python entry point for the native SAS hypothesis construction.
+#[doc = " Python entry point for the native SAS hypothesis construction."]
 #[pyfunction(name = "yates_sgtt")]
 #[pyo3(signature = (x, assign, adjustment_terms, beta, vmat, coefficient_assign, test_terms, sigma2=None, include_intercept=true))]
 #[allow(clippy::too_many_arguments)]

@@ -826,8 +826,6 @@ mod tests {
 
     #[test]
     fn forest_plot_preserves_extreme_wald_p_values() {
-        // R 2 * pnorm(abs(z), lower.tail = FALSE), including values beyond
-        // the point where a binary64 lower-tail CDF rounds to one.
         let cases = [
             (0.0_f64, 1.0),
             (2.0, 4.550_026_389_635_842e-2),
@@ -853,8 +851,6 @@ mod tests {
                 );
             }
         }
-        // A finite coefficient divided by a positive subnormal standard
-        // error can produce an infinite statistic; its limiting p-value is zero.
         let result = forest_plot_data(
             vec!["treatment".to_string()],
             vec![1.0],

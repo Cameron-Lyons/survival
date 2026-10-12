@@ -43,8 +43,6 @@ def test_grouped_state_columns_match_stock_selected_matrices(case):
         curve = curves[group["label"]]
         raw = group["raw_selected"]
         assert curve.states == raw["states"]
-        # n.censor in raw stock subsets retains all original columns. Its
-        # correctly selected values are checked in the complete table below.
         for name, values in raw.items():
             if name not in {"states", "n.censor"}:
                 np.testing.assert_allclose(
@@ -62,7 +60,6 @@ def test_grouped_state_columns_match_stock_selected_matrices(case):
             assert values == expected[name]
         else:
             np.testing.assert_allclose(values, expected[name], rtol=2e-12, atol=1e-14)
-    # Exported table columns are independent snapshots of the selected curves.
     frame["pstate"][0] = 999
     np.testing.assert_allclose(
         r.as_data_frame(curves)["pstate"], expected["pstate"], rtol=2e-12, atol=1e-14

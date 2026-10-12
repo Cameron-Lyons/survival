@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Stock survival references for omitted/excluded survival residual rows.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -29,7 +28,6 @@ for (histories in c(FALSE, TRUE)) for (multistate in c(FALSE, TRUE)) {
                     group = rep(c("a","b"), each = 4))
   }
   if (multistate) d$event <- factor(d$event, levels = c("censor","b","a"))
-  # The competing-risk case without ids verifies original observation positions.
   use_id <- histories || !multistate
   name <- paste(if (multistate) "aj" else "km", if (histories) "histories" else "right", sep = "_")
   formula <- paste0("Surv(", if (histories) "start," else "", "time,",
@@ -51,8 +49,6 @@ for (histories in c(FALSE, TRUE)) for (multistate in c(FALSE, TRUE)) {
         residual_frame_error <- NULL
         if (inherits(residual_frame, "error")) {
           residual_frame_error <- conditionMessage(residual_frame)
-          # Grouped AJ single-time tables fail in stock R's col(array) call.
-          # Select the same rows from an independent successful multi-time call.
           residual_frame <- residuals(fit, times = query_times, type = type,
                                       collapse = collapse, data.frame = TRUE)
           residual_frame <- residual_frame[residual_frame$time %in% times, , drop = FALSE]

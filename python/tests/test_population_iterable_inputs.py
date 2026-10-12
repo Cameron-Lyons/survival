@@ -183,7 +183,6 @@ def assert_result(fit, case, retention):
     if retention == "model":
         model = expected["model"]
         if case["rmap_kind"] == "vectors":
-            # The Python direct vectors do not carry R expression symbol names.
             model = {
                 name: value for name, value in model.items() if name not in {"rate_age", "rate_sex"}
             }
@@ -241,9 +240,7 @@ def test_direct_and_mapped_aliases_consume_each_source_once(function_name, cox):
     }
     arguments["model"] = True
     fit = getattr(r, function_name)(case["formula"], data, **arguments)
-    # The raw sex column appears both in data and in a direct rmap vector.
     assert counted["sex"].seen == counted["sex"].values
-    # Literal rmap vectors do not become retained source columns in stock R.
     expected_model = dict(case["expected"]["model"])
     expected_model.pop("agebase", None)
     expected_model.pop("sex", None)
@@ -318,7 +315,6 @@ def test_direct_survexp_vectors_match_complete_stock_formula_outputs(
     arguments.update({"model": True} if retention == "model" else {"x": True, "y": True})
     fit = r.survexp(data=data, **arguments)
     expected_model = case["expected"]["model"]
-    # Direct vector names are canonical; the R reference formula names its sources.
     direct_model = {
         "time": expected_model["time"],
         "age": expected_model["age_days"],

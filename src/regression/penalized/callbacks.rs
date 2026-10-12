@@ -1,5 +1,3 @@
-//! Fit-local state for user penalty functions and outer-loop controllers.
-
 use super::control::{ControlInput, ControlState};
 use super::penalty::PenaltyValue;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -8,8 +6,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::Arc;
 
-/// R-style `pfun` and `cfun`. The penalty uses positive derivatives; the
-/// controller returns a mapping whose `theta` selects the next inner fit.
 #[derive(Debug, Clone)]
 pub struct ControlledPenalty {
     pub pfun: Arc<Py<PyAny>>,
@@ -19,8 +15,6 @@ pub struct ControlledPenalty {
     pub needs_df: bool,
 }
 
-/// Opaque controller state belongs to one fit, never to the reusable penalty
-/// or the numerical fit result. Numeric history columns are parsed once.
 pub(crate) struct CallbackState {
     value: Py<PyAny>,
     pub columns: Vec<String>,
@@ -170,8 +164,6 @@ impl ControlledPenalty {
                 (Vec::new(), Vec::new())
             } else {
                 let mut first = value.get_item("first")?.extract::<FloatVec>()?.into_inner();
-                // R recycles dense derivatives during subassignment; its
-                // sparse callback requires one entry per frailty coefficient.
                 if which == 2 && !first.is_empty() && coef.len().is_multiple_of(first.len()) {
                     first = first.iter().copied().cycle().take(coef.len()).collect();
                 }

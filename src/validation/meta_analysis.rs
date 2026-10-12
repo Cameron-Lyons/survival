@@ -529,14 +529,14 @@ impl PublicationBiasResult {
 
 #[pyfunction]
 #[pyo3(signature = (effects, std_errors))]
-/// Test publication bias using Egger regression and Begg rank correlation.
-///
-/// Egger regresses standardized effects on precision with an intercept and uses
-/// a two-sided Student-t test with `n - 2` degrees of freedom. Its fields are NaN
-/// when the precision slope is numerically unidentifiable or standardized
-/// effects are not representable. With zero residual variance, a nonzero
-/// intercept has an infinite statistic and zero probability; a zero intercept
-/// has an undefined statistic and probability.
+#[doc = " Test publication bias using Egger regression and Begg rank correlation."]
+#[doc = ""]
+#[doc = " Egger regresses standardized effects on precision with an intercept and uses"]
+#[doc = " a two-sided Student-t test with `n - 2` degrees of freedom. Its fields are NaN"]
+#[doc = " when the precision slope is numerically unidentifiable or standardized"]
+#[doc = " effects are not representable. With zero residual variance, a nonzero"]
+#[doc = " intercept has an infinite statistic and zero probability; a zero intercept"]
+#[doc = " has an undefined statistic and probability."]
 pub fn publication_bias_tests(
     effects: Vec<f64>,
     std_errors: Vec<f64>,
@@ -544,8 +544,6 @@ pub fn publication_bias_tests(
     let k = effects.len();
     validate_meta_inputs(&effects, &std_errors, 3)?;
 
-    // Scaling the precision column leaves the intercept and its test unchanged.
-    // This avoids overflowing reciprocals and makes rank independent of units.
     let min_se = std_errors.iter().copied().fold(f64::INFINITY, f64::min);
     let precisions: Vec<f64> = std_errors.iter().map(|se| min_se / se).collect();
     let standardized: Vec<f64> = effects
@@ -589,8 +587,6 @@ fn egger_regression(x: &[f64], y: &[f64]) -> Option<(f64, f64, f64)> {
     let mean_y = y.iter().map(|value| value / y_scale).sum::<f64>() / n;
     let sxx = x.iter().map(|value| (value - mean_x).powi(2)).sum::<f64>();
     let sum_xx = x.iter().map(|value| value * value).sum::<f64>();
-    // R's lm.fit uses a default relative column-norm rank tolerance of 1e-7.
-    // A dropped precision slope does not identify the two-parameter Egger test.
     if sxx <= 1e-14 * sum_xx {
         return None;
     }
@@ -607,8 +603,6 @@ fn egger_regression(x: &[f64], y: &[f64]) -> Option<(f64, f64, f64)> {
         .zip(y)
         .map(|(xi, yi)| ((yi / y_scale - mean_y) - slope * (xi - mean_x)).powi(2))
         .sum::<f64>();
-    // Var(intercept) = MSE * (1/n + mean(x)^2 / Sxx).
-    // Scale the response to avoid overflow when squaring residuals.
     let se_intercept = (sse / (n - 2.0)).sqrt() * (1.0 / n + mean_x * mean_x / sxx).sqrt();
 
     Some((
@@ -789,7 +783,6 @@ mod tests {
                     ];
                     for (index, (actual, expected)) in actual.into_iter().zip(expected).enumerate()
                     {
-                        // Do not hide a lost small probability with absolute tolerance.
                         let absolute = if index == 3 { 0.0 } else { 2e-12 };
                         assert!(
                             (actual - expected).abs() <= absolute + 2e-10 * expected.abs(),
@@ -829,8 +822,6 @@ mod tests {
 
     #[test]
     fn egger_rank_cutoff_retains_estimable_precision_columns() {
-        // R lm(y ~ x), x = 1 + (0:2) * delta, y = c(1, 2, 4):
-        // rank 1 at delta=1e-7, rank 2 at delta=2e-7.
         for (delta, estimable) in [(1e-7, false), (2e-7, true)] {
             for units in [1e-8, 1.0, 1e8] {
                 let std_errors: Vec<f64> = (0..3)
@@ -851,8 +842,6 @@ mod tests {
                     assert_eq!(value.is_finite(), estimable);
                 }
                 if estimable {
-                    // This nearly aliased fit loses a few digits in both QR and
-                    // centered arithmetic; the inferential result still agrees.
                     assert!((result.egger_p - 0.12103775436571447).abs() < 1e-8);
                 }
             }

@@ -1,5 +1,3 @@
-//! Public Rust inputs remain checked when callers mutate their fields.
-
 use survival::surv_analysis::{
     SurvdiffData, SurvfitAJData, SurvfitAJOptions, SurvfitKMData, SurvfitKMOptions, survdiff,
     survfitaj, survfitkm,

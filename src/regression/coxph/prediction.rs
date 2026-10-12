@@ -1,5 +1,3 @@
-//! Linear predictors, term contributions, expected counts and prediction errors.
-
 use super::{CoxNewData, CoxPHFit, CoxPrediction, CoxTermsPrediction, PredictReference};
 use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -15,8 +13,6 @@ impl CoxPHFit {
         self.coefficients.len()
     }
 
-    /// Coefficients with aliased (`NaN`) entries replaced by 0, R's
-    /// `ifelse(is.na(coef), 0, coef)`.
     pub fn coefficients_or_zero(&self) -> Vec<f64> {
         self.coefficients
             .iter()
@@ -24,10 +20,6 @@ impl CoxPHFit {
             .collect()
     }
 
-    /// Fitted fields are publicly mutable in Rust. Validate dimensions before
-    /// consuming them, including when privately cached baselines already exist.
-    /// These checks take constant time in the number of training observations;
-    /// fitted numeric values retain their method-specific missing-value behavior.
     pub(super) fn check_prediction_dimensions(&self) -> SurvivalResult<()> {
         for (name, length) in [
             ("fit time", self.time.len()),
@@ -91,9 +83,6 @@ impl CoxPHFit {
         Ok(())
     }
 
-    /// Relative risks without an nrow-by-nvar centered matrix. Reusing one
-    /// contiguous row preserves the same subtraction and dot product as the
-    /// full curve path while bounding temporary covariate storage by nvar.
     pub(super) fn prediction_risks(
         &self,
         x: ArrayView2<'_, f64>,
@@ -114,7 +103,6 @@ impl CoxPHFit {
             .collect()
     }
 
-    /// Weighted per-stratum column means (`predict.coxph`'s `xmeans`).
     fn stratum_means(&self) -> Vec<Vec<f64>> {
         let nvar = self.nvar();
         let mut sums = vec![vec![0.0; nvar]; self.sorted.nstrata()];
@@ -134,20 +122,12 @@ impl CoxPHFit {
         sums
     }
 
-    /// Whether `predict.coxph` reads back the training design and offset
-    /// (its `use.x` branch): for `se.fit`, for a stratified fit centred
-    /// within strata, or for `reference = "zero"` with non-zero means.
     fn uses_training_x(&self, se_fit: bool, reference: PredictReference) -> bool {
         se_fit
             || (self.strata.is_some() && reference == PredictReference::Strata)
             || (reference == PredictReference::Zero && self.means.iter().any(|&m| m != 0.0))
     }
 
-    /// The design rows `predict.coxph` uses for `lp`, `risk` and `terms`:
-    /// centred per the reference, plus the offset.  With `training_offset`
-    /// the offset is centred at the mean training offset, as R's `offset -
-    /// mean(offset)` does in its `use.x` branch; otherwise the training
-    /// offset is 0 and a new offset is used as it is.
     fn prediction_rows(
         &self,
         newdata: Option<&CoxNewData>,
@@ -205,7 +185,6 @@ impl CoxPHFit {
         Ok((newx, offset))
     }
 
-    /// `predict(type = "lp")` (and `"risk"` via [`Self::predict_risk`]).
     pub fn predict_lp(
         &self,
         newdata: Option<&CoxNewData>,
@@ -235,7 +214,6 @@ impl CoxPHFit {
         Ok(CoxPrediction { fit, se_fit })
     }
 
-    /// `predict(type = "risk")`: `exp(lp)` with R's Taylor-series standard error.
     pub fn predict_risk(
         &self,
         newdata: Option<&CoxNewData>,
@@ -250,7 +228,6 @@ impl CoxPHFit {
         Ok(CoxPrediction { fit, se_fit })
     }
 
-    /// `predict(type = "terms")`: `assign` lists the columns of each term.
     pub fn predict_terms(
         &self,
         newdata: Option<&CoxNewData>,
@@ -261,8 +238,6 @@ impl CoxPHFit {
         self.predict_terms_inner(newdata, se_fit, reference, assign, None)
     }
 
-    /// Term predictions summed by ascending integer group. Only grouped
-    /// output rows are allocated; standard errors combine in quadrature.
     pub fn predict_terms_grouped(
         &self,
         newdata: Option<&CoxNewData>,
@@ -344,10 +319,6 @@ impl CoxPHFit {
         })
     }
 
-    /// `predict(type = "expected")`: the expected number of events over each
-    /// observation's follow-up.  `newdata` needs `time` (and `entry` for a
-    /// counting-process fit). Multiple fitted strata require an explicit stratum
-    /// for every new row.
     pub fn predict_expected(
         &self,
         newdata: Option<&CoxNewData>,
@@ -365,9 +336,6 @@ impl CoxPHFit {
             if !se_fit {
                 return Ok(CoxPrediction { fit, se_fit: None });
             }
-            // predict.coxph's exp(linear.predictors), relative to the mean
-            // offset as the baseline curves are (the standard error does not
-            // depend on that scale)
             let offset_mean = self.offset_mean();
             let risk: Vec<f64> = self
                 .linear_predictors
@@ -438,10 +406,6 @@ impl CoxPHFit {
         Ok(CoxPrediction { fit, se_fit: se })
     }
 
-    /// Standard error of an expected count (`predict.coxph`, `type =
-    /// "expected"`): `sqrt(varh + dt' V dt) * risk`, differenced over
-    /// (entry, time] for counting-process data.  The covariate rows are
-    /// `x - means` when `means` is given, `x` itself otherwise.
     #[allow(clippy::too_many_arguments)]
     fn expected_se(
         &self,
@@ -482,7 +446,6 @@ impl CoxPHFit {
             .collect())
     }
 
-    /// `predict(type = "survival")`: `exp(-expected)`.
     pub fn predict_survival(
         &self,
         newdata: Option<&CoxNewData>,
@@ -501,9 +464,6 @@ impl CoxPHFit {
     }
 }
 
-/// Checks that `assign` groups existing columns.  A term may have no
-/// columns left (all of them aliased); its prediction is then 0, as in
-/// `predict.coxph`.
 pub(crate) fn validate_assign(assign: &[Vec<usize>], nvar: usize) -> SurvivalResult<()> {
     for (term, columns) in assign.iter().enumerate() {
         if let Some(column) = columns.iter().find(|&&c| c >= nvar) {
@@ -515,7 +475,6 @@ pub(crate) fn validate_assign(assign: &[Vec<usize>], nvar: usize) -> SurvivalRes
     Ok(())
 }
 
-/// One column per coefficient, the default term structure.
 pub(crate) fn default_assign(nvar: usize) -> Vec<Vec<usize>> {
     (0..nvar).map(|c| vec![c]).collect()
 }

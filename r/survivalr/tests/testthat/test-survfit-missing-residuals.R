@@ -35,11 +35,9 @@ test_that("missing KM and AJ residual and pseudo rows agree with stock R", {
                               extra = TRUE)
           expected <- residuals(stock_fit, times = query, type = type, collapse = collapse,
                                 extra = TRUE)
-          # Grouped AJ's native single-time array has a redundant last dimension.
           if (multi && length(query) == 1L && length(dim(expected$resid)) == 3L) {
             expected$resid <- drop(expected$resid)
           }
-          # Stock NA reinsertion loses AJ array labels; retain port metadata.
           labels <- !multi || !is.null(dimnames(expected$resid))
           .missing_survfit_compare(actual$resid, expected$resid, info, labels)
           expect_equal(actual$curve, expected$curve, info = info)

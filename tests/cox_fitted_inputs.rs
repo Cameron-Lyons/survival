@@ -1,6 +1,3 @@
-//! External Rust fitted-model callers may mutate public fields after fitting.
-//! Predictions must reject inconsistent shapes even after baseline caching.
-
 use ndarray::{Array2, array};
 use survival::regression::{
     CoxNewData, CoxPHFit, CoxphData, CoxphOptions, PredictReference, SurvfitOptions, TieMethod,
@@ -105,8 +102,6 @@ fn inconsistent_fitted_dimensions_fail_before_predictions_with_or_without_cache(
         if cached {
             original.basehaz(true).unwrap();
         }
-        // Validate all control arguments on a separate clone, so this does
-        // not warm the baselines used by the uncached mutation cases.
         check_prediction_outcomes(&original.clone(), false);
         for field in [
             "time",
@@ -162,9 +157,6 @@ fn inconsistent_fitted_dimensions_fail_before_predictions_with_or_without_cache(
             }
         }
     }
-    // A caller can resize all public covariate fields together. The private
-    // cached baseline still has its original width and must not be indexed
-    // using the newly enlarged fitted design.
     let mut fit = ordinary_model();
     fit.basehaz(true).unwrap();
     fit.coefficients.push(0.0);

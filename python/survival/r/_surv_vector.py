@@ -45,7 +45,6 @@ def concat_surv(*objects: Surv) -> Surv:
         raise ValueError("all elements must be of the same Surv type")
     if any(x.states != first.states for x in objects[1:]):
         raise ValueError("all elements must have the same list of states")
-    # Matching censoring types have matching time columns; verify before flattening.
     for x in objects:
         if (x.start is None) != (first.start is None) or (x.time2 is None) != (first.time2 is None):
             raise ValueError("all elements must have the same Surv columns")
@@ -122,8 +121,6 @@ def _each_column(column: tuple[Any, ...], each: int) -> tuple[Any, ...]:
         return column
     if len(column) == 1:
         return column * each
-    # Object storage repeats the original float/int objects without coercing
-    # missing statuses or allocating a new Python float for every copy.
     return tuple(np.repeat(np.asarray(column, dtype=object), each).tolist())
 
 
@@ -158,7 +155,6 @@ def rep_surv(
     length_out = _pop_dotted_keyword(kwargs, "length.out", "length_out", length_out, None)
     if kwargs:
         raise TypeError(f"rep_surv got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
-    # Base R parses length.out before each, including validation and warnings.
     length = None if length_out is None else _rep_scalar(length_out, "length.out")
     each_value = _rep_scalar(each, "each")
     each_count = 1 if math.isnan(each_value) else _count(each_value, "each")
@@ -262,7 +258,6 @@ def _end_count(x: Surv, n: Any, *, tail: bool) -> int:
     if math.isnan(value):
         raise ValueError("invalid 'n' argument")
     size = max(len(x) + value, 0) if value < 0 else min(value, len(x))
-    # seq_len() truncates for head; seq.int(length.out=) rounds up for tail.
     return math.ceil(size) if tail else int(size)
 
 

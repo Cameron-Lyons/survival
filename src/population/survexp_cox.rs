@@ -1,4 +1,3 @@
-//! Expected population survival from fitted Cox curves (`survexp.cfit`).
 use super::survexp::SurvExpResult;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatVec, IntVec};
@@ -6,16 +5,11 @@ use crate::internal::validation::{validate_finite, validate_length, validate_non
 use crate::regression::CoxSurvfitCurve;
 use pyo3::prelude::*;
 
-/// One event-time baseline, on the same centering scale as the population risks.
-/// An empty baseline represents a stratum without observed events.
 pub struct CoxExpectedBaseline {
     pub time: Vec<f64>,
     pub cumhaz: Vec<f64>,
 }
 
-/// Aggregate expected Cox curves without allocating one curve per subject.
-/// Baselines are selected by zero-based `strata`; output columns by `group`.
-/// Storage is O(subjects + baseline points + output times * groups).
 #[allow(clippy::too_many_arguments)]
 pub fn survexp_cox_prepared(
     baselines: &[CoxExpectedBaseline],
@@ -154,14 +148,11 @@ pub fn survexp_cox_prepared(
                     } else {
                         1.0
                     };
-                // Subtract subject hazards as in expanded curves, preserving
-                // rounding and the reference's exp(-H).powf(risk) convention.
                 numerator[g] += weight * (current_h[s] * risk[i] - previous_h[s] * risk[i]);
                 denominator[g] += weight;
                 at_risk[g] += 1.0;
             }
         }
-        // Before the first event, R uses that event's risk counts and survival 1.
         while output < requested.len() && requested[output] < time {
             surv.push(survival.clone());
             n_risk.push(if grid[0] == time {
@@ -206,7 +197,7 @@ pub fn survexp_cox_prepared(
     })
 }
 
-/// Numeric entry point for baselines prepared outside a fitted Rust model.
+#[doc = " Numeric entry point for baselines prepared outside a fitted Rust model."]
 #[pyfunction(name = "survexp_cox_prepared")]
 #[pyo3(signature=(time, cumhaz, lengths, risk, strata, group, weights, y=None, times=None, method="ederer"))]
 #[allow(clippy::too_many_arguments)]
@@ -265,8 +256,6 @@ pub fn survexp_cox_prepared_py(
     })?)
 }
 
-/// Average one predicted curve per subject. A curve block can contain several
-/// columns; blocks and columns follow the subject order in `group`.
 pub fn survexp_cox(
     curves: &[CoxSurvfitCurve],
     group: &[usize],
@@ -384,9 +373,6 @@ pub fn survexp_cox(
             survival[t][g] = if method == "ederer" {
                 numerator[g] / denominator[g]
             } else {
-                // R's `hazard %*% tmat / colSums(tmat)`: once nobody in the
-                // group is at risk this is 0/0, and the NaN carries through
-                // the cumulative sum.
                 cumulative[g] += numerator[g] / denominator[g];
                 (-cumulative[g]).exp()
             };
@@ -469,7 +455,6 @@ mod tests {
                 time: vec![2., 3., 5.],
                 cumhaz: vec![0.2, 0.6, 1.2],
             },
-            // No population member uses this stratum, so its time is not output.
             CoxExpectedBaseline {
                 time: vec![1.5],
                 cumhaz: vec![0.3],
@@ -592,7 +577,6 @@ mod tests {
 
     #[test]
     fn a_group_with_nobody_at_risk_turns_missing_like_r() {
-        // Subject 1 (group 0) leaves at time 1, subject 2 (group 1) stays.
         let curves = [curve([[0.1, 0.2], [0.3, 0.4], [0.6, 0.9]])];
         for method in ["conditional", "hakulinen"] {
             let out = survexp_cox(

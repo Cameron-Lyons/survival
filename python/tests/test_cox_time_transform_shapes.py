@@ -134,7 +134,7 @@ def fit_case(case, **kwargs):
 def test_legacy_expanded_matrix_labels_restore_without_transform_callbacks(case, monkeypatch):
     fit = fit_case(case)
     expected = r.model_matrix(fit, _with_metadata=True)
-    legacy = pickle.loads(pickle.dumps(replace(fit, _matrix_rows=None)))  # noqa: S301
+    legacy = pickle.loads(pickle.dumps(replace(fit, _matrix_rows=None)))
 
     def forbid_callbacks(*args, **kwargs):
         pytest.fail("model_matrix must not rerun time-transform callbacks")
@@ -173,7 +173,7 @@ def test_transformed_fit_and_expanded_methods_match_r(case):
 def test_transformed_models_retain_shapes_after_pickle_and_init(name):
     case = next(c for c in REFERENCE["cases"] if c["name"] == name)
     fit = fit_case(case)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - our own fitted model
+    restored = pickle.loads(pickle.dumps(fit))
     assert restored.coef_names == fit.coef_names
     close(r.model_matrix(restored), fit.x)
     close(r.coxph_detail(restored).score, r.coxph_detail(fit).score)

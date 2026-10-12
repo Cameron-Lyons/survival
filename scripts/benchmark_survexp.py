@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
-from survival import r_api as r  # noqa: E402
+from survival import r_api as r
 
 
 def main():
@@ -58,7 +58,6 @@ def main():
         return function("time ~ group", data, ratetable=fit, weights="weight", method=method)
 
     if args.memory_variant:
-        # One fresh process per variant, including imports/training/common setup.
         call(variants[args.memory_variant], "ederer")
         print(
             json.dumps({"peak_rss_mib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024})
@@ -70,7 +69,7 @@ def main():
         if args.baseline_source:
             command.extend(["--baseline-source", str(args.baseline_source)])
         memory[name] = [
-            json.loads(subprocess.check_output(command, text=True))["peak_rss_mib"]  # noqa: S603 -- this script, no shell
+            json.loads(subprocess.check_output(command, text=True))["peak_rss_mib"]
             for _ in range(3)
         ]
     results = {}

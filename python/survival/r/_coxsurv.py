@@ -221,7 +221,6 @@ def coxsurv_fit(
     n = response.shape[0]
     design = _numeric_design_matrix(x, n, empty=True)
     p = design.shape[1]
-    # A vector represents one prepared prediction row, including p=0.
     if isinstance(x2, dict):
         new_x = np.column_stack(list(x2.values())) if x2 else np.empty((1, 0))
     else:

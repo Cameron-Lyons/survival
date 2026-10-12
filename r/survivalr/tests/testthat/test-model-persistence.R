@@ -130,7 +130,6 @@ test_that("loaded models support diagnostics, comparisons, and population method
   restored <- persistence_roundtrip(list(fit, smaller))
   compared <- concordance(restored[[1L]], restored[[2L]], influence = 1)
   original <- concordance(fit, smaller, influence = 1)
-  # Names follow the supplied R expressions, independently of stored fit state.
   for (field in c("concordance", "var", "n", "count", "dfbeta", "cvar")) {
     expect_equal(compared[[field]], original[[field]], ignore_attr = TRUE, info = field)
   }

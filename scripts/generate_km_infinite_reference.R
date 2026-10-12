@@ -42,11 +42,6 @@ capture <- function(call, transform=identity) {
   c(result,list(warnings=I(warnings)))
 }
 
-# Stock aeqSurv computes finite cutpoints, then indexes all endpoints with
-# them. Positive infinity becomes the last finite cut; a zero index for
-# negative infinity drops a value before R recycles/reconstructs columns.
-# Keep those raw outcomes below. The corrected oracle uses stock aeqSurv
-# only on finite entries, then inserts its values back into the same rows.
 finite_aeq <- function(response) {
   columns <- seq_len(ncol(response)-1L)
   times <- unclass(response)[,columns,drop=FALSE]
@@ -116,9 +111,6 @@ for (input_name in names(inputs)) {
           missing_counts <- count_fields[vapply(count_fields,function(field)
             is.null(result[[field]]) && !is.null(fit[[field]]),logical(1))]
           if (length(missing_counts)) {
-            # Stock unlistsurv loses fitted fields when its first stratum
-            # selects no times. Reuse the same stock kernels per stratum and
-            # concatenate only those fields, preserving the global time rows.
             groups <- if (is.null(fit$strata)) list(fit) else
               lapply(seq_along(fit$strata),function(i) stock_subset(fit,i))
             pieces <- lapply(groups,function(group) do.call(stock_summary,
@@ -150,9 +142,6 @@ for (input_name in names(inputs)) {
       })
       zero <- stock_zero(fit)
       raw_zero <- snapshot(zero)
-      # Stock survfit0 adds a zero influence column to every stratum once any
-      # curve needs a time-zero row, even to a curve already starting at t0.
-      # Retain the raw result and remove only those unmatched columns.
       sizes <- if (is.null(fit$strata)) length(fit$time) else unname(fit$strata)
       begins <- c(1L,head(cumsum(sizes),-1L)+1L)
       inserted <- fit$time[begins] != fit$t0

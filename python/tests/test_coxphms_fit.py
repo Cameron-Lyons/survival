@@ -36,11 +36,6 @@ def cat(values, levels):
     return pd.Categorical(values, categories=levels)
 
 
-# ---------------------------------------------------------------------------
-# data
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def mg():
     m = pd.DataFrame(datasets.load_mgus2())
@@ -175,11 +170,6 @@ def shared_fit(mg):
     return r.coxph(["Surv(etime, event) ~ age", "1:2 + 1:3 ~ 1 / shared"], mg, id="id")
 
 
-# ---------------------------------------------------------------------------
-# single-formula fits
-# ---------------------------------------------------------------------------
-
-
 def test_competing_risks_fit(mg_fit):
     fit = mg_fit
     assert isinstance(fit, r.CoxphmsModel)
@@ -244,7 +234,6 @@ def test_competing_risks_fit(mg_fit):
         ]
     )
     assert sum(v * v for v in fit.residuals) == approx(885.082678825288)
-    # the unstacked data
     assert len(fit.y) == 1384
     assert fit.y.type == "mright"
     assert len(fit.x) == 1384
@@ -295,7 +284,6 @@ def test_strata_terms(mg):
     )
     assert fit.transitions.values[0] == [115, 854, 404]
     assert fit.strata[:2] == ["F", "F"]
-    # the strata row is found by term, wherever an offset() sits (R errors on the second)
     expected = [0.0128649869605635, 0.063998587023079]
     for formula in (
         "Surv(etime, event) ~ age + strata(sex) + offset(o)",
@@ -372,11 +360,6 @@ def test_multistate_equals_separate_fits(my):
     assert parts[0].var[0] == approx([0.0111026721626867, -0.000857211695370525])
 
 
-# ---------------------------------------------------------------------------
-# formula lists
-# ---------------------------------------------------------------------------
-
-
 def test_formula_list_adds_a_covariate(mg):
     fit = r.coxph(["Surv(etime, event) ~ age + sex", "1:3 ~ mspike"], mg, id="id")
     assert fit.coef_names == ("age_1:2", "sexM_1:2", "age_1:3", "sexM_1:3", "mspike")
@@ -395,7 +378,6 @@ def test_formula_list_adds_a_covariate(mg):
     assert fit.cmap.values == [[1, 3], [2, 4], [0, 5]]
     assert fit.transitions.values[0] == [115, 860, 409]
     assert fit.na_action is None
-    # mspike is missing only on rows that stay in use for 1:2, so nothing is dropped
     failing = r.coxph(
         ["Surv(etime, event) ~ age + sex", "1:3 ~ mspike"], mg, id="id", na_action="na.fail"
     )
@@ -500,7 +482,6 @@ def test_formula_list_missing_values(my_na):
             0.0537810519012755,
         ]
     )
-    # the clusters stay aligned with the rows after the drop (R's are not)
     assert diag(fit.var) == approx(
         [
             0.0110578456704084,
@@ -518,7 +499,6 @@ def test_formula_list_missing_values(my_na):
     assert fit.rscore == approx(30.3176978576869, rel=1e-6)
     assert fit.wald_test == approx(30.7449097228274, rel=1e-6)
     assert fit.concordance["std"] == approx(0.011656218461181, rel=1e-6)
-    # the stored frame is the one fitted
     kept = [row for row in range(len(my_na)) if row + 1 not in (423, 425, 428)]
     for frame in (fit.model, r.model_frame(fit)):
         assert len(frame["trt"]) == 1006
@@ -716,7 +696,6 @@ def test_hand_checkable_data():
         r.coxph("Surv(t1, t2, state) ~ x", gap, id="id", control={"survcheckallow": ["overlap"]})
     with pytest.raises(ValueError, match=fails):
         r.coxph("Surv(t1, t2, state) ~ x", gap, id="id", survcheckallow=[])
-    # R lets an unknown flag name switch every check off
     with pytest.raises(ValueError, match="survcheckallow must be a subset of"):
         r.coxph("Surv(t1, t2, state) ~ x", overlap, id="id", survcheckallow=["foo"])
     assert r.coxph_control(survcheckallow=["gap", "jump"])["survcheckallow"] == ["gap", "jump"]
@@ -796,14 +775,12 @@ def test_errors(mg, my):
     fails("an element of the formula list is not a formula", [base, 3], mg, id="id")
     fails("all formulas must have a left and right side", [base, "~ sex"], mg, id="id")
     fails(r"offset\(\) terms are not supported", [base + " + offset(o)", "1:3 ~ sex"], mg, id="id")
-    # R gives cluster(grp) a coefficient on 1:3
     fails(
         r"cluster\(\) terms are only allowed in the first formula",
         [base, "1:3 ~ sex + cluster(grp)"],
         mg,
         id="id",
     )
-    # R fails with "missing value where TRUE/FALSE needed" in coxph
     fails(
         "a shared baseline hazard has no observed reference transition",
         [base, "2:3 + 1:3 + 1:2 ~ 1 / shared"],
@@ -1132,11 +1109,6 @@ def test_timeline_formula_list(pdata):
     assert all(len(values) == 1945 for values in frame.values())
 
 
-# ---------------------------------------------------------------------------
-# methods
-# ---------------------------------------------------------------------------
-
-
 def test_coef_and_vcov_matrices(mg_fit, common_fit):
     matrix = r.coef(mg_fit, matrix=True)
     assert matrix.rownames == ["age", "sexM"]
@@ -1251,7 +1223,7 @@ def test_array_columns_and_pickle(mg, mg_fit):
     columns["event"] = mg["event"]
     fit = r.coxph("Surv(etime, event) ~ age + sex", columns, id="id")
     assert fit.coefficients == approx(mg_fit.coefficients, rel=1e-12)
-    restored = pickle.loads(pickle.dumps(mg_fit))  # noqa: S301 - the test's own pickle
+    restored = pickle.loads(pickle.dumps(mg_fit))
     assert restored.coefficients == mg_fit.coefficients
     assert restored.cmap == mg_fit.cmap
     assert restored.rmap.tolist() == mg_fit.rmap.tolist()

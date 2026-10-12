@@ -68,11 +68,8 @@ def _imports(body: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Return-type overrides for symbols whose Rust source cannot be parsed (macro-generated).
 RETURN_OVERRIDES: dict[str, str] = {}
 
-# Parameter annotations the Rust types cannot express: a `&Bound<PyAny>` that the binding
-# casts to one of several classes, or a type with a hand-written `FromPyObject`.
 PARAM_OVERRIDES: dict[str, dict[str, str]] = {
     "aggregate_survfit": {
         "surv": "ArrayLike | None",
@@ -89,7 +86,6 @@ PARAM_OVERRIDES: dict[str, dict[str, str]] = {
 PARAM_OVERRIDES["yates_response"]["inverse_link"] = "Callable[[NDArray[np.float64]], ArrayLike]"
 PARAM_OVERRIDES["yates_predict"]["predict"] = "Callable[[NDArray[np.float64]], ArrayLike]"
 
-# Keys whose value is not a Python object we can annotate; the runtime tells us nothing.
 _SKIP_MEMBERS = {"__doc__", "__module__", "__new__", "__init__", "__hash__", "__eq__", "__ne__"}
 _DUNDER_METHODS = {
     "__repr__": "str",
@@ -108,25 +104,20 @@ _DUNDER_METHODS = {
 _COMPARISONS = {"__lt__", "__le__", "__gt__", "__ge__"}
 
 
-# ---------------------------------------------------------------------------------------------
-# Rust source parsing
-# ---------------------------------------------------------------------------------------------
-
-
 @dataclass
 class RustFn:
     ident: str
     py_name: str
-    params: list[tuple[str, str]]  # (name, rust type), self/py params removed
+    params: list[tuple[str, str]]
     ret: str
-    kind: str = "method"  # method | static | class | new | getter | setter | function
+    kind: str = "method"
 
 
 @dataclass
 class RustClass:
     ident: str
     py_name: str
-    fields: dict[str, tuple[str, bool]] = field(default_factory=dict)  # name -> (type, settable)
+    fields: dict[str, tuple[str, bool]] = field(default_factory=dict)
     methods: dict[str, RustFn] = field(default_factory=dict)
     getters: dict[str, str] = field(default_factory=dict)
     setters: set[str] = field(default_factory=set)
@@ -289,7 +280,6 @@ def _parse_struct_fields(body: str, get_all: bool) -> dict[str, tuple[str, bool]
         attrs, pos = _read_attributes(body, pos)
         m = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?(r#)?(\w+)\s*:").match(body, pos)
         if m is None:
-            # tuple struct entries or trailing whitespace
             nxt = body.find(",", pos)
             if nxt == -1:
                 break
@@ -329,7 +319,6 @@ def _parse_methods(body: str, cls: RustClass) -> None:
             m = re.compile(r"\s*\S").match(body, pos)
             if m is None:
                 break
-            # skip a non-fn item (const, type, ...)
             semi = body.find(";", pos)
             brace = body.find("{", pos)
             if semi == -1 and brace == -1:
@@ -348,7 +337,6 @@ def _parse_methods(body: str, cls: RustClass) -> None:
         elif any(a.startswith("getter") for a in attrs):
             getter_attr = next(a for a in attrs if a.startswith("getter"))
             m = re.match(r"getter\s*\(\s*(\w+)\s*\)", getter_attr)
-            # PyO3 strips a `get_` prefix from an unnamed getter
             name = m.group(1) if m else py_name.removeprefix("get_")
             cls.getters[name] = fn.ret
         elif any(a.startswith("setter") for a in attrs):
@@ -437,10 +425,6 @@ def parse_rust_sources(src: Path = SRC) -> tuple[dict[str, RustClass], dict[str,
     return classes, functions
 
 
-# ---------------------------------------------------------------------------------------------
-# Rust type -> Python annotation
-# ---------------------------------------------------------------------------------------------
-
 _SCALARS = {
     "f64": "float",
     "f32": "float",
@@ -503,13 +487,12 @@ def _parse_type(text: str) -> tuple[str, list[str]]:
 def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str | None) -> str:
     """Map a Rust type to a Python annotation; ``ctx`` is 'param' or 'return'."""
     ident, args = _parse_type(rust)
-    sub = lambda t: rust_to_python(t, classes, ctx, self_name)  # noqa: E731
+    sub = lambda t: rust_to_python(t, classes, ctx, self_name)
     if ident == "()":
         if not args:
             return "None"
         return f"tuple[{', '.join(sub(a) for a in args)}]"
     if ident == "[]":
-        # PyO3 reads a `&[u8]` argument from `bytes` only.
         if ctx == "param" and args[0].strip() == "u8" and rust.lstrip().startswith("&"):
             return "bytes"
         return f"list[{sub(args[0])}]"
@@ -565,15 +548,10 @@ def rust_to_python(rust: str, classes: dict[str, str], ctx: str, self_name: str 
     return "Any"
 
 
-# ---------------------------------------------------------------------------------------------
-# Runtime introspection
-# ---------------------------------------------------------------------------------------------
-
-
 @dataclass
 class Param:
     name: str
-    kind: str  # positional-only handled as positional-or-keyword in stubs
+    kind: str
     default: str | None
     annotation: str = "Any"
 
@@ -583,11 +561,10 @@ def parse_text_signature(text: str) -> list[Param]:
     text = text.strip()
     if text.startswith("(") and text.endswith(")"):
         text = text[1:-1]
-    # a bare positional-only marker is left behind by `($self, /)`
     text = re.sub(r"^\s*/\s*$", "", text)
     tree = ast.parse(f"def _f({text}): pass")
     fn = tree.body[0]
-    if not isinstance(fn, ast.FunctionDef):  # pragma: no cover - the source above is a def
+    if not isinstance(fn, ast.FunctionDef):
         raise TypeError(f"unexpected signature text {text!r}")
     params: list[Param] = []
     args = fn.args
@@ -624,11 +601,6 @@ def _text_signature(obj: object) -> str | None:
     if text is None and isinstance(obj, (staticmethod, classmethod)):
         text = getattr(obj.__func__, "__text_signature__", None)
     return text
-
-
-# ---------------------------------------------------------------------------------------------
-# Emission
-# ---------------------------------------------------------------------------------------------
 
 
 def _format_def(
@@ -685,8 +657,8 @@ def _wrap_return(closing: str, ret: str, indent: str) -> list[str]:
     """
     head, bracket, rest = ret.partition("[")
     if not bracket or not rest.endswith("]"):
-        return [closing]  # not a subscript: nothing ruff would split, leave it long
-    prefix = closing[: len(closing) - len(f"{ret}: ...")]  # everything before the annotation
+        return [closing]
+    prefix = closing[: len(closing) - len(f"{ret}: ...")]
     inner = rest[:-1]
     lines = [f"{prefix}{head}["]
     body = f"{indent}    {inner}"
@@ -758,7 +730,6 @@ def _render_function(name, obj, rust_fn, class_names, missing_types) -> str:
     if name in RETURN_OVERRIDES:
         ret = RETURN_OVERRIDES[name]
     elif name.startswith("load_"):
-        # the dataset loaders are macro-generated: one dict of column lists per data frame
         ret = "dict[str, list[Any]]"
     elif rust_fn is not None:
         ret = rust_to_python(rust_fn.ret, class_names, "return", None)
@@ -777,7 +748,6 @@ def _render_class(name, cls, rust_cls, class_names, missing_types) -> str:
     variants = sorted(k for k, v in cls.__dict__.items() if isinstance(v, cls))
     for variant in variants:
         if keyword.iskeyword(variant):
-            # e.g. ScreeningRule.None: only reachable through getattr
             continue
         members.append(f"    {variant}: {name}")
 
@@ -794,7 +764,6 @@ def _render_class(name, cls, rust_cls, class_names, missing_types) -> str:
         if key in _SKIP_MEMBERS or key in _COMPARISONS or key in variants:
             continue
         if keyword.iskeyword(key):
-            # e.g. FastCoxConfig.lambda: only reachable through getattr, not declarable in a stub
             continue
         if key.startswith("__") and key.endswith("__"):
             if key in _DUNDER_METHODS:
@@ -844,9 +813,6 @@ def _render_class(name, cls, rust_cls, class_names, missing_types) -> str:
         members.append("    ...")
     lines.extend(members)
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------------------------
 
 
 def load_extension():
@@ -901,7 +867,7 @@ def _ruff_format(text: str) -> str:
     the formatter (or ruff changed), and is reported rather than papered over so the stub cannot
     depend on which ruff, if any, happens to be on PATH.
     """
-    result = subprocess.run(  # noqa: S603 - ruff from PATH or this interpreter, fixed arguments
+    result = subprocess.run(
         [*_ruff_command(), "format", "--stdin-filename", str(STUB_PATH), "-"],
         input=text,
         capture_output=True,

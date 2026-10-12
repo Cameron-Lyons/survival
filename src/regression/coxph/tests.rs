@@ -1,5 +1,3 @@
-//! Regression coverage for the Cox model façade.
-
 use super::fitting::crossprod;
 use super::*;
 use crate::constants::COX_RANK_TOLERANCE;
@@ -198,7 +196,6 @@ fn default_controls_match_reference_efron_fit() {
     assert_eq!(fit.n, 8);
     assert_eq!(fit.nevent, 5);
     assert_eq!(fit.method, TieMethod::Efron);
-    // Linear predictors are centred at the means.
     let mean_lp: f64 = fit.linear_predictors.iter().sum::<f64>() / 8.0;
     assert!(mean_lp.abs() < 1e-12);
     assert_eq!(fit.residuals.len(), 8);
@@ -428,15 +425,12 @@ fn newdata_offset_is_centred_only_in_the_use_x_branch() {
     let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
     let newdata =
         CoxNewData::try_new(fit.x.clone(), None, Some(offset.clone()), None, None).unwrap();
-    // predict.coxph without se.fit: newx %*% beta + newoffset, so the
-    // training rows give back the linear predictors
     let plain = fit
         .predict_lp(Some(&newdata), false, PredictReference::Sample)
         .unwrap();
     for (p, lp) in plain.fit.iter().zip(&fit.linear_predictors) {
         assert!((p - lp).abs() < 1e-12);
     }
-    // with se.fit the offset is centred at mean(offset)
     let with_se = fit
         .predict_lp(Some(&newdata), true, PredictReference::Sample)
         .unwrap();
@@ -476,10 +470,6 @@ fn strata_and_counting_process_fits_keep_row_order() {
     assert!(total.abs() < 1e-10);
 }
 
-/// `survfit(coxph(Surv(time, status) ~ x + strata(g), d), start.time =
-/// 15)` in R 3.8-12 (`d` from `set.seed(1)`, `x = rnorm(20)`): the rows
-/// before 15 leave, stratum 1 keeps an empty curve with `n = 0`, and the
-/// risk scores stay those of the whole fit.
 #[test]
 fn start_time_drops_the_earlier_rows_and_keeps_an_emptied_stratum() {
     let time: Vec<f64> = (1..=10).chain(21..=30).map(f64::from).collect();
@@ -558,7 +548,6 @@ fn start_time_drops_the_earlier_rows_and_keeps_an_emptied_stratum() {
         assert!((curves[1].surv[g][0] - surv[g]).abs() < 1e-12 * surv[g]);
         assert!((se[g][0] - std_err[g]).abs() < 1e-12 * std_err[g]);
     }
-    // the cached curves of the whole fit are left alone
     assert_eq!(
         fit.survfit(None, SurvfitOptions::default()).unwrap()[0].n,
         10
@@ -575,7 +564,6 @@ fn start_time_drops_the_earlier_rows_and_keeps_an_emptied_stratum() {
         .unwrap();
     assert!((kp[1].surv[9][0] - 0.139_802_086_569_338).abs() < 1e-12);
 
-    // the last row, at 30, is censored
     let error = fit.survfit(None, after(30.0)).unwrap_err();
     assert!(
         error
@@ -585,9 +573,6 @@ fn start_time_drops_the_earlier_rows_and_keeps_an_emptied_stratum() {
     );
 }
 
-/// `coxph()` fits at the centred offset and adds the mean back, so
-/// offsets near the limits of `exp()` give R's fit
-/// (`coxph(Surv(time, status) ~ x1 + offset(708 + x2))`, and `-740`).
 #[test]
 fn offsets_are_centred_before_fitting() {
     let base = lung_like_data();
@@ -634,14 +619,10 @@ fn offsets_are_centred_before_fitting() {
             assert!((actual - expected).abs() < 1e-9);
         }
         assert!((fit.concordance.concordance[0] - 6.0 / 19.0).abs() < 1e-12);
-        // The offset is kept as given.
         assert!((fit.offset[0] - (shift + 1.0)).abs() < 1e-12);
     }
 }
 
-/// Without events `coxph()` returns before any fitter runs: R's
-/// `coxph(Surv(start, stop, status) ~ x + offset(off), weights = w)` on
-/// four censored rows.
 #[test]
 fn data_without_events_gets_coxph_skeleton_fit() {
     let data = CoxphData::try_new(
@@ -659,7 +640,6 @@ fn data_without_events_gets_coxph_skeleton_fit() {
     assert_eq!(fit.var[(0, 0)], 0.0);
     assert_eq!(fit.loglik, [0.0, 0.0]);
     assert_eq!((fit.score, fit.wald_test, fit.iter), (0.0, 0.0, 0));
-    // Unweighted column means; the linear predictors are the centred offset.
     assert_eq!(fit.means, vec![2.5]);
     for (lp, expected) in fit.linear_predictors.iter().zip([-0.15, -0.05, 0.05, 0.15]) {
         assert!((lp - expected).abs() < 1e-12);

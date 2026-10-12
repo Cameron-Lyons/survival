@@ -21,7 +21,7 @@ QUERIES = [(case, query) for case in REFERENCE["special_cases"] for query in cas
 def test_column_assignments_match_r(case):
     matrix = {"assign": case["assign"]}
     expected = case["expected"]
-    if expected == []:  # R's unnamed empty list
+    if expected == []:
         expected = {}
     found = r.attrassign(matrix, r.TermMetadata(case["term_labels"]))
     assert found == expected
@@ -58,7 +58,7 @@ def test_prepared_metadata_is_immutable_and_pickles():
     specials["strata"].clear()
     expected = {"vars": ["strata(g)"], "tvar": [1], "terms": [1]}
     assert r.untangle_specials(tt, "strata") == expected
-    restored = pickle.loads(pickle.dumps(tt))  # noqa: S301 - own round-trip data
+    restored = pickle.loads(pickle.dumps(tt))
     assert r.untangle_specials(restored, "strata") == expected
     with pytest.raises(FrozenInstanceError):
         tt.response = 0

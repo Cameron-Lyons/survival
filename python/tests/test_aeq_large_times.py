@@ -80,6 +80,4 @@ def test_large_time_normalization_retains_nonfinite_endpoints(interface):
         actual = survival.data_prep.aeq_surv(time).time
     else:
         actual = r.aeqSurv(r.Surv(time, [1, 0, 1, 0, 1, 0])).time
-    # The finite rows use the independent huge_near_tie reference; nonfinite
-    # rows retain the already documented correction of stock aeqSurv indexing.
     np.testing.assert_array_equal(actual, [-np.inf, 1e308, 1e308, 1.2e308, np.inf, np.nan])

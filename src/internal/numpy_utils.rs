@@ -1,17 +1,3 @@
-//! Boundary input and output types for `#[pyfunction]` signatures.
-//!
-//! [`FloatVec`], [`IntVec`], [`BoolVec`], [`FloatMatrix`] and [`FloatArray3`] accept, without a
-//! Python-side `.tolist()`: NumPy arrays of any dtype and memory layout,
-//! pandas/polars columns (anything with `__array__`) and plain sequences. Each
-//! converts exactly once into the owned container core code consumes
-//! (`Vec<f64>`, `Vec<i32>`, `Vec<bool>`, `Array2<f64>`, `Array3<f64>`). Returning one from a
-//! `#[pyfunction]` hands the caller a NumPy array without copying
-//! (`IntoPyArray`), and a `#[pyo3(get)]` field of these types reads back as a
-//! NumPy array.
-//!
-//! Without the `python` feature the same newtypes exist as plain wrappers, so
-//! core signatures can name them in both builds.
-
 use std::ops::Deref;
 
 use ndarray::{Array2, Array3};
@@ -19,23 +5,15 @@ use ndarray::{Array2, Array3};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{ValidationError, validate_matrix_shape};
 
-/// One-dimensional `float64` input.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FloatVec(pub Vec<f64>);
 
-/// Matrix input for kernels that consume nested rows. Unlike [`FloatMatrix`],
-/// list inputs keep their row buffers instead of flattening and rebuilding
-/// them. The receiving kernel validates rectangular shape and dimensions.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FloatRows(pub Vec<Vec<f64>>);
 
-/// One-dimensional `int32` input. Integer and boolean dtypes convert directly;
-/// floating values are accepted only when integral and within `i32` range.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IntVec(pub Vec<i32>);
 
-/// One-dimensional boolean input. Boolean dtypes convert directly; numeric
-/// values are accepted only when they are exactly `0` or `1`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BoolVec(pub Vec<bool>);
 
@@ -74,14 +52,10 @@ vector_newtype!(FloatRows, Vec<f64>);
 vector_newtype!(IntVec, i32);
 vector_newtype!(BoolVec, bool);
 
-/// Two-dimensional `float64` input (`n` rows by `p` columns), always held in
-/// row-major (C) layout so `as_slice()` on the inner array never fails.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloatMatrix(Array2<f64>);
 
 impl FloatMatrix {
-    /// Wraps an array, copying it into row-major layout when it is not
-    /// already stored that way.
     pub fn new(values: Array2<f64>) -> Self {
         if values.is_standard_layout() {
             Self(values)
@@ -94,7 +68,6 @@ impl FloatMatrix {
         }
     }
 
-    /// Builds the matrix from equally long rows.
     pub fn from_rows(rows: Vec<Vec<f64>>) -> SurvivalResult<Self> {
         let ncol = rows.first().map_or(0, Vec::len);
         for (index, row) in rows.iter().enumerate() {
@@ -114,7 +87,6 @@ impl FloatMatrix {
         ))
     }
 
-    /// Builds the matrix from a row-major flat buffer with `ncol` columns.
     pub fn from_flat(values: Vec<f64>, ncol: usize) -> SurvivalResult<Self> {
         let nrow = values.len().checked_div(ncol).unwrap_or(0);
         validate_matrix_shape(&values, nrow, ncol, "x")?;
@@ -135,8 +107,6 @@ impl FloatMatrix {
         self.0
     }
 
-    /// The array, checked to be `nrow x ncol`.  An empty input (`[]`) stands
-    /// for zero rows of any width, or for any number of rows of zero width.
     pub fn into_shape(self, nrow: usize, ncol: usize, name: &str) -> SurvivalResult<Array2<f64>> {
         if self.0.dim() == (nrow, ncol) {
             Ok(self.0)
@@ -151,7 +121,6 @@ impl FloatMatrix {
         }
     }
 
-    /// The row-major entries; never fails because of the layout invariant.
     pub fn as_flat(&self) -> &[f64] {
         self.0
             .as_slice()
@@ -183,8 +152,6 @@ impl From<FloatMatrix> for Array2<f64> {
     }
 }
 
-/// Three-dimensional `float64` input, owned in row-major (C) layout.
-/// NumPy storage is copied before a receiving kernel releases the GIL.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloatArray3(Array3<f64>);
 
@@ -233,13 +200,6 @@ impl From<FloatArray3> for Array3<f64> {
 
 #[cfg(feature = "python")]
 mod python {
-    //! `FromPyObject`/`IntoPyObject` for the boundary types.
-    //!
-    //! Extraction order, cheapest first: a NumPy array of the exact dtype is
-    //! read through a read-only view (any strides); a `list`/`tuple` goes
-    //! through PyO3's sequence extraction; everything else (other dtypes,
-    //! pandas/polars columns, `array.array`, `range`, ...) is normalised with
-    //! `numpy.asarray(obj, dtype=...)` and read as a NumPy array.
 
     use ndarray::{Array2, Array3};
     use numpy::{
@@ -270,7 +230,6 @@ mod python {
         obj.is_instance_of::<PyList>() || obj.is_instance_of::<PyTuple>()
     }
 
-    /// `numpy.asarray(obj, dtype=T)`.
     fn asarray<'py, T: Element>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let py = obj.py();
         let kwargs = PyDict::new(py);
@@ -280,8 +239,6 @@ mod python {
             .call((obj,), Some(&kwargs))
     }
 
-    /// NumPy permits unaligned buffers and strides. Normalise those before
-    /// creating Rust references; an owned copy is then made by the caller.
     fn aligned_array<'py, T: Element, D: ndarray::Dimension>(
         array: &Bound<'py, PyArray<T, D>>,
     ) -> PyResult<Bound<'py, PyArray<T, D>>> {
@@ -302,7 +259,6 @@ mod python {
         Ok(aligned)
     }
 
-    /// Copies a one-dimensional array out in logical order, whatever its strides.
     fn read_1d<T: Element + Copy>(array: &Bound<'_, PyArray1<T>>) -> PyResult<Vec<T>> {
         if array.is_empty() {
             return Ok(Vec::new());
@@ -323,8 +279,6 @@ mod python {
         )
     }
 
-    /// Any array-like as `float64` values, via `numpy.asarray` when needed.
-    /// `expected` names the target type in error messages.
     fn float_values(obj: &Bound<'_, PyAny>, expected: &str) -> PyResult<Vec<f64>> {
         if let Ok(array) = obj.cast::<PyArray1<f64>>() {
             return read_1d(array);
@@ -390,9 +344,6 @@ mod python {
             return narrow_i64(obj, read_1d(array)?);
         }
         if obj.cast::<PyArray1<bool>>().is_ok() {
-            // NumPy bool storage can contain any nonzero byte (for example
-            // frombuffer([2, 255])). Rust bool only permits bytes 0 and 1,
-            // so convert numerically without borrowing that storage as bool.
             let converted = asarray::<i32>(obj)?;
             return read_1d(converted.cast::<PyArray1<i32>>()?);
         }
@@ -434,10 +385,6 @@ mod python {
             .collect()
     }
 
-    /// Copies a two-dimensional array into a row-major `Array2`, whatever its
-    /// layout. `as_slice` is only the memory order for C-contiguous arrays
-    /// (NumPy also reports Fortran-contiguous arrays as contiguous), so every
-    /// other layout is walked in logical order.
     fn read_2d(array: &Bound<'_, PyArray2<f64>>) -> PyResult<Array2<f64>> {
         let array = aligned_array(array)?;
         let shape = array.shape();
@@ -475,8 +422,6 @@ mod python {
         }
     }
 
-    /// Copy a three-dimensional NumPy array in logical order, normalising
-    /// unaligned storage before constructing Rust references to its values.
     fn read_3d(array: &Bound<'_, PyArray3<f64>>) -> PyResult<FloatArray3> {
         let shape = array.shape();
         let shape = (shape[0], shape[1], shape[2]);
@@ -512,8 +457,6 @@ mod python {
         }
     }
 
-    /// Exact lists/tuples of Python floats have no conversion callbacks, so
-    /// their innermost rows can be read without allocating Python iterators.
     fn plain_array3(obj: &Bound<'_, PyAny>) -> Option<FloatArray3> {
         let exact_sequence = |value: &Bound<'_, PyAny>| {
             value.is_exact_instance_of::<PyList>() || value.is_exact_instance_of::<PyTuple>()
@@ -572,9 +515,6 @@ mod python {
             .map(FloatArray3)
     }
 
-    /// Flatten nested rows directly into their final buffer. This keeps lists,
-    /// tuples, array-valued rows and sequence subclasses compatible without
-    /// allocating an intermediate vector for every data/state row.
     fn sequence_array3(obj: &Bound<'_, PyAny>) -> PyResult<FloatArray3> {
         let length = |value: &Bound<'_, PyAny>, context: &str| {
             value
@@ -656,10 +596,6 @@ mod python {
             .map_err(|err| PyValueError::new_err(format!("3-dimensional float array: {err}")))
     }
 
-    /// Lists/tuples of float rows go directly into one row-major allocation.
-    /// Keep the general extractor for sequence subclasses, array-valued rows,
-    /// other scalar types, vectors and invalid inputs. Reading only PyFloat
-    /// objects cannot invoke custom conversion methods before falling back.
     fn plain_matrix(obj: &Bound<'_, PyAny>) -> Option<FloatMatrix> {
         let exact_sequence = |value: &Bound<'_, PyAny>| {
             value.is_exact_instance_of::<PyList>() || value.is_exact_instance_of::<PyTuple>()
@@ -733,7 +669,6 @@ mod python {
         }
     }
 
-    /// A vector is a single-column matrix, as `as.matrix()` treats it in R.
     fn column_matrix(values: Vec<f64>) -> FloatMatrix {
         let n = values.len();
         FloatMatrix(Array2::from_shape_vec((n, 1), values).expect("n values fill an (n, 1) array"))
@@ -794,7 +729,6 @@ mod python {
                 type Output = Bound<'py, PyArray1<$elem>>;
                 type Error = Infallible;
 
-                /// Moves the buffer into a NumPy array without copying.
                 fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
                     Ok(self.0.into_pyarray(py))
                 }
@@ -805,7 +739,6 @@ mod python {
                 type Output = Bound<'py, PyArray1<$elem>>;
                 type Error = Infallible;
 
-                /// Copies the buffer; this is what a `#[pyo3(get)]` field uses.
                 fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
                     Ok(self.0.to_pyarray(py))
                 }
@@ -822,7 +755,6 @@ mod python {
         type Output = Bound<'py, PyArray2<f64>>;
         type Error = Infallible;
 
-        /// Moves the buffer into a NumPy array without copying.
         fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Infallible> {
             Ok(self.0.into_pyarray(py))
         }
@@ -862,7 +794,6 @@ mod python {
 #[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
-/// Owned prediction matrices, without constructing Python scalar/row lists.
 #[cfg(feature = "python")]
 pub(crate) fn prediction_matrix_arrays<'py>(
     py: pyo3::Python<'py>,
@@ -891,14 +822,11 @@ pub(crate) fn prediction_matrix_arrays<'py>(
     Ok(result)
 }
 
-/// Extracts `float64` values from any array-like; prefer a [`FloatVec`]
-/// parameter, which does the same conversion in the signature.
 #[cfg(feature = "python")]
 pub(crate) fn extract_vec_f64(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Vec<f64>> {
     obj.extract::<FloatVec>().map(FloatVec::into_inner)
 }
 
-/// Extracts `int32` values from any array-like; prefer an [`IntVec`] parameter.
 #[cfg(feature = "python")]
 pub(crate) fn extract_vec_i32(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Vec<i32>> {
     obj.extract::<IntVec>().map(IntVec::into_inner)
@@ -911,25 +839,12 @@ pub(crate) fn extract_optional_vec_f64(
     obj.map(extract_vec_f64).transpose()
 }
 
-/// A read-only NumPy view of `array` whose base object is `owner`: how a
-/// `#[pyclass]` getter hands Python a large array the class holds without
-/// copying it.  NumPy refuses to make the view writeable again, since it
-/// does not own the data.
-///
-/// # Safety
-///
-/// `array` must be owned by `owner` (directly or through an `Arc` it
-/// holds), and must not be mutated or reallocated while `owner` is alive;
-/// a `frozen` class that never hands out `&mut` access to it guarantees
-/// both.
 #[cfg(feature = "python")]
 pub(crate) unsafe fn readonly_view<'py, D: ndarray::Dimension>(
     array: &ndarray::Array<f64, D>,
     owner: &pyo3::Bound<'py, pyo3::PyAny>,
 ) -> pyo3::Bound<'py, numpy::PyArray<f64, D>> {
     use numpy::{PyArray, PyArrayMethods};
-    // SAFETY: the caller guarantees that `owner`, which becomes the view's
-    // base object, keeps `array` alive and unchanged for the view's lifetime.
     let view = unsafe { PyArray::borrow_from_array(array, owner.clone()) };
     view.readwrite().make_nonwriteable();
     view
@@ -1021,7 +936,6 @@ mod tests {
 
 #[cfg(all(test, feature = "python"))]
 mod python_tests {
-    //! Need an interpreter with NumPy: `PYO3_PYTHON` must point at one.
 
     use super::*;
     use numpy::{PyArray1, PyArray2, PyArray3, PyArrayMethods, PyUntypedArrayMethods};

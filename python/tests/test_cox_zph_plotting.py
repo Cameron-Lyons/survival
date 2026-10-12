@@ -9,7 +9,7 @@ from .test_cox_zph_plot_data import REFERENCE, fitted, plotting
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
-from matplotlib import pyplot as plt  # noqa: E402
+from matplotlib import pyplot as plt
 
 
 @pytest.fixture(autouse=True)

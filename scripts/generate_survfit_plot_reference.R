@@ -46,8 +46,6 @@ snapshot <- function(fit) {
        conf_type=fit$conf.type,conf_int=fit$conf.int)
 }
 
-# Run the actual R plotting method and record each graphics call. A null PDF
-# supplies the device state used by the method without producing an artifact.
 capture <- function(fit,options,method="plot") {
   calls <- list()
   save_xy <- function(kind,x,y=NULL,...) {

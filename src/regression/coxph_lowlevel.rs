@@ -1,6 +1,3 @@
-//! Bare Cox fitters: preserve offsets and return the optimizer's results without
-//! full-model concordance, robust variance, baseline caches or retained input data.
-
 use super::TieMethod;
 use super::coxph::{CoxphData, CoxphOptions, fit_cox_engine};
 use super::coxph_diagnostics::risk_scores;
@@ -12,9 +9,9 @@ use ndarray::Array2;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Numerical result of a bare Cox fit. Null models retain empty coefficient
-/// arrays; their likelihood still has initial and final entries. Residuals are
-/// absent when they were not requested. Input rows and matrices are not retained.
+#[doc = " Numerical result of a bare Cox fit. Null models retain empty coefficient"]
+#[doc = " arrays; their likelihood still has initial and final entries. Residuals are"]
+#[doc = " absent when they were not requested. Input rows and matrices are not retained."]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", skip_from_py_object)]
 pub struct CoxphFitResult {
@@ -59,8 +56,6 @@ impl CoxphFitResult {
 }
 
 impl CoxphFitResult {
-    /// Fit at the original offsets. `options.cluster` and robust variance belong
-    /// to `CoxPHFit` and are refused here. `resid=false` skips martingale work.
     pub fn fit(data: CoxphData, mut options: CoxphOptions, resid: bool) -> SurvivalResult<Self> {
         data.validate()?;
         if options.cluster.is_some() || options.robust == Some(true) {
@@ -165,7 +160,7 @@ impl CoxphFitResult {
     }
 }
 
-/// Bare Cox fitting on explicit arrays, without full-model post-processing.
+#[doc = " Bare Cox fitting on explicit arrays, without full-model post-processing."]
 #[pyfunction]
 #[pyo3(signature = (time, status, x, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, resid=true))]
 #[allow(clippy::too_many_arguments)]

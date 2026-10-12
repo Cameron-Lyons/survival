@@ -67,8 +67,6 @@ def _python_steps_during(call: Callable[[], object]) -> tuple[int, float]:
 def _assert_detaches(call: Callable[[], object]) -> None:
     best_share = 0.0
     elapsed = 0.0
-    # Shared CI runners can briefly deschedule the spinner. Retry the complete
-    # measurement, including its baseline, without lowering the GIL-release threshold.
     for _ in range(3):
         idle_steps, idle_time = _python_steps_during(lambda: time.sleep(0.02))
         steps, elapsed = _python_steps_during(call)

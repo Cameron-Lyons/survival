@@ -1,5 +1,3 @@
-//! Run with `cargo run --example rust_package_layout --no-default-features`.
-
 use ndarray::array;
 use survival::SurvivalResult;
 use survival::regression::{CoxPHFit, CoxphData, CoxphOptions};

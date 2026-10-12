@@ -76,8 +76,6 @@ def test_grouped_residual_and_pseudo_long_tables_match_r(case):
 
 @pytest.mark.parametrize("multistate", [False, True], ids=["km", "aj"])
 def test_ragged_curve_endpoint_warning_and_values_follow_each_stratum(multistate):
-    # Stratum lengths 2/3/4/5 and endpoints 2/3/4/5 require both the row
-    # offsets and the per-curve warning comparison to follow curve order.
     time, event, group = [], [], []
     for label, size in zip(["z", "a", "m", "c"], [2, 3, 4, 5], strict=True):
         time.extend(range(1, size + 1))
@@ -113,8 +111,6 @@ def test_ragged_curve_endpoint_warning_and_values_follow_each_stratum(multistate
             curve = r.survfit("Surv(time,event) ~ 1", separate, timefix=False)
             expected[rows] = r.pseudo(curve, times=times)
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-14)
-    # Exactly at the earliest endpoint needs no warning, including duplicate
-    # and unsorted query times that the public residual/pseudo facade normalizes.
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         r.pseudo(fit, times=[2, 1.5, 2])

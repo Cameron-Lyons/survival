@@ -1,31 +1,24 @@
-//! R's `tcut` (`R/tcut.R`): a time-dependent cut for `pyears`.  Unlike
-//! `cut`, the values are kept as they are; the breakpoints and labels ride
-//! along as attributes and `pyears` splits each subject's follow-up across
-//! the intervals as time advances.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A `tcut` object.
+#[doc = " A `tcut` object."]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", from_py_object)]
 pub struct TcutResult {
-    /// The (scaled) values, unchanged otherwise.
+    #[doc = " The (scaled) values, unchanged otherwise."]
     #[pyo3(get)]
     pub values: Vec<f64>,
-    /// The (scaled) breakpoints, one more than the number of intervals.
+    #[doc = " The (scaled) breakpoints, one more than the number of intervals."]
     #[pyo3(get)]
     pub cutpoints: Vec<f64>,
-    /// One label per interval (`levels()` of the object).
+    #[doc = " One label per interval (`levels()` of the object)."]
     #[pyo3(get)]
     pub labels: Vec<String>,
 }
 
 crate::internal::pickle::picklable!(TcutResult);
 
-/// R's `seq(from, to, length.out = n)`: interior points are
-/// `from + k * (to - from) / (n - 1)` and the last is exactly `to`.
 fn seq_length(from: f64, to: f64, n: usize) -> Vec<f64> {
     match n {
         0 => Vec::new(),
@@ -44,8 +37,6 @@ fn seq_length(from: f64, to: f64, n: usize) -> Vec<f64> {
     }
 }
 
-/// Build a `tcut`.  A single `breaks` value is the number of intervals,
-/// spread evenly over the range of the data plus 1% at either end.
 pub fn tcut(
     x: &[f64],
     breaks: &[f64],
@@ -71,7 +62,6 @@ pub fn tcut(
                 ));
             }
         };
-        // range(x[!is.na(x)]), with NA (no data) replaced by 1.
         let finite: Vec<f64> = x.iter().copied().filter(|v| !v.is_nan()).collect();
         let (mut low, mut high) = if finite.is_empty() {
             (1.0, 1.0)
@@ -129,7 +119,7 @@ pub fn tcut(
     })
 }
 
-/// Python entry point of [`tcut`].
+#[doc = " Python entry point of [`tcut`]."]
 #[pyfunction(name = "tcut")]
 #[pyo3(signature = (x, breaks, labels=None, scale=1.0))]
 pub fn tcut_py(
@@ -141,21 +131,12 @@ pub fn tcut_py(
     Ok(tcut(&x, &breaks, labels.as_deref(), scale)?)
 }
 
-// ---------------------------------------------------------------------------
-// R's format() for a numeric vector (src/main/format.c, formatReal with
-// digits = 7), which the default tcut labels are built from.
-// ---------------------------------------------------------------------------
-
-/// `R_print.digits`.
 const DIGITS: i32 = 7;
-/// Exact powers of ten up to `1e22`.
 const POW10: [f64; 23] = [
     1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
     1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
 ];
 
-/// `scientific()`: sign, decimal exponent, significant digits needed (at
-/// most `DIGITS`) and whether rounding to `DIGITS` widens the number.
 fn scientific(x: f64) -> (bool, i32, i32, bool) {
     if x == 0.0 {
         return (false, 0, 1, false);
@@ -170,7 +151,6 @@ fn scientific(x: f64) -> (bool, i32, i32, bool) {
             r * POW10[(-kp) as usize]
         }
     } else if kp <= -308 {
-        // Denormals: 10^kp would underflow.
         (r * 1e303) / 10f64.powi(kp + 303)
     } else {
         r / 10f64.powi(kp)
@@ -200,8 +180,6 @@ fn scientific(x: f64) -> (bool, i32, i32, bool) {
     (neg, kpower, nsig, widens)
 }
 
-/// `format(x)` of a numeric vector: a common fixed or scientific layout,
-/// padded to a common width.
 pub fn format_numbers(x: &[f64]) -> Vec<String> {
     let mut neg = false;
     let mut rgt = i32::MIN;
@@ -274,7 +252,6 @@ pub fn format_numbers(x: &[f64]) -> Vec<String> {
     out
 }
 
-/// C's `%.*e` with R's two-digit minimum exponent (`1e+05`).
 fn format_scientific(value: f64, decimals: usize) -> String {
     let formatted = format!("{value:.*e}", decimals);
     let (mantissa, exponent) = formatted.split_once('e').unwrap_or((&formatted, "0"));
@@ -346,7 +323,6 @@ mod tests {
     #[test]
     fn interval_count_spreads_breaks_over_the_padded_range() {
         let result = tcut(&[10.0, 25.0, 40.0, 55.0, 70.0], &[3.0], None, 1.0).unwrap();
-        // R's seq(9.4, 70.6, length = 4), including its rounding.
         assert_eq!(
             result.cutpoints,
             vec![9.4, 29.799999999999997, 50.199999999999996, 70.6]
@@ -366,7 +342,6 @@ mod tests {
         assert!(tcut(&[0.5], &[2.0, 1.0], None, 1.0).is_err());
         assert!(tcut(&[0.5], &[], None, 1.0).is_err());
         assert!(tcut(&[0.5], &[0.0, 1.0], None, f64::NAN).is_err());
-        // Equal adjacent breaks are allowed, as in R.
         assert!(tcut(&[0.5], &[0.0, 1.0, 1.0], None, 1.0).is_ok());
     }
 

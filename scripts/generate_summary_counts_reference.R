@@ -61,9 +61,6 @@ encode <- function(x) {
     if (is.matrix(x)) return(lapply(seq_len(nrow(x)),function(i) I(unname(x[i,]))))
     I(unname(x))
 }
-# Stock summary.survfitms indexes grouped count matrices as vectors when
-# times are absent. Retain that raw result, then accumulate the original
-# fitted counts per column with R's own cumsum/diff operations.
 grouped_counts <- function(fit, field) {
     sizes <- fit$strata
     ends <- cumsum(sizes)

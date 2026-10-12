@@ -45,8 +45,6 @@ fn generate_covariates(n: usize, p: usize) -> Array2<f64> {
     })
 }
 
-/// `coxph.control(iter.max = 20)` with the given ties, tolerances left at
-/// their defaults.
 fn cox_options(method: TieMethod) -> CoxphOptions {
     CoxphOptions {
         method,
@@ -55,7 +53,6 @@ fn cox_options(method: TieMethod) -> CoxphOptions {
     }
 }
 
-/// [`cox_options`] with `eps = 1e-7` and `toler.chol = 1e-9`.
 fn tight_cox_options(method: TieMethod) -> CoxphOptions {
     CoxphOptions {
         eps: 1e-7,
@@ -104,7 +101,6 @@ fn fitted_coxph_model(n: usize, p: usize) -> CoxPHFit {
 mod kaplan_meier {
     use super::*;
 
-    /// Fractional case weights select the robust variance by default.
     #[divan::bench(args = [100, 1000, 10000, 100000])]
     fn survfitkm_weighted(bencher: divan::Bencher, n: usize) {
         let (time, _, status) = generate_survival_data(n);
@@ -132,7 +128,6 @@ mod kaplan_meier {
         bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
     }
 
-    /// Fifty curves from one call: the rows are bucketed by stratum once.
     #[divan::bench(args = [1000, 10000, 100000])]
     fn survfitkm_strata(bencher: divan::Bencher, n: usize) {
         let (time, _, status) = generate_survival_data(n);
@@ -255,7 +250,6 @@ mod aggregate_curves {
 
     fn run(bencher: divan::Bencher, columns: usize, groups: usize, states: usize) {
         let times = 20;
-        // Scrambled values avoid measuring median's already-sorted special case.
         let value = |t: usize, j: usize, s: usize| {
             ((j * 7919 + t * 101 + s * 37) % 100003) as f64 / 100003.0
         };
@@ -354,7 +348,6 @@ mod pseudo_bench {
 
     fn inputs(n: usize) -> (Vec<f64>, Vec<i32>, Vec<f64>) {
         let (time, _, status) = generate_survival_data(n);
-        // rmst refuses a truncation point before the first time (0.5)
         let eval_times = (1..=n).map(|idx| idx as f64 * 0.5 + 0.25).collect();
         (time, status, eval_times)
     }
@@ -566,7 +559,6 @@ mod logrank {
         bencher.bench_local(|| surv_analysis::survdiff(&data, 1.0, true).unwrap());
     }
 
-    /// `survdiff(Surv(time, status) ~ group + strata(s))` with 49 strata.
     #[divan::bench(args = [1000, 10000, 100000])]
     fn survdiff_strata(bencher: divan::Bencher, n: usize) {
         let (time, _, status_i32) = generate_survival_data(n);
@@ -853,8 +845,6 @@ mod exact_counting_process_cox {
             });
     }
 
-    /// Almost the entire risk set dies together: the exact likelihood can
-    /// enumerate the one surviving subject instead of n - 1 tied deaths.
     #[divan::bench(args = [100, 1000, 4000])]
     fn near_complete_tie(bencher: divan::Bencher, n: usize) {
         let start = vec![0.0; n];
@@ -965,7 +955,6 @@ mod cox_regression {
     fn coxph_survival_at_requested_times(bencher: divan::Bencher, n: usize) {
         let fit = fitted_coxph_model(n, 3);
         let times = [2.0, 4.0, 8.0, 12.0];
-        // Warm the baseline cache, as with repeated prediction calls.
         fit.predict_survival_at(&times, None).unwrap();
         bencher.bench_local(|| fit.predict_survival_at(&times, None).unwrap());
     }
@@ -1231,10 +1220,6 @@ mod cox_regression {
     }
 }
 
-/// The residual kernels behind `residuals.coxph` on their own: the C ports
-/// (`coxmart`, `agmart3`, `coxscore2`, `agscore3`) and `coxscho` on the
-/// shared backward sweep, with 1000 distinct times so that ties exercise
-/// the Efron branches.
 mod cox_residual_kernels {
     use super::*;
     use survival::core::schoenfeld_residuals;
@@ -1362,8 +1347,6 @@ mod case_cohort_bench {
     type CaseCohortData = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<i32>, Vec<i64>);
 
     fn case_cohort_data(n: usize, p: usize) -> CaseCohortData {
-        // Use strictly spaced event times so Prentice's entry-delta stays representable,
-        // and offset the subcohort pattern from censoring so sampled noncases remain.
         let time = (0..n)
             .map(|idx| (idx as f64 + 1.0) * 0.25)
             .collect::<Vec<_>>();

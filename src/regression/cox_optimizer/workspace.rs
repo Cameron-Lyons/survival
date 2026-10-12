@@ -1,18 +1,8 @@
-//! Reusable buffers for Breslow and Efron likelihood evaluations.
-//!
-//! Their lifetime follows the fit, while the evaluator resets sums and
-//! overwrites predictors on every call, including rejected Newton steps.
-
 use crate::core::risk_sweep::RiskSetSums;
 
 pub(super) struct EvaluationWorkspace {
     pub eta: Vec<f64>,
-    /// Precomputed weighted risks for the counting-process fast path.
-    /// Allocated only when that path is first used; the right-censored
-    /// sweep computes each risk when its row joins.
     pub risk: Vec<f64>,
-    /// Right-censored running sums. Counting-process evaluations reuse
-    /// the fitter's recentred sums for both the fast and general paths.
     pub risk_set: RiskSetSums,
     pub tied: RiskSetSums,
 }

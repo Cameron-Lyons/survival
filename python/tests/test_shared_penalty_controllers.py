@@ -48,7 +48,7 @@ def test_controller_trajectories_match_r(case, arrays):
             }
         next_state = controller.step(old, iteration, **inputs)
         compare(next_state, expected)
-        compare(pickle.loads(pickle.dumps(next_state)), expected)  # noqa: S301
+        compare(pickle.loads(pickle.dumps(next_state)), expected)
         old = next_state
 
 
@@ -104,7 +104,7 @@ def test_state_and_controller_own_their_arrays_and_are_reusable():
     old = State(1.0, history=history)
     history[:] = 99
     expected = controller.step(old, 2, loglik=-100, events_by_group=[1, 2, 3])
-    copied = pickle.loads(pickle.dumps(controller))  # noqa: S301
+    copied = pickle.loads(pickle.dumps(controller))
     with ThreadPoolExecutor(max_workers=4) as pool:
         outputs = list(
             pool.map(

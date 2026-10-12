@@ -55,7 +55,6 @@ def extract_line_rate(root: ET.Element) -> float:
             raise ValueError("coverage report has no valid lines")
         if not 0 <= covered <= valid:
             raise ValueError("lines-covered must be between 0 and lines-valid")
-        # Counts retain their precision when the producer rounds line-rate.
         return covered / valid
 
     if line_rate is not None:

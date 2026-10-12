@@ -37,7 +37,7 @@ def previous_pseudo(path):
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "pseudo"
     )
     namespace = dict(vars(_survfit_residuals))
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)  # noqa: S102 -- explicitly supplied repository revision
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
     return namespace[function.name]
 
 
@@ -52,8 +52,6 @@ def workload(rows, group_mode, multistate):
             ["event" if value else "censor" for value in status], ["censor", "event"]
         )
     fit = r.survfit("Surv(time,event) ~ group", data, se_fit=False, timefix=False)
-    # A stratum with m event/censor pairs has event residual -1/(4m),
-    # censor residual +1/(4m), and pseudo values zero/one respectively.
     counts = np.bincount(codes)
     residual = np.where(status, -0.5, 0.5) / counts[codes]
     pseudo = (1 - status).astype(float)

@@ -1,8 +1,3 @@
-//! Score residual kernels of R's `survival` package (`coxscore2.c`,
-//! `agscore3.c`).  Both take the row-major `n x p` covariate matrix and the
-//! stratum-label convention of `crate::core::strata_order`, and both return the
-//! `n x p` matrix of per-observation score residuals in input order.
-
 pub mod agscore3;
 pub mod coxscore2;
 
@@ -13,8 +8,6 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use ndarray::ArrayView2;
 
-/// Shared argument checks: the covariate matrix has `n` rows, `score`
-/// (`exp(eta)`) and the optional weights/strata have `n` entries.
 pub(crate) fn validate_score_inputs(
     n: usize,
     covariates: ArrayView2<'_, f64>,

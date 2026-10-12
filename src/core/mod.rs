@@ -1,9 +1,3 @@
-//! Ports of the small C routines and R helpers of `survival` that other
-//! modules build on: risk-set expansion for `tt()` terms (`coxcount1.c`),
-//! Schoenfeld residuals (`coxscho.c`), the `nsk` natural spline and the
-//! `pspline` basis, plus the data conventions the kernels share
-//! (`strata_order`) and the per-death-time risk-set sweep (`risk_sweep`).
-
 pub mod bspline;
 pub mod coxcount1;
 pub mod coxscho;

@@ -42,12 +42,10 @@ def main() -> None:
     times = np.arange(1, args.n + 1, dtype=float)
     x = rng.normal(size=(args.n, args.columns))
     status = (np.arange(args.n) % 3 != 0).astype(np.int32)
-    # One evaluation at beta=0 isolates prediction performance from convergence.
     fit = regression.coxph_fit(times, status, x, method="efron", iter_max=0)
     ordinary = rng.normal(size=(args.new_rows, args.columns))
     boundaries = np.linspace(0, args.n, args.intervals + 1)
     changing = rng.normal(size=(args.intervals, args.columns))
-    # Interleave two short intervals for every subject, in first-appearance order.
     subject_start = rng.integers(0, args.n - 2, size=args.subjects).astype(float)
     short_start = np.concatenate([subject_start, subject_start + 1])
     short_x = rng.normal(size=(args.subjects * 2, args.columns))

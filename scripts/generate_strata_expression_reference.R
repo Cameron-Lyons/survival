@@ -55,8 +55,6 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
         error=function(e) list(r_error=conditionMessage(e)))
     fit_error <- fit$r_error
     if(!is.null(fit_error)) {
-        # Retain the empty trailing scale instead of assigning three names to
-        # two scales. Only change the count; use the installed numerical fitter.
         stopifnot(kind=="survreg",name=="shared_source")
         source <- deparse(survival::survreg)
         stopifnot(sum(grepl("nstrata <- max(strata)",source,fixed=TRUE)) == 1L)
@@ -84,9 +82,6 @@ for(kind in c("coxph","survreg")) for(name in names(rhs)) {
         result$raw_expected <- I(unname(p$fit))
         result$raw_expected_se <- I(unname(p$se.fit))
         if(name=="shared_source") {
-            # g is constant within every stratum and has an aliased coefficient.
-            # R's expected prediction propagates that NA; the reduced model is
-            # identical and gives the identifiable expected counts and errors.
             reduced <- coxph(Surv(time,status) ~ age + strata(g,na.group=TRUE),
                 d[!is.na(d$g),])
             p <- predict(reduced,new,type="expected",se.fit=TRUE)
@@ -113,7 +108,6 @@ subsets <- lapply(c("strata(cut(age, 3))", "strata(cut(age, 4), sex)",
         strata_levels=I(levels(droplevels(fit$strata))),strata=I(as.character(fit$strata)),
         omitted=I(as.integer(fit$na.action)),lp=I(unname(predict(fit,type="lp"))))
 })
-# The grouping-only methods use the same evaluated factors.
 grouping <- lapply(c("strata(sex == 1)","strata(g, na.group = TRUE)",
     "strata(group = label, shortlabel = FALSE)","strata(cut(age, c(45, 60, 75)))"),function(rhs) {
     f <- as.formula(paste("Surv(time, status) ~",rhs))

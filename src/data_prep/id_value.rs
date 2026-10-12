@@ -1,23 +1,11 @@
-//! Subject identifiers for the data-preparation routines.
-//!
-//! R lets `id`, `strata` and state variables be integer, double, character
-//! or factor; its `match`/`order` semantics are what the kernels need.
-//! [`SubjectId`] extracts a comparable, hashable key from whatever the
-//! caller holds, so every routine has one generic implementation.  Rust
-//! callers use `i64`, `String` or `&str`; the Python bindings accept
-//! [`IdValue`], into which an `int`, `float` or `str` converts.
-
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-/// A value usable as a subject identifier or categorical state.
 pub trait SubjectId: Clone {
-    /// The identity used for equality, hashing and ordering.
     type Key: Clone + Eq + Hash + Ord;
 
     fn key(&self) -> Self::Key;
 
-    /// The label R would print for the value.
     fn label(&self) -> String;
 }
 
@@ -69,11 +57,6 @@ impl SubjectId for &str {
     }
 }
 
-/// An identifier as it arrives from Python: an integer, a float or a
-/// string.  Integral floats equal the corresponding integers (`1 == 1.0`,
-/// as in R), other floats compare by value, and numbers sort before
-/// strings.  `NaN` is rejected at the boundary because R's `id` cannot be
-/// missing.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IdValue {
     Int(i64),
@@ -81,10 +64,6 @@ pub enum IdValue {
     Str(String),
 }
 
-/// A `str` or `float` (numpy's `str_` and `float64` included) converts
-/// without a failed attempt; anything else is tried as an integer (`int`,
-/// `bool`, numpy integers), then as a float (an `int` beyond `i64`,
-/// `numpy.float32`).
 #[cfg(feature = "python")]
 impl<'py> pyo3::FromPyObject<'_, 'py> for IdValue {
     type Error = pyo3::PyErr;
@@ -112,12 +91,9 @@ impl<'py> pyo3::FromPyObject<'_, 'py> for IdValue {
     }
 }
 
-/// The normalised identity of an [`IdValue`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IdKey {
     Int(i64),
-    /// A non-integral float, kept as its bit pattern (`-0.0` is folded
-    /// into `0`, so it never occurs here).
     Float(u64),
     Str(String),
 }
@@ -154,7 +130,6 @@ impl PartialOrd for IdKey {
 }
 
 impl IdValue {
-    /// Whether the value is a missing number, which R does not allow.
     pub fn is_missing(&self) -> bool {
         matches!(self, Self::Float(v) if v.is_nan())
     }
@@ -192,8 +167,6 @@ impl Hash for IdValue {
     }
 }
 
-/// R's `match(x, unique(x))` minus one: zero-based codes in order of first
-/// appearance, together with one representative per code.
 pub fn first_appearance_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
     let mut seen: std::collections::HashMap<I::Key, usize> = std::collections::HashMap::new();
     let mut representatives = Vec::new();

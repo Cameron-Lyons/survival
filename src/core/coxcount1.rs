@@ -1,13 +1,3 @@
-//! Risk-set expansion for `coxph` models with `tt()` terms.
-//!
-//! [`coxcount1`] and [`coxcount2`] port `coxcount1.c` (survival 3.8-12):
-//! each unique event time becomes one stratum of the expanded data set
-//! holding every observation at risk at that time, and the routines return
-//! the row indices (`index`) and event indicators (`status`) of those
-//! strata back to back.  R sorts the data first (`order(strata, -time,
-//! status)`, censored before deaths within tied times); the functions here
-//! sort internally and return zero-based indices into the input.
-
 use crate::core::strata_order::{first_of_run, order_within_strata, validate_intervals};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
@@ -16,9 +6,9 @@ use crate::internal::validation::{
 };
 use pyo3::prelude::*;
 
-/// The expanded risk sets: `time[k]` and `nrisk[k]` describe the `k`-th
-/// unique event time; the next `nrisk[k]` entries of `index`/`status` are
-/// its members (zero-based rows of the input) and their event indicators.
+#[doc = " The expanded risk sets: `time[k]` and `nrisk[k]` describe the `k`-th"]
+#[doc = " unique event time; the next `nrisk[k]` entries of `index`/`status` are"]
+#[doc = " its members (zero-based rows of the input) and their event indicators."]
 #[derive(Debug, Clone)]
 #[pyclass(from_py_object)]
 pub struct CoxCountOutput {
@@ -32,7 +22,6 @@ pub struct CoxCountOutput {
     pub status: Vec<i32>,
 }
 
-/// Risk sets of right-censored data (`coxcount1`).
 pub fn coxcount1(
     survival: &SurvivalData,
     strata: Option<&[i32]>,
@@ -70,7 +59,6 @@ pub fn coxcount1(
         }
         if sorted_status[i] == 1 {
             let dtime = sorted_time[i];
-            // Non-deaths at risk, this death, then any tied deaths.
             let mut j = i + 1;
             while j < n && sorted_status[j] == 1 && sorted_time[j] == dtime && !first[j] {
                 j += 1;
@@ -88,10 +76,6 @@ pub fn coxcount1(
     Ok(out)
 }
 
-/// Risk sets of (start, stop] data (`coxcount2`).  The members of a risk
-/// set are emitted in the order of the C routine's `who` list: entries are
-/// appended as subjects enter and a departing subject's slot is filled by
-/// the last entry.
 pub fn coxcount2(
     counting: &CountingProcessData,
     strata: Option<&[i32]>,
@@ -111,8 +95,6 @@ pub fn coxcount2(
     let strata = strata.map_or(Ok(&zero[..]), |s| {
         validate_length(n, s.len(), "strata").map(|()| s)
     })?;
-    // sort2: stratum, decreasing stop, censored first; sort1: stratum,
-    // decreasing start.  `first` marks the first sort2 position of a stratum.
     let sort2 = order_within_strata(strata, |a, b| {
         time2[b]
             .total_cmp(&time2[a])
@@ -128,7 +110,6 @@ pub fn coxcount2(
         index: Vec::new(),
         status: Vec::new(),
     };
-    // `who` lists those at risk; `atrisk[k]` is the slot of subject k in it.
     let mut who: Vec<usize> = Vec::with_capacity(n);
     let mut atrisk = vec![0usize; n];
     let mut j = 0;
@@ -146,7 +127,6 @@ pub fn coxcount2(
             continue;
         }
         let dtime = time2[iptr];
-        // Unmark those who are no longer at risk.
         while j < i && time1[sort1[j]] >= dtime {
             let jptr = sort1[j];
             let k = atrisk[jptr];
@@ -159,7 +139,6 @@ pub fn coxcount2(
         }
         out.status.extend(std::iter::repeat_n(0, who.len()));
         out.index.extend(who.iter().copied());
-        // This death, then any tied deaths within the stratum.
         let mut deaths = 1;
         atrisk[iptr] = who.len();
         who.push(iptr);
@@ -186,8 +165,6 @@ mod tests {
 
     #[test]
     fn right_censored_risk_sets_follow_r() {
-        // R: coxcount1 on time (3, 1, 2, 2), status (1, 1, 0, 1) sorted as
-        // order(-time, status) -> rows 1, 3, 4, 2 (1-based).
         let out = coxcount1(
             &SurvivalData::try_new(vec![3.0, 1.0, 2.0, 2.0], vec![1, 1, 0, 1]).unwrap(),
             None,
@@ -214,7 +191,6 @@ mod tests {
 
     #[test]
     fn counting_process_risk_sets_drop_late_entries_and_early_exits() {
-        // (0,4] event, (0,6] censored, (1,5] event, (2,7] event, (4,9] censored
         let out = coxcount2(
             &CountingProcessData::try_new(
                 vec![0.0, 0.0, 1.0, 2.0, 4.0],
@@ -226,10 +202,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.time, vec![7.0, 5.0, 4.0]);
-        // Risk set at 7: subjects 4 (censored, added first) and 3.
-        // At 5: 4, 3, 1 remain (all entered before 5); 2 dies.
-        // At 4: subject 4 leaves (start 4 >= 4) and the last entry, 2, takes
-        // its slot in `who`; 0 dies.
         assert_eq!(out.nrisk, vec![2, 4, 4]);
         assert_eq!(out.index, vec![4, 3, 4, 3, 1, 2, 2, 3, 1, 0]);
         assert_eq!(out.status, vec![0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
@@ -237,9 +209,6 @@ mod tests {
 
     #[test]
     fn stratified_outputs_match_r() {
-        // R: .Call(Ccoxcount1, Y[sorted, ], newstrat) with
-        // sorted = order(strata, -time, status); indices mapped back to the
-        // (0-based) input rows.
         let out = coxcount1(
             &SurvivalData::try_new(
                 vec![5.0, 3.0, 3.0, 8.0, 1.0, 3.0, 8.0, 2.0, 6.0, 6.0],
@@ -260,7 +229,6 @@ mod tests {
             vec![1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1]
         );
 
-        // R: .Call(Ccoxcount2, Y, sort.start - 1, sort.end - 1, newstrat)
         let out = coxcount2(
             &CountingProcessData::try_new(
                 vec![0.0, 1.0, 0.0, 2.0, 4.0, 0.0, 3.0, 1.0, 0.0, 5.0],

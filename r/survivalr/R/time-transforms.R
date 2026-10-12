@@ -36,7 +36,6 @@
   attribute <- attributes(value)
   sparse <- isTRUE(attribute$sparse)
   basis <- if (is.factor(value) && !sparse) {
-    # Cox penalty factors use every group, including the reference group.
     stats::model.matrix(~ value - 1)
   } else if (is.matrix(value)) value else matrix(as.numeric(value), ncol = 1L)
   controller <- .survpenal_controller(attribute, seq_len(ncol(basis)), basis, status)

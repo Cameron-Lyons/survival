@@ -38,7 +38,6 @@ def test_interleaved_subjects_and_changing_strata_match_r(fit, case):
     for field, expected in case["expected"].items():
         actual = getattr(curve, field.replace(".", "_"))
         if field == "strata":
-            # First appearance, including nonconsecutive rows for each subject.
             assert list(actual.items()) == list(expected.items())
         else:
             np.testing.assert_allclose(

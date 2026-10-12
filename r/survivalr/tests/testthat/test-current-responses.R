@@ -39,7 +39,6 @@ test_that("multistate responses preserve censor labels through conversion", {
       source <- expected
       if (legacy) attr(source, "clabel") <- NULL
       converted <- .as_native_surv(.as_python_surv(source))
-      # Python responses retain states/censor labels, not arbitrary R input attributes.
       attr(source, "inputAttributes") <- NULL
       expect_equal(converted, source)
       expect_equal(format(converted), survival::format.Surv(source))

@@ -12,7 +12,6 @@ survival = setup_survival_import()
 regression = survival.regression
 core = survival.core
 
-# R: d <- data.frame(t = c(1,2,2,3,4,4,5,6,7,8), s = c(1,1,1,0,1,1,0,1,0,1), x1, x2)
 _TIED_TIME = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 _TIED_STATUS = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]
 _TIED_X1 = [0.0, 0.4, 0.8, 0.2, 1.0, 1.4, 0.6, 1.2, 1.6, 1.8]
@@ -20,7 +19,6 @@ _TIED_X2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
 _TIED_X = [[a, b] for a, b in zip(_TIED_X1, _TIED_X2, strict=True)]
 _NEWDATA = [[0.5, 0.3], [1.5, 0.9]]
 
-# R: d <- data.frame(t = 1:8, s = c(1,1,0,1,1,1,0,1), x = c(.5,.2,.9,.1,.7,.3,.8,.4))
 _AFT_TIME = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 _AFT_STATUS = [1, 1, 0, 1, 1, 1, 0, 1]
 _AFT_X = [0.5, 0.2, 0.9, 0.1, 0.7, 0.3, 0.8, 0.4]
@@ -34,7 +32,6 @@ def _tied_fit(**kwargs):
 def test_coxph_fit_efron_matches_r():
     fit = _tied_fit()
 
-    # coxph(Surv(t, s) ~ x1 + x2, d): ties = "efron"
     assert isinstance(fit, regression.CoxPHFit)
     assert fit.method == regression.TieMethod.Efron
     assert fit.coefficients == pytest.approx([-2.34686780701378028, 0.57759281933864315])
@@ -161,7 +158,6 @@ def test_coxph_fit_residual_methods_match_r():
         ],
     )
 
-    # collapse sums residuals within the given groups
     collapsed = fit.martingale_residuals(collapse=[0, 0, 1, 1, 2, 2, 3, 3, 4, 4])
     full = fit.martingale_residuals()
     assert collapsed == pytest.approx([full[i] + full[i + 1] for i in range(0, 10, 2)])
@@ -223,7 +219,6 @@ def test_coxph_fit_basehaz_and_survfit_match_r():
     assert curve.n_risk == pytest.approx([10, 9, 7, 6, 4, 3, 2, 1])
     assert curve.n_event == pytest.approx([1, 2, 0, 2, 0, 1, 0, 1])
     assert curve.n_censor == pytest.approx([0, 0, 1, 0, 1, 0, 1, 0])
-    # survfit(fit, newdata)$surv, one column per newdata row
     assert [row[0] for row in curve.surv][:2] == pytest.approx(
         [0.88731130006455339, 0.58658345696823611]
     )
@@ -250,7 +245,6 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
     fit = regression.coxph_fit(
         stop, status, x, entry=start, strata=strata, weights=weights, offset=offset
     )
-    # coxph(Surv(start, stop, status) ~ x + strata(g) + offset(off), weights = w)
     assert fit.coefficients == pytest.approx([-0.78302485927205856])
     assert fit.var[0] == pytest.approx([2.2334762314262075])
     assert fit.loglik == pytest.approx([-6.5337342596707160, -6.3940130870789798])
@@ -266,14 +260,12 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
     )
 
     clustered = regression.coxph_fit(stop, status, x, entry=start, cluster=strata)
-    # coxph(Surv(start, stop, status) ~ x + cluster(g)): robust sandwich variance
     assert clustered.coefficients == pytest.approx([0.48868151624787642])
     assert clustered.var[0] == pytest.approx([0.018306739858682395])
     assert clustered.naive_var[0] == pytest.approx([0.6478055354496437])
     assert clustered.rscore == pytest.approx(1.2162778262460221)
 
     exact = regression.coxph_fit(stop, status, x, entry=start, method="exact")
-    # coxph(..., ties = "exact") on counting-process data (agexact)
     assert exact.coefficients == pytest.approx([0.56988220267373335])
     assert exact.var[0] == pytest.approx([0.70878875738958225])
     assert exact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
@@ -298,7 +290,6 @@ def test_coxph_detail_matches_r():
     fit = _tied_fit()
     detail = regression.coxph_detail(fit)
 
-    # R: coxph.detail(fit) fields
     assert isinstance(detail, regression.CoxphDetail)
     assert detail.time == pytest.approx([1.0, 2.0, 4.0, 6.0, 8.0])
     assert detail.nevent == [1, 2, 2, 1, 1]
@@ -329,14 +320,13 @@ def test_coxph_detail_matches_r():
 
     with_riskmat = regression.coxph_detail(fit, riskmat=True)
     assert len(with_riskmat.riskmat) == 10
-    assert sum(with_riskmat.riskmat[0]) == 1  # the first subject is only at risk at time 1
+    assert sum(with_riskmat.riskmat[0]) == 1
 
 
 def test_cox_zph_matches_r():
     fit = _tied_fit()
     zph = regression.cox_zph(fit)
 
-    # cox.zph(fit)$table and the scaled Schoenfeld residuals
     assert isinstance(zph, regression.CoxZph)
     assert zph.transform == "km"
     assert [row.chisq for row in zph.table] == pytest.approx(
@@ -370,7 +360,6 @@ def test_coxph_wtest_matches_r():
     fit = _tied_fit()
     result = regression.coxph_wtest(fit.var, [fit.coefficients])
 
-    # coxph.wtest(fit$var, coef(fit))
     assert isinstance(result, regression.CoxphWtest)
     assert result.test == pytest.approx([3.284067646975064])
     assert result.df == 2
@@ -394,7 +383,6 @@ def _aft_fit(distribution="weibull", **data_kwargs):
 def test_survreg_fit_matches_r():
     fit = _aft_fit()
 
-    # survreg(Surv(t, s) ~ x, d)
     assert isinstance(fit, regression.SurvregFit)
     assert fit.coefficients == pytest.approx(
         [1.1636656987433951, 1.3788867351883287, math.log(0.497638477465639)]
@@ -459,8 +447,6 @@ def test_survreg_fit_predictions_match_r():
 
     with pytest.raises(ValueError, match="'arg' should be one of \"response\""):
         fit.predict(predict_type="bogus")
-    # Stock R keeps an undefined probability's column and the neighboring
-    # quantiles; the missing column propagates through estimated-scale SEs.
     with_invalid = fit.predict(
         newdata=newdata, predict_type="quantile", p=[0.1, 1.5, 0.5], se_fit=True
     )
@@ -526,8 +512,6 @@ def test_survreg_fit_residuals_match_r():
 
 
 def test_survreg_fit_interval_strata_weights_and_cluster_match_r():
-    # survreg(Surv(t1, t2, type = "interval2") ~ x + strata(g), weights = w, dist = "lognormal")
-    # with R's interval status coding 0 right / 1 exact / 2 left / 3 interval
     fit = regression.survreg_fit(
         regression.SurvregData(
             [1.0, 2.0, 3.0, 4.0, 5.0, 3.0, 7.0, 2.0],
@@ -552,7 +536,6 @@ def test_survreg_fit_interval_strata_weights_and_cluster_match_r():
     )
 
     clustered = _aft_fit(cluster=[1, 1, 2, 2, 3, 3, 4, 4])
-    # survreg(Surv(t, s) ~ x + cluster(g)): robust variance keeps the naive one alongside
     assert clustered.coefficients[:2] == pytest.approx([1.1636656987433951, 1.3788867351883287])
     assert clustered.variance_matrix[0] == pytest.approx(
         [0.13301265160388523, -0.23361217142580540, -0.14495353454168899]
@@ -569,14 +552,13 @@ def test_survreg_distribution_helpers_match_r():
     assert regression.survreg_dtest(weibull) == []
     assert weibull.variance() == pytest.approx(math.pi**2 / 6)
 
-    exponential = regression.SurvregDistribution("exp")  # R's match.arg partial matching
+    exponential = regression.SurvregDistribution("exp")
     assert exponential.name == "Exponential"
     assert exponential.scale == pytest.approx(1.0)
 
     with pytest.raises(ValueError, match="'arg' should be one of \"extreme\""):
         regression.SurvregDistribution("normal")
 
-    # dsurvreg / psurvreg / qsurvreg with R's recycling of mean and scale
     assert regression.dsurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
         [0.094738019355815842, 0.163187748073130218, 0.143403690391142008]
     )

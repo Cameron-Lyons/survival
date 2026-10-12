@@ -1,12 +1,9 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_rsurvreg_count_reference.R [output.json]
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1]] else "python/tests/fixtures/rsurvreg_count_reference.json"
 
-# runif() decides the number of draws before rsurvreg() calls qsurvreg().
-# Values in a vector of length other than one do not participate in coercion.
 counts <- list(
     integer0 = 0L, integer1 = 1L, integer3 = 3L, numeric3 = 3,
     fractional = 2.5, fractional_small = .75, negative_fraction_small = -.75,
@@ -49,8 +46,6 @@ cases <- lapply(names(counts), function(name) list(
     runif = record(counts[[name]], "runif"),
     rsurvreg = record(counts[[name]], "rsurvreg")))
 
-# Install a local registered family whose quantile records the probability batch.
-# This isolated R process never writes or changes the installed package.
 namespace <- asNamespace("survival")
 distributions <- survival::survreg.distributions
 custom <- distributions$gaussian

@@ -24,7 +24,7 @@ native = survival._survival
 
 
 def round_trip(obj):
-    return pickle.loads(pickle.dumps(obj))  # noqa: S301 - the test's own pickle
+    return pickle.loads(pickle.dumps(obj))
 
 
 COPIES = {
@@ -68,7 +68,6 @@ def mgus2_states():
 
 @pytest.fixture(scope="module")
 def cox_fits(lung):
-    # (start, stop] data, whose rows the fitter sorts into its own order
     split = r.survSplit(
         "Surv(time, status) ~ age + sex + ph.ecog", lung, cut=[100], start="t0", end="t1"
     )
@@ -86,7 +85,7 @@ def cox_fits(lung):
 def assert_same_native(original, restored):
     """A copy of a native object is a new object with every attribute unchanged."""
     assert type(restored) is type(original)
-    if hasattr(original, "__int__"):  # a fieldless enum
+    if hasattr(original, "__int__"):
         assert restored == original
         return
     assert restored is not original
@@ -159,7 +158,7 @@ def test_coxph_round_trip_keeps_every_method(cox_fits, kind, how):
         )
     for type_ in ("martingale", "deviance", "score", "dfbeta"):
         if kind == "exact" and type_ not in ("martingale", "deviance"):
-            continue  # R has no score residuals for the exact partial likelihood
+            continue
         assert np.asarray(r.residuals(again, type=type_)) == approx(
             np.asarray(r.residuals(fit, type=type_))
         )
@@ -175,7 +174,6 @@ def test_coxph_round_trip_keeps_every_method(cox_fits, kind, how):
 
 def test_restored_coxph_reproduces_r(cox_fits):
     fit = round_trip(cox_fits["plain"])
-    # R's coefficients, first three linear predictors and deviance residuals.
     assert r.coef(fit) == approx([0.0170453318454113, -0.5132185171083844])
     assert list(r.predict(fit, type="lp"))[:3] == approx(
         [0.3995046957042455, 0.2972327046317776, 0.0926887224868421]
@@ -278,7 +276,6 @@ def test_restored_survfit_reproduces_r(lung):
     assert r.summary_survfit(fit, times=[100, 365]).surv == approx(
         [0.826086956521739, 0.336087834639379, 0.922088353413655, 0.526463030185906]
     )
-    # The influence matrices keep R's column-major layout.
     assert all(curve.influence.values.flags.f_contiguous for curve in fit.influence_surv)
 
 
@@ -297,10 +294,8 @@ def test_survfit_influence_is_kept_once(lung, mgus2_states, how):
                 np.testing.assert_array_equal(curve.values, original.values)
                 assert curve.values.flags.f_contiguous
                 assert curve.cluster == original.cluster
-    # Each matrix is pickled once, inside the engine.
     matrices = sum(curve.values.nbytes for curve in km.influence_surv + km.influence_chaz)
     assert len(pickle.dumps(km)) < len(pickle.dumps(km.engine)) + matrices / 2
-    # Matrices that are not the engine's own are kept as they are.
     detached = dataclasses.replace(km, engine=None)
     assert COPIES[how](detached).influence_surv[0].cluster == km.influence_surv[0].cluster
 

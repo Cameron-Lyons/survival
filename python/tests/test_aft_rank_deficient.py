@@ -92,7 +92,6 @@ def test_rank_deficient_aft_keeps_complete_design_and_r_fitted_values(case):
         np.asarray(r.residuals(fit, type="dfbeta", weighted=True))[SAMPLE_ROWS],
         expected["dfbeta"],
     )
-    # Stock predict.survreg retains NA coefficients when evaluating new rows.
     new = {key: [value[row] for row in [2, 0, 1]] for key, value in frame().items()}
     close(r.predict(fit, new, type="lp"), expected["new_lp"])
 
@@ -122,7 +121,7 @@ def test_public_containers_keep_nonbinary_constant_aliases_and_pickle(layout, co
     reduced = r.survreg("Surv(time, status) ~ h1 + h2", data)
     close(fit.linear_predictors, reduced.linear_predictors)
     close(np.asarray(fit.var)[np.ix_([0, 1, 2, 4], [0, 1, 2, 4])], reduced.var)
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - our own model
+    restored = pickle.loads(pickle.dumps(fit))
     assert np.isnan(restored.coefficients[-1])
     close(r.predict(restored, type="lp", se_fit=True).fit, fit.linear_predictors)
     close(r.vcov(restored), fit.var)
@@ -137,8 +136,6 @@ def test_bare_aft_fit_retains_zero_alias_before_full_model_marking(case):
     data = frame()
     transformed = case["dist"] in {"weibull", "lognormal", "exponential"}
     y = np.column_stack([np.log(data["time"]) if transformed else data["time"], data["status"]])
-    # The bare R fitter receives the already transformed response and its
-    # underlying density, with exponential scale supplied explicitly.
     raw = r.survreg_fit(
         matrix,
         y,

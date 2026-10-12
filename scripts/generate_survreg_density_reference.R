@@ -1,11 +1,9 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_survreg_density_reference.R [output.json]
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1]] else "python/tests/fixtures/survreg_density_reference.json"
 
-# A skewed mixture, deliberately outside survival's built-in families.
 density <- function(z, parms = NULL) {
     v <- (z - 1.4) / .8
     a <- .65 * dnorm(z)
@@ -63,10 +61,6 @@ cases <- lapply(c("estimated", "stratified", "fixed"), function(kind) {
     fit <- survreg(formula, data, weights = weights,
                    dist = mixture, init = init, scale = scale,
                    control = survreg.control(maxiter = 50, rel.tolerance = 1e-11))
-    # survreg7.c allocates z for n endpoints, but survregc2.c writes a second
-    # endpoint for each interval. Avoid that out-of-bounds write in the R
-    # reference: compare its penalized fitter with intervals made exact,
-    # and use a separate R optimizer for the full interval likelihood.
     no_interval <- data
     no_interval$status[no_interval$status == 3] <- 1
     penalized <- survreg(update(formula, . ~ . - x + ridge(x, theta = .7, scale = FALSE)),

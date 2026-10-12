@@ -96,7 +96,7 @@ def test_bare_response_missing_rows_follow_formula_and_survive_survfit0(multista
     )
     assert bare.na_action == fit.na_action == r.NaAction((2, 6), action[3:])
     expected = r.survfit_residuals(fit, times=[2.5, 6.5])
-    restored = pickle.loads(pickle.dumps(bare))  # noqa: S301 -- this test's own serialized object
+    restored = pickle.loads(pickle.dumps(bare))
     for transformed in (bare, r.survfit0(bare), copy.deepcopy(bare), restored):
         assert transformed.na_action == bare.na_action
         actual = r.survfit_residuals(transformed, times=[2.5, 6.5])

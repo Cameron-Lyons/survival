@@ -7,7 +7,7 @@ from .test_aareg_plot_data import REFERENCE, options_for, plotting, reference_fi
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
-from matplotlib import pyplot as plt  # noqa: E402
+from matplotlib import pyplot as plt
 
 
 @pytest.fixture(autouse=True)

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Stock R numerical oracle; correct only the documented delayed-entry row index.
 suppressPackageStartupMessages(library(survival))
 reference <- survival::finegray
 code <- paste(deparse(body(reference), width.cutoff = 500L), collapse = "\n")
@@ -18,7 +17,6 @@ for (seed in seq_len(60L)) {
   end <- entry + sample(3:16, subjects, replace = TRUE)
   status <- sample(0:2, subjects, replace = TRUE)
   status[2:3] <- c(1L, 2L)
-  # Exercise entry after the earliest censoring.
   entry[1L] <- 0
   end[1L] <- 1
   status[1L] <- 0L

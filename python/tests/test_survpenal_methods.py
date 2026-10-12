@@ -66,9 +66,6 @@ def f_fixed(lung):
     return r.survreg(S + "ridge(age, sex, theta = 1)", lung, scale=1)
 
 
-# --- print.survreg.penal -----------------------------------------------------------------
-
-
 def test_print_pspline(f_ps):
     out = r.print_survreg_penal(f_ps)
     assert type(out) is r.SurvregPenalPrint
@@ -80,14 +77,38 @@ def test_print_pspline(f_ps):
     ]
     assert out.columns == ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
     assert out.rows == [
-        approx([6.24585597390229, 0.774295468910945, 0.542072019950927, 65.0684550440064, 1,
-                7.23408783883134e-16]),
-        approx([-0.0122845071132055, 0.00678832327074835, 0.00678794746085093,
-                3.27484266952672, 1, 0.0703496715686645]),
+        approx(
+            [
+                6.24585597390229,
+                0.774295468910945,
+                0.542072019950927,
+                65.0684550440064,
+                1,
+                7.23408783883134e-16,
+            ]
+        ),
+        approx(
+            [
+                -0.0122845071132055,
+                0.00678832327074835,
+                0.00678794746085093,
+                3.27484266952672,
+                1,
+                0.0703496715686645,
+            ]
+        ),
         approx([NAN, NAN, NAN, 1.83094970775341, 2.06393485506937, 0.41463880579785]),
-        approx([0.38107546373868, 0.12718861465403, 0.127035140001751, 8.97688165194598, 1,
-                0.00273416868047694]),
-    ]  # fmt: skip
+        approx(
+            [
+                0.38107546373868,
+                0.12718861465403,
+                0.127035140001751,
+                8.97688165194598,
+                1,
+                0.00273416868047694,
+            ]
+        ),
+    ]
     assert out.history == ["Theta= 0.924"]
     assert (out.logtest, out.logtest_df, out.logtest_p) == approx(
         (16.1136210525574, 3.55034143263268, 0.00188889308490712)
@@ -117,13 +138,37 @@ def test_print_pspline(f_ps):
 def test_print_ridge(f_ridge):
     out = r.print_survreg_penal(f_ridge)
     assert out.rows == [
-        approx([6.27390503073021, 0.480249954868952, 0.479287126382474, 170.663722971442, 1,
-                5.29912768643092e-39]),
-        approx([-0.0122117247372104, 0.00694129170709535, 0.00692748808151663,
-                3.09509098849476, 1, 0.0785287619538989]),
-        approx([0.380638679432984, 0.127140477869816, 0.12689321283388, 8.96309825142868, 1,
-                0.00275487309610932]),
-    ]  # fmt: skip
+        approx(
+            [
+                6.27390503073021,
+                0.480249954868952,
+                0.479287126382474,
+                170.663722971442,
+                1,
+                5.29912768643092e-39,
+            ]
+        ),
+        approx(
+            [
+                -0.0122117247372104,
+                0.00694129170709535,
+                0.00692748808151663,
+                3.09509098849476,
+                1,
+                0.0785287619538989,
+            ]
+        ),
+        approx(
+            [
+                0.380638679432984,
+                0.127140477869816,
+                0.12689321283388,
+                8.96309825142868,
+                1,
+                0.00275487309610932,
+            ]
+        ),
+    ]
     assert out.history == []
     assert (out.logtest, out.logtest_df, out.logtest_p) == approx(
         (13.5933356904902, 1.98802260978291, 0.00110003907510153)
@@ -145,12 +190,19 @@ def test_print_ridge(f_ridge):
 def test_print_terms_makes_a_multicolumn_ridge_one_wald_row(f_ridge):
     out = r.print_survreg_penal(f_ridge, terms=True)
     assert out.rownames == ["(Intercept)", "ridge(age, sex, theta = 1"]
-    # the p-value is on 1 df, not the DF column's 1.99 (as R)
     assert out.rows == [
-        approx([6.27390503073021, 0.480249954868952, 0.479287126382474, 170.663722971442, 1,
-                5.29912768643092e-39]),
+        approx(
+            [
+                6.27390503073021,
+                0.480249954868952,
+                0.479287126382474,
+                170.663722971442,
+                1,
+                5.29912768643092e-39,
+            ]
+        ),
         approx([NAN, NAN, NAN, 12.5148891620972, 1.99215425102188, 0.000403721737726793]),
-    ]  # fmt: skip
+    ]
     assert out.lines[:3] == [
         "                          coef se(coef) se2   Chisq DF   p",
         "(Intercept)               6.27 0.48     0.479 170.7 1.00 5.3e-39",
@@ -161,12 +213,28 @@ def test_print_terms_makes_a_multicolumn_ridge_one_wald_row(f_ridge):
 def test_print_kidney_terms(f_kid):
     out = r.print_survreg_penal(f_kid, terms=True)
     assert out.rows[1:4] == [
-        approx([-0.00177481342176895, 0.00999652483657338, 0.00994487143196454,
-                0.0315215315088221, 1, 0.85908186013957]),
+        approx(
+            [
+                -0.00177481342176895,
+                0.00999652483657338,
+                0.00994487143196454,
+                0.0315215315088221,
+                1,
+                0.85908186013957,
+            ]
+        ),
         approx([NAN, NAN, NAN, 1.88051184783359, 2.09669387411263, 0.411916563593353]),
-        approx([1.63849733939882, 0.319828993739394, 0.318467368560539, 26.2455584256732, 1,
-                3.00645489161996e-07]),
-    ]  # fmt: skip
+        approx(
+            [
+                1.63849733939882,
+                0.319828993739394,
+                0.318467368560539,
+                26.2455584256732,
+                1,
+                3.00645489161996e-07,
+            ]
+        ),
+    ]
     assert out.rownames[4] == "disease"
     assert out.rows[4] == approx(
         [NAN, NAN, NAN, 12.6245175637379, 2.81019582338287, 0.000380720125350966]
@@ -215,16 +283,48 @@ def test_print_two_penalties(lung):
     fit = r.survreg(S + "pspline(age, df = 3) + ridge(sex, agec2, theta = 1)", lung)
     out = r.print_survreg_penal(fit)
     assert out.rows == [
-        approx([6.71517334646903, 2.66448191361222, 0.564516236121696, 6.35168428373779, 1,
-                0.0117269908968652]),
-        approx([-0.0122130506656044, 0.00677582073043233, 0.00677497367473356,
-                3.24881141975497, 1, 0.0714752705380747]),
+        approx(
+            [
+                6.71517334646903,
+                2.66448191361222,
+                0.564516236121696,
+                6.35168428373779,
+                1,
+                0.0117269908968652,
+            ]
+        ),
+        approx(
+            [
+                -0.0122130506656044,
+                0.00677582073043233,
+                0.00677497367473356,
+                3.24881141975497,
+                1,
+                0.0714752705380747,
+            ]
+        ),
         approx([NAN, NAN, NAN, 2.465838804334, 2.09339521947694, 0.309224058005302]),
-        approx([0.381221278439617, 0.127009462826432, 0.126515891527678, 9.00911453902082, 1,
-                0.00268636534316447]),
-        approx([-0.0209728592672551, 0.366960357063472, 0.106540062600304,
-                0.00326645730392958, 1, 0.954423373972043]),
-    ]  # fmt: skip
+        approx(
+            [
+                0.381221278439617,
+                0.127009462826432,
+                0.126515891527678,
+                9.00911453902082,
+                1,
+                0.00268636534316447,
+            ]
+        ),
+        approx(
+            [
+                -0.0209728592672551,
+                0.366960357063472,
+                0.106540062600304,
+                0.00326645730392958,
+                1,
+                0.954423373972043,
+            ]
+        ),
+    ]
     assert out.history == ["Theta= 0.782"]
     assert (out.logtest, out.logtest_df) == approx((17.0188579485948, 3.21274702574432))
     assert out.lines == [
@@ -247,12 +347,28 @@ def test_print_two_penalties(lung):
 def test_print_strata(f_strata):
     out = r.print_survreg_penal(f_strata)
     assert out.rows == [
-        approx([6.82903491801213, 0.774731747541877, 0.513766301526636, 77.6990949906332, 1,
-                1.1999631372355e-18]),
-        approx([-0.0124855135229911, 0.00670851214226097, 0.00670829869273367,
-                3.46386054011834, 1, 0.0627237093565249]),
+        approx(
+            [
+                6.82903491801213,
+                0.774731747541877,
+                0.513766301526636,
+                77.6990949906332,
+                1,
+                1.1999631372355e-18,
+            ]
+        ),
+        approx(
+            [
+                -0.0124855135229911,
+                0.00670851214226097,
+                0.00670829869273367,
+                3.46386054011834,
+                1,
+                0.0627237093565249,
+            ]
+        ),
         approx([NAN, NAN, NAN, 2.0301528056425, 2.06217204105684, 0.375680675199099]),
-    ]  # fmt: skip
+    ]
     assert out.scale_names == ["sex=1", "sex=2"]
     assert (out.logtest, out.logtest_df) == approx((6.14446166823427, 2.49352777012269))
     assert out.lines[4:] == [
@@ -272,9 +388,15 @@ def test_print_fixed_scale(f_fixed):
     out = r.print_survreg_penal(f_fixed)
     assert out.fixed_scale
     assert out.rows[0] == approx(
-        [6.35776040444341, 0.633084281121129, 0.630876043731395, 100.852171453125, 1,
-         9.91110954389704e-24]
-    )  # fmt: skip
+        [
+            6.35776040444341,
+            0.633084281121129,
+            0.630876043731395,
+            100.852171453125,
+            1,
+            9.91110954389704e-24,
+        ]
+    )
     assert (out.logtest, out.logtest_df) == approx((12.4778047330378, 1.97961128683534))
     assert out.lines == [
         "            coef    se(coef) se2     Chisq  DF p",
@@ -291,7 +413,6 @@ def test_print_fixed_scale(f_fixed):
 
 
 def test_print_digits_wrap_the_table(f_ps, f_kid):
-    # print(f_ps, digits = 7): a 80-character line wraps p into a block of its own
     assert r.print_survreg_penal(f_ps, digits=7).lines == [
         "                          coef        se(coef)    se2         Chisq DF",
         "(Intercept)                6.24585597 0.774295469 0.542072020 65.07 1.00",
@@ -311,7 +432,6 @@ def test_print_digits_wrap_the_table(f_ps, f_kid):
         "Degrees of freedom for terms= 0.5 3.1 1.0 1.0",
         "Likelihood ratio test=16.11  on 3.6 df, p=0.00189  n= 228",
     ]
-    # print(f_ps, maxlabel = 40, digits = 5): a 78-character line does not wrap
     assert r.print_survreg_penal(f_ps, maxlabel=40, digits=5).lines == [
         "                             coef      se(coef)  se2       Chisq DF   p",
         "(Intercept)                   6.245856 0.7742955 0.5420720 65.07 1.00 7.2e-16",
@@ -371,14 +491,10 @@ def test_print_guards_and_surface(lung, f_ps):
 def test_signif_rounds_halfway_cases_like_r():
     from survival.r._survpenal_print import _signif
 
-    # R 4.5.3: signif(values, digits), printed with sprintf("%.17g")
     values = [0.000125, 0.0125, 0.35, 2.5e-10, 0.45, 1.5e-300, -0.000125]
     digits = [2, 2, 1, 1, 1, 1, 2]
     expected = [0.00012, 0.012, 0.4, 2.0000000000000001e-10, 0.4, 1.9999999999999987e-300, -0.00012]
     assert [_signif(v, d) for v, d in zip(values, digits, strict=True)] == expected
-
-
-# --- summary.survreg -----------------------------------------------------------------------
 
 
 def _summary_row(summary: dict[str, Any], name: str) -> list[float]:
@@ -421,18 +537,20 @@ def test_summary(f_ps, f_strata, f_fixed, lung):
     row = robust["coefficients"][1]
     assert row["name"] == "ridge(age)"
     assert [row["coef"], row["se"], row["naive_se"], row["z"], row["p"]] == approx(
-        [-0.0122117247372104, 0.00733358364618504, 0.00694129170709535, -1.66517835295477,
-         0.0958771783686467]
-    )  # fmt: skip
+        [
+            -0.0122117247372104,
+            0.00733358364618504,
+            0.00694129170709535,
+            -1.66517835295477,
+            0.0958771783686467,
+        ]
+    )
 
 
 def test_summary_chi_df_of_an_unpenalized_fit_is_an_integer(lung):
     summary = r.model_summary(r.survreg(S + "age + sex", lung))
     assert summary["chi_df"] == 2
     assert isinstance(summary["chi_df"], int)
-
-
-# --- anova -----------------------------------------------------------------------------------
 
 
 def test_anova_refits_with_the_penalties(f_ps, f_ridge):
@@ -480,9 +598,6 @@ def test_anova_list(lung, f_ps):
     assert table.p == approx([NAN, 0.0918407374421038])
 
 
-# --- logLik and friends ------------------------------------------------------------------------
-
-
 def test_loglik_uses_the_fractional_df(f_ps, lung):
     assert r.loglik(f_ps) == approx(-1145.79437756313)
     assert r.degrees_freedom(f_ps) == approx(5.55034143263268)
@@ -498,15 +613,11 @@ def test_loglik_uses_the_fractional_df(f_ps, lung):
     assert isinstance(r.df_residual(plain), int)
 
 
-# --- predict, residuals and the rest ---------------------------------------------------------
-
-
 def test_predict(f_ps):
     lp = r.predict(f_ps, type="lp", se_fit=True)
     assert lp.fit[:5] == approx(
-        [5.71345267741673, 5.87720770178742, 5.92388651523252, 5.92835354437333,
-         5.94207633434705]
-    )  # fmt: skip
+        [5.71345267741673, 5.87720770178742, 5.92388651523252, 5.92835354437333, 5.94207633434705]
+    )
     assert lp.se_fit[:2] == approx([0.117559537131727, 0.0976583708205022])
     response = r.predict(f_ps, type="response", se_fit=True)
     assert response.fit[:2] == approx([302.915133075289, 356.811525212041])
@@ -524,25 +635,48 @@ def test_predict(f_ps):
 
 
 def test_predict_newdata(f_ps, f_strata, f_ridge):
-    # ages 30 and 90 lie outside the boundary knots: the basis extrapolates linearly
     new = {"age": [30, 40, 55, 70, 85, 90], "sex": [1, 2, 1, 2, 1, 2]}
     lp = r.predict(f_ps, new, type="lp", se_fit=True)
     assert lp.fit == approx(
-        [6.7944994952506, 6.70963441784024, 5.92102634425018, 6.21375439906028,
-         5.18299218080553, 5.29441746602627]
-    )  # fmt: skip
+        [
+            6.7944994952506,
+            6.70963441784024,
+            5.92102634425018,
+            6.21375439906028,
+            5.18299218080553,
+            5.29441746602627,
+        ]
+    )
     assert lp.se_fit == approx(
-        [0.944393555619267, 0.381025690811457, 0.114424110248264, 0.124723788348632,
-         0.520373063881881, 0.815262155228203]
-    )  # fmt: skip
+        [
+            0.944393555619267,
+            0.381025690811457,
+            0.114424110248264,
+            0.124723788348632,
+            0.520373063881881,
+            0.815262155228203,
+        ]
+    )
     assert r.predict(f_ps, new, type="response") == approx(
-        [892.922235922185, 820.270708292105, 372.794132710534, 499.573332467857,
-         178.215266293895, 199.221538842833]
-    )  # fmt: skip
+        [
+            892.922235922185,
+            820.270708292105,
+            372.794132710534,
+            499.573332467857,
+            178.215266293895,
+            199.221538842833,
+        ]
+    )
     assert r.predict(f_ps, new, type="quantile", p=0.5) == approx(
-        [678.279382619171, 623.092008708187, 283.180957989925, 379.484660463568,
-         135.375440247933, 151.332173099264]
-    )  # fmt: skip
+        [
+            678.279382619171,
+            623.092008708187,
+            283.180957989925,
+            379.484660463568,
+            135.375440247933,
+            151.332173099264,
+        ]
+    )
     assert r.predict(f_ps, new, type="terms")[0] == approx([0.90323652432752, -0.150424525160005])
 
     quantile = r.predict(
@@ -553,20 +687,31 @@ def test_predict_newdata(f_ps, f_strata, f_ridge):
 
     lp = r.predict(f_ridge, new, type="lp", se_fit=True)
     assert lp.fit == approx(
-        [6.28819196804688, 6.54671340010777, 5.98289884961662, 6.18036165799145,
-         5.61654710750031, 5.93612716324724]
-    )  # fmt: skip
+        [
+            6.28819196804688,
+            6.54671340010777,
+            5.98289884961662,
+            6.18036165799145,
+            5.61654710750031,
+            5.93612716324724,
+        ]
+    )
     assert lp.se_fit == approx(
-        [0.243273644929016, 0.188905383260956, 0.0928969522428197, 0.115529066928607,
-         0.165730812064884, 0.215954416923269]
-    )  # fmt: skip
+        [
+            0.243273644929016,
+            0.188905383260956,
+            0.0928969522428197,
+            0.115529066928607,
+            0.165730812064884,
+            0.215954416923269,
+        ]
+    )
 
 
 def test_residuals(f_ps):
     assert r.residuals(f_ps, type="response")[:5] == approx(
-        [3.08486692471115, 98.1884747879585, 636.138086038147, -165.535701672121,
-         502.275378969938]
-    )  # fmt: skip
+        [3.08486692471115, 98.1884747879585, 636.138086038147, -165.535701672121, 502.275378969938]
+    )
     deviance = r.residuals(f_ps, type="deviance")
     assert deviance[:3] == approx([0.0135376464761823, 0.342543521323455, 2.74281792290041])
     assert sum(value * value for value in deviance) == approx(308.000411195986)
@@ -591,14 +736,18 @@ def test_residuals(f_ps):
         [0.00059984474207393, 0.000825408403251323, 0.000962139430662173]
     )
     assert r.residuals(f_ps, type="matrix")[0] == approx(
-        [-0.712611563939665, 0.0181280771269601, -1.8012255793311, -0.999816318626535,
-         -0.000368606047373462, -0.0363788593812241]
-    )  # fmt: skip
+        [
+            -0.712611563939665,
+            0.0181280771269601,
+            -1.8012255793311,
+            -0.999816318626535,
+            -0.000368606047373462,
+            -0.0363788593812241,
+        ]
+    )
 
 
 def test_offset_is_in_the_linear_predictors(lung):
-    # R's survpenal.fit leaves the offset out of linear.predictors (lp 5.70208670271706,
-    # response residual 6.50830047908886); these are R's values with it restored
     fit = r.survreg(S + "pspline(age, df = 3) + offset(off)", lung, weights="w")
     assert fit.linear_predictors[:3] == approx(
         [5.80208670271706, 5.97823046555435, 6.03039093198702]
@@ -633,6 +782,18 @@ def test_vcov_confint_concordance_model_matrix(f_ps):
     assert concordance.concordance == approx(0.598655940841411)
     assert concordance.var == approx(0.000650419157417025)
     assert r.model_matrix(f_ps)["data"][0] == approx(
-        [1, 0, 0, 0, 0, 0, 0.0194133849849699, 0.471866208845343, 0.486399520377661,
-         0.0223208857920267, 0, 1]
-    )  # fmt: skip
+        [
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.0194133849849699,
+            0.471866208845343,
+            0.486399520377661,
+            0.0223208857920267,
+            0,
+            1,
+        ]
+    )

@@ -1,14 +1,11 @@
-//! `quantile.survfit` (`R/quantile.survfit.R`) from stacked curve vectors.
-//! The port itself is `surv_analysis::quantile_survfit`.
-
 use crate::data_types::FloatVec;
 use crate::surv_analysis::{
     StackedCurves, SurvfitKMResult, SurvfitQuantiles, quantile_survfit_from,
 };
 use pyo3::prelude::*;
 
-/// `quantile(fit, probs, conf.int)`: one row per curve, `NaN` for a
-/// quantile the curve does not reach (R's `NA`).
+#[doc = " `quantile(fit, probs, conf.int)`: one row per curve, `NaN` for a"]
+#[doc = " quantile the curve does not reach (R's `NA`)."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct SurvfitCurveQuantiles {
@@ -29,11 +26,11 @@ impl From<SurvfitQuantiles> for SurvfitCurveQuantiles {
     }
 }
 
-/// Python entry point of `quantile.survfit` on the stacked vectors of one
-/// `survfit` object (`strata` gives the rows of each curve, `None` for a
-/// single curve).  `start_time` is R's `x$start.time` (0 when absent), the
-/// time reported for a probability of 0; `probs` defaults to the
-/// quartiles and `tolerance` to `sqrt(.Machine$double.eps)`.
+#[doc = " Python entry point of `quantile.survfit` on the stacked vectors of one"]
+#[doc = " `survfit` object (`strata` gives the rows of each curve, `None` for a"]
+#[doc = " single curve).  `start_time` is R's `x$start.time` (0 when absent), the"]
+#[doc = " time reported for a probability of 0; `probs` defaults to the"]
+#[doc = " quartiles and `tolerance` to `sqrt(.Machine$double.eps)`."]
 #[pyfunction(name = "quantile_survfit_curves")]
 #[pyo3(signature = (time, surv, lower=None, upper=None, strata=None, probs=None, conf_int=true, start_time=0.0, scale=1.0, tolerance=None))]
 #[allow(clippy::too_many_arguments)]
@@ -96,7 +93,6 @@ mod tests {
                 .unwrap()
                 .into();
         assert_eq!(result.quantile, vec![vec![0.5, 2.0]]);
-        // the lower bound crosses 0.5 at t=1, the upper bound at t=3
         assert_eq!(result.lower.unwrap()[0][1], 1.0);
         assert_eq!(result.upper.unwrap()[0][1], 3.0);
     }

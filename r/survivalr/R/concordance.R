@@ -1,5 +1,3 @@
-# External lm/GLM objects retain their own formula evaluation and prediction.
-# Concordance counts, influence functions and model comparisons use Rust/Python.
 .concordance_lm_data <- function(object, newdata, cluster) {
   if (is.null(newdata)) {
     frame <- object$model

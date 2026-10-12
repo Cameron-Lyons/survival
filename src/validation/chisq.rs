@@ -1,13 +1,9 @@
-//! R's `pchisq` for the Python layer: the nmath port in
-//! `internal::dist` behind a binding, so the R-faithful API computes its
-//! chi-square tail probabilities (summary and anova tables) exactly as R.
-
 use crate::internal::dist;
 use pyo3::prelude::*;
 
-/// `pchisq(q, df, lower.tail, log.p)` for one quantile.  As in R, a missing
-/// argument or a negative `df` gives `NaN`, `df = 0` is the point mass at 0
-/// and `q <= 0` has lower tail 0.
+#[doc = " `pchisq(q, df, lower.tail, log.p)` for one quantile.  As in R, a missing"]
+#[doc = " argument or a negative `df` gives `NaN`, `df = 0` is the point mass at 0"]
+#[doc = " and `q <= 0` has lower tail 0."]
 #[pyfunction(name = "pchisq")]
 #[pyo3(signature = (q, df, lower_tail=true, log_p=false))]
 pub fn pchisq_py(q: f64, df: f64, lower_tail: bool, log_p: bool) -> f64 {
@@ -27,17 +23,14 @@ mod tests {
 
     #[test]
     fn fractional_df_matches_r() {
-        // R: pchisq(3.6432229393649322, 3.08864312775353, lower.tail=FALSE)
         assert_close(
             pchisq_py(3.6432229393649322, 3.08864312775353, false, false),
             0.31611266250077846,
         );
-        // R: pchisq(2.9406959209324954, 3.092186074265781, lower.tail=FALSE, log.p=TRUE)
         assert_close(
             pchisq_py(2.9406959209324954, 3.092186074265781, false, true),
             -0.8750484229716111,
         );
-        // R: pchisq(0.5, 0.25)
         assert_close(pchisq_py(0.5, 0.25, true, false), 0.8696646545502863);
     }
 

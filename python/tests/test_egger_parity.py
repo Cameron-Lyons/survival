@@ -28,7 +28,6 @@ def assert_reference(result, case, *, sign=1, response_scale=1.0):
         expected = case[field]
         if field in ("egger_intercept", "egger_t"):
             expected *= sign
-        # Relative-only probability comparison retains the df100 tiny tail.
         absolute_tolerance = 0.0 if field == "egger_p" else 2e-12
         actual = getattr(result, field)
         if field in ("egger_intercept", "egger_se"):

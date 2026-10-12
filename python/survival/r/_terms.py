@@ -195,8 +195,6 @@ def untangle_specials(tt: Any, special: str, order: Any = 1) -> SpecialTerms:
         for column, code in enumerate(metadata.factors[position - 1]):
             selected[column] |= code != 0
     if len(selected) == 1:
-        # R calls seq(ff), not seq_along(ff). For one term, ff is a scalar
-        # factor-code sum, so interaction-only codes can produce extra indices.
         count = sum(metadata.factors[position - 1][0] for position in positions)
         terms = list(range(1, count + 1)) if metadata.order[0] in degrees else []
     else:

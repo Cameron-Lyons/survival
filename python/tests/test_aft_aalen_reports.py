@@ -123,7 +123,6 @@ def test_reweighted_robust_covariance_matches_r(name, fits):
     assert "robust se" in actual["columns"]
     np.testing.assert_allclose(actual["test_var2"], expected["test_var2"], rtol=3e-10, atol=1e-11)
     assert actual["chisq"] == pytest.approx(expected["chisq"], rel=3e-10)
-    # Both stored representation types use the same bounded reducer.
     array_fit = dataclasses.replace(fit, dfbeta=np.asarray(fit.dfbeta))
     array_result = r.model_summary(array_fit, **kwargs)
     np.testing.assert_allclose(
@@ -156,7 +155,7 @@ def test_missingness_metadata_and_conversion_are_independent(fits):
     report.tables["correlation"].values[0][0] = 999
     report.statistics["scales"][0] = 999
     assert pickle.dumps(summary) == before
-    assert pickle.loads(pickle.dumps(report)) == report  # noqa: S301 - this test's own bytes
+    assert pickle.loads(pickle.dumps(report)) == report
     penal = r.print_survreg(fits("spline"))
     assert isinstance(penal, r.SurvregPenalPrint)
     np.testing.assert_array_equal(r.as_data_frame(penal)["coef"], [row[0] for row in penal.rows])

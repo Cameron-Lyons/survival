@@ -1,14 +1,12 @@
-//! AFT fitting on an already transformed response, without full-model retention.
-
 use super::parametric_survival::{SurvregControl, SurvregData, fit_survreg_engine};
 use super::survreg_distributions::{SurvregDistribution, SurvregTransform};
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Bare `survreg.fit` components. Estimated log-scales remain in coefficients;
-/// redundant coefficients retain the optimizer's values. Training data and
-/// callback distributions are not retained, so the result is always serializable.
+#[doc = " Bare `survreg.fit` components. Estimated log-scales remain in coefficients;"]
+#[doc = " redundant coefficients retain the optimizer's values. Training data and"]
+#[doc = " callback distributions are not retained, so the result is always serializable."]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[pyclass(module = "survival._survival", skip_from_py_object)]
 pub struct SurvregFitResult {
@@ -30,15 +28,13 @@ pub struct SurvregFitResult {
     pub df: usize,
     #[pyo3(get)]
     pub score: Vec<f64>,
-    /// R drops variance dimension names when undoing covariate rescaling.
+    #[doc = " R drops variance dimension names when undoing covariate rescaling."]
     #[pyo3(get)]
     pub rescaled: bool,
 }
 
 crate::internal::pickle::picklable!(SurvregFitResult);
 
-/// The density on the fitting scale. Bare fitters ignore response transforms
-/// and distribution-level fixed scales; the explicit scale argument controls fitting.
 pub(crate) fn fitting_distribution(distribution: &SurvregDistribution) -> SurvregDistribution {
     let mut result = distribution.clone();
     result.transform = SurvregTransform::Identity;
@@ -48,8 +44,6 @@ pub(crate) fn fitting_distribution(distribution: &SurvregDistribution) -> Survre
 }
 
 impl SurvregFitResult {
-    /// Fit prepared response data; `nstrata` can include unobserved scale strata.
-    /// Cluster variance belongs to the full-model interface and is refused here.
     pub fn fit(
         data: &SurvregData,
         distribution: &SurvregDistribution,
@@ -68,7 +62,7 @@ impl SurvregFitResult {
     }
 }
 
-/// Bare AFT fit, preserving the response scale and dropping training data.
+#[doc = " Bare AFT fit, preserving the response scale and dropping training data."]
 #[pyfunction]
 #[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, nstrat=None))]
 pub fn survreg_fit_raw(

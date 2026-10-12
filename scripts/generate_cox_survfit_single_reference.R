@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-R nondimensional selectors and stale aggregation uncertainty.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly=TRUE)

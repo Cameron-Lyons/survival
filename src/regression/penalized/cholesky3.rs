@@ -1,21 +1,5 @@
-//! R survival's sparse-plus-dense Cholesky routines, `src/cholesky3.c`,
-//! `src/chsolve3.c` and `src/chinv3.c`, used by the penalised Newton
-//! kernels (`coxfit5.c`, `agfit5.c`, `survreg7.c`).
-//!
-//! The matrix has the block structure `[D  B'; B  C]`: `D` (the sparse
-//! frailty groups, `m` of them) is diagonal and stored in `diag`, and only
-//! the dense slice `[B C]` is kept (`n2` rows, `m + n2` columns, the C code's
-//! `matrix[i][j]` with row `i` a dense coefficient).  The factorisation
-//! `F D F'` keeps that shape.
-
 use ndarray::Array2;
 
-/// `cholesky3`: the generalised Cholesky `C = F D F'` of the sparse-plus-dense
-/// matrix (`diag`, `matrix`).  `D` overwrites the diagonals, `F` the lower
-/// triangle of the dense slice; a pivot below the tolerance (`toler` times
-/// the smallest diagonal, or `toler` itself when none is negative — as in
-/// the C code, which scales by the minimum) zeroes its column.  Returns the
-/// rank, negated when a pivot was more negative than `-8 * eps`.
 pub(crate) fn cholesky3(matrix: &mut Array2<f64>, m: usize, diag: &mut [f64], toler: f64) -> i32 {
     let n2 = matrix.nrows();
     let mut nonneg = 1;
@@ -33,7 +17,6 @@ pub(crate) fn cholesky3(matrix: &mut Array2<f64>, m: usize, diag: &mut [f64], to
     eps = if eps == 0.0 { toler } else { eps * toler };
 
     let mut rank = 0;
-    // Pivot out the diagonal elements.
     for i in 0..m {
         let pivot = diag[i];
         if !pivot.is_finite() || pivot < eps {
@@ -55,7 +38,6 @@ pub(crate) fn cholesky3(matrix: &mut Array2<f64>, m: usize, diag: &mut [f64], to
             }
         }
     }
-    // Now the dense part.
     for i in 0..n2 {
         let pivot = matrix[(i, i + m)];
         if !pivot.is_finite() || pivot < eps {
@@ -80,11 +62,8 @@ pub(crate) fn cholesky3(matrix: &mut Array2<f64>, m: usize, diag: &mut [f64], to
     rank * nonneg
 }
 
-/// `chsolve3`: solves `A b = y` from the [`cholesky3`] factors, overwriting
-/// `y`; components of redundant columns are set to zero.
 pub(crate) fn chsolve3(matrix: &Array2<f64>, m: usize, diag: &[f64], y: &mut [f64]) {
     let n2 = matrix.nrows();
-    // Solve F b = y (the diagonal portion is unchanged).
     for i in 0..n2 {
         let mut temp = y[i + m];
         for j in 0..m {
@@ -95,7 +74,6 @@ pub(crate) fn chsolve3(matrix: &Array2<f64>, m: usize, diag: &[f64], y: &mut [f6
         }
         y[i + m] = temp;
     }
-    // Solve D F' z = b: the dense portion, then the diagonal one.
     for i in (0..n2).rev() {
         if matrix[(i, i + m)] == 0.0 {
             y[i + m] = 0.0;
@@ -120,9 +98,6 @@ pub(crate) fn chsolve3(matrix: &Array2<f64>, m: usize, diag: &[f64], y: &mut [f6
     }
 }
 
-/// `chinv3`: inverts the Cholesky factor in place — `D^{-1}` on the
-/// diagonals (only positive entries are inverted), `F^{-1}` in the lower
-/// triangle.
 pub(crate) fn chinv3(matrix: &mut Array2<f64>, m: usize, fdiag: &mut [f64]) {
     let n2 = matrix.nrows();
     for i in 0..m {
@@ -148,10 +123,6 @@ pub(crate) fn chinv3(matrix: &mut Array2<f64>, m: usize, fdiag: &mut [f64]) {
     }
 }
 
-/// The "nicer output for the S user" block that follows `chinv3` in
-/// `coxfit5.c`, `agfit5.c` and `survreg7.c` (survreg7.c:466-474): the dense
-/// diagonal of `D^{-1}` moves from the inverse factor `hinv` into `fdiag`,
-/// and both slices get a unit diagonal and zeros above it.
 pub(crate) fn finish_factors(
     hmat: &mut Array2<f64>,
     hinv: &mut Array2<f64>,
@@ -175,7 +146,6 @@ pub(crate) fn finish_factors(
 mod tests {
     use super::*;
 
-    /// The dense matrix `[D B'; B C]` of a factorisation.
     fn full_matrix(matrix: &Array2<f64>, m: usize, diag: &[f64]) -> Array2<f64> {
         let n2 = matrix.nrows();
         let n = n2 + m;
@@ -207,7 +177,6 @@ mod tests {
             let value: f64 = (0..4).map(|j| full[(i, j)] * y[j]).sum();
             assert!((value - rhs[i]).abs() < 1e-12, "row {i}");
         }
-        // The inverse factor: F^{-1}' D^{-1} F^{-1} is the inverse.
         chinv3(&mut matrix, 2, &mut diag);
         let mut finv = Array2::<f64>::eye(4);
         for i in 0..2 {
@@ -223,7 +192,6 @@ mod tests {
             dinv[(i + 2, i + 2)] =
                 1.0 / matrix[(i, i + 2)] * matrix[(i, i + 2)] * matrix[(i, i + 2)];
         }
-        // D^{-1} of the dense rows still sits on the matrix diagonal.
         for i in 0..2 {
             dinv[(i + 2, i + 2)] = matrix[(i, i + 2)];
         }

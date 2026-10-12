@@ -1,18 +1,3 @@
-//! Exact copies of the census rate tables shipped with R's `survival`
-//! package: `survexp.us`, `survexp.usr` and `survexp.mn` (survival 3.8-11).
-//!
-//! Each table is stored as a TSV under `data/` holding R's `dim`, `dimnames`,
-//! `type` and `cutpoints` attributes plus the daily hazard rates in R's
-//! column-major storage order (first index varies fastest). Rates are the
-//! per-day hazards R stores (`-log(1 - q) / 365.25` for a one-year death
-//! probability `q`), age cutpoints are in days, and calendar-year cutpoints
-//! are R `Date`s stored as days since 1970-01-01. Every double is written as
-//! the shortest decimal that a correctly rounded parser reads back as the
-//! identical double, so the rates are bit-exact copies of R's.
-//!
-//! R 3.8 tables carry no `dimid` attribute; as in R, `names(dimnames)` is
-//! used instead.
-
 use super::ratetable::{DimType, RateTable};
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
@@ -22,7 +7,6 @@ const SURVEXP_US_TSV: &str = include_str!("data/survexp_us.tsv");
 const SURVEXP_USR_TSV: &str = include_str!("data/survexp_usr.tsv");
 const SURVEXP_MN_TSV: &str = include_str!("data/survexp_mn.tsv");
 
-/// Parse one of the embedded TSV rate tables.
 fn parse(name: &str, text: &str) -> SurvivalResult<RateTable> {
     let err = |message: String| SurvivalError::invalid_input(format!("{name}: {message}"));
     let mut dims = Vec::new();
@@ -77,7 +61,6 @@ fn parse(name: &str, text: &str) -> SurvivalResult<RateTable> {
         }
     }
 
-    // Reorder the per-dimension lines to the `dimid` order.
     fn by_dimid<T: Clone>(
         dimid: &[String],
         entries: &[(String, T)],
@@ -113,40 +96,34 @@ fn load(cell: &'static OnceLock<RateTable>, name: &'static str, text: &str) -> &
     })
 }
 
-/// R's `survexp.us`: US total population daily hazards by single year of
-/// age (0-109), sex, and calendar year 1940-2020.
 pub fn survexp_us_table() -> &'static RateTable {
     static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.us", SURVEXP_US_TSV)
 }
 
-/// R's `survexp.usr`: US daily hazards by age, sex, race (white/black), and
-/// calendar year 1940-2020.
 pub fn survexp_usr_table() -> &'static RateTable {
     static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.usr", SURVEXP_USR_TSV)
 }
 
-/// R's `survexp.mn`: Minnesota daily hazards by age, sex, and calendar year
-/// 1970-2020.
 pub fn survexp_mn_table() -> &'static RateTable {
     static TABLE: OnceLock<RateTable> = OnceLock::new();
     load(&TABLE, "survexp.mn", SURVEXP_MN_TSV)
 }
 
-/// R's `survexp.us` rate table.
+#[doc = " R's `survexp.us` rate table."]
 #[pyfunction]
 pub fn survexp_us() -> RateTable {
     survexp_us_table().clone()
 }
 
-/// R's `survexp.usr` rate table.
+#[doc = " R's `survexp.usr` rate table."]
 #[pyfunction]
 pub fn survexp_usr() -> RateTable {
     survexp_usr_table().clone()
 }
 
-/// R's `survexp.mn` rate table.
+#[doc = " R's `survexp.mn` rate table."]
 #[pyfunction]
 pub fn survexp_mn() -> RateTable {
     survexp_mn_table().clone()
@@ -158,10 +135,6 @@ mod tests {
 
     const DAYS_PER_YEAR: f64 = 365.25;
 
-    /// Order-dependent hash of the IEEE-754 bit patterns of the rates
-    /// (`(h * 31 + low32) mod 2^32`, then the same with the high word),
-    /// computed in R over `as.vector(table)`; it detects a rate that is off
-    /// by a single ulp.
     fn bits_hash(values: &[f64]) -> u64 {
         values.iter().fold(0, |h, v| {
             let bits = v.to_bits();
@@ -209,7 +182,6 @@ mod tests {
         assert_eq!(table.cutpoints[1], None);
         let year = table.cutpoints.last().unwrap().as_ref().unwrap();
         assert_eq!(year.len(), n_years);
-        // 2020-01-01 is 18262 days after 1970-01-01.
         assert_eq!(*year.last().unwrap(), 18262.0);
         assert!(table.rates.iter().all(|r| *r > 0.0 && *r < 0.01));
     }
@@ -231,7 +203,6 @@ mod tests {
         let table = survexp_us_table();
         assert_eq!(table.dims, [110, 2, 81]);
         check_common_shape(table, ("1940", "2020"), 81);
-        // 1940-01-01 as days since 1970-01-01.
         assert_eq!(table.cutpoints[2].as_ref().unwrap()[0], -10958.0);
         assert_eq!(
             lookup(table, &["50", "male", "2000"]),

@@ -1,5 +1,3 @@
-//! Direct Cox curves for prepared matrices (`coxsurv.fit`), without a fitted model.
-
 use super::agsurv::{
     AgsurvCurve, CoxSurvCurve, CoxSurvType, IndividualInterval, agsurv_rows, check_baseline,
     expand_curve_validated, individual_curve_validated, prepare_baseline,
@@ -12,8 +10,6 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Original response/design, weights and relative risks. Stratum codes are
-/// zero-based; `nstrata` retains declared levels with no observations.
 pub struct CoxSurvData<'a> {
     pub y: ArrayView2<'a, f64>,
     pub x: ArrayView2<'a, f64>,
@@ -23,8 +19,6 @@ pub struct CoxSurvData<'a> {
     pub nstrata: usize,
 }
 
-/// Prediction rows. `id` requests individual curves in first-appearance order;
-/// `y` then supplies (start, stop] and `strata` zero-based interval strata.
 pub struct CoxSurvNewData<'a> {
     pub x: ArrayView2<'a, f64>,
     pub risk: &'a [f64],
@@ -33,7 +27,6 @@ pub struct CoxSurvNewData<'a> {
     pub id: Option<&'a [i32]>,
 }
 
-/// Optional ordinary-curve components retained for the unflattened R layout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxSurvBaselineDetails {
     pub hazard: Array1<f64>,
@@ -42,8 +35,8 @@ pub struct CoxSurvBaselineDetails {
     pub xbar: Array2<f64>,
 }
 
-/// Stacked numerical curves. Matrix columns are prediction rows, or one
-/// column for individual trajectories. No response or design data are retained.
+#[doc = " Stacked numerical curves. Matrix columns are prediction rows, or one"]
+#[doc = " column for individual trajectories. No response or design data are retained."]
 #[pyclass(frozen, module = "survival._survival", skip_from_py_object)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoxSurvRawResult {
@@ -118,7 +111,6 @@ impl CurveStack {
         self.n_risk.extend(curve.n_risk);
         self.n_event.extend(curve.n_event);
         self.n_censor.extend(curve.n_censor);
-        // Both shared kernels return standard-layout owned matrices.
         self.surv.extend(curve.surv);
         self.cumhaz.extend(curve.cumhaz);
         if let (Some(out), Some(se)) = (&mut self.std_err, curve.std_err) {
@@ -167,9 +159,6 @@ fn baseline_details(curves: Vec<AgsurvCurve>, nvar: usize) -> CoxSurvBaselineDet
     }
 }
 
-/// Assemble all strata in one call, sharing the kernels used by fitted models.
-/// `varmat` requests standard errors. `keep_details` retains ordinary baseline
-/// increments for R's list output; individual curves have no baseline extras.
 pub fn coxsurv_fit(
     data: &CoxSurvData<'_>,
     newdata: &CoxSurvNewData<'_>,
@@ -200,7 +189,6 @@ pub fn coxsurv_fit(
         }
         check_matrix(v.view(), "varmat")?;
     }
-    // Validate individual inputs before computing any baseline curves.
     if let Some(id) = newdata.id {
         validate_length(m, id.len(), "id2")?;
         let y = newdata
@@ -329,67 +317,56 @@ pub fn coxsurv_fit_py(
 impl CoxSurvRawResult {
     #[getter(time)]
     fn time_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray1<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().time, this.as_any()) }
     }
     #[getter(n_risk)]
     fn n_risk_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray1<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().n_risk, this.as_any()) }
     }
     #[getter(n_event)]
     fn n_event_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray1<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().n_event, this.as_any()) }
     }
     #[getter(n_censor)]
     fn n_censor_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray1<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().n_censor, this.as_any()) }
     }
     #[getter(surv)]
     fn surv_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray2<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().surv, this.as_any()) }
     }
     #[getter(cumhaz)]
     fn cumhaz_view<'py>(this: Bound<'py, Self>) -> Bound<'py, numpy::PyArray2<f64>> {
-        // SAFETY: this frozen result owns the array for the lifetime of its view.
         unsafe { crate::internal::numpy_utils::readonly_view(&this.get().cumhaz, this.as_any()) }
     }
     #[getter(std_err)]
     fn std_err_view<'py>(this: Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray2<f64>>> {
-        this.get().std_err.as_ref().map(|values| {
-            // SAFETY: the frozen owner keeps this array alive and unchanged.
-            unsafe { crate::internal::numpy_utils::readonly_view(values, this.as_any()) }
+        this.get().std_err.as_ref().map(|values| unsafe {
+            crate::internal::numpy_utils::readonly_view(values, this.as_any())
         })
     }
     #[getter(hazard)]
     fn hazard_view<'py>(this: Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray1<f64>>> {
-        this.get().details.as_ref().map(|values| {
-            // SAFETY: the frozen owner keeps this array alive and unchanged.
-            unsafe { crate::internal::numpy_utils::readonly_view(&values.hazard, this.as_any()) }
+        this.get().details.as_ref().map(|values| unsafe {
+            crate::internal::numpy_utils::readonly_view(&values.hazard, this.as_any())
         })
     }
     #[getter(varhaz)]
     fn varhaz_view<'py>(this: Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray1<f64>>> {
-        this.get().details.as_ref().map(|values| {
-            // SAFETY: the frozen owner keeps this array alive and unchanged.
-            unsafe { crate::internal::numpy_utils::readonly_view(&values.varhaz, this.as_any()) }
+        this.get().details.as_ref().map(|values| unsafe {
+            crate::internal::numpy_utils::readonly_view(&values.varhaz, this.as_any())
         })
     }
     #[getter(ndeath)]
     fn ndeath_view<'py>(this: Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray1<f64>>> {
-        this.get().details.as_ref().map(|values| {
-            // SAFETY: the frozen owner keeps this array alive and unchanged.
-            unsafe { crate::internal::numpy_utils::readonly_view(&values.ndeath, this.as_any()) }
+        this.get().details.as_ref().map(|values| unsafe {
+            crate::internal::numpy_utils::readonly_view(&values.ndeath, this.as_any())
         })
     }
     #[getter(xbar)]
     fn xbar_view<'py>(this: Bound<'py, Self>) -> Option<Bound<'py, numpy::PyArray2<f64>>> {
-        this.get().details.as_ref().map(|values| {
-            // SAFETY: the frozen owner keeps this array alive and unchanged.
-            unsafe { crate::internal::numpy_utils::readonly_view(&values.xbar, this.as_any()) }
+        this.get().details.as_ref().map(|values| unsafe {
+            crate::internal::numpy_utils::readonly_view(&values.xbar, this.as_any())
         })
     }
     fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {

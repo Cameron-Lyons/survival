@@ -12,7 +12,7 @@ import pytest
 from .helpers import setup_survival_import
 
 r = setup_survival_import().r
-from survival.r._models import _subset_coxms_curves  # noqa: E402
+from survival.r._models import _subset_coxms_curves
 
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures" / "coxms_subset_reference.json").read_text()
@@ -105,14 +105,13 @@ def test_public_subset_composes_and_preserves_original_state_names(stratified):
     assert selected.n_censor == direct.n_censor
     assert selected.p0 == direct.p0
     np.testing.assert_array_equal(selected.pstate, direct.pstate)
-    # Selected probabilities retain their mass instead of being renormalized.
     assert np.any(selected.pstate < 1)
     before = r.survfit0(source).subset(states=[0], data=[2, 0])
     after = r.survfit0(selected)
     assert before.time == after.time
     assert before.n_censor == after.n_censor
     np.testing.assert_array_equal(before.pstate, after.pstate)
-    restored = pickle.loads(pickle.dumps(selected))  # noqa: S301 - locally created result
+    restored = pickle.loads(pickle.dumps(selected))
     np.testing.assert_array_equal(
         r.summary_survfit(restored, censored=True).pstate,
         r.summary_survfit(selected, censored=True).pstate,

@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock-survival AFT predictions with missing probabilities.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)

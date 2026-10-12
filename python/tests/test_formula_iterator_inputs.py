@@ -13,8 +13,8 @@ import pytest
 from .helpers import setup_survival_import
 
 r = setup_survival_import().r_api
-from survival.r._coerce import _mstate_categories, _r_factor  # noqa: E402
-from survival.r._formula import model_frame as formula_frame  # noqa: E402
+from survival.r._coerce import _mstate_categories, _r_factor
+from survival.r._formula import model_frame as formula_frame
 
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/formula_iterator_reference.json").read_text()
@@ -47,8 +47,6 @@ class UnusedIterator:
 
 
 def layout_columns(specs, layout):
-    # Row naming and dimension queries must use evaluated formula columns;
-    # an unused first column must remain unread through every entrance.
     columns = {"unused": UnusedIterator()}
     for key, spec in specs.items():
         values = copy.deepcopy(spec["values"])
@@ -118,7 +116,6 @@ def fit_case(case, data, **extra):
 
 
 def check_matrix(actual, expected):
-    # Python labels use compact expressions; R deparse adds spaces.
     assert [name.replace(" ", "") for name in actual["columns"]] == [
         name.replace(" ", "") for name in expected["columns"]
     ]
@@ -128,8 +125,6 @@ def check_matrix(actual, expected):
 
 
 def flattened_fit_frame(expected):
-    # The public Python frame exposes source columns and the total offset;
-    # stock stores its evaluated offset expression as one model-frame column.
     frame = copy.deepcopy(expected)
     if "offset(off)" in frame:
         values = frame.pop("offset(off)")
@@ -228,8 +223,6 @@ def test_shared_column_and_explicit_weights_iterators_have_one_owned_row_sequenc
         case for case in REFERENCE["cases"] if case["name"] == f"{routine}/aliased/all/omit"
     )
     data = data_columns("aliased", "list")
-    # R sees equal response times and case weights. Python may express both
-    # columns and the explicit argument with the same one-shot source.
     shared = ColumnIterator(REFERENCE["inputs"]["complete"]["time"]["values"])
     data["time"] = shared
     data["wt"] = shared
@@ -264,7 +257,6 @@ def test_retained_models_snapshot_source_rows_and_return_owned_public_frames(rou
 def test_response_free_formula_reads_used_columns_and_leaves_other_lengths_unused(
     kind, unused_first
 ):
-    # Independent stats::model.frame ignores an unused scalar in list data.
     data = {"unused": [8], "x": [4, 5, 6]} if unused_first else {"x": [4, 5, 6], "unused": [8]}
     if kind == "frame":
         data = pd.DataFrame(
@@ -310,8 +302,6 @@ def test_prediction_newdata_columns_and_shared_collapse_match_stock(case, layout
     if case["routine"] == "survreg":
         options["p"] = case["p"]
     if "collapse" in case:
-        # Reusing a one-shot predictor as an explicit row-aligned argument must
-        # produce the same groups and predictors as the two equal R vectors.
         options["collapse"] = data[case["collapse"]]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -335,11 +325,9 @@ def test_formula_iterator_fits_serialize_without_reading_unused_columns(
     data = data_columns("complete", "iterator")
     fit = getattr(r, routine)(case["formula"], data, weights="wt", model=retained, x=True)
     if copy_method == "pickle":
-        restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own generated object
+        restored = pickle.loads(pickle.dumps(fit))
     else:
         restored = getattr(copy, copy_method)(fit)
-    # Public AFT model-frame extraction requires model=True; its numerical and
-    # matrix methods remain available without that optional stored frame.
     check_result(case, restored, with_frame=retained or routine == "coxph")
     prediction = next(
         case
@@ -365,8 +353,6 @@ def test_typed_and_formally_removed_iterator_columns_survive_subset_and_serializ
     specs = REFERENCE["special_inputs"][case["input"]]
     data = layout_columns(specs, "iterator")
     if case["input"] == "typed_double":
-        # R x is double while each JSON number/iterator item is an integer.
-        # Multiplication by 2L must preserve double arithmetic beyond INT_MAX.
         data["x"].dtype = np.dtype("float64")
     fit = r.coxph(
         case["formula"],
@@ -378,14 +364,11 @@ def test_typed_and_formally_removed_iterator_columns_survive_subset_and_serializ
         x=True,
     )
     if copy_method == "pickle":
-        restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own generated object
+        restored = pickle.loads(pickle.dumps(fit))
     else:
         restored = getattr(copy, copy_method)(fit)
     check_result(case, restored, with_frame=case["input"] != "typed_double")
     if case["input"] == "typed_double":
-        # The Python public frame retains raw source columns. Compare those
-        # with an independent stock raw-source frame, then check the full
-        # transformed design against the original fitted stock matrix above.
         assert_values(r.model_frame(restored), flattened_fit_frame(case["source_frame"]))
         matrix = r.model_matrix(restored, _with_metadata=True)["data"]
         assert all(np.isfinite(row[0]) for row in matrix)

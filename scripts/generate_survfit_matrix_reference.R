@@ -1,6 +1,4 @@
 #!/usr/bin/env Rscript
-# Rscript scripts/generate_survfit_matrix_reference.R [output.json]
-# No random data or changes to the main survival 3.8-11 fixture corpus.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 suppressPackageStartupMessages(library(expm))

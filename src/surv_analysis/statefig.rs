@@ -1,29 +1,17 @@
-//! Box coordinates and arrows of a multi-state diagram: the layout half of
-//! R's `statefig` (`R/statefig.R`).  R draws the figure; this returns what
-//! it computes, the centre of each state's box (`statefig`'s invisible
-//! return value) and the arrows implied by the connection matrix, so any
-//! plotting front end can draw it.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use pyo3::prelude::*;
 
-/// The `layout` argument of `statefig`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StateFigLayout {
-    /// A vector: `counts[k]` boxes in the `k`-th column, columns left to
-    /// right, boxes top to bottom within a column.
     LeftToRight(Vec<usize>),
-    /// A one-column matrix: `counts[k]` boxes in the `k`-th row, rows top
-    /// to bottom, boxes left to right within a row.
     TopToBottom(Vec<usize>),
-    /// A two-column matrix of `(x, y)` centres in `[0, 1]`, one per state.
     Coordinates(Vec<(f64, f64)>),
 }
 
-/// One arrow of the diagram.  `curvature` is `connect[from, to] - 1`: 0 for
-/// a straight line, positive for an arc bending counter-clockwise, negative
-/// for clockwise; `offset` marks the arrows that R shifts sideways because
-/// the reverse arrow is drawn with the mirrored curvature.
+#[doc = " One arrow of the diagram.  `curvature` is `connect[from, to] - 1`: 0 for"]
+#[doc = " a straight line, positive for an arc bending counter-clockwise, negative"]
+#[doc = " for clockwise; `offset` marks the arrows that R shifts sideways because"]
+#[doc = " the reverse arrow is drawn with the mirrored curvature."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct StateFigArrow {
@@ -37,8 +25,8 @@ pub struct StateFigArrow {
     pub offset: bool,
 }
 
-/// The diagram: box centres (`x`, `y` in `[0, 1]`) and arrows, in the
-/// order R draws them (by destination state, then origin).
+#[doc = " The diagram: box centres (`x`, `y` in `[0, 1]`) and arrows, in the"]
+#[doc = " order R draws them (by destination state, then origin)."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct StateFigResult {
@@ -52,14 +40,10 @@ pub struct StateFigResult {
     pub arrows: Vec<StateFigArrow>,
 }
 
-/// Centres of `n` boxes spread over `[0, 1]`: `(1:n - .5) / n`.
 fn space(n: usize) -> Vec<f64> {
     (0..n).map(|i| (i as f64 + 0.5) / n as f64).collect()
 }
 
-/// Port of the layout logic of `statefig`.  `connect` is the square
-/// connection matrix (`0` = no arrow, `1` = straight, `1 + d` = an arc of
-/// height `d`); `states` names its rows.
 pub fn statefig(
     layout: &StateFigLayout,
     connect: &[Vec<f64>],
@@ -150,10 +134,10 @@ pub fn statefig(
     })
 }
 
-/// Python binding of [`statefig`].  `layout` is R's vector form (boxes per
-/// column, left to right), `column = True` turns it into the one-column
-/// matrix form (boxes per row, top to bottom), and `coordinates` gives the
-/// centres directly.
+#[doc = " Python binding of [`statefig`].  `layout` is R's vector form (boxes per"]
+#[doc = " column, left to right), `column = True` turns it into the one-column"]
+#[doc = " matrix form (boxes per row, top to bottom), and `coordinates` gives the"]
+#[doc = " centres directly."]
 #[pyfunction(name = "statefig")]
 #[pyo3(signature = (connect, states, layout=None, column=false, coordinates=None))]
 pub fn statefig_py(
@@ -203,7 +187,6 @@ mod tests {
 
     #[test]
     fn matches_r_layouts() {
-        // statefig(c(1, 2), connect) and statefig(matrix(c(1, 2), ncol = 1), connect)
         let row = statefig(
             &StateFigLayout::LeftToRight(vec![1, 2]),
             &connect3(),
@@ -247,7 +230,7 @@ mod tests {
     #[test]
     fn arrows_follow_the_connection_matrix() {
         let mut connect = connect3();
-        connect[1][0] = 1.5; // B -> A as an arc, opposite of A -> B's 1.0
+        connect[1][0] = 1.5;
         connect[0][1] = 0.5;
         let out = statefig(
             &StateFigLayout::LeftToRight(vec![1, 2]),

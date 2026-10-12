@@ -34,7 +34,6 @@ mod tests {
     }
     #[test]
     fn test_survdiff_same_times_is_singular() {
-        // everyone dies at once: a zero variance, which R's solve() rejects
         let err = survdiff(
             &SurvdiffData::try_new(
                 None,

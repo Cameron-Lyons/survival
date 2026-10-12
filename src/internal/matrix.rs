@@ -1,18 +1,3 @@
-//! Dense linear algebra shared across the crate.
-//!
-//! Two families live here:
-//!
-//! * Faithful ports of R survival's generalised Cholesky routines
-//!   (`src/cholesky2.c`, `src/chsolve2.c`, `src/chinv2.c`), which are what
-//!   `coxph`, `survreg` and `coxph.wtest` use on information matrices.
-//!   They never fail: redundant columns are reported through a zero diagonal
-//!   and a reduced rank, exactly as in R.
-//! * A partial-pivot LU factorisation for general square systems, with
-//!   explicit singularity detection (`Err(SurvivalError::Singular)` or `None`).
-//!
-//! Matrices are `ndarray::Array2<f64>` indexed `m[[row, col]]`; the C sources
-//! index `matrix[i][j]`, which maps to `m[[i, j]]` below.
-
 use crate::constants::GAUSSIAN_ELIMINATION_TOL;
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::Array2;
@@ -84,19 +69,15 @@ fn require_finite(matrix: &Array2<f64>, context: &str) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// The rows of a matrix, the nested-list layout of the Python bindings.
 pub(crate) fn matrix_rows(matrix: &Array2<f64>) -> Vec<Vec<f64>> {
     matrix.outer_iter().map(|row| row.to_vec()).collect()
 }
 
-/// A matrix from rows of one length; `name` labels the error for ragged
-/// rows.  No rows give a `0 x 0` matrix.
 pub(crate) fn matrix_from_rows(rows: &[Vec<f64>], name: &str) -> SurvivalResult<Array2<f64>> {
     let ncols = rows.first().map_or(0, Vec::len);
     matrix_from_rows_with_columns(rows, ncols, name)
 }
 
-/// Preserve a known column count, including when there are no rows.
 pub(crate) fn matrix_from_rows_with_columns(
     rows: &[Vec<f64>],
     ncols: usize,
@@ -114,25 +95,6 @@ pub(crate) fn matrix_from_rows_with_columns(
     .map_err(|err| SurvivalError::invalid_input(err.to_string()))
 }
 
-// ---------------------------------------------------------------------------
-// Generalised Cholesky (R survival: cholesky2.c / chsolve2.c / chinv2.c)
-// ---------------------------------------------------------------------------
-
-/// Port of R survival's `cholesky2` (`src/cholesky2.c`): the generalised
-/// Cholesky decomposition `C = F D F'` of a symmetric matrix, where `F` is
-/// lower triangular with unit diagonal and `D` is diagonal.
-///
-/// Reads the diagonal and the upper triangle (`m[[i, j]]`, `i < j`); on return
-/// `D` occupies the diagonal, `F` (without its unit diagonal) the lower
-/// triangle `m[[j, i]]`, `j > i`, and the upper triangle is left undisturbed.
-///
-/// `toler` is R's `toler.chol` (`coxph.control` default `eps^0.75`,
-/// `coxph.wtest` default `1e-9`): a pivot below `toler * max(diag)` marks the
-/// column redundant and zeroes its diagonal. A non-finite diagonal counts as
-/// zero. Returns the rank when the matrix is non-negative definite, or minus
-/// the rank when a pivot was more negative than `-8 * eps`.
-///
-/// Panics if `matrix` is not square.
 pub(crate) fn cholesky2(matrix: &mut Array2<f64>, toler: f64) -> i32 {
     let n = matrix.nrows();
     assert_eq!(n, matrix.ncols(), "cholesky2 requires a square matrix");
@@ -172,13 +134,6 @@ pub(crate) fn cholesky2(matrix: &mut Array2<f64>, toler: f64) -> i32 {
     rank * nonneg
 }
 
-/// Port of R survival's `chsolve2` (`src/chsolve2.c`): solves `A b = y`
-/// given the [`cholesky2`] factorisation of `A` in `chol`, overwriting `y`
-/// with `b`. Components belonging to redundant columns (zero diagonal) are
-/// set to zero, which is how `coxph` keeps iterating past a singular
-/// information matrix.
-///
-/// Panics if `y.len()` differs from the matrix order.
 pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
     let n = chol.nrows();
     assert_eq!(n, chol.ncols(), "chsolve2 requires a square matrix");
@@ -205,15 +160,6 @@ pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
     }
 }
 
-/// Port of R survival's `chinv2` (`src/chinv2.c`): inverts a matrix given its
-/// [`cholesky2`] factorisation. On return the upper triangle and diagonal
-/// (`m[[i, j]]`, `i <= j`) hold `(F D F')^{-1}`; below the diagonal is
-/// `F^{-1}`. Rows and columns of redundant variables are zeroed (R's `coxph`
-/// reports those coefficients as `NA`). Callers wanting the full symmetric
-/// inverse copy the upper triangle into the lower one, as `coxfit6.c` does;
-/// [`symmetric_inverse_via_cholesky`] performs that step.
-///
-/// Panics if `matrix` is not square.
 pub(crate) fn chinv2(matrix: &mut Array2<f64>) {
     let n = matrix.nrows();
     assert_eq!(n, matrix.ncols(), "chinv2 requires a square matrix");
@@ -252,28 +198,14 @@ pub(crate) fn chinv2(matrix: &mut Array2<f64>) {
     }
 }
 
-/// Result of [`symmetric_inverse_via_cholesky`].
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SymmetricInverse {
-    /// Full symmetric (generalised) inverse; rows and columns listed in
-    /// `singular_columns` are zero.
     pub inverse: Array2<f64>,
-    /// Number of non-redundant columns (absolute value of the `cholesky2`
-    /// return).
     pub rank: usize,
-    /// `false` when `cholesky2` found a pivot more negative than `-8 * eps`,
-    /// i.e. the matrix is not non-negative definite.
     pub non_negative_definite: bool,
-    /// Zero-based columns whose diagonal of the inverse is zero — R's
-    /// `which.sing <- diag(var) == 0` in `coxph.fit`.
     pub singular_columns: Vec<usize>,
 }
 
-/// Inverts a symmetric matrix the way `coxfit6.c` inverts the information
-/// matrix: `cholesky2`, `chinv2`, then copy the upper triangle into the lower
-/// one. Redundant columns are zeroed and reported rather than turned into an
-/// error, matching R. Fails only for malformed input (non-square or
-/// non-finite), mirroring `coxph.wtest`'s `"infinite argument"` check.
 pub(crate) fn symmetric_inverse_via_cholesky(
     matrix: &Array2<f64>,
     toler: f64,
@@ -300,19 +232,6 @@ pub(crate) fn symmetric_inverse_via_cholesky(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Partial-pivot LU for general square systems
-// ---------------------------------------------------------------------------
-
-/// `P A = L U` with partial (row) pivoting, stored row-major. Unlike the
-/// Cholesky routines above this applies to any square matrix, and singular
-/// systems are reported rather than patched, by the rule of R's `solve()`
-/// (`La_solve`: LAPACK `dgesv`, then `dgecon`): an exactly zero pivot is an
-/// error naming its column ("exactly singular"), and so is a matrix whose
-/// reciprocal condition number in the 1-norm, `1 / (||A||_1 ||A^-1||_1)`, is
-/// below `.Machine$double.eps` ("computationally singular", reporting the
-/// number).  `dgecon` estimates `||A^-1||_1`; the systems solved here are
-/// small, so it is computed exactly.
 #[derive(Debug, Clone)]
 pub(crate) struct LuDecomposition {
     factors: Vec<f64>,
@@ -335,7 +254,6 @@ impl LuDecomposition {
         }
 
         let mut factors: Vec<f64> = matrix.iter().copied().collect();
-        // LAPACK's `dlange("1")`: the largest absolute column sum.
         let anorm = (0..n)
             .map(|col| (0..n).map(|row| factors[row * n + col].abs()).sum::<f64>())
             .fold(0.0, f64::max);
@@ -390,8 +308,6 @@ impl LuDecomposition {
         Ok(lu)
     }
 
-    /// `1 / (||A||_1 ||A^-1||_1)`: the inverse's largest absolute column
-    /// sum, one substitution per unit vector (zero when it overflows).
     fn reciprocal_condition(&self, anorm: f64) -> f64 {
         let mut inverse_norm = 0.0_f64;
         let mut column = vec![0.0; self.n];
@@ -408,9 +324,6 @@ impl LuDecomposition {
         1.0 / (anorm * inverse_norm)
     }
 
-    /// Overwrites `rhs` with `A^-1 rhs`: the row swaps, then forward
-    /// substitution with the unit lower triangle and back substitution with
-    /// the upper one.
     fn substitute(&self, rhs: &mut [f64]) {
         for (row, &swap_row) in self.swaps.iter().enumerate() {
             if row != swap_row {
@@ -435,7 +348,6 @@ impl LuDecomposition {
         }
     }
 
-    /// Solves `A x = rhs`.
     pub(crate) fn solve(&self, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
         if rhs.len() != self.n {
             return Err(SurvivalError::invalid_input(format!(
@@ -466,7 +378,6 @@ impl LuDecomposition {
         Ok(solution)
     }
 
-    /// Dense inverse, one solve per unit vector.
     pub(crate) fn inverse(&self) -> SurvivalResult<Array2<f64>> {
         let mut inverse = Array2::zeros((self.n, self.n));
         let mut rhs = vec![0.0; self.n];
@@ -482,19 +393,14 @@ impl LuDecomposition {
     }
 }
 
-/// Dense inverse by partial-pivot LU; `Err(SurvivalError::Singular)` names the
-/// first column at which elimination broke down.
 pub(crate) fn lu_inverse(matrix: &Array2<f64>) -> SurvivalResult<Array2<f64>> {
     LuDecomposition::decompose(matrix)?.inverse()
 }
 
-/// `Option` form of [`lu_inverse`] for callers that only need success/failure.
 pub(crate) fn matrix_inverse(matrix: &Array2<f64>) -> Option<Array2<f64>> {
     lu_inverse(matrix).ok()
 }
 
-/// `Vec<Vec<f64>>` adapter over [`lu_inverse`]. `None` for an empty, ragged,
-/// non-square or singular matrix.
 pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = mat.len();
     if n == 0 || mat.iter().any(|row| row.len() != n) {
@@ -505,17 +411,6 @@ pub(crate) fn invert_matrix(mat: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     Some(matrix_rows(&matrix_inverse(&matrix)?))
 }
 
-/// Always-successful inverse of a flattened row-major `n x n` information or
-/// covariance matrix, for the spatial frailty fit, which reports rather than
-/// fails on a singular fit.
-///
-/// A non-singular matrix gets its exact LU inverse. A singular one gets R's
-/// `chinv2` generalised inverse of the symmetrised matrix (see
-/// [`symmetric_inverse_via_cholesky`]): the redundant rows and columns are
-/// zero, so downstream quantities for those coefficients are zero rather than
-/// garbage, exactly as `residuals.coxph` behaves for an `NA` coefficient.
-///
-/// Panics if `a.len() != n * n`.
 pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Vec<f64> {
     assert_eq!(a.len(), n * n, "flattened matrix must hold n * n entries");
     if n == 0 {
@@ -537,7 +432,6 @@ pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Ve
     }
     match symmetric_inverse_via_cholesky(&symmetric, GAUSSIAN_ELIMINATION_TOL) {
         Ok(result) => result.inverse.into_raw_vec_and_offset().0,
-        // Only non-finite entries reach here; every column is then redundant.
         Err(_) => vec![0.0; n * n],
     }
 }
@@ -589,11 +483,6 @@ mod tests {
         }
     }
 
-    // Reference values from R survival 3.8-11:
-    //   A <- matrix(c(4,2,2, 2,5,3, 2,3,6), 3, 3); b <- 1:3
-    //   coxph.wtest(A, b)$solve  -> -0.046875  0.15625  0.4375
-    //   coxph.wtest(A, b)$test   -> 1.578125, df = 3
-    //   solve(A) -> [0.328125 -0.09375 -0.0625; -0.09375 0.3125 -0.125; -0.0625 -0.125 0.25]
     fn spd() -> Array2<f64> {
         arr2(&[[4.0, 2.0, 2.0], [2.0, 5.0, 3.0], [2.0, 3.0, 6.0]])
     }
@@ -606,9 +495,6 @@ mod tests {
         ])
     }
 
-    //   B <- matrix(c(4,2,6, 2,5,7, 6,7,13), 3, 3)   # column 3 = column 1 + column 2
-    //   coxph.wtest(B, 1:3)$df -> 2 ; $solve -> 0.0625 0.375 0 ; $test -> 0.8125
-    //   solve(B[1:2, 1:2]) -> [0.3125 -0.125; -0.125 0.25]
     fn rank_deficient() -> Array2<f64> {
         arr2(&[[4.0, 2.0, 6.0], [2.0, 5.0, 7.0], [6.0, 7.0, 13.0]])
     }
@@ -618,19 +504,16 @@ mod tests {
         let mut work = spd();
         assert_eq!(cholesky2(&mut work, 1e-9), 3);
 
-        // D = diag(4, 4, 4); F below the diagonal.
         for i in 0..3 {
             assert_close(work[[i, i]], 4.0, 1e-12);
         }
         assert_close(work[[1, 0]], 0.5, 1e-12);
         assert_close(work[[2, 0]], 0.5, 1e-12);
         assert_close(work[[2, 1]], 0.5, 1e-12);
-        // Upper triangle is untouched.
         assert_eq!(work[[0, 1]], 2.0);
         assert_eq!(work[[0, 2]], 2.0);
         assert_eq!(work[[1, 2]], 3.0);
 
-        // Reassemble F D F' and compare with the input.
         let mut f = Array2::eye(3);
         let mut d = Array2::zeros((3, 3));
         for i in 0..3 {
@@ -667,7 +550,6 @@ mod tests {
 
     #[test]
     fn cholesky2_flags_indefinite_matrix_with_negative_rank() {
-        // C <- matrix(c(1,2, 2,1), 2, 2): coxph.wtest(C, c(1,1))$df == 1, test == 1
         let mut work = arr2(&[[1.0, 2.0], [2.0, 1.0]]);
         assert_eq!(cholesky2(&mut work, 1e-9), -1);
         assert_eq!(work[[1, 1]], 0.0);
@@ -684,7 +566,6 @@ mod tests {
         assert_eq!(work[[0, 0]], 0.0);
         assert_close(work[[1, 1]], 2.0, 0.0);
 
-        // No positive diagonals: eps falls back to toler itself.
         let mut zeros = Array2::zeros((2, 2));
         assert_eq!(cholesky2(&mut zeros, 1e-9), 0);
 
@@ -792,8 +673,6 @@ mod tests {
         assert_eq!(empty.inverse().unwrap().dim(), (0, 0));
     }
 
-    // R: solve(matrix(c(1, 2, 2, 4), 2)) -> "Lapack routine dgesv: system is
-    // exactly singular: U[2,2] = 0"; solve(matrix(0, 2, 2)) -> U[1,1] = 0.
     #[test]
     fn lu_decomposition_reports_singular_column() {
         let singular = arr2(&[[1.0, 2.0], [2.0, 4.0]]);
@@ -812,14 +691,6 @@ mod tests {
         assert!(matrix_inverse(&singular).is_none());
     }
 
-    // R's solve() accepts a matrix whose reciprocal condition number is at
-    // least .Machine$double.eps, however small its pivots:
-    //   solve(diag(c(1, 1e-13)))                   -> diag(c(1, 1e13))
-    //   solve(matrix(c(1, 1, 1, 1 + 1e-15), 2))    -> [900719925474100.2 -900719925474099.2;
-    //                                                  -900719925474099.2 900719925474099.2]
-    //   solve(matrix(c(1, 1, 1, 1 + 4e-16), 2))    -> computationally singular:
-    //                                                 reciprocal condition number = 1.11022e-16
-    //   solve(diag(c(1, 1e-17)))                   -> reciprocal condition number = 1e-17
     #[test]
     fn lu_decomposition_uses_r_condition_number_rule() {
         let inverse = lu_inverse(&arr2(&[[1.0, 0.0], [0.0, 1e-13]])).unwrap();

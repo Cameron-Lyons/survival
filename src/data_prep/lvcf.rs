@@ -1,17 +1,9 @@
-//! R's `lvcf` (`R/xtras.R`): last value carried forward within subject.
-//!
-//! Only the bookkeeping lives here: for every row, the row whose value it
-//! should take.  The caller copies values (of any type) and applies R's
-//! `first = TRUE` rule, which turns a missing first value of a 0/1 or
-//! logical variable into 0.
-
 use super::id_value::{IdValue, SubjectId};
 use crate::error::SurvivalResult;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
 
-/// R's `order(id, time)` treats missing times as larger than any value.
 fn compare_time(left: f64, right: f64) -> Ordering {
     match (left.is_nan(), right.is_nan()) {
         (false, false) => left.total_cmp(&right),
@@ -21,10 +13,6 @@ fn compare_time(left: f64, right: f64) -> Ordering {
     }
 }
 
-/// For each row, the zero-based row whose value is carried into it: the
-/// row itself when its value is present or it is the first row of its
-/// subject, otherwise the most recent row of the subject with a value
-/// (or that subject's first row when none has one yet).
 pub fn lvcf<I: SubjectId>(
     id: &[I],
     missing: &[bool],
@@ -58,7 +46,7 @@ pub fn lvcf<I: SubjectId>(
     Ok(source)
 }
 
-/// Python entry point of [`lvcf`].
+#[doc = " Python entry point of [`lvcf`]."]
 #[pyfunction(name = "lvcf")]
 #[pyo3(signature = (id, missing, time=None))]
 pub fn lvcf_py(

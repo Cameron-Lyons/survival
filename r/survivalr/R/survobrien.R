@@ -1,5 +1,3 @@
-# R evaluates formulas and retains column classes. The shared kernel constructs
-# risk sets and ranks; source rows align protected columns after subset/NA removal.
 survobrien <- function(formula, data, subset, na.action, transform) {
   Call <- match.call()
   if (!missing(transform) && length(transform(seq_len(10L))) != 10L) {
@@ -13,8 +11,6 @@ survobrien <- function(formula, data, subset, na.action, transform) {
   if (attr(Terms, "response") == 0L) stop("Response must be a survival object", call. = FALSE)
   source <- if (missing(data)) NULL else data
   formula_env <- environment(Terms)
-  # Evaluate the response once and reuse it in model.frame. This also supplies
-  # a row index for subset/NA alignment without reevaluating the response call.
   response <- eval(attr(Terms, "variables")[[2L]], source, formula_env)
   if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
   predvars <- attr(Terms, "variables")
@@ -57,7 +53,6 @@ survobrien <- function(formula, data, subset, na.action, transform) {
   }
   columns <- frame[variables[!keep]]
   n <- nrow(frame)
-  # R indexes a matrix-valued continuous term linearly, using its first column.
   continuous <- if (missing(transform)) lapply(columns, function(value) {
     value <- value[seq_len(n)]
     if (is.character(value)) {

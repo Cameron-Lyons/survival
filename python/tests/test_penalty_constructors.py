@@ -111,7 +111,6 @@ def test_constructor_basis_labels_configuration_and_errors_match_stock(case, lay
             scale=options.get("scale", True),
             scale_values=result.scale_values,
         )
-        # Compare complete native configurations through their supported pickle form.
         assert pickle.dumps(result.penalty) == pickle.dumps(reference_penalty)
     else:
         assert isinstance(result, r.FrailtyResult)
@@ -214,7 +213,7 @@ def test_complete_constructor_tt_fits_and_shared_formula_path_match_stock(case):
         term = next(term for term in fit._frame.design.covariates if hasattr(term, "penalty"))
         used = {str(value) for value in REFERENCE["data"]["g"]}
         assert term.levels == tuple(value for value in REFERENCE["group_levels"] if value in used)
-        restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - trusted test fixture
+        restored = pickle.loads(pickle.dumps(fit))
         assert r.model_summary(restored)["print2"] == summary["print2"]
         close(restored.coefficients, fit.coefficients)
         close(restored.var, fit.var)
@@ -267,7 +266,7 @@ def test_named_ridge_inputs_explicit_labels_and_result_roundtrip():
         r.ridge(named, column_names=["one"])
     with pytest.raises(TypeError, match="inputs must be numeric"):
         r.ridge(["a", "b"])
-    restored = pickle.loads(pickle.dumps(explicit))  # noqa: S301 - trusted test fixture
+    restored = pickle.loads(pickle.dumps(explicit))
     assert restored.basis == explicit.basis
     assert restored.column_names == explicit.column_names
     assert restored.scale_values == explicit.scale_values

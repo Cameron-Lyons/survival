@@ -1,5 +1,3 @@
-//! Optimizer setup and post-processing of fitted Cox parameters.
-
 use super::{CoxPHFit, CoxphData, CoxphOptions, SortedRows};
 use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::core::SurvResponse;
@@ -18,9 +16,6 @@ pub(super) fn crossprod(rows: &Array2<f64>) -> Array2<f64> {
     rows.t().dot(rows)
 }
 
-/// `coxph()`'s offset centring: the offsets minus their (unweighted) mean,
-/// which keeps `exp()` of the risk scores in range, and that mean.  An
-/// absent or all-zero offset is zero with mean 0.
 pub(crate) fn centre_offset(offset: Option<&[f64]>, n: usize) -> (Vec<f64>, f64) {
     match offset {
         Some(offset) if offset.iter().any(|&value| value != 0.0) => {
@@ -31,8 +26,6 @@ pub(crate) fn centre_offset(offset: Option<&[f64]>, n: usize) -> (Vec<f64>, f64)
     }
 }
 
-/// R's `nocenter` rule: a column whose values all belong to `values` is
-/// neither centred nor scaled by the fitter.
 pub(crate) fn nocenter_columns(x: &Array2<f64>, values: Option<&[f64]>) -> Vec<bool> {
     (0..x.ncols())
         .map(|col| {
@@ -41,8 +34,6 @@ pub(crate) fn nocenter_columns(x: &Array2<f64>, values: Option<&[f64]>) -> Vec<b
         .collect()
 }
 
-/// `coxph()` adds the mean offset back to the linear predictors the fitter
-/// computed at the centred offset.
 pub(crate) fn add_offset_mean(linear_predictors: &mut [f64], offset_mean: f64) {
     if offset_mean != 0.0 {
         for value in linear_predictors {
@@ -51,8 +42,6 @@ pub(crate) fn add_offset_mean(linear_predictors: &mut [f64], offset_mean: f64) {
     }
 }
 
-/// A Cox model whose parameters another fitter estimated (`coxpenal.fit`),
-/// in the data's row order: what [`CoxPHFit::from_fitted`] assembles.
 pub(crate) struct FittedCox {
     pub method: TieMethod,
     pub coefficients: Vec<f64>,
@@ -62,18 +51,13 @@ pub(crate) struct FittedCox {
     pub flag: i32,
     pub means: Vec<f64>,
     pub nocenter: Vec<bool>,
-    /// Score vector at the final coefficients.
     pub first: Vec<f64>,
-    /// The linear predictors at the centred offset ([`centre_offset`]).
     pub linear_predictors: Vec<f64>,
-    /// The offsets' mean, added back to the stored linear predictors.
     pub offset_mean: f64,
-    /// Martingale residuals; `None` computes them from the linear predictors.
     pub residuals: Option<Vec<f64>>,
     pub wald_test: f64,
 }
 
-/// Shared optimizer setup; callers choose whether offsets have already been centered.
 pub(crate) fn fit_cox_engine(
     data: &CoxphData,
     options: &CoxphOptions,
@@ -120,9 +104,6 @@ pub(crate) fn fit_cox_engine(
 }
 
 impl CoxPHFit {
-    /// Fits the model: `coxph.fit` / `agreg.fit` / `coxexact.fit` /
-    /// `agexact.fit` at the centred offset, followed by the post-processing
-    /// of `coxph()`.
     pub fn fit(data: CoxphData, options: CoxphOptions) -> SurvivalResult<Self> {
         data.validate()?;
         let n = data.n();
@@ -136,10 +117,6 @@ impl CoxPHFit {
 
         let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
-        // The linear predictor uses the fitted values; only afterwards are
-        // the aliased coefficients marked NA (`coef[which.sing] <- NA`).
-        // Residuals, the robust variance and the concordance use it at the
-        // centred offset; the mean offset is added back at the end.
         let mut coefficients = results.coefficients;
         let center: f64 = coefficients
             .iter()
@@ -158,11 +135,6 @@ impl CoxPHFit {
                     - center
             })
             .collect();
-        // `which.sing <- diag(var) == 0` when the rank is below nvar
-        // (`coxph.fit`'s flag, negative ranks and -2 included; `agreg.fit`'s
-        // rank at the initial coefficients).  `coxph.fit` and `agreg.fit`
-        // leave the coefficients alone when no iterations were requested,
-        // the exact fitters do not.
         let rank = results.info.map_or(results.flag, |info| info[0]);
         let exact = options.method == TieMethod::Exact;
         if (exact || options.iter_max > 0) && i64::from(rank) < nvar as i64 {
@@ -173,8 +145,6 @@ impl CoxPHFit {
             }
         }
         let sorted = SortedRows::new(results.order, data.strata.as_deref());
-        // As in `coxph()`, the cluster enters the concordance whenever it was
-        // given, even when the variance is not robust.
         let concordance = fit_concordance(
             &data.time,
             data.entry.as_deref(),
@@ -220,7 +190,6 @@ impl CoxPHFit {
 
         let robust = options.robust.unwrap_or(fit.cluster.is_some());
         if !robust {
-            // "cluster specified with robust=FALSE, cluster ignored"
             fit.cluster = None;
         }
         if robust && fit.coefficients.iter().any(|b| !b.is_nan()) {
@@ -236,7 +205,6 @@ impl CoxPHFit {
             fit.naive_var = Some(fit.var.clone());
             let dfbeta = fit.dfbeta_matrix(&fit.linear_predictors, true, Some(&cluster))?;
             fit.var = crossprod(&dfbeta);
-            // Robust score test at the initial coefficients (lp = X init).
             let lp0: Vec<f64> = match &options.init {
                 Some(init) => (0..n)
                     .map(|i| fit.x.row(i).iter().zip(init).map(|(x, b)| x * b).sum())
@@ -263,10 +231,6 @@ impl CoxPHFit {
         Ok(fit)
     }
 
-    /// `coxph()`'s fit of data without events, made before any fitter runs:
-    /// `NA` coefficients, a zero variance, `loglik = c(0, 0)`, zero
-    /// residuals, the unweighted column means and a concordance without
-    /// pairs.  As in R the linear predictors are the centred offset.
     fn without_events(data: CoxphData, centred_offset: Vec<f64>, options: &CoxphOptions) -> Self {
         let n = data.n();
         let nvar = data.x.ncols();
@@ -323,12 +287,6 @@ impl CoxPHFit {
         }
     }
 
-    /// A fit whose parameters another fitter estimated (`coxpenal.fit`),
-    /// with `coxph()`'s post-processing: the martingale residuals when not
-    /// given and the concordance of the final linear predictors.  `cluster`
-    /// only enters the concordance: `coxph()` passes it to `concordancefit`
-    /// although a penalized fit has no robust variance.  There is no score
-    /// test.
     pub(crate) fn from_fitted(
         data: CoxphData,
         fitted: FittedCox,
@@ -385,9 +343,6 @@ impl CoxPHFit {
     }
 }
 
-/// `coxph()`'s concordance step: `concordancefit(Y, lp, strata, weights,
-/// cluster, reverse = TRUE, timefix = FALSE)` on the fitted linear
-/// predictors.
 fn fit_concordance(
     time: &[f64],
     entry: Option<&[f64]>,
@@ -407,9 +362,6 @@ fn fit_concordance(
     linear_predictor_concordance(time, entry, status, x, weights, strata, cluster, &options)
 }
 
-/// `concordancefit(Y, x, strata, weights, cluster)` on the response of a
-/// Cox model's data, `x` holding the linear predictors of one or more fits
-/// to those data: the concordance step of `coxph()` and `concordance.coxph`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn linear_predictor_concordance(
     time: &[f64],

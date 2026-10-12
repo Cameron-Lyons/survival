@@ -45,8 +45,6 @@ capture <- function(object,options,method) {
   }
   env$lines <- function(x,y=NULL,...) save_xy("line",x,y,...)
   env$points <- function(x,y=NULL,...) save_xy("point",x,y,...)
-  # Keep actual method bodies: plot.Surv fits the response and lines.survexp
-  # supplies its straight-line default before dispatching to this method.
   registerS3method(method,"survfit",f,envir=asNamespace("graphics"))
   on.exit(registerS3method(method,"survfit",original,envir=asNamespace("graphics")),add=TRUE)
   grDevices::pdf(NULL)

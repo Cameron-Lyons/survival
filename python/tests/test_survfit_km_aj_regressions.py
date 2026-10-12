@@ -16,7 +16,6 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 r = survival.r_api
-# the R bridge's fit[k] and fit[, states]
 _survfit_strata_curves = r._survfit_strata_curves
 _subset_survfit_multistate = r._subset_survfit_multistate
 
@@ -56,13 +55,7 @@ def _labelled():
     }
 
 
-# ---------------------------------------------------------------------------
-# curves derived from a fit
-# ---------------------------------------------------------------------------
-
-
 def test_methods_of_a_split_stratum_use_that_stratum_only():
-    # k <- survfit(Surv(t, e) ~ g); quantile(k[2]), survfit0(k[2]), summary(k[2], c(5.5, 7))
     fit = r.survfit("Surv(t, e) ~ g", _two_groups())
     second = _survfit_strata_curves(fit)["2"]
 
@@ -88,13 +81,11 @@ def test_a_stratum_emptied_by_start_time_keeps_its_own_counts():
     assert fit.n == [0, 4]
 
     (only,) = _survfit_strata_curves(fit).values()
-    # R's fit[1] reports n = 0 here: it indexes n by the position among the fitted curves
     assert only.n == [4]
     _close(only.surv, [1, 2 / 3, 1 / 3, 1 / 3])
 
 
 def test_methods_of_a_state_subset_keep_only_those_states():
-    # f <- survfit(Surv(t, e) ~ 1); survfit0(f[, "a"]), summary(f[, "a"], times = c(3, 6))
     fit = r.survfit("Surv(t, e) ~ 1", _three_states())
     only_a = _subset_survfit_multistate(fit, [1])
 
@@ -119,7 +110,6 @@ def test_methods_of_a_state_subset_keep_only_those_states():
     _close(summary.table.values[0], [8, 3, 1.64285714285714, 0.84493862664624], 1e-12)
     _close(r.summary_survfit(only_a).time, [2, 4, 7])
 
-    # every state in its original order keeps the transitions and records no oldstate
     every = _subset_survfit_multistate(fit, [0, 1, 2])
     assert every.oldstate is None
     assert every.hazard_names == fit.hazard_names
@@ -127,7 +117,6 @@ def test_methods_of_a_state_subset_keep_only_those_states():
 
 
 def test_methods_of_a_split_multistate_stratum_match_r():
-    # f <- survfit(Surv(t, e) ~ g); survfit0(f[2, ]), summary(f[2, ], times = c(5.5, 7))
     fit = r.survfit("Surv(t, e) ~ g", _three_states())
     second = _survfit_strata_curves(fit)["2"]
 
@@ -162,13 +151,7 @@ def test_split_turnbull_strata_take_their_rows():
     assert (first.n, first.time, first.surv) == (alone.n, alone.time, alone.surv)
 
 
-# ---------------------------------------------------------------------------
-# time0 and start.time: survfitKM and survfitTurnbull set neither
-# ---------------------------------------------------------------------------
-
-
 def test_survfit0_adds_the_time_0_row_to_a_time0_km_fit():
-    # survfit0(survfit(Surv(c(1, 2, 3, 4, 5), c(1, 0, 1, 1, 0)) ~ 1, time0 = TRUE))
     fit = r.survfit(r.Surv([1, 2, 3, 4, 5], [1, 0, 1, 1, 0]), time0=True)
     fit0 = r.survfit0(fit)
 
@@ -179,7 +162,6 @@ def test_survfit0_adds_the_time_0_row_to_a_time0_km_fit():
 
 
 def test_rmean_of_a_start_time_km_fit_is_checked_against_its_first_time():
-    # f <- survfit(Surv(time, status) ~ 1, lung, start.time = 100): f$start.time is NULL
     fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_lung(), start_time=100)
 
     assert not hasattr(fit, "start_time")
@@ -192,7 +174,6 @@ def test_rmean_of_a_start_time_km_fit_is_checked_against_its_first_time():
 
 
 def test_turnbull_fits_record_neither_start_time_nor_time0():
-    # R: survfit0(fit)$time is 0 1.5 2.5 4, survfitTurnbull keeping no t0
     data = {"l": [1, 2, None, 4], "r": [3, 4, 2, None]}
     fit = r.survfit("Surv(l, r, type = 'interval2') ~ 1", data, start_time=1, time0=True)
 
@@ -200,11 +181,6 @@ def test_turnbull_fits_record_neither_start_time_nor_time0():
     assert (fit.time0, fit.t0) == (False, 0.0)
     _close(fit.time, [1.5, 2.5, 4])
     _close(r.survfit0(fit).time, [0, 1.5, 2.5, 4])
-
-
-# ---------------------------------------------------------------------------
-# influence row names and survfitAJ's cluster warning
-# ---------------------------------------------------------------------------
 
 
 def test_km_influence_rows_are_named_by_cluster_id_or_row_number():
@@ -235,13 +211,10 @@ def test_km_influence_rows_are_named_by_cluster_id_or_row_number():
 
 
 def test_km_influence_rows_share_one_clname_per_fit():
-    # R: f <- survfit(Surv(time, status) ~ g, d, cluster = cl, influence = TRUE);
-    # rownames(f$influence.surv[[2]]) and those of survfit0(f)$influence.surv[[2]] are q m z
     data = {**_labelled(), "cl": ["z", "q", "q", "m", "m", "z"]}
     fit = r.survfit("Surv(time, status) ~ g", data, cluster="cl", influence=True)
     assert [curve.cluster for curve in fit.influence_chaz] == [["z", "q", "m"], ["q", "m", "z"]]
     assert isinstance(fit.influence_surv[1].influence, survival.surv_analysis.SurvfitInfluence)
-    # survfit0 and the split curves keep the engine's codes and reuse the fit's levels
     clname = fit.influence_surv[0].clname
     derived = [r.survfit0(fit), *_survfit_strata_curves(fit).values()]
     for curve in derived:
@@ -252,7 +225,6 @@ def test_km_influence_rows_share_one_clname_per_fit():
 
 
 def test_aj_influence_rows_are_numbered_as_in_r():
-    # dimnames(fit$influence.pstate)[[1]]: survfitAJ names the rows by the cluster numbers
     data = _labelled()
 
     def rows(formula, **kwargs):
@@ -276,8 +248,6 @@ def test_an_id_on_two_clusters_warns():
         "t2": [1, 2, 3, 4, 5, 6],
         "st": events,
     }
-    # subject 1 lies in clusters x and y; R's Ctwoclust misses it (survfitAJ passes it
-    # the 1-based order(id)), the intended check does not
     with pytest.warns(UserWarning, match="an id value appears on more than one cluster"):
         fit = r.survfit("Surv(t1, t2, st) ~ 1", data, id="id", cluster="cl")
     _close_rows(fit.pstate, [[2 / 3, 1 / 3, 0], [1 / 3, 1 / 3, 1 / 3], [0, 2 / 3, 1 / 3]])

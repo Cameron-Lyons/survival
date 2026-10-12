@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent references for typed formula evaluation and fitted designs.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -205,14 +204,10 @@ for (kind in c("coxph", "survreg")) for (term in rhs) {
               raw <- capture(function() predict(fit, newdata = nd, type = type,
                                                  na.action = get(predict_action)))
               result <- list(raw = encode_capture(raw))
-              # Stock predict.survreg rejects a zero-row terms model matrix.
-              # Keep the failure and independently preserve the fitted term schema.
               if (kind == "survreg" && name == "empty" && type == "terms" && is_error(raw$value)) {
                 example <- capture(function() predict(fit, newdata = newdata$complete, type = "terms"))
                 result$intended <- encode(example$value[FALSE, , drop = FALSE])
               }
-              # Stock predict.survreg drops new-data offsets for lp/response.
-              # Preserve its raw output and derive the intended fitted-design prediction.
               if (kind == "survreg" && type != "terms" &&
                   length(attr(terms(fit), "offset")) && !is_error(raw$value)) {
                 mf <- capture(function() model.frame(delete.response(terms(fit)), nd,

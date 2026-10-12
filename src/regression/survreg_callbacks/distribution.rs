@@ -5,8 +5,6 @@ use crate::regression::survreg_distributions::{
 };
 
 impl SurvregDistribution {
-    /// Define a location-scale family in native Rust. Fits retain an `Arc`
-    /// to these callbacks. Runtime callables have no automatic serde form.
     pub fn from_callbacks(
         name: impl Into<String>,
         callbacks: Arc<dyn SurvregCallbacks>,
@@ -28,14 +26,12 @@ impl SurvregDistribution {
         Ok(distribution)
     }
 
-    /// Replace a response transform, retaining the base family and parameters.
     pub fn with_transform(mut self, callbacks: Arc<dyn SurvregTransformCallbacks>) -> Self {
         self.transform = SurvregTransform::Custom;
         self.transform_callbacks = Some(RuntimeCallback(callbacks));
         self
     }
 
-    /// Clone a distribution with new fitted parameters, retaining callbacks.
     pub fn with_parms(&self, parms: Vec<f64>) -> SurvivalResult<Self> {
         if self.callbacks.is_some() && parms.len() != self.parms.len() {
             return Err(SurvivalError::invalid_input(
@@ -48,7 +44,6 @@ impl SurvregDistribution {
         Ok(distribution)
     }
 
-    /// Derive a named distribution using the same base family and callbacks.
     pub fn derived(
         &self,
         name: impl Into<String>,
@@ -73,7 +68,6 @@ impl SurvregDistribution {
             .ok_or_else(|| SurvivalError::invalid_input("custom distribution has no callbacks"))
     }
 
-    /// Density summaries for a whole batch of standardized endpoints.
     pub fn density_batch(&self, z: &[f64]) -> SurvivalResult<Vec<SurvregDensity>> {
         if self.family == SurvregFamily::Custom || self.callbacks.is_some() {
             let values = self.custom_callbacks()?.density(z, &self.parms)?;
@@ -84,7 +78,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Density summary at one standardized endpoint. Built-ins allocate no batch.
     pub fn density(&self, z: f64) -> SurvivalResult<SurvregDensity> {
         if self.family == SurvregFamily::Custom || self.callbacks.is_some() {
             Ok(self.density_batch(&[z])?[0])
@@ -93,7 +86,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Standardized quantiles evaluated in one callback invocation.
     pub fn quantiles(&self, p: &[f64]) -> SurvivalResult<Vec<f64>> {
         if self.family == SurvregFamily::Custom || self.callbacks.is_some() {
             let values = self.custom_callbacks()?.quantile(p, &self.parms)?;
@@ -104,7 +96,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Standardized quantile at a single probability.
     pub fn quantile(&self, p: f64) -> SurvivalResult<f64> {
         if self.family == SurvregFamily::Custom || self.callbacks.is_some() {
             Ok(self.quantiles(&[p])?[0])
@@ -113,7 +104,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Saturated centers and log likelihoods for a complete response batch.
     pub fn deviance_batch(
         &self,
         y1: &[f64],
@@ -141,7 +131,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Saturated center and log likelihood for one observation.
     pub fn deviance(
         &self,
         y1: f64,
@@ -157,7 +146,6 @@ impl SurvregDistribution {
         }
     }
 
-    /// Forward response transform, evaluated as one batch.
     pub fn transform_values(&self, values: &[f64]) -> SurvivalResult<Vec<f64>> {
         self.transform_batch(
             values,
@@ -167,7 +155,6 @@ impl SurvregDistribution {
         )
     }
 
-    /// Derivative of the response transform, evaluated as one batch.
     pub fn transform_derivatives(&self, values: &[f64]) -> SurvivalResult<Vec<f64>> {
         self.transform_batch(
             values,
@@ -177,7 +164,6 @@ impl SurvregDistribution {
         )
     }
 
-    /// Inverse response transform, evaluated as one batch.
     pub fn inverse_values(&self, values: &[f64]) -> SurvivalResult<Vec<f64>> {
         self.transform_batch(
             values,

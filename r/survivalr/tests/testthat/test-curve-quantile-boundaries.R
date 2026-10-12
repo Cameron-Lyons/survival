@@ -8,7 +8,6 @@
 }
 
 .stock_curve_quantile_labels <- function(captured, actual_fit) {
-  # Split bridge KM curves expose bare group levels instead of formula labels.
   if (!is.list(actual_fit) || inherits(actual_fit, "python.builtin.object")) return(captured)
   labels <- names(actual_fit)
   if (is.list(captured$value)) {

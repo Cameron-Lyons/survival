@@ -52,9 +52,6 @@ def compare(actual, expected, *, kp=False):
             found = found[:, None]
         reference = np.asarray(values, dtype=float)
         if name == "surv" and kp and np.isnan(reference).any():
-            # Stock R can raise a negative roundoff residue to a fractional
-            # power after a terminal death. Retain its NaNs in the fixture,
-            # but independently verify the zero-survival limit for every run.
             missing = np.isnan(reference)
             rows = missing if missing.ndim == 1 else missing.any(axis=1)
             first = np.flatnonzero(rows & ~np.r_[False, rows[:-1]])
@@ -126,7 +123,7 @@ def test_legacy_wrapper_and_unused_arguments(survtype):
 
 def test_readonly_views_keep_native_storage_alive_and_pickle_roundtrip():
     fit = r.coxsurv_fit(**simple(unlist=False))
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own round-trip data
+    restored = pickle.loads(pickle.dumps(fit))
     for name in ("time", "surv", "cumhaz", "std_err", "hazard", "varhaz", "ndeath", "xbar"):
         left, right = getattr(fit[0], name), getattr(restored[0], name)
         np.testing.assert_array_equal(left, right)

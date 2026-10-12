@@ -45,8 +45,6 @@ PENALTY_FUNCTIONS = (
     "frailty.t",
 )
 
-# The coefficient names of a dense frailty term: frailty.gamma.R, frailty.gaussian.R and
-# frailty.t.R paste these before the levels.
 _FRAILTY_PREFIX = {"gamma": "gamma", "gaussian": "gauss", "t": "t"}
 
 
@@ -279,9 +277,6 @@ def _frailty_penalty(n: int, **options: Any) -> _core.CoxPenalty:
         if df is not None
         else methods[0]
     )
-    # AIC prepends init=(.1, 1) before ... . Gamma EM's c(list(eps), ...)
-    # flattens a vector into init1/init2, so $init finds no usable vector.
-    # Other fixed/df searches do not consume init either.
     effective_init = (
         [0.1, 1.0]
         if method_value == "aic"
@@ -359,7 +354,6 @@ def fit_penalty(
     kind = term.call.split("(", 1)[0]
     kwargs = dict(options)
     if kind == "ridge":
-        # ridge.R: vars <- apply(x, 2, function(z) var(z[!is.na(z)]))
         scale_values = [_r_var(_observed(values[name])) for name in columns]
         penalty = _core.CoxPenalty.ridge(scale_values=scale_values, **kwargs)
         return _PenaltyDesignTerm(
@@ -393,11 +387,9 @@ def _fit_pspline(
     nvar = nterm + degree if groups is None else len(set(groups))
     ncol = nvar if intercept else nvar - 1
     if penalized:
-        # ps(x)1..nvar, or ps(x)3..nvar+1 after the first column is dropped
         first = 1 if intercept else 3
         names = tuple(f"ps({column}){first + j}" for j in range(ncol))
     else:
-        # model.matrix numbers the columns of an unnamed matrix term
         names = tuple(f"{term.call}{j}" for j in range(1, ncol + 1))
     return _PenaltyDesignTerm(
         term,

@@ -157,7 +157,7 @@ def test_r_warning_hook_retains_previous_hook_for_other_categories():
 @pytest.mark.parametrize("marker", ["missing", "null"])
 @pytest.mark.parametrize(
     "roundtrip",
-    [copy.copy, copy.deepcopy, lambda value: pickle.loads(pickle.dumps(value))],  # noqa: S301
+    [copy.copy, copy.deepcopy, lambda value: pickle.loads(pickle.dumps(value))],
 )
 def test_query_parameter_marker_survives_roundtrip(marker, roundtrip):
     original = core.SurvregDistribution.for_query("t", _parms_null=marker == "null")
@@ -197,7 +197,7 @@ def query_derivative(values):
 @pytest.mark.parametrize("transformed", [False, True])
 @pytest.mark.parametrize(
     "roundtrip",
-    [copy.copy, copy.deepcopy, lambda value: pickle.loads(pickle.dumps(value))],  # noqa: S301
+    [copy.copy, copy.deepcopy, lambda value: pickle.loads(pickle.dumps(value))],
 )
 def test_permissive_query_parameter_values_survive_roundtrip(parms, transformed, roundtrip):
     original = core.SurvregDistribution.for_query("t", parms)

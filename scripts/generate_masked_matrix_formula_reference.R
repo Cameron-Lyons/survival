@@ -1,5 +1,4 @@
 #!/usr/bin/env Rscript
-# Independent stock kernels: masks in Python correspond to these R NA cells.
 suppressPackageStartupMessages(library(survival))
 suppressPackageStartupMessages(library(jsonlite))
 args <- commandArgs(trailingOnly = TRUE)
@@ -55,7 +54,6 @@ for (input in names(inputs)) for (selection in names(selections))
       formula = paste("Y ~",rhs), na_action = action,
       frame = expected_frame, pyears = expected_pyears)
   }
-# Scalar masked values use the same stock NA vector, independently of matrices.
 vector_cases <- list()
 for (input in c("complete","missing")) for (action in names(actions)) {
   data <- list(Y = c(2,5,3), wt = c(1,.5,2))

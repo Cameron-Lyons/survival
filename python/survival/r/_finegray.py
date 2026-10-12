@@ -104,8 +104,6 @@ def finegray(
     count_name = None if count is None else _make_names(str(count))
     output_names = [f"{prefix}{suffix}" for suffix in ("start", "stop", "status", "wt")]
 
-    # Preserve the existing subject-label convention; only compact integer codes
-    # cross the native boundary. Covariate objects remain in Python.
     ids = None
     if mf.id is not None:
         if any(_is_missing_value(value) for value in mf.id):

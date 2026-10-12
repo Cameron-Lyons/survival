@@ -29,8 +29,6 @@ add <- function(name,rhs,kind="coxph",counting=FALSE,weighted=FALSE,ties="efron"
     }
     prediction_error <- prediction$r_error
     if(!is.null(prediction_error) && kind=="coxph") {
-        # predict.coxph drops columns by term number, which is wrong after
-        # a multi-column factor. Use R's correct model.matrix.coxph output.
         center <- rowsum(fit$x,fit$strata) / as.numeric(table(fit$strata))
         centered <- newx - center[match(attr(newx,"strata"),rownames(center)),,drop=FALSE]
         beta <- coef(fit); beta[is.na(beta)] <- 0
@@ -54,8 +52,6 @@ add <- function(name,rhs,kind="coxph",counting=FALSE,weighted=FALSE,ties="efron"
         sf <- capture(survfit(fit,newdata=new))
         result$survfit_error <- sf$r_error
         if(!is.null(sf$r_error)) {
-            # These saturated factor-by-stratum models equal independent Cox
-            # fits within each stratum; use those when R's curve method fails.
             stopifnot(name %in% c("factor_star","strata_first_factor"))
             parts <- lapply(seq_len(nrow(new)),function(i) {
                 separate <- coxph(Surv(time,status) ~ factor(ph.ecog),d[d$sex==new$sex[i],])

@@ -44,8 +44,6 @@ def test_sgtt_matches_r_for_linear_models(case):
         assert result.sas_row_names == expected["sas_row_names"]
         assert [row.name for row in result.test] == expected["test_names"]
         assert_close([[row.chisq, row.df, row.ss] for row in result.test], expected["tests"])
-        # SGTT replaces the hypothesis tests; its marginal estimates remain
-        # those of the SAS population, including non-estimable levels.
         direct = r.yates(fit, expected["term"], population="sas")
         assert_close(result.estimate["pmm"], direct.estimate["pmm"])
         assert direct.sas is None

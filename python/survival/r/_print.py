@@ -185,7 +185,6 @@ def coefficient_matrix_lines(
     finite = [abs(value) for value in values if math.isfinite(value) and value != 0]
     places = max(1, digits - (1 + math.floor(math.log10(min(finite))) if finite else 1))
     cells = _r_format_numbers([round(value, places) for value in values], digits)
-    # Avoid replacing a nonzero estimate with a displayed zero after rounding.
     lost = [
         i
         for i, (value, cell) in enumerate(zip(values, cells, strict=True))
@@ -223,7 +222,6 @@ def coefficient_matrix_lines(
             [*table.colnames, ""],
             [[float(value) for value in row] + [0.0] for row in table.values],
         )
-        # R's cbind of significance symbols discards dimnames' dimension titles.
         row_title = None
     lines = character_matrix_lines(table, columns, width, row_title=row_title)
     if signif_stars:

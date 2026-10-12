@@ -14,7 +14,7 @@ from .r_fixture_support import RFactor
 survival = setup_survival_import()
 r = survival.r_api
 sa = survival.surv_analysis
-from survival.r._types import (  # noqa: E402
+from survival.r._types import (
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     NamedMatrix,
@@ -51,7 +51,6 @@ def _by(spec, native=False):
             )
         return factors
     if spec["kind"] == "mapping":
-        # Each input must be consumed exactly once by the public grouping boundary.
         return {name: iter(values) for name, values in columns}
     if spec["kind"] == "factor":
         return RFactor(spec["values"], spec["levels"])
@@ -151,7 +150,6 @@ def test_callback_and_named_summary_match_stock_r(case, interface, container):
     assert len(calls) == len(case["calls"])
     for (values, kwargs), expected_call in zip(calls, case["calls"], strict=True):
         np.testing.assert_array_equal(values, np.asarray(expected_call["values"], dtype=float))
-        # Stock aggregate.survfit accepts ... but never passes it to FUN.
         assert not kwargs
         assert not expected_call["dots"]
 
@@ -300,7 +298,6 @@ def test_callback_accepts_one_real_numeric_value(scalar, interface):
 )
 @pytest.mark.parametrize("interface", ["native", "facade"])
 def test_callback_rejects_non_real_or_non_scalar_values(invalid, interface):
-    # Stock R's is.numeric gate rejects logical, complex and list summaries.
     surv = _array(REFERENCE["inputs"]["ordinary"]["surv"])
 
     def aggregate():
@@ -362,8 +359,6 @@ def test_callback_vectors_are_independent_of_source_and_previous_calls(interface
 
 @pytest.mark.parametrize("interface", ["native", "facade"])
 def test_callback_keeps_the_scalar_contract_after_validation(interface):
-    # R only checks the initial index-vector calls and allows apply to change
-    # shape afterward. The port consistently enforces its real scalar output.
     calls = []
 
     def summary(values):
@@ -403,8 +398,6 @@ def test_empty_time_numpy_curve_keeps_group_metadata_with_callback():
     assert result.colnames == ["1", "2"]
     assert result.newdata == {"aggregate": ["a", "b"]}
     assert result.ncurve == 2
-    # Stock apply also probes a zero vector for this empty axis. The port's
-    # well-shaped empty results avoid these additional value callbacks.
     assert [values.tolist() for values, _ in calls] == [[2, 4], [1, 3]]
     assert source.surv.shape == (0, 4)
 

@@ -1,5 +1,3 @@
-//! Entry reporting grids, counts and estimates match stock R survival 3.8-12.
-
 use serde_json::Value;
 use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, survfitaj};
 
@@ -124,8 +122,6 @@ fn entry_grids_match_current_stock_r_for_subject_continuations() {
             },
         )
         .unwrap();
-        // Every result field other than uncertainty matches the complete
-        // general-IJ fit checked against stock R below.
         assert_point_estimates_equal(&point_estimates, &fit);
         let expected = &case["expected"];
         let name = case["name"].as_str().unwrap();
@@ -246,7 +242,6 @@ fn subject_gaps_are_rejected_before_constructing_an_entry_grid() {
             };
             let error = survfitaj(&data, &options).unwrap_err().to_string();
             assert!(error.contains("gap = 1"), "{error}");
-            // The same censor-only trajectory is valid when contiguous.
             data.start.as_mut().unwrap()[1] = 2.0;
             assert!(survfitaj(&data, &options).is_ok());
         }

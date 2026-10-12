@@ -151,10 +151,9 @@ def test_frailty_newdata_matrix_and_metadata_match_stock(case, layout, retained)
                 np.testing.assert_array_equal(value, snapshots[name])
             if case["newdata"][name]["levels"] is not None:
                 assert tuple(value.categories) == tuple(case["newdata"][name]["levels"])
-    # Sparse matrix insertion and local recoding must not accumulate across calls.
     for _ in range(2):
         assert r.model_matrix(fit, _with_metadata=True) == stored
-    restored = pickle.loads(pickle.dumps(fit))  # noqa: S301 - own fit
+    restored = pickle.loads(pickle.dumps(fit))
     assert r.model_matrix(fit, _with_metadata=True) == r.model_matrix(restored, _with_metadata=True)
 
 
@@ -179,7 +178,7 @@ def test_unretained_iterator_fit_matrix_rebuild_and_pickle_match_stock(name, lay
     spec = REFERENCE["fits"][name]
     data = columns(REFERENCE["inputs"][spec["source"]], layout)
     fit = r.coxph(spec["formula"], data, model=False, x=False)
-    for candidate in (fit, pickle.loads(pickle.dumps(fit))):  # noqa: S301 - own fit
+    for candidate in (fit, pickle.loads(pickle.dumps(fit))):
         check_matrix(r.model_matrix(candidate, _with_metadata=True), spec["stored"]["value"])
     for column, value in data.items():
         if isinstance(value, ColumnIterator):

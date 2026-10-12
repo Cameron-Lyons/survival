@@ -31,8 +31,6 @@ column <- function(value) list(values=I(unname(as.vector(value))),
 cases <- list()
 for (input in inputs) for (named in c(FALSE,TRUE)) for (na in c(FALSE,TRUE)) {
   for (short in list(NULL,FALSE,TRUE)) {
-    # A bare Python list of only None has no numeric/character dtype, so the
-    # all-missing positional case specifies its label convention explicitly.
     if (input$name=="missing" && !named && is.null(short)) next
     columns <- input$columns
     names(columns) <- paste0("v",seq_along(columns))

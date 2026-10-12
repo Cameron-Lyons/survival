@@ -1,5 +1,3 @@
-# R owns formula evaluation and result attributes. Marginal means, estimability,
-# simulation, and contrasts use the shared numerical implementation.
 .yates_frame <- function(fit, Terms) {
   if (inherits(fit, "survival_py_model")) {
     raw <- as.data.frame(.call_r_api("model_frame", fit), check.names = FALSE)
@@ -134,7 +132,6 @@
     }
   }
   if (!is.null(attr(pdata, "terms"))) {
-    # Select evaluated variables directly; keep fitted predvars, including spline knots.
     index <- match(selection$parts, rownames(attr(Terms, "factors")))
     selected_terms <- Terms
     attr(selected_terms, "variables") <- as.call(c(quote(list), as.list(attr(Terms, "variables"))[-1L][index]))

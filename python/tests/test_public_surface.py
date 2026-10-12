@@ -20,7 +20,6 @@ survival = setup_survival_import()
 r = survival.r
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "survival"
 
-# R's formals(concordancefit), with std.err spelled std_err
 R_CONCORDANCEFIT_FORMALS = [
     "y",
     "x",
@@ -86,7 +85,6 @@ def test_inline_annotations_are_the_typed_surface():
 def test_every_public_function_declares_its_return_type(name):
     function = getattr(r, name)
     assert inspect.signature(function).return_annotation is not inspect.Signature.empty
-    # the annotations name real objects (a typo would silently become Any for mypy)
     assert "return" in typing.get_type_hints(function)
 
 
@@ -131,11 +129,9 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
         if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     ]
     assert positional == R_CONCORDANCEFIT_FORMALS
-    # the extras are keyword-only: names stands in for colnames(x), the rest is private
     extras = {name for name in parameters if name not in R_CONCORDANCEFIT_FORMALS}
     assert extras == {"names", "_strata_levels", "_formula", "kwargs"}
 
-    # R: concordancefit(Surv(ovarian$futime, ovarian$fustat), ovarian$age, ovarian$rx)
     y = r.Surv(ovarian["futime"], ovarian["fustat"])
     fit = r.concordancefit(y, ovarian["age"], ovarian["rx"])
     assert fit.concordance == approx(0.19047619047619)
@@ -143,10 +139,6 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
     assert fit.names == ["1", "2"]
     assert fit.var == approx(0.00322663910613376)
     assert fit.cvar == approx(0.00906273620559335)
-    # std.err = FALSE given positionally, after R's defaults for weights ... keepstrata.
-    # R 3.8-12 returns 0.494845360824742 here, with a warning: without std.err each
-    # stratum's count has five columns, which R/concordance.R reshapes with ncol = 6.  The
-    # assertion is the value R intends, the one std.err = TRUE gives.
     r_defaults = [None, None, None, "n", None, 0, False, False, True, 10]
     quick = r.concordancefit(y, ovarian["age"], ovarian["rx"], *r_defaults, False)
     assert quick.var is None
@@ -156,8 +148,6 @@ def test_concordancefit_takes_r_arguments_in_r_order(ovarian):
 
 
 def test_concordancefit_orders_strata_like_r_factor_levels(ovarian):
-    # R: g <- ifelse(ovarian$resid.ds == 1, "a", "b")  (the data starts with "b")
-    #    concordancefit(Surv(futime, fustat), age, g)$count has rows a, b
     y = r.Surv(ovarian["futime"], ovarian["fustat"])
     strata = ["a" if value == 1 else "b" for value in ovarian["resid.ds"]]
     assert strata[0] == "b"
@@ -166,7 +156,6 @@ def test_concordancefit_orders_strata_like_r_factor_levels(ovarian):
     assert counts(fit.count) == [[3, 20, 0], [23, 64, 0]]
     assert fit.concordance == approx(0.236363636363636)
     assert fit.var == approx(0.00706405300184414)
-    # the strata are read once, so a one-shot iterable gives the same fit
     once = r.concordancefit(y, ovarian["age"], iter(strata))
     assert once.names == ["a", "b"]
     assert counts(once.count) == counts(fit.count)
@@ -182,7 +171,6 @@ def test_cluster_is_the_identity():
 
 
 def test_survreg_distribution_helpers_match_r():
-    # the names of R's survreg.distributions, in R's order
     assert list(r.survreg_distributions) == [
         "extreme",
         "logistic",
@@ -195,10 +183,8 @@ def test_survreg_distribution_helpers_match_r():
         "loglogistic",
         "t",
     ]
-    # the exported registry is the one survreg(dist=) looks names up in
     assert r.survreg_distributions is survival.r._survreg.survreg_distributions
     assert r.survregDtest(r.survreg_distributions["weibull"]) is True
-    # R: survreg.control() has iter.max 30, rel.tolerance 1e-9, toler.chol 1e-10
     control = r.survreg_control()
     assert control.iter_max == 30
     assert math.isclose(control.rel_tolerance, 1e-9)

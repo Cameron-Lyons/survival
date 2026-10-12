@@ -1,34 +1,21 @@
-//! R's `survcondense` (`R/survcondense.R`): the inverse of `survSplit`.
-//! Adjacent rows of a subject whose covariates agree and whose intervals
-//! abut, `(0, 10]` followed by `(10, 25]`, are merged into one row
-//! `(0, 25]` carrying the values of the last row.
-//!
-//! As in R, only the covariates (summarised by `row_code`) and the times
-//! decide whether rows merge; the status column plays no part, so a
-//! caller wanting to keep interior events must fold the status into
-//! `row_code`.
-
 use super::id_value::{IdValue, SubjectId};
 use crate::error::SurvivalResult;
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
 
-/// Which rows survive and their (possibly moved back) start times.
+#[doc = " Which rows survive and their (possibly moved back) start times."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object)]
 pub struct SurvcondenseResult {
-    /// Start time of every input row after merging; only the rows in
-    /// `keep` are meaningful.
+    #[doc = " Start time of every input row after merging; only the rows in"]
+    #[doc = " `keep` are meaningful."]
     #[pyo3(get)]
     pub start: Vec<f64>,
-    /// Zero-based input rows to keep, in input order.
+    #[doc = " Zero-based input rows to keep, in input order."]
     #[pyo3(get)]
     pub keep: Vec<usize>,
 }
 
-/// Condense `(start, stop]` rows.  `row_code` identifies the covariate
-/// combination of each row (equal codes may merge); rows are ordered by
-/// stop time within subject, as R does.
 pub fn survcondense<I: SubjectId>(
     id: &[I],
     start: &[f64],
@@ -50,7 +37,6 @@ pub fn survcondense<I: SubjectId>(
             .then_with(|| stop[a].total_cmp(&stop[b]))
     });
 
-    // droprow[p]: sorted row p merges into sorted row p + 1.
     let droprow: Vec<bool> = (0..n)
         .map(|p| {
             p + 1 < n && {
@@ -62,8 +48,6 @@ pub fn survcondense<I: SubjectId>(
         })
         .collect();
 
-    // The first row after each run of dropped rows inherits the start time
-    // of the first row of the run.
     let mut new_start = start.to_vec();
     let mut p = 0;
     while p < n {
@@ -75,7 +59,6 @@ pub fn survcondense<I: SubjectId>(
         while p < n && droprow[p] {
             p += 1;
         }
-        // droprow is always false for the last sorted row, so p < n here.
         new_start[index[p]] = start[index[run_start]];
     }
     let mut dropped = vec![false; n];
@@ -90,7 +73,7 @@ pub fn survcondense<I: SubjectId>(
     })
 }
 
-/// Python entry point of [`survcondense`].
+#[doc = " Python entry point of [`survcondense`]."]
 #[pyfunction(name = "survcondense")]
 pub fn survcondense_py(
     id: Vec<IdValue>,
@@ -140,8 +123,6 @@ mod tests {
 
     #[test]
     fn unsorted_input_uses_sorted_positions_not_raw_rows() {
-        // Subject 1's rows appear last; a run at the start of the sorted
-        // order must not touch raw row 0.
         let out = survcondense(
             &["b", "b", "a", "a", "a"],
             &[0.0, 4.0, 0.0, 2.0, 5.0],

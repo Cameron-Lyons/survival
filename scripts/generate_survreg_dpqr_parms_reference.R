@@ -1,5 +1,3 @@
-# Independent parameter-query references from stock R survival, never survivalr.
-# Run with R_LIBS_USER pointing to the stock survival library. Optional fixture directory.
 arguments <- commandArgs(trailingOnly = TRUE)
 output_directory <- if (length(arguments)) arguments[[1L]] else "python/tests/fixtures"
 dir.create(output_directory, recursive = TRUE, showWarnings = FALSE)
@@ -67,14 +65,12 @@ add <- function(name, method, nq, nm, ns, distribution = "t", mode = "numeric",
     expected = record(method, query, mean, scale, distribution, mode, parms, parm_names))
 }
 
-# Every query/df/location/scale length from zero through five, with fractional df.
 df_values <- c(.5, 1, 2, 3, 8)
 for (method in methods) for (nq in 0:5) for (nd in 0:5) for (nm in 0:5) for (ns in 0:5) {
   add(paste("shape", method, nq, nd, nm, ns, sep = "/"), method, nq, nm, ns,
     parms = df_values[seq_len(nd)])
 }
 
-# Mix invalid and nonfinite df with valid entries; preserve NA separately from NaN.
 patterns <- list(invalid = c(0, -1, .5, 2, 3),
   nonfinite = c(Inf, NA_real_, NaN, -Inf, 4),
   mixed = c(-1, 0, NA_real_, Inf, NaN))
@@ -86,7 +82,6 @@ for (df in c(0, -1, 2, Inf, -Inf, NA_real_, NaN)) for (method in methods) for (n
   add(paste("scalar", number(df), method, nq, sep = "/"), method, nq, 1, 1, parms = df)
 }
 
-# Mathlib's missing-value precedence and warning suppression is separate from arithmetic.
 missing_queries <- list(na = NA_real_, nan = NaN,
   na_nan = c(NA_real_, NaN), nan_na = c(NaN, NA_real_),
   mixed = c(NA_real_, NaN, -.1, .5, 1.1))
@@ -100,20 +95,17 @@ for (method in methods[methods != "rsurvreg"]) {
   }
 }
 
-# Missing and NULL fail when the distribution function forces parms, not at lookup.
 for (mode in c("omitted", "null")) for (method in methods) for (nq in 0:5) {
   for (nm in c(0, 1, 3)) for (ns in c(0, 1, 5)) {
     add(paste(mode, method, nq, nm, ns, sep = "/"), method, nq, nm, ns, mode = mode)
   }
 }
 
-# Names do not change the numeric argument of pt/dt/qt.
 for (method in methods) for (nq in 0:5) {
   add(paste("named", method, nq, sep = "/"), method, nq, 2, 3,
     parms = c(1, 4, Inf), parm_names = c("unexpected", "df", "other"))
 }
 
-# Named families other than t do not evaluate or validate the supplied parms.
 ignored <- list(omitted = NULL, null = NULL, empty = numeric(),
   invalid = c(-1, 0, 2), nonfinite = c(Inf, NA_real_, NaN),
   character = c("not numeric", "bad"), list = list(1, 2))
@@ -126,7 +118,6 @@ for (distribution in c("extreme", "gaussian", "logistic", "weibull", "exponentia
   }
 }
 
-# Keep every density column as separate evidence for warnings from unselected columns.
 density_cases <- list()
 all_patterns <- c(list(valid = df_values), patterns)
 for (pattern in names(all_patterns)) for (nx in 0:5) for (nd in 0:5) {

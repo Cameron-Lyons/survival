@@ -1,12 +1,3 @@
-//! Royston and Sauerbrei's D and the related explained-variation measures
-//! for a Cox model.
-//!
-//! Port of R survival `R/royston.R` for the `newdata`-free call: the linear
-//! predictor of the fit is replaced by normal scores and a Cox model is
-//! refitted on that predictor (`coxph(y ~ qhat)`, Efron ties), from which
-//! D, its standard error and R²_D follow; Kent-O'Quigley, Nagelkerke and
-//! Gönen-Heller measures are computed alongside.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -18,27 +9,20 @@ use std::f64::consts::PI;
 
 const PARALLEL_THRESHOLD: usize = 2_000;
 
-/// Inputs of [`royston`]: the fitted model's linear predictors and response.
 #[derive(Debug, Clone)]
 pub struct RoystonInput<'a> {
-    /// `predict(fit)`: the centred linear predictor.
     pub eta: &'a [f64],
     pub time: &'a [f64],
     pub status: &'a [i32],
-    /// Start times for (start, stop] responses.
     pub entry_times: Option<&'a [f64]>,
-    /// `fit$loglik`: null and final partial log-likelihood.
     pub loglik: [f64; 2],
-    /// `fit$nevent` and the number of coefficients, for `adjust`.
     pub n_event: usize,
     pub n_coef: usize,
-    /// Average the normal scores over tied `eta` values (R `ties`).
     pub ties: bool,
-    /// Apply the overfitting adjustment (R `adjust`).
     pub adjust: bool,
 }
 
-/// R's named result vector.
+#[doc = " R's named result vector."]
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass(from_py_object, get_all)]
 pub struct RoystonResult {
@@ -50,8 +34,6 @@ pub struct RoystonResult {
     pub c_gh: f64,
 }
 
-/// Blom normal scores of `eta`, averaged over ties when `ties` is set
-/// (R's `qhat`).
 fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
     let n = eta.len();
     let mut order: Vec<usize> = (0..n).collect();
@@ -65,14 +47,12 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
             end += 1;
         }
         if ties {
-            // mean of the scores at ranks start+1..=end (ties.method = "first")
             let mean =
                 (start..end).map(|k| blom((k + 1) as f64)).sum::<f64>() / (end - start) as f64;
             for &idx in &order[start..end] {
                 scores[idx] = mean;
             }
         } else {
-            // rank(eta) with the default average rank for ties
             let average_rank = ((start + 1) + end) as f64 / 2.0;
             for &idx in &order[start..end] {
                 scores[idx] = blom(average_rank);
@@ -83,8 +63,6 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
     scores
 }
 
-/// Gönen and Heller's concordance `2/(n(n-1)) * sum_{i<j} 1/(1+exp(eta_i - eta_j))`
-/// over the sorted predictor.
 fn gonen_heller(eta: &[f64]) -> f64 {
     let n = eta.len();
     let mut sorted = eta.to_vec();
@@ -130,8 +108,6 @@ fn validate(input: &RoystonInput<'_>) -> SurvivalResult<()> {
     Ok(())
 }
 
-/// Royston's D and the R²_D, Kent-O'Quigley, Nagelkerke and Gönen-Heller
-/// measures of a Cox fit.
 pub fn royston(input: &RoystonInput<'_>) -> SurvivalResult<RoystonResult> {
     validate(input)?;
     let eta = input.eta;
@@ -180,8 +156,8 @@ pub fn royston(input: &RoystonInput<'_>) -> SurvivalResult<RoystonResult> {
     })
 }
 
-/// Python entry point: `royston(eta, time, status, loglik, n_event,
-/// n_coef, entry_times=None, ties=True, adjust=False)`.
+#[doc = " Python entry point: `royston(eta, time, status, loglik, n_event,"]
+#[doc = " n_coef, entry_times=None, ties=True, adjust=False)`."]
 #[pyfunction(name = "royston")]
 #[pyo3(signature = (eta, time, status, loglik, n_event, n_coef, entry_times=None, ties=true, adjust=false))]
 #[allow(clippy::too_many_arguments)]

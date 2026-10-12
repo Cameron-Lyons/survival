@@ -163,9 +163,6 @@ def _restore_survival_modules():
     finally:
         _remove_survival_modules()
         sys.modules.update(saved)
-        # The package caches the submodules it lazily loaded in its globals; a
-        # submodule first imported during this test must stay registered, or the
-        # next test sees the attribute without its sys.modules entry.
         root = saved.get("survival")
         for value in list(vars(root).values()) if root is not None else []:
             if isinstance(value, ModuleType) and value.__name__.startswith("survival."):
@@ -229,11 +226,6 @@ def _readme_python_blocks() -> list[str]:
 
 def _format_missing(missing: list[tuple[str, str]]) -> str:
     return "\n".join(f"{source}: {name}" for source, name in missing)
-
-
-# ---------------------------------------------------------------------------------------------
-# Manifest <-> Rust registrations <-> domain modules
-# ---------------------------------------------------------------------------------------------
 
 
 def test_generated_manifest_matches_rust_registration():
@@ -310,11 +302,6 @@ def test_domain_modules_expose_exactly_their_bindings():
                 assert callable(getattr(module, name)), f"{module_name}.{name}"
 
 
-# ---------------------------------------------------------------------------------------------
-# _survival.pyi <-> runtime
-# ---------------------------------------------------------------------------------------------
-
-
 def test_survival_stub_declares_exactly_the_registered_bindings():
     manifest = set(_manifest_bindings())
     stub_names = _pyi_top_level_names(STUB_PATH)
@@ -334,9 +321,8 @@ def test_survival_stub_is_generated_from_the_extension():
     if not _has_ml_bindings(core):
         pytest.skip("stub generation needs the extension built with the ml feature")
     if importlib.util.find_spec("ruff") is None:
-        # the coverage job runs `scripts/generate_stubs.py --check` with ruff installed
         pytest.skip("stub generation needs ruff in this interpreter's environment")
-    result = subprocess.run(  # noqa: S603 - fixed interpreter and script arguments
+    result = subprocess.run(
         [sys.executable, str(ROOT / "scripts/generate_stubs.py"), "--check"],
         capture_output=True,
         text=True,
@@ -348,7 +334,7 @@ def test_survival_stub_is_generated_from_the_extension():
 
 @dataclasses.dataclass(frozen=True)
 class _Signature:
-    params: tuple[tuple[str, str, object], ...]  # (name, kind, default or NO_DEFAULT)
+    params: tuple[tuple[str, str, object], ...]
 
 
 _NO_DEFAULT = "<no default>"
@@ -440,14 +426,12 @@ def test_stub_signature_matches_runtime(name):
         if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
     }
 
-    # constructor
     if runtime.__text_signature__ is None:
         assert "__init__" not in stub_methods, f"{name} has no constructor at runtime"
     else:
         assert "__init__" in stub_methods, f"{name} is constructible at runtime"
         assert _stub_signature(stub_methods["__init__"]) == _runtime_signature(runtime)
 
-    # enum variants, properties and methods
     runtime_variants = set()
     runtime_properties = set()
     runtime_methods = {}
@@ -479,11 +463,6 @@ def test_stub_signature_matches_runtime(name):
         elif isinstance(value, classmethod):
             assert "classmethod" in decorators, f"{name}.{method}"
         assert _stub_signature(stub_node) == _runtime_signature(target), f"{name}.{method}"
-
-
-# ---------------------------------------------------------------------------------------------
-# Package root, sklearn stub, README
-# ---------------------------------------------------------------------------------------------
 
 
 def test_init_stub_mirrors_root_export_lists():
@@ -663,7 +642,7 @@ def test_readme_low_level_examples_run(capsys):
     assert len(blocks) >= 8
     for index, block in blocks:
         namespace: dict[str, object] = {"__name__": f"readme_block_{index}"}
-        exec(compile(block, f"README.md python block {index}", "exec"), namespace)  # noqa: S102
+        exec(compile(block, f"README.md python block {index}", "exec"), namespace)
     capsys.readouterr()
 
 

@@ -1,11 +1,3 @@
-//! Pickle support for the result classes that `survival.r` keeps.
-//!
-//! A class's `__reduce__` hands `pickle` (and `copy`) the module-level
-//! `_survival._unpickle`, the class and the object encoded with serde and
-//! bincode; `_unpickle` decodes it back.  The encoding follows the Rust
-//! structs, so a pickle is only readable by the package version that wrote
-//! it, like the pickles of most compiled extensions.
-
 use ndarray::{Array, Dimension};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Borrow;
@@ -17,11 +9,9 @@ use pyo3::{
     types::{PyBytes, PyType},
 };
 
-/// The `__reduce__` value of a result class: `(_unpickle, (cls, state))`.
 #[cfg(feature = "python")]
 pub(crate) type Reduced<'py> = (Bound<'py, PyAny>, (Bound<'py, PyType>, Bound<'py, PyBytes>));
 
-/// `__reduce__` of the result class `T`: `value` encoded for [`decode`].
 #[cfg(feature = "python")]
 pub(crate) fn reduce<'py, T>(py: Python<'py>, value: &T) -> PyResult<Reduced<'py>>
 where
@@ -33,7 +23,6 @@ where
     Ok((unpickle, (T::type_object(py), PyBytes::new(py, &state))))
 }
 
-/// Decodes the state [`reduce`] wrote for a `T`.
 #[cfg(feature = "python")]
 pub(crate) fn decode<T>(py: Python<'_>, state: &[u8]) -> PyResult<T>
 where
@@ -48,9 +37,6 @@ where
     }
 }
 
-/// Serde adapter for an array, owned or behind an `Arc`, that keeps its
-/// memory order: a column-major array (the influence matrices, laid out as
-/// R's) comes back column-major, anything else in standard order.
 pub(crate) mod memory_order {
     use super::*;
 
@@ -82,7 +68,6 @@ pub(crate) mod memory_order {
         }))
     }
 
-    /// The same for an optional array.
     pub(crate) mod option {
         use super::*;
 
@@ -117,9 +102,6 @@ pub(crate) mod memory_order {
     }
 }
 
-/// A `#[pymethods]` block holding only `__reduce__`, for the classes that
-/// have no other Python methods; the others define the same `__reduce__`
-/// in their own block.
 macro_rules! picklable {
     ($($class:ty),+ $(,)?) => {$(
         #[cfg(feature = "python")]

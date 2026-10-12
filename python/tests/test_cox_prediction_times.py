@@ -44,7 +44,6 @@ def _full_curve_predictions(fit, times, **newdata):
 @pytest.mark.parametrize("counting", [False, True])
 def test_requested_times_match_full_curves(method, stratified, counting):
     fit = _fit(method, stratified, counting)
-    # Out of order, repeated, before the first event, at a tie and past the end.
     times = np.array([30.0, 5.0, -1.0, 5.0, 7.5, 2.0])
     training = {"newdata": fit.x, "new_strata": fit.strata, "new_offset": fit.offset}
     expected = _full_curve_predictions(fit, times, **training)
@@ -52,7 +51,6 @@ def test_requested_times_match_full_curves(method, stratified, counting):
     assert isinstance(result, np.ndarray)
     assert result.shape == (len(times), fit.n)
     np.testing.assert_allclose(result, expected, rtol=1e-14, atol=1e-15)
-    # The explicit training rows take the same path, without changing their order.
     np.testing.assert_array_equal(result, fit.predict_survival_at(times, **training))
 
     order = [15, 0, 43, 4, 15]

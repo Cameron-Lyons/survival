@@ -1,16 +1,7 @@
-//! Canonical input validation helpers.
-//!
-//! Every check reports a structured [`ValidationError`]; callers convert it
-//! into [`crate::SurvivalError`] or `PyErr` (`ValueError`) with `?`. Field
-//! names are `&str` so callers may pass either literals or formatted names
-//! (for example `"survival_predictions row 3"`); the name is only copied into
-//! the error on the failure path.
-
 use pyo3::PyErr;
 use pyo3::exceptions::PyValueError;
 use std::fmt;
 
-/// Structured description of an input validation failure.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
     LengthMismatch {
@@ -45,21 +36,16 @@ pub enum ValidationError {
         index: usize,
         value: String,
     },
-    /// A value outside the probability interval. `open` distinguishes the
-    /// open interval `(0, 1)` from the closed `[0, 1]`.
     OutOfRange {
         name: String,
         index: usize,
         value: f64,
         open: bool,
     },
-    /// `index` is the first position whose value is smaller than its
-    /// predecessor.
     Unsorted {
         name: String,
         index: usize,
     },
-    /// A flattened matrix whose length disagrees with its declared shape.
     ShapeMismatch {
         name: String,
         n_rows: usize,
@@ -133,12 +119,9 @@ impl From<ValidationError> for PyErr {
     }
 }
 
-/// Which probability interval [`validate_probability`] enforces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbabilityBounds {
-    /// `[0, 1]`: predicted risks, survival probabilities.
     Closed,
-    /// `(0, 1)`: confidence levels, quantile positions.
     Open,
 }
 
@@ -157,10 +140,6 @@ pub(crate) fn validate_length(
     Ok(())
 }
 
-/// Checks that every `(name, len)` pair has the same length as the first one.
-///
-/// The first entry is the reference; the error names the first entry that
-/// disagrees with it.
 pub(crate) fn validate_equal_len(lengths: &[(&str, usize)]) -> Result<(), ValidationError> {
     let Some(&(_, expected)) = lengths.first() else {
         return Ok(());
@@ -193,13 +172,6 @@ pub(crate) fn validate_finite(slice: &[f64], name: &str) -> Result<(), Validatio
     Ok(())
 }
 
-/// Rejects `NaN` only (infinities pass).
-///
-/// Almost every caller pairs this with [`validate_finite`], which already
-/// rejects `NaN`; there it is redundant and only survives because tests
-/// assert on the `"{name} contains NaN"` wording. It is the right check only
-/// where an infinite value is legitimate (`surv2data` timelines). New code
-/// should call [`validate_finite`] alone unless infinities are allowed.
 pub(crate) fn validate_no_nan(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, &value) in slice.iter().enumerate() {
         if value.is_nan() {
@@ -219,8 +191,6 @@ fn nan_error(name: &str, index: usize) -> ValidationError {
     }
 }
 
-/// Every value must be `>= 0`; `NaN` is reported as [`ValidationError::NaN`].
-/// Infinite values pass; pair with [`validate_finite`] when they must not.
 pub(crate) fn validate_non_negative(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, &value) in slice.iter().enumerate() {
         if value.is_nan() {
@@ -237,8 +207,6 @@ pub(crate) fn validate_non_negative(slice: &[f64], name: &str) -> Result<(), Val
     Ok(())
 }
 
-/// Every value must be `> 0`; `NaN` is reported as [`ValidationError::NaN`].
-/// Infinite values pass; pair with [`validate_finite`] when they must not.
 pub(crate) fn validate_positive(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, &value) in slice.iter().enumerate() {
         if value.is_nan() {
@@ -255,8 +223,6 @@ pub(crate) fn validate_positive(slice: &[f64], name: &str) -> Result<(), Validat
     Ok(())
 }
 
-/// Every value must lie in `[0, 1]` (`Closed`) or `(0, 1)` (`Open`); `NaN` is
-/// reported as [`ValidationError::NaN`].
 pub(crate) fn validate_probability(
     slice: &[f64],
     name: &str,
@@ -308,8 +274,6 @@ pub(crate) fn validate_binary_f64(slice: &[f64], name: &str) -> Result<(), Valid
     Ok(())
 }
 
-/// Values must be non-decreasing. `NaN` compares false and therefore passes;
-/// pair with [`validate_finite`] when the data may contain `NaN`.
 pub(crate) fn validate_sorted(slice: &[f64], name: &str) -> Result<(), ValidationError> {
     for (index, pair) in slice.windows(2).enumerate() {
         if pair[1] < pair[0] {
@@ -322,7 +286,6 @@ pub(crate) fn validate_sorted(slice: &[f64], name: &str) -> Result<(), Validatio
     Ok(())
 }
 
-/// A flattened matrix must hold exactly `n_rows * n_cols` entries.
 pub(crate) fn validate_matrix_shape(
     values: &[f64],
     n_rows: usize,
@@ -340,14 +303,12 @@ pub(crate) fn validate_matrix_shape(
     Ok(())
 }
 
-/// Finite values in `[0, 1]`, reported as `PyErr` for binding-level callers.
 pub(crate) fn validate_probability_slice(values: &[f64], name: &str) -> Result<(), PyErr> {
     validate_finite(values, name)?;
     validate_probability(values, name, ProbabilityBounds::Closed)?;
     Ok(())
 }
 
-/// Finite values `> 0`, reported as `PyErr` for binding-level callers.
 pub(crate) fn validate_positive_finite_slice(values: &[f64], name: &str) -> Result<(), PyErr> {
     validate_finite(values, name)?;
     validate_positive(values, name)?;

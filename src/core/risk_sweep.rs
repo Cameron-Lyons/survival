@@ -1,39 +1,12 @@
-//! The backward risk-set sweep shared by the Cox kernels that work one
-//! death time at a time.
-//!
-//! R survival's (start, stop] kernels (`agfit4.c`, `zph2.c`) keep one
-//! running risk set per stratum: walking the death times from the largest
-//! down, the rows whose entry time is at or after the death time leave the
-//! set and then the rows whose stop time is at or after it join.
-//! [`RiskSetSums`] holds those running sums and resets them to exactly zero
-//! whenever the set empties (at every cut point of `survSplit` data), so
-//! rounding error never outlives a risk set.  [`RecenteredRiskSet`] adds
-//! `agfit4.c`'s rescaling of the risk scores for the Newton iteration of
-//! `coxph`.
-//!
-//! [`StratumSweep`] walks one stratum for `coxscho.c`, `coxdetail.c` and
-//! `zph1.c`/`zph2.c` (the C behind `residuals(type = "schoenfeld")`,
-//! `coxph.detail` and `cox.zph`), for right-censored and (start, stop] data
-//! alike, and hands each death time's sums to the kernel, which applies its
-//! own Breslow or Efron arithmetic.  Death times are visited in decreasing
-//! order; kernels needing ascending output reverse afterwards.
-
 use crate::error::{SurvivalError, SurvivalResult};
 use ndarray::ArrayView2;
 
-/// Weighted sums over a set of rows.
 #[derive(Debug, Clone)]
 pub(crate) struct RiskSetSums {
-    /// Number of rows.
     pub count: usize,
-    /// `sum w`.
     pub weight: f64,
-    /// `sum w r` (risk `r = exp(lp)`).
     pub denom: f64,
-    /// `sum w r x`.
     pub a: Vec<f64>,
-    /// `sum w r x x'`, row-major `nvar x nvar` (lower triangle); empty
-    /// unless second moments were requested.
     pub cmat: Vec<f64>,
 }
 
@@ -52,7 +25,6 @@ impl RiskSetSums {
         }
     }
 
-    /// Empties the set, every sum exactly zero.
     pub(crate) fn clear(&mut self) {
         self.count = 0;
         self.weight = 0.0;
@@ -61,8 +33,6 @@ impl RiskSetSums {
         self.cmat.fill(0.0);
     }
 
-    /// Adds a row with case weight `weight`, weighted risk `risk = w r` and
-    /// covariates `x`.
     #[inline]
     pub(crate) fn add(&mut self, weight: f64, risk: f64, x: &[f64]) {
         self.count += 1;
@@ -70,9 +40,6 @@ impl RiskSetSums {
         self.accumulate(risk, x);
     }
 
-    /// Removes a row added with the same `risk`.  Removing the last row
-    /// resets the sums to exactly zero instead (`agfit4.c`), so no
-    /// cancellation error carries over to the next risk set.
     #[inline]
     pub(crate) fn remove(&mut self, weight: f64, risk: f64, x: &[f64]) {
         self.count -= 1;
@@ -103,7 +70,6 @@ impl RiskSetSums {
         }
     }
 
-    /// Multiplies the risk-weighted sums by `factor`.
     fn rescale(&mut self, factor: f64) {
         self.denom *= factor;
         for sum in self.a.iter_mut().chain(&mut self.cmat) {
@@ -112,23 +78,11 @@ impl RiskSetSums {
     }
 }
 
-/// The running risk set of `agfit4.c`'s likelihood evaluation, with second
-/// moments: sums of the weighted risk scores `w exp(eta - recenter)`.  The
-/// centre follows the mean linear predictor of the set, so `exp` neither
-/// overflows nor underflows the whole set away when the linear predictors
-/// are large (an offset of -750, or near-infinite coefficients).  It
-/// cancels from the likelihood, score and information as long as the
-/// deaths' own `eta` terms are shifted by it too.  As in `agfit4.c`, a
-/// row's risk score is recomputed about the current centre when it leaves.
 #[derive(Debug)]
 pub(crate) struct RecenteredRiskSet {
     pub sums: RiskSetSums,
-    /// `sum eta` over the set.
     etasum: f64,
-    /// The constant subtracted from every linear predictor.
     pub recenter: f64,
-    /// Number of times the centre moved, over every evaluation
-    /// (`agreg.fit`'s `info["rescale"]`).
     pub rescales: i32,
 }
 
@@ -142,32 +96,21 @@ impl RecenteredRiskSet {
         }
     }
 
-    /// Starts an evaluation of the likelihood: an empty set centred at 0.
     pub(crate) fn restart(&mut self) {
         self.clear();
         self.recenter = 0.0;
     }
 
-    /// Empties the set for a new stratum; as in `agfit4.c` the centre
-    /// carries over.
     pub(crate) fn clear(&mut self) {
         self.sums.clear();
         self.etasum = 0.0;
     }
 
-    /// The weighted risk score `w exp(eta - recenter)`.
     #[inline]
     pub(crate) fn risk(&self, eta: f64, weight: f64) -> f64 {
         (eta - self.recenter).exp() * weight
     }
 
-    /// Adds a row.  When the mean linear predictor of the set, the row
-    /// included, lies more than 200 from the centre, the centre moves to it
-    /// and the sums are rescaled first; a move beyond `exp`'s range while
-    /// rows are at risk is `agfit4.c`'s overflow error.  The deaths already
-    /// added at the current death time count as at risk here, whereas
-    /// `agfit4.c` holds them apart (`denom2`) and leaves them on the old
-    /// centre.
     #[inline]
     pub(crate) fn add(&mut self, eta: f64, weight: f64, x: &[f64]) -> SurvivalResult<()> {
         self.etasum += eta;
@@ -187,7 +130,6 @@ impl RecenteredRiskSet {
         Ok(())
     }
 
-    /// Removes a row of the set (see [`RiskSetSums::remove`]).
     #[inline]
     pub(crate) fn remove(&mut self, eta: f64, weight: f64, x: &[f64]) {
         self.sums.remove(weight, self.risk(eta, weight), x);
@@ -199,12 +141,6 @@ impl RecenteredRiskSet {
     }
 }
 
-/// Whether each row of a stratum (`rows`, sorted by ascending stop time)
-/// has one of the stratum's death times in its interval `(entry, stop]`,
-/// `agreg.fit`'s `!ignore`.  Only those rows ever belong to a death time's
-/// risk set.  A sweep that walks them alone removes only rows it has added:
-/// a row that entered at or after a death time spans a later death time, so
-/// it joined the set before the sweep reached this one.
 pub(crate) fn spans_a_death(
     rows: &[usize],
     stop: &[f64],
@@ -212,7 +148,6 @@ pub(crate) fn spans_a_death(
     status: &[i32],
 ) -> Vec<bool> {
     let mut spans = vec![false; rows.len()];
-    // The largest death time at or before the current stop time.
     let mut last_death = f64::NEG_INFINITY;
     let mut end = 0;
     while end < rows.len() {
@@ -231,15 +166,11 @@ pub(crate) fn spans_a_death(
     spans
 }
 
-/// One death time's risk set and its tied deaths.
 #[derive(Debug)]
 pub(crate) struct DeathTime<'a> {
     pub time: f64,
-    /// Original row indices of the deaths at this time, in sorted order.
     pub deaths: &'a [usize],
-    /// Sums over the whole risk set (`entry < time <= stop`), deaths included.
     pub risk_set: &'a RiskSetSums,
-    /// Sums over the deaths only.
     pub tied: &'a RiskSetSums,
 }
 
@@ -248,48 +179,38 @@ impl DeathTime<'_> {
         self.deaths.len()
     }
 
-    /// Efron's `j`-th denominator `denom - j/d * denom2`.
     pub fn efron_denom(&self, j: usize) -> f64 {
         self.risk_set.denom - self.tied.denom * j as f64 / self.ndead() as f64
     }
 
-    /// Efron's `j`-th first-moment sum `a - j/d * a2`.
     pub fn efron_a(&self, j: usize, i: usize) -> f64 {
         self.risk_set.a[i] - self.tied.a[i] * j as f64 / self.ndead() as f64
     }
 
-    /// Efron's `j`-th second-moment sum `cmat - j/d * cmat2` (lower triangle).
     pub fn efron_cmat(&self, j: usize, i: usize, k: usize) -> f64 {
         let index = i * self.risk_set.a.len() + k;
         self.risk_set.cmat[index] - self.tied.cmat[index] * j as f64 / self.ndead() as f64
     }
 }
 
-/// The data of one stratum (in the caller's row order) and its rows sorted
-/// by ascending stop time.
 pub(crate) struct StratumSweep<'a> {
     pub stop: &'a [f64],
     pub entry: Option<&'a [f64]>,
     pub status: &'a [i32],
     pub x: ArrayView2<'a, f64>,
     pub weights: &'a [f64],
-    /// `exp(linear predictor)` (weights are applied inside the sweep).
     pub risk: &'a [f64],
-    /// Row indices of the stratum sorted by (stop time, index).
     pub rows: &'a [usize],
     pub second_moments: bool,
 }
 
 impl StratumSweep<'_> {
-    /// Visits every death time of the stratum from the largest downwards.
     pub fn for_each_death_time(&self, mut visit: impl FnMut(&DeathTime<'_>)) {
         let nvar = self.x.ncols();
         let x = self.x.as_standard_layout();
         let x = x.as_slice().expect("standard layout");
         let row_x = |row: usize| &x[row * nvar..(row + 1) * nvar];
         let rows = self.rows;
-        // Rows join the risk set by decreasing stop time and, for (start,
-        // stop] data, leave it by decreasing entry time.
         let (joining, leaving) = match self.entry {
             Some(entry) => {
                 let spans = spans_a_death(rows, self.stop, entry, self.status);
@@ -401,11 +322,8 @@ mod tests {
                 death.tied.denom,
             ));
         });
-        // t = 4: row 4 only (row 3 stopped at 3).
         assert_eq!(visited[0], (4.0, vec![4], 1, 1.0, 5.0, 1.0));
-        // t = 2: rows 1, 2, 3 (row 4 enters at 2.5).
         assert_eq!(visited[1], (2.0, vec![1, 2], 3, 4.0, 11.0, 3.0));
-        // t = 1: rows 0, 1, 3 (row 2 enters at 1.5).
         assert_eq!(visited[2], (1.0, vec![0], 3, 4.0, 9.0, 1.0));
     }
 
@@ -444,8 +362,6 @@ mod tests {
 
     #[test]
     fn rows_spanning_no_death_never_join_and_emptied_sets_restart_from_zero() {
-        // survSplit-like: (0, 1], (1, 2], (2, 3] pieces; (1.2, 1.8] spans no
-        // death time and the huge risk of (2, 3] leaves before t = 2.
         let stop = [1.0, 2.0, 3.0, 1.8, 2.0];
         let entry = [0.0, 1.0, 2.0, 1.2, 0.0];
         let status = [1, 1, 1, 0, 0];
@@ -473,7 +389,6 @@ mod tests {
             visited.push((death.time, death.risk_set.count, death.risk_set.denom, cmat));
         });
         assert_eq!(visited[0], (3.0, 1, 1e300, 1e300 * 3.0 * 3.0));
-        // Row 2 left the emptied set: the sums restart from exact zeros.
         assert_eq!(visited[1], (2.0, 2, 0.75, 2.0 + 6.25));
         assert_eq!(visited[2], (1.0, 2, 1.25, 1.0 + 6.25));
     }
@@ -494,7 +409,6 @@ mod tests {
         set.remove(-749.0, 2.0, &[2.0]);
         assert_eq!((set.sums.count, set.sums.denom), (0, 0.0));
 
-        // A centre move beyond exp's range while rows are at risk.
         let mut set = RecenteredRiskSet::new(1);
         set.restart();
         set.add(0.0, 1.0, &[0.0]).unwrap();
