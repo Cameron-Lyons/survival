@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A bare `cut()` term in `survfit`, `survdiff` and `survexp` formulas used the
+  raw variable, giving one curve per distinct value. `cut()` terms are now R
+  factors evaluated before subsetting, and `coxph`/`survreg` accept them.
+- Character columns are factors, as in R: a column of digit strings was fitted
+  as one numeric covariate. Character levels sort as strings ("10" before "9").
+- The bundled data sets keep R's factor levels, so models on `veteran`,
+  `colon`, `pbc` and others use R's reference levels and R's multi-state
+  examples on `hoel` and `mgus1` run. Factor columns are `survival.r.Factor`
+  lists.
+- `survSplit`, `tmerge`, `survcondense`, `finegray` and `survobrien` keep factor
+  levels; `tmerge` factor `event`/`tdc` arguments give factor columns.
+- `summary()` of a Cox fit with a monotone likelihood, `basehaz(centered=FALSE)`
+  and frailty standard errors return R's `Inf`/`NaN` instead of raising.
+- `royston()` centers a stratified fit's linear predictor within strata.
+- `Surv(time, event = status)` matches named arguments first, as R does.
+- `predict.survreg` returns the linear predictor, response and terms for a
+  stratum the fit did not see, and NA quantiles.
+- `ridge(df = ...)` beyond its columns and `cox_zph` with an overlapping
+  `assign` raise ordinary errors instead of panicking.
+- `tcut()` accepts calendar dates.
+- `survdiff`'s strata table keeps a level emptied by missing-value removal.
+
+### Added
+
+- `survival.r.Factor`, R's `factor()`: a list of labels that carries its levels.
+- `subset(strata=, states=)` and `dim` on ordinary and multi-state `survfit`
+  curves (R's `fit[...]`).
+
+### Performance
+
+- Factor terms build their design columns with NumPy and use the array design:
+  `coxph` with two factors on 100,000 rows takes 0.12 s (R 0.26 s), and
+  `predict` on 20,000 new rows 2.7 ms (R 4.0 ms).
+- The Aalen-Johansen influence updates run over contiguous rows: a multi-state
+  `survfit(..., id=)` on 100,000 subjects takes 1.8 s, down from 4.1 s (R 3.2 s).
+
 ## 2.0.0
 
 2.0 turns `survival.r` into a faithful port of R's survival 3.8: the formula
