@@ -665,7 +665,7 @@ class TMergeFrame(Mapping[str, list[Any]]):
 
     def copy(self) -> TMergeFrame:
         return TMergeFrame(
-            columns={name: list(values) for name, values in self.columns.items()},
+            columns={name: values.copy() for name, values in self.columns.items()},
             tname=dict(self.tname),
             tevent=dict(self.tevent),
             tdcvar=tuple(self.tdcvar),

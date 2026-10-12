@@ -32,6 +32,8 @@ from ._coerce import (
     _is_missing_value,
     _match_string_arg,
     _materialize_1d,
+    _rows_of,
+    _select_rows,
     _materialize_labels,
     _normalize_bool_option,
     _r_factor_levels,
@@ -45,6 +47,7 @@ from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
     _column,
+    _column_source,
     _column_or_values,
     _covariate_term_columns,
     _covariate_term_name,
@@ -738,6 +741,11 @@ def _survobrien_transformed(
     return out
 
 
+def _column_rows(data: Any, name: str) -> Any:
+    source = _column_source(data, name)
+    return _rows_of(source, _materialize_1d(source, name))
+
+
 def survobrien(
     formula: str,
     data: Any | None = None,
@@ -792,7 +800,7 @@ def survobrien(
     columns.append(("status", list(expansion.status)))
     knames = [*keepers, *terms.strata]
     columns += [
-        (label, list(_subset_sequence(_column(data, name), rows, name)))
+        (label, _select_rows(_column_rows(data, name), rows))
         for label, name in zip(
             [*_make_unique(knames), *terms.clusters], [*knames, *terms.clusters], strict=True
         )

@@ -16,6 +16,7 @@ from typing import Any, cast
 import numpy as np
 
 from .. import _survival as _core
+from .._factor import Factor
 
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
@@ -574,6 +575,17 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
             contrast=getattr(source, "contrast", None),
         )
     )
+
+
+def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
+    """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does."""
+
+    selected = list(map(values.__getitem__, rows))
+    categories = _categories(values)
+    if categories is None:
+        return selected
+    ordered = getattr(values, "ordered", getattr(getattr(values, "dtype", None), "ordered", False))
+    return Factor(selected, categories, bool(ordered))
 
 
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:

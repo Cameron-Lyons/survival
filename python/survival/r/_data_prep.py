@@ -21,10 +21,11 @@ from typing import Any, TypeVar, cast
 import numpy as np
 
 from .. import _survival as _core
+from .._factor import Factor
 from ._coerce import (
-    _DEFAULT_NA_ACTION,
     _as_character,
     _categories,
+    _DEFAULT_NA_ACTION,
     _finite_float,
     _float_vector,
     _floats_or_nan,
@@ -37,7 +38,9 @@ from ._coerce import (
     _normalize_positive_scale,
     _numeric_ndarray,
     _pop_dotted_keyword,
+    _rows_of,
     _scalar_or_vector,
+    _select_rows,
     _warn_outside_package,
 )
 from ._formula import (
@@ -333,7 +336,9 @@ def _status_labels(states: Sequence[str], status: Sequence[float | int | None]) 
     if not states:
         return [None if code is None or code != code else int(code) for code in status]
     labels = ["censor", *states]
-    return [None if code is None or code != code else labels[int(code)] for code in status]
+    return Factor(
+        [None if code is None or code != code else labels[int(code)] for code in status], labels
+    )
 
 
 def _cut_points(cut: Any) -> list[float]:
@@ -350,7 +355,7 @@ def _output_name(value: Any, name: str) -> str:
 
 
 def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> dict[str, list[Any]]:
-    return {name: list(map(values.__getitem__, rows)) for name, values in columns.items()}
+    return {name: _select_rows(values, rows) for name, values in columns.items()}
 
 
 def _data_column_sources(data: Any, name: str) -> dict[str, Any]:
@@ -370,7 +375,7 @@ def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
     """Every retained column as a list, in data order."""
 
     columns = {
-        column: _materialize_1d(source, column)
+        column: _rows_of(source, _materialize_1d(source, column))
         for column, source in _data_column_sources(data, name).items()
     }
     if len({len(values) for values in columns.values()}) > 1:
@@ -715,7 +720,7 @@ def survcondense(
     new_start = condensed.start
     output: dict[str, list[Any]] = {}
     for name, values in variables:
-        output.setdefault(name, [values[row] for row in keep])
+        output.setdefault(name, _select_rows(values, keep))
     if mf.weights is not None:
         weights_column = weights_name or (weights if isinstance(weights, str) else "(weights)")
         output.setdefault(str(weights_column), [mf.weights[row] for row in keep])
@@ -1017,7 +1022,7 @@ def _first_call_frame(
         order.sort(key=lambda idx: (first_seen[keys2[idx]], tstop[idx]))
     position = {key: idx for idx, key in enumerate(keys1)}
     rows = [position[keys2[idx]] for idx in order]
-    newdata = {name: [values[row] for row in rows] for name, values in columns1.items()}
+    newdata = {name: _select_rows(values, rows) for name, values in columns1.items()}
     newdata[str(control["tstartname"])] = [tstart[idx] for idx in order]
     newdata[str(control["tstopname"])] = [tstop[idx] for idx in order]
     ids = [keys2[idx] for idx in order]
@@ -1219,6 +1224,19 @@ def _event_values(
     return values
 
 
+def _factor_update(values: list[Any], levels: Sequence[Any], prior: Any) -> Factor:
+    """A factor ``tdc`` or ``event`` column: the prior factor's levels, else the update's,
+    with a ``tdc`` default outside them appended as R's ``tmerge`` does."""
+
+    declared = list(_categories(prior) or levels)
+    extra = [
+        value
+        for value in dict.fromkeys(values)
+        if not _is_missing_value(value) and value not in declared
+    ]
+    return Factor(values, declared + extra)
+
+
 def _apply_tmerge_argument(
     newdata: dict[str, list[Any]],
     data2: Any,
@@ -1272,13 +1290,13 @@ def _apply_tmerge_argument(
         not first_call,
     )
     rows = list(step.row)
-    expanded = {column: [values[row] for row in rows] for column, values in newdata.items()}
+    expanded = {column: _select_rows(values, rows) for column, values in newdata.items()}
     for column, censor in tevent.items():
         for row in step.censor_rows:
             expanded[column][row] = censor
     expanded[startname] = list(step.start)
     expanded[stopname] = list(step.stop)
-    prior_expanded = None if prior is None else [prior[row] for row in rows]
+    prior_expanded = None if prior is None else _select_rows(prior, rows)
     if kind in {"tdc", "cumtdc"}:
         expanded[name] = (
             _tdc_values(step, argument, prior_expanded) if kind == "tdc" else list(step.cumulative)
@@ -1289,6 +1307,8 @@ def _apply_tmerge_argument(
         if name not in tevent:
             tevent[name] = argument.censor_value()
         expanded[name] = _event_values(step, argument, prior_expanded, tevent[name], len(rows))
+    if argument.levels is not None:
+        expanded[name] = _factor_update(expanded[name], argument.levels, prior)
     newdata.clear()
     newdata.update(expanded)
     return dict(zip(_TMERGE_COUNT_NAMES, step.tcount, strict=True))
