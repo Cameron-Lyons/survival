@@ -266,6 +266,14 @@ For Python-facing changes, rebuild the extension before running Python tests.
 An import failure that reports a missing symbol often means the local `.so` is
 stale, not that the Python wrapper is wrong.
 
+## Documentation
+
+Describe user-facing behavior in the matching topic guide under `docs/` (listed
+in the README's documentation section) rather than adding a note per change.
+Record every difference from R, corrected R defect and deliberately reproduced R
+quirk in `docs/r-compatibility.md`. Keep algorithmic notes on scaling in
+`docs/performance.md`; leave before/after timings in the pull request.
+
 ## Style Notes
 
 - Keep generated files generated and hand-maintained files hand-maintained.
