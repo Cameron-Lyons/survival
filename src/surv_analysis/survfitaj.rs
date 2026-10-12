@@ -733,6 +733,29 @@ impl AJInfluence {
     }
 }
 
+fn row(matrix: &Array2<f64>, index: usize) -> &[f64] {
+    let width = matrix.ncols();
+    &matrix.as_slice().expect("standard layout")[index * width..(index + 1) * width]
+}
+
+fn row_mut(matrix: &mut Array2<f64>, index: usize) -> &mut [f64] {
+    let width = matrix.ncols();
+    &mut matrix.as_slice_mut().expect("standard layout")[index * width..(index + 1) * width]
+}
+
+fn rows_mut_pair(matrix: &mut Array2<f64>, a: usize, b: usize) -> (&mut [f64], &mut [f64]) {
+    debug_assert_ne!(a, b);
+    let width = matrix.ncols();
+    let data = matrix.as_slice_mut().expect("standard layout");
+    if a < b {
+        let (low, high) = data.split_at_mut(b * width);
+        (&mut low[a * width..(a + 1) * width], &mut high[..width])
+    } else {
+        let (low, high) = data.split_at_mut(a * width);
+        (&mut high[..width], &mut low[b * width..(b + 1) * width])
+    }
+}
+
 fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
     let ntime = d.utime.len();
     let nused = d.sort2.len();
@@ -838,13 +861,13 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
             } else {
                 ctime - d.t0
             };
-            for j in 0..nstate {
+            for (j, se) in se3.iter_mut().enumerate() {
                 let mut temp = 0.0;
-                for g in 0..ngrp {
-                    ua[[j, g]] += delta * u[[j, g]];
-                    temp += ua[[j, g]] * ua[[j, g]];
+                for (a, &x) in row_mut(ua, j).iter_mut().zip(row(u, j)) {
+                    *a += delta * x;
+                    temp += *a * *a;
                 }
-                se3[j] = temp.sqrt();
+                *se = temp.sqrt();
             }
             while person1 < nused {
                 let i1 = d.sort1[person1];
@@ -886,20 +909,26 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
             if tdeath == 0 {
                 skip_update = true;
             } else {
-                uold.assign(u);
+                for j in 0..nstate {
+                    if h[[j, j]] != 0.0 {
+                        row_mut(uold, j).copy_from_slice(row(u, j));
+                    }
+                }
                 for j in 0..nstate {
                     if h[[j, j]] == 0.0 {
                         continue;
                     }
                     for k in 0..nstate {
                         if k != j && h[[j, k]] != 0.0 {
-                            for g in 0..ngrp {
-                                u[[k, g]] += uold[[j, g]] * h[[j, k]];
+                            let hjk = h[[j, k]];
+                            for (x, &old) in row_mut(u, k).iter_mut().zip(row(uold, j)) {
+                                *x += old * hjk;
                             }
                         }
                     }
-                    for g in 0..ngrp {
-                        u[[j, g]] += uold[[j, g]] * h[[j, j]];
+                    let hjj = h[[j, j]];
+                    for (x, &old) in row_mut(u, j).iter_mut().zip(row(uold, j)) {
+                        *x += old * hjj;
                     }
                 }
                 for &i2 in &d.sort2[person2..] {
@@ -922,27 +951,28 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
                         let (j, k) = d.trmat[jk];
                         let haz = ntrans[[i, jk]] / nrisk[[i, j]];
                         let htemp = haz / nrisk[[i, j]];
-                        for g in 0..ngrp {
-                            if wg[[j, g]] > 0.0 {
-                                c[[jk, g]] -= wg[[j, g]] * htemp;
+                        for (x, &w) in row_mut(c, jk).iter_mut().zip(row(wg, j)) {
+                            if w > 0.0 {
+                                *x -= w * htemp;
                             }
                         }
                         if j != k {
-                            for g in 0..ngrp {
-                                if wg[[j, g]] > 0.0 {
-                                    let term = wg[[j, g]] * phat[j] * htemp;
-                                    u[[j, g]] += term;
-                                    u[[k, g]] -= term;
+                            let (from, to) = rows_mut_pair(u, j, k);
+                            for ((x, y), &w) in from.iter_mut().zip(to).zip(row(wg, j)) {
+                                if w > 0.0 {
+                                    let term = w * phat[j] * htemp;
+                                    *x += term;
+                                    *y -= term;
                                 }
                             }
                         }
                     }
                 }
                 for (j, se) in se1.iter_mut().enumerate() {
-                    *se = u.row(j).iter().map(|v| v * v).sum::<f64>().sqrt();
+                    *se = row(u, j).iter().map(|v| v * v).sum::<f64>().sqrt();
                 }
                 for (jk, se) in se2.iter_mut().enumerate() {
-                    *se = c.row(jk).iter().map(|v| v * v).sum::<f64>().sqrt();
+                    *se = row(c, jk).iter().map(|v| v * v).sum::<f64>().sqrt();
                 }
             }
         }

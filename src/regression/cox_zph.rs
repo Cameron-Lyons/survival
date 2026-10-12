@@ -352,6 +352,14 @@ pub fn cox_zph<'a>(
     let assign: Vec<Vec<usize>> = if terms {
         let assign = assign.unwrap_or(&default);
         validate_assign(assign, fit.nvar())?;
+        let mut owned = vec![false; fit.nvar()];
+        for &column in assign.iter().flatten() {
+            if std::mem::replace(&mut owned[column], true) {
+                return Err(SurvivalError::invalid_input(format!(
+                    "column {column} belongs to more than one term"
+                )));
+            }
+        }
         assign.to_vec()
     } else {
         default
@@ -711,6 +719,21 @@ mod tests {
                 assert!(zph.y.iter().flatten().all(|v| v.is_finite()));
             }
         }
+    }
+
+    #[test]
+    fn zph_rejects_a_column_assigned_to_two_terms() {
+        let fit = fitted(false, false);
+        let error = cox_zph(
+            &fit,
+            &ZphTransform::Km,
+            true,
+            false,
+            true,
+            Some(&[vec![0], vec![0]]),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("more than one term"));
     }
 
     #[test]

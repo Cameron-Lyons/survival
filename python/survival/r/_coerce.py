@@ -16,6 +16,7 @@ from typing import Any, cast
 import numpy as np
 
 from .. import _survival as _core
+from .._factor import Factor
 
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
@@ -369,9 +370,11 @@ def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
             try:
                 missing.update(compress(range(n), map(math.isnan, materialized)))
             except (TypeError, OverflowError):
-                missing.update(
-                    idx for idx, value in enumerate(materialized) if _row_has_missing(value)
-                )
+                types = set(map(type, materialized))
+                if not types <= {str, int, bool}:
+                    missing.update(
+                        idx for idx, value in enumerate(materialized) if _row_has_missing(value)
+                    )
             except UserWarning as warning:
                 if str(warning) != _MASKED_FLOAT_WARNING:
                     raise
@@ -574,6 +577,17 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
             contrast=getattr(source, "contrast", None),
         )
     )
+
+
+def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
+    """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does."""
+
+    selected = list(map(values.__getitem__, rows))
+    categories = _categories(values)
+    if categories is None:
+        return selected
+    ordered = getattr(values, "ordered", getattr(getattr(values, "dtype", None), "ordered", False))
+    return Factor(selected, categories, bool(ordered))
 
 
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
@@ -829,12 +843,15 @@ def _as_character(value: Any) -> str:
 
 
 def _r_sort_key(value: Any) -> tuple[Any, ...]:
-    """R's ``sort`` order for factor levels: numbers (and logicals) before strings."""
+    """R's ``sort`` order for factor levels: numbers (and logicals) before strings,
+    which sort as strings even when they look like numbers."""
 
     if isinstance(value, tuple):
         return tuple(_r_sort_key(part) for part in value)
     if _is_bool_like(value):
         return (0, int(value))
+    if isinstance(value, str):
+        return (1, value)
     try:
         numeric = float(value)
     except (TypeError, ValueError):

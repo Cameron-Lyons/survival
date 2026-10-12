@@ -275,7 +275,7 @@ def _formula_model_frame(
             term = model_term.term
             if isinstance(term, _InteractionTerm):
                 raise ValueError("Interaction terms are not valid for this function")
-            plain = term.transform is None and term.arithmetic is None
+            plain = term.transform is None and term.arithmetic is None and term.call is None
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
         elif isinstance(model_term, _ModelStrataTerm):

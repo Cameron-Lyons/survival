@@ -428,11 +428,13 @@ class DatasetsHandler(TopicHandler):
             if col["type"] in ("factor", "character"):
                 present = sorted({str(v) for v in values if v is not None})
                 if col["type"] == "factor":
-                    if present and not set(present) <= set(col["levels"]):
+                    categories = list(getattr(values, "categories", ()))
+                    if categories != col["levels"]:
                         raise FixtureMismatchError(
-                            f"{col['name']}: values {present[:5]} are not factor levels "
-                            f"{col['levels']}"
+                            f"{col['name']}: levels {categories} differ from R's {col['levels']}"
                         )
+                    codes = sum(categories.index(v) + 1 for v in values if v is not None)
+                    assert_exact(codes, col["codes_sum"], path=f"{col['name']}.codes_sum")
                 elif present != list(col["levels"]):
                     raise FixtureMismatchError(f"{col['name']}: distinct values differ from R")
             elif col["type"] == "logical":

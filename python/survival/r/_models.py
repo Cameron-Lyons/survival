@@ -1068,6 +1068,43 @@ def _survfit_stratum(
     return _derived_survfit(result, _engine_of(result).select_curves([index]), time0=result.time0)
 
 
+def _subset_survfit(
+    result: SurvfitResult | SurvfitMultiStateResult,
+    strata: Any | None = None,
+    states: Any | None = None,
+    drop: bool = True,
+) -> SurvfitResult | SurvfitMultiStateResult:
+    """``[.survfit`` and ``[.survfitms``: keep the selected curves and states, by label or
+    0-based index, in the order given."""
+
+    if isinstance(strata, str | int | np.integer):
+        strata = [strata]
+    if isinstance(states, str | int | np.integer):
+        states = [states]
+    names = result.strata_names
+    subset = result
+    if strata is not None:
+        if not names:
+            if any(
+                _integer_scalar(value, "strata") != 0 for value in _materialize_1d(strata, "strata")
+            ):
+                raise IndexError("subscript out of bounds")
+        else:
+            kept = _positions(strata, len(names), names, "strata")
+            engine = _engine_of(result).select_curves(kept)
+            labels = _make_unique([names[index] for index in kept])
+            template = dataclasses.replace(result, strata=dict.fromkeys(labels, 0))
+            subset = _derived_survfit(template, engine, time0=result.time0)
+            if len(kept) == 1 and not drop:
+                subset = dataclasses.replace(subset, strata={labels[0]: len(subset.time)})
+    if states is not None:
+        if not isinstance(subset, SurvfitMultiStateResult):
+            raise TypeError("states can be selected only from multi-state curves")
+        positions = _positions(states, len(subset.states), list(subset.states), "states")
+        subset = _subset_survfit_multistate(subset, positions)
+    return subset
+
+
 def _survfit_strata_curves(result: Any) -> Any:
     """The bridge's shape for a stratified ``survfit``: ``{bare level label: curve}``.
 

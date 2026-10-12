@@ -427,6 +427,24 @@ def _ratetable_argument(ratetable: Any) -> RateTable:
     raise ValueError("Invalid rate table")
 
 
+def _is_date_value(value: Any) -> bool:
+    return isinstance(value, _Date) or _is_numpy_scalar(value, "datetime64")
+
+
+def _tcut_values(data: Any, expression: str, n: int) -> list[float]:
+    """The ``x`` of a formula ``tcut()``: R's ``as.numeric``, which turns a date column
+    into days since 1970-01-01."""
+
+    name, quoted = _formula_name(expression.strip())
+    if quoted or name in (_data_column_names(data) or ()):
+        values = _materialize_1d(_column_source(data, name), name)
+        if any(_is_date_value(value) for value in values):
+            if len(values) != n:
+                raise ValueError("formula columns must have the same length as the Surv response")
+            return [_ratetable_day(value) for value in values]
+    return _arithmetic_expression_values(data, expression, n)
+
+
 def _breaks_vector(expression: str, data: Any) -> list[float]:
     """A ``tcut()``/``cut()`` ``breaks`` argument as numbers: a literal vector,
     ``as.Date(...)`` as days since 1970-01-01, or a column of *data* read whole (R
@@ -437,7 +455,10 @@ def _breaks_vector(expression: str, data: Any) -> list[float]:
         return [_ratetable_day(value) for value in _literal_vector(text[8:-1])]
     name, quoted = _formula_name(text)
     if quoted or name in (_data_column_names(data) or ()):
-        return _floats_or_nan(_column(data, name))
+        values = _column(data, name)
+        if any(_is_date_value(value) for value in values):
+            return [_ratetable_day(value) for value in values]
+        return _floats_or_nan(values)
     return _numeric_vector(_literal_vector(text))
 
 
@@ -567,7 +588,7 @@ def _tcut_call(call: str, data: Any, n: int) -> _CallTerm:
     )
     scale = _numeric_scalar(_literal_vector(arguments.get("scale", "1")), "scale")
     result = _core.tcut(
-        _arithmetic_expression_values(data, arguments["x"], n),
+        _tcut_values(data, arguments["x"], n),
         _breaks_vector(arguments["breaks"], data),
         labels,
         scale,
@@ -883,7 +904,7 @@ def _population_variable_overrides(
                 [None if math.isnan(v) else factor.levels[int(v) - 1] for v in factor.values],
                 factor.levels,
             )
-        elif term.transform is None and term.arithmetic is None:
+        elif term.call is None and term.transform is None and term.arithmetic is None:
             source = _column_source(mf.data, term.column)
             overrides[label] = _rows_of(source, _materialize_labels(source, label))
     return overrides

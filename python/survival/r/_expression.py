@@ -11,7 +11,7 @@ import math
 import numbers
 import re
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from operator import add, mul, sub, truediv
@@ -66,6 +66,21 @@ class _ExpressionVector(list[Any]):
         )
 
 
+def _all_logical(values: Sequence[Any]) -> bool:
+    """Whether *values* hold a logical and nothing but logicals and missing values."""
+
+    types = set(map(type, values))
+    logical = {
+        kind
+        for kind in types
+        if kind is bool or (kind.__module__ == "numpy" and kind.__name__ in {"bool", "bool_"})
+    }
+    if not logical:
+        return False
+    others = types - logical - {type(None)}
+    return not others or all(_is_missing_value(value) for value in values if type(value) in others)
+
+
 def _expression_source(source: Any, name: str) -> _ExpressionVector:
     """A column's declared type takes precedence over inference from its values."""
     if isinstance(source, _ExpressionVector):
@@ -89,9 +104,7 @@ def _expression_source(source: Any, name: str) -> _ExpressionVector:
             kind = "logical"
         elif getattr(dtype, "kind", None) in {"i", "u", "f"}:
             kind = "numeric"
-        elif any(_is_bool_like(value) for value in values) and all(
-            _is_bool_like(value) or _is_missing_value(value) for value in values
-        ):
+        elif _all_logical(values):
             kind = "logical"
         elif getattr(dtype, "kind", None) in {"U", "S"} or any(
             isinstance(value, str) for value in values

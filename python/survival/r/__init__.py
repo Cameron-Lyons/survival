@@ -11,6 +11,7 @@ implementation modules (the package ships ``py.typed``).
 
 from __future__ import annotations
 
+from .._factor import Factor
 from .._survival import AnovaCoxphResult
 from ._aareg import aareg
 from ._aareg_print import print_aareg, print_summary_aareg
@@ -307,6 +308,7 @@ __all__ = [
     "CoxphmsModel",
     "CoxphmsSchoenfeldResiduals",
     "CoxphmsShare",
+    "Factor",
     "FineGrayFrame",
     "FineGrayOutput",
     "ModelFrame",

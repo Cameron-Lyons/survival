@@ -20,6 +20,7 @@ from ._coerce import (
     _materialize_1d,
     _normalize_bool_option,
     _pop_dotted_keyword,
+    _select_rows,
 )
 from ._formula import _model_variables, _strata_keep, _strata_specs, model_frame
 from ._names import _make_names
@@ -129,7 +130,7 @@ def finegray(
     if mf.weights is not None:
         variables.append(("(weights)", list(mf.weights)))
     columns: dict[str, list[Any]] = {
-        name: [values[idx] for idx in source] for name, values in variables
+        name: _select_rows(values, source) for name, values in variables
     }
     columns[output_names[0]] = split.start
     columns[output_names[1]] = split.end

@@ -33,6 +33,9 @@ from .r import (
     CchModelResult as CchModelResult,
 )
 from .r import (
+    Factor as Factor,
+)
+from .r import (
     FineGrayFrame as FineGrayFrame,
 )
 from .r import (

@@ -116,18 +116,10 @@ def load_dataset(name: str) -> dict[str, list[Any]]:
         loader = getattr(module, candidate, None)
         if loader is not None:
             columns = loader()
-            schema = next(
-                case["expected"]["columns"] for case in cases("datasets") if case["dataset"] == name
-            )
-            for column in schema:
-                if column["type"] == "factor":
-                    key = column["name"]
-                    levels = column["levels"]
-                    values = [
-                        None if value is None else str(value).removesuffix(".0")
-                        for value in columns[key]
-                    ]
-                    columns[key] = RFactor(values, levels)
+            for key, values in columns.items():
+                categories = getattr(values, "categories", None)
+                if categories is not None:
+                    columns[key] = RFactor(values, categories)
             return columns
     raise UnsupportedCaseError(
         f"no Python loader for dataset {name!r} (tried {', '.join(candidates)})"
