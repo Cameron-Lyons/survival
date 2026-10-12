@@ -92,6 +92,9 @@
   `coxph(ties = "exact")` with 324 tied death times on 6,000 rows takes
   0.010 s, down from 0.58 s (R 0.064 s). Counting-process exact fits take
   0.21 s, down from 0.56 s.
+- Sparse frailty fits touch a group only when its risk set changes:
+  `coxph(~ x1 + frailty(id))` with 2,000 groups on 100,000 rows takes 0.33 s,
+  down from 5.95 s (R 4.10 s), and the gaussian frailty 0.47 s (R 6.51 s).
 
 ## 2.0.0
 

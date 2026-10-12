@@ -7,6 +7,25 @@ fn coxsafe(x: f64) -> f64 {
     x.clamp(-200.0, 22.0)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RunningSum {
+    hi: f64,
+    lo: f64,
+}
+
+impl RunningSum {
+    fn add(&mut self, value: f64) {
+        let sum = self.hi + value;
+        let part = sum - self.hi;
+        self.lo += (self.hi - (sum - part)) + (value - part);
+        self.hi = sum;
+    }
+
+    fn since(self, earlier: Self) -> f64 {
+        (self.hi - earlier.hi) + (self.lo - earlier.lo)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct InnerFit {
     pub loglik: f64,
@@ -42,6 +61,10 @@ pub(super) struct Kernel {
     tmean: Vec<f64>,
     cmat: Array2<f64>,
     cmat2: Array2<f64>,
+    running: Vec<RunningSum>,
+    flushed: Vec<RunningSum>,
+    tied: Vec<usize>,
+    tied_mark: Vec<bool>,
 }
 
 pub(super) struct KernelData<'a> {
@@ -160,15 +183,15 @@ impl Kernel {
             tmean: vec![0.0; nvar2],
             cmat: Array2::zeros((nvar, nvar2)),
             cmat2: Array2::zeros((nvar, nvar2)),
+            running: vec![RunningSum::default(); nvar + 2],
+            flushed: vec![RunningSum::default(); nf * (nvar + 2)],
+            tied: Vec::new(),
+            tied_mark: vec![false; nf],
         }
     }
 
     pub(super) fn means(&self) -> &[f64] {
         &self.means
-    }
-
-    fn nvar2(&self) -> usize {
-        self.nvar + self.nf
     }
 
     fn eta(&self, p: usize, beta: &[f64], fbeta: &[f64]) -> f64 {
@@ -287,6 +310,13 @@ impl Kernel {
     fn accumulate(&mut self, p: usize, risk: f64, sign: f64, second: bool) {
         let nf = self.nf;
         let fgrp = self.frail.as_ref().map(|f| f[p]);
+        if second
+            && let Some(g) = fgrp
+            && !self.tied_mark[g]
+        {
+            self.tied_mark[g] = true;
+            self.tied.push(g);
+        }
         let target = if second { &mut self.a2 } else { &mut self.a };
         if let Some(g) = fgrp {
             target[g] += sign * risk;
@@ -311,6 +341,35 @@ impl Kernel {
         }
     }
 
+    fn flush_group(&mut self, g: usize, u: &mut [f64], jmat: &mut Array2<f64>, fdiag: &mut [f64]) {
+        let width = self.nvar + 2;
+        let flushed = &mut self.flushed[g * width..(g + 1) * width];
+        let a = self.a[g];
+        if a != 0.0 {
+            let ds1 = self.running[0].since(flushed[0]);
+            let ds2 = self.running[1].since(flushed[1]);
+            u[g] -= a * ds1;
+            fdiag[g] += a * ds1 - a * a * ds2;
+            for ii in 0..self.nvar {
+                let dt = self.running[ii + 2].since(flushed[ii + 2]);
+                jmat[(ii, g)] += self.cmat[(ii, g)] * ds1 - a * dt;
+            }
+        }
+        flushed.copy_from_slice(&self.running);
+    }
+
+    fn flush_person(&mut self, p: usize, u: &mut [f64], jmat: &mut Array2<f64>, fdiag: &mut [f64]) {
+        if let Some(g) = self.frail.as_ref().map(|frail| frail[p]) {
+            self.flush_group(g, u, jmat, fdiag);
+        }
+    }
+
+    fn flush_all(&mut self, u: &mut [f64], jmat: &mut Array2<f64>, fdiag: &mut [f64]) {
+        for g in 0..self.nf {
+            self.flush_group(g, u, jmat, fdiag);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn death_step(
         &mut self,
@@ -324,20 +383,41 @@ impl Kernel {
         fdiag: &mut [f64],
     ) -> f64 {
         let nf = self.nf;
+        let nvar = self.nvar;
         let temp = k as f64 * self.method / ndead;
         let d2 = denom - temp * efron_wt;
-        for i in 0..self.nvar2() {
+        for ii in 0..nvar {
+            let i = ii + nf;
             let temp2 = (self.a[i] - temp * self.a2[i]) / d2;
             self.tmean[i] = temp2;
             u[i] -= meanwt * temp2;
-            if i < nf {
-                fdiag[i] += meanwt * temp2 * (1.0 - temp2);
-            } else {
-                let ii = i - nf;
-                for j in 0..=i {
-                    jmat[(ii, j)] += meanwt
-                        * ((self.cmat[(ii, j)] - temp * self.cmat2[(ii, j)]) / d2
-                            - temp2 * self.tmean[j]);
+        }
+        for ii in 0..nvar {
+            let i = ii + nf;
+            for j in nf..=i {
+                jmat[(ii, j)] += meanwt
+                    * ((self.cmat[(ii, j)] - temp * self.cmat2[(ii, j)]) / d2
+                        - self.tmean[i] * self.tmean[j]);
+            }
+        }
+        if nf > 0 {
+            let weight = meanwt / d2;
+            self.running[0].add(weight);
+            self.running[1].add(weight / d2);
+            for ii in 0..nvar {
+                self.running[ii + 2].add(weight * self.tmean[ii + nf]);
+            }
+            if temp != 0.0 {
+                for &g in &self.tied {
+                    let plain = self.a[g] / d2;
+                    let tied = (self.a[g] - temp * self.a2[g]) / d2;
+                    u[g] -= meanwt * (tied - plain);
+                    fdiag[g] += meanwt * (tied * (1.0 - tied) - plain * (1.0 - plain));
+                    for ii in 0..nvar {
+                        jmat[(ii, g)] += meanwt
+                            * (-temp * self.cmat2[(ii, g)] / d2
+                                - self.tmean[ii + nf] * (tied - plain));
+                    }
                 }
             }
         }
@@ -346,12 +426,23 @@ impl Kernel {
 
     fn reset_sums(&mut self, second: bool) {
         if second {
-            self.a2.fill(0.0);
-            self.cmat2.fill(0.0);
+            for &g in &self.tied {
+                self.a2[g] = 0.0;
+                self.cmat2.column_mut(g).fill(0.0);
+                self.tied_mark[g] = false;
+            }
+            self.tied.clear();
+            self.a2[self.nf..].fill(0.0);
+            self.cmat2.slice_mut(ndarray::s![.., self.nf..]).fill(0.0);
         } else {
             self.a.fill(0.0);
             self.cmat.fill(0.0);
         }
+    }
+
+    fn reset_running(&mut self) {
+        self.running.fill(RunningSum::default());
+        self.flushed.fill(RunningSum::default());
     }
 
     fn evaluate_right(
@@ -367,10 +458,12 @@ impl Kernel {
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
         let mut istrat = 0;
+        self.reset_running();
         for ip in 0..self.n {
             if ip == 0 || ip == self.strata_end[istrat] {
                 efron_wt = 0.0;
                 denom = 0.0;
+                self.flush_all(u, jmat, fdiag);
                 self.reset_sums(false);
                 self.reset_sums(true);
             }
@@ -382,6 +475,7 @@ impl Kernel {
             self.score[p] = zbeta.exp();
             let risk = self.score[p] * self.weights[p];
             denom += risk;
+            self.flush_person(p, u, jmat, fdiag);
             self.accumulate(p, risk, 1.0, false);
             if self.status[p] == 1 {
                 efron_wt += risk;
@@ -404,6 +498,7 @@ impl Kernel {
                 self.reset_sums(true);
             }
         }
+        self.flush_all(u, jmat, fdiag);
         newlk
     }
 
@@ -423,13 +518,16 @@ impl Kernel {
         let mut istrat = 0;
         let mut indx2 = 0;
         let mut denom = 0.0;
+        self.reset_running();
         self.reset_sums(false);
+        self.reset_sums(true);
         let mut person = 0;
         while person < self.n {
             let p = self.sort1[person];
             if self.status[p] == 0 {
                 let risk = self.score[p].exp() * self.weights[p];
                 denom += risk;
+                self.flush_person(p, u, jmat, fdiag);
                 self.accumulate(p, risk, 1.0, false);
                 person += 1;
             } else {
@@ -441,6 +539,7 @@ impl Kernel {
                     }
                     let risk = self.score[q].exp() * self.weights[q];
                     denom -= risk;
+                    self.flush_person(q, u, jmat, fdiag);
                     self.accumulate(q, risk, -1.0, false);
                     indx2 += 1;
                 }
@@ -456,6 +555,7 @@ impl Kernel {
                     }
                     let risk = self.score[q].exp() * self.weights[q];
                     denom += risk;
+                    self.flush_person(q, u, jmat, fdiag);
                     self.accumulate(q, risk, 1.0, false);
                     if self.status[q] == 1 {
                         deaths += 1.0;
@@ -488,9 +588,11 @@ impl Kernel {
                 istrat += 1;
                 denom = 0.0;
                 indx2 = person;
+                self.flush_all(u, jmat, fdiag);
                 self.reset_sums(false);
             }
         }
+        self.flush_all(u, jmat, fdiag);
         newlk
     }
 
