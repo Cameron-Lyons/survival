@@ -1,6 +1,4 @@
-
-
-fn selu_activation<B: burn::prelude::Backend, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D> {
+fn selu_activation<const D: usize>(x: Tensor<D>) -> Tensor<D> {
     let alpha: f32 = 1.673_263_2;
     let scale: f32 = 1.050_701;
     let positive = x.clone().clamp_min(0.0);

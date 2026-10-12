@@ -1,17 +1,21 @@
-
 #[derive(Module, Debug)]
-struct MultiHeadAttention<B: burn::prelude::Backend> {
-    query: Linear<B>,
-    key: Linear<B>,
-    value: Linear<B>,
-    output: Linear<B>,
+struct MultiHeadAttention {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
     dropout: Dropout,
     num_heads: usize,
     head_dim: usize,
 }
 
-impl<B: burn::prelude::Backend> MultiHeadAttention<B> {
-    fn new(device: &B::Device, hidden_size: usize, num_heads: usize, dropout_prob: f64) -> Self {
+impl MultiHeadAttention {
+    fn new(
+        device: &burn::tensor::Device,
+        hidden_size: usize,
+        num_heads: usize,
+        dropout_prob: f64,
+    ) -> Self {
         let head_dim = hidden_size / num_heads;
 
         Self {
@@ -25,7 +29,7 @@ impl<B: burn::prelude::Backend> MultiHeadAttention<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let [batch_size, hidden_size] = x.dims();
         let seq_len = 1;
 
@@ -61,21 +65,21 @@ impl<B: burn::prelude::Backend> MultiHeadAttention<B> {
 }
 
 #[derive(Module, Debug)]
-struct TransformerLayer<B: burn::prelude::Backend> {
-    attention: MultiHeadAttention<B>,
-    intermediate: Linear<B>,
-    output_dense: Linear<B>,
-    layer_norm1_gamma: burn::module::Param<Tensor<B, 1>>,
-    layer_norm1_beta: burn::module::Param<Tensor<B, 1>>,
-    layer_norm2_gamma: burn::module::Param<Tensor<B, 1>>,
-    layer_norm2_beta: burn::module::Param<Tensor<B, 1>>,
+struct TransformerLayer {
+    attention: MultiHeadAttention,
+    intermediate: Linear,
+    output_dense: Linear,
+    layer_norm1_gamma: burn::module::Param<Tensor<1>>,
+    layer_norm1_beta: burn::module::Param<Tensor<1>>,
+    layer_norm2_gamma: burn::module::Param<Tensor<1>>,
+    layer_norm2_beta: burn::module::Param<Tensor<1>>,
     dropout: Dropout,
     layer_norm_eps: f32,
 }
 
-impl<B: burn::prelude::Backend> TransformerLayer<B> {
+impl TransformerLayer {
     fn new(
-        device: &B::Device,
+        device: &burn::tensor::Device,
         hidden_size: usize,
         num_heads: usize,
         intermediate_size: usize,
@@ -113,7 +117,7 @@ impl<B: burn::prelude::Backend> TransformerLayer<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let attn_output = self.attention.forward(x.clone(), training);
         let attn_output = if training {
             self.dropout.forward(attn_output)
@@ -146,11 +150,11 @@ impl<B: burn::prelude::Backend> TransformerLayer<B> {
 }
 
 #[derive(Module, Debug)]
-struct SurvTraceNetwork<B: burn::prelude::Backend> {
-    cat_embeddings: Vec<Embedding<B>>,
-    num_projection: Linear<B>,
-    transformer_layers: Vec<TransformerLayer<B>>,
-    output_heads: Vec<Linear<B>>,
+struct SurvTraceNetwork {
+    cat_embeddings: Vec<Embedding>,
+    num_projection: Linear,
+    transformer_layers: Vec<TransformerLayer>,
+    output_heads: Vec<Linear>,
     hidden_size: usize,
     num_cat_features: usize,
     num_num_features: usize,
@@ -158,9 +162,9 @@ struct SurvTraceNetwork<B: burn::prelude::Backend> {
     num_durations: usize,
 }
 
-impl<B: burn::prelude::Backend> SurvTraceNetwork<B> {
+impl SurvTraceNetwork {
     fn new(
-        device: &B::Device,
+        device: &burn::tensor::Device,
         num_cat_features: usize,
         num_num_features: usize,
         cat_cardinalities: &[usize],
@@ -212,20 +216,20 @@ impl<B: burn::prelude::Backend> SurvTraceNetwork<B> {
 
     fn forward(
         &self,
-        x_cat: Option<Tensor<B, 2, Int>>,
-        x_num: Tensor<B, 2>,
+        x_cat: Option<Tensor<2, Int>>,
+        x_num: Tensor<2>,
         training: bool,
-    ) -> Vec<Tensor<B, 2>> {
+    ) -> Vec<Tensor<2>> {
         let [batch_size, _] = x_num.dims();
         let device = x_num.device();
 
-        let mut embeddings: Tensor<B, 2> = Tensor::zeros([batch_size, self.hidden_size], &device);
+        let mut embeddings: Tensor<2> = Tensor::zeros([batch_size, self.hidden_size], &device);
 
         if let Some(x_cat) = x_cat {
             for (i, emb) in self.cat_embeddings.iter().enumerate() {
-                let cat_slice: Tensor<B, 2, Int> = x_cat.clone().slice([0..batch_size, i..i + 1]);
-                let cat_emb_3d: Tensor<B, 3> = emb.forward(cat_slice);
-                let cat_emb: Tensor<B, 2> = cat_emb_3d.squeeze::<2>();
+                let cat_slice: Tensor<2, Int> = x_cat.clone().slice([0..batch_size, i..i + 1]);
+                let cat_emb_3d: Tensor<3> = emb.forward(cat_slice);
+                let cat_emb: Tensor<2> = cat_emb_3d.squeeze_dim::<2>(1);
                 embeddings = embeddings + cat_emb;
             }
         }
@@ -249,12 +253,7 @@ impl<B: burn::prelude::Backend> SurvTraceNetwork<B> {
         outputs
     }
 
-    fn forward_inference(
-        &self,
-        x_cat: Option<Tensor<B, 2, Int>>,
-        x_num: Tensor<B, 2>,
-    ) -> Vec<Tensor<B, 2>> {
+    fn forward_inference(&self, x_cat: Option<Tensor<2, Int>>, x_num: Tensor<2>) -> Vec<Tensor<2>> {
         self.forward(x_cat, x_num, false)
     }
 }
-

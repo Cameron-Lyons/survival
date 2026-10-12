@@ -324,6 +324,14 @@ are listed in [R compatibility](docs/r-compatibility.md).
 
 ### Further fixes and improvements
 
+- Migrated the optional neural survival models to Burn 0.22's runtime device,
+  tensor and optimizer APIs. Rust 1.95 or newer is now required. Python model
+  interfaces and stored weight layouts are unchanged. DeepHit training keeps
+  the gradient graph connected across competing-risk output heads.
+- Fixed SurvTrace categorical embeddings for batches containing a single row,
+  including single-row validation batches.
+- Avoid overflow when computing ridge penalty scales for large constant
+  covariates on platforms where NumPy's `longdouble` has double precision.
 - Keep ordinary numeric Cox fitting designs in owned arrays, borrow inputs
   directly into the optimizer's sorted data and reuse Breslow/Efron evaluation
   buffers. Separate Cox input types, fitting, prediction, curves and Python

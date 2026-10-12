@@ -88,4 +88,47 @@ mod tests {
             assert!((0.0..=1.0).contains(&h));
         }
     }
+
+    #[test]
+    fn temporal_modes_train_on_autodiff_device() {
+        for temporal_type in [
+            TemporalType::LSTM,
+            TemporalType::GRU,
+            TemporalType::Attention,
+            TemporalType::LSTMAttention,
+        ] {
+            let config = DynamicDeepHitConfig::new(
+                temporal_type,
+                2,
+                1,
+                false,
+                vec![],
+                vec![],
+                2,
+                1,
+                0.0,
+                0.5,
+                0.1,
+                0.01,
+                2,
+                1,
+                None,
+                0.0,
+                Some(42),
+            )
+            .unwrap();
+            let model = fit_dynamic_deephit_inner(
+                &[1.0, 0.5, 0.0, 1.0],
+                &[2, 2],
+                2,
+                2,
+                1,
+                &[1.0, 2.0],
+                &[1, 0],
+                &config,
+            );
+            assert_eq!(model.train_loss.len(), 1);
+            assert!(model.train_loss[0].is_finite());
+        }
+    }
 }

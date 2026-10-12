@@ -169,7 +169,7 @@ mod tests {
                 .iter()
                 .map(|&k| (pid[k], out.start[k], pstop[k]))
                 .collect();
-            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            rows.sort_by_key(|row| row.0);
             assert_eq!(rows, vec![(1, 0.0, 6.0), (2, 0.0, 5.0)]);
         }
     }

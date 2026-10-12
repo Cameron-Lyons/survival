@@ -16,7 +16,7 @@ mod tests {
         let result = group_lasso_cox(time, event, covariates, groups, &config).unwrap();
 
         assert_eq!(result.coefficients.len(), 3);
-        assert!(result.n_groups == 2);
+        assert_eq!(result.n_groups, 2);
     }
 
     #[test]

@@ -151,8 +151,8 @@ mod tests {
         assert!((link.bcloglog(0.0) - -2.9701952490421637).abs() < 1e-9);
         assert!((link.blog(0.0) - -2.995732273553991).abs() < 1e-9);
 
-        assert!((link.blogit(0.5)).abs() < 1e-9);
-        assert!((link.bprobit(0.5)).abs() < 1e-8);
+        assert!(link.blogit(0.5).abs() < 1e-9);
+        assert!(link.bprobit(0.5).abs() < 1e-8);
         assert!((link.bcloglog(0.5) - -0.36651292058166435).abs() < 1e-9);
         assert!((link.blog(0.5) - -LN_2).abs() < 1e-9);
     }

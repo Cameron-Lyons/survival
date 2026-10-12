@@ -461,6 +461,8 @@ def _r_var(values: Sequence[float]) -> float:
 
     if len(values) < 2 or any(not math.isfinite(value) for value in values):
         return math.nan
+    if all(value == values[0] for value in values):
+        return 0.0
     array = np.asarray(values, dtype=np.longdouble)
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         mean = np.sum(array) / len(values)

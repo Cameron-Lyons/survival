@@ -1,4 +1,3 @@
-
 #[allow(clippy::too_many_arguments)]
 fn fit_tracer_inner(
     x: &[f64],
@@ -12,12 +11,12 @@ fn fit_tracer_inner(
     event: &[i32],
     config: &TracerConfig,
 ) -> Tracer {
-    let device = burn::backend::ndarray::NdArrayDevice::Cpu;
+    let device = super::utils::training_device();
     let seed = config.seed.unwrap_or(crate::constants::DEFAULT_RANDOM_SEED);
 
     let (duration_bins, cuts) = compute_duration_bins(time, config.num_durations);
 
-    let mut model: TracerNetwork<AutodiffBackend> = TracerNetwork::new(&device, n_features, config);
+    let mut model: TracerNetwork = TracerNetwork::new(&device, n_features, config);
 
     let mut optimizer = AdamConfig::new()
         .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
@@ -83,18 +82,17 @@ fn fit_tracer_inner(
 
             let x_data =
                 burn::tensor::TensorData::new(x_batch, [batch_size, max_seq_len, n_features]);
-            let x_tensor: Tensor<AutodiffBackend, 3> = Tensor::from_data(x_data, &device);
+            let x_tensor: Tensor<3> = Tensor::from_data(x_data, &device);
 
             let mask_data =
                 burn::tensor::TensorData::new(mask_batch, [batch_size, max_seq_len, n_features]);
-            let mask_tensor: Tensor<AutodiffBackend, 3> = Tensor::from_data(mask_data, &device);
+            let mask_tensor: Tensor<3> = Tensor::from_data(mask_data, &device);
 
             let time_delta_data = burn::tensor::TensorData::new(
                 time_delta_batch,
                 [batch_size, max_seq_len, n_features],
             );
-            let time_delta_tensor: Tensor<AutodiffBackend, 3> =
-                Tensor::from_data(time_delta_data, &device);
+            let time_delta_tensor: Tensor<3> = Tensor::from_data(time_delta_data, &device);
 
             let outputs = model.forward(
                 x_tensor,
@@ -106,7 +104,8 @@ fn fit_tracer_inner(
 
             let mut all_logits = Vec::new();
             for logits_tensor in &outputs {
-                let logits_vec: Vec<f32> = tensor_to_vec_f32(logits_tensor.clone().inner());
+                let logits_vec: Vec<f32> =
+                    tensor_to_vec_f32(logits_tensor.clone().without_autodiff());
                 all_logits.push(logits_vec);
             }
 
@@ -159,7 +158,7 @@ fn fit_tracer_inner(
                     gradients[0].clone(),
                     [batch_size, config.num_durations],
                 );
-                let grad_tensor: Tensor<AutodiffBackend, 2> = Tensor::from_data(grad_data, &device);
+                let grad_tensor: Tensor<2> = Tensor::from_data(grad_data, &device);
 
                 let pseudo_loss = (outputs[0].clone() * grad_tensor).mean();
                 let grads = pseudo_loss.backward();

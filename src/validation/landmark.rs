@@ -901,7 +901,10 @@ mod tests {
         let before = compute_survival_at_times(&exact_time, &status, &[0.5], 0.95).unwrap();
         assert_eq!(before[0].survival, 1.0);
         assert_eq!(before[0].n_at_risk, 4);
-        assert!(compute_survival_at_times(&[], &[], &[0.5], 0.95).unwrap()[0].n_at_risk == 0);
+        assert_eq!(
+            compute_survival_at_times(&[], &[], &[0.5], 0.95).unwrap()[0].n_at_risk,
+            0
+        );
     }
 
     #[test]

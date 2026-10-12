@@ -381,7 +381,7 @@ mod tests {
         let predictions = vec![0.0, 0.5, 1.0];
         let result = compute_ice(covariates, predictions, 0, 3, true, None).unwrap();
         for curve in &result.ice_curves {
-            assert!((curve[0]).abs() < 1e-6);
+            assert!(curve[0].abs() < 1e-6);
         }
     }
 }

@@ -121,7 +121,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          rust-toolchain: '1.94.0'
+          rust-toolchain: '1.95.0'
           manylinux: ${{ runner.os == 'Linux' && '2014' || '' }}
           # setup-python only selects the host interpreter. Linux builds run in
           # manylinux and must use the requested CPython ABI inside that image.

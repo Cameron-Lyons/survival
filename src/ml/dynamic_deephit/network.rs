@@ -1,15 +1,14 @@
-
 #[derive(Module, Debug)]
-struct LSTMCell<B: burn::prelude::Backend> {
-    input_gate: Linear<B>,
-    forget_gate: Linear<B>,
-    cell_gate: Linear<B>,
-    output_gate: Linear<B>,
+struct LSTMCell {
+    input_gate: Linear,
+    forget_gate: Linear,
+    cell_gate: Linear,
+    output_gate: Linear,
     hidden_size: usize,
 }
 
-impl<B: burn::prelude::Backend> LSTMCell<B> {
-    fn new(device: &B::Device, input_size: usize, hidden_size: usize) -> Self {
+impl LSTMCell {
+    fn new(device: &Device, input_size: usize, hidden_size: usize) -> Self {
         let gate_size = hidden_size;
         Self {
             input_gate: LinearConfig::new(input_size + hidden_size, gate_size).init(device),
@@ -22,10 +21,10 @@ impl<B: burn::prelude::Backend> LSTMCell<B> {
 
     fn forward(
         &self,
-        x: Tensor<B, 2>,
-        h_prev: Tensor<B, 2>,
-        c_prev: Tensor<B, 2>,
-    ) -> (Tensor<B, 2>, Tensor<B, 2>) {
+        x: Tensor<2>,
+        h_prev: Tensor<2>,
+        c_prev: Tensor<2>,
+    ) -> (Tensor<2>, Tensor<2>) {
         let [_batch, _] = x.dims();
         let combined = Tensor::cat(vec![x, h_prev.clone()], 1);
 
@@ -42,15 +41,15 @@ impl<B: burn::prelude::Backend> LSTMCell<B> {
 }
 
 #[derive(Module, Debug)]
-struct GRUCell<B: burn::prelude::Backend> {
-    reset_gate: Linear<B>,
-    update_gate: Linear<B>,
-    new_gate: Linear<B>,
+struct GRUCell {
+    reset_gate: Linear,
+    update_gate: Linear,
+    new_gate: Linear,
     hidden_size: usize,
 }
 
-impl<B: burn::prelude::Backend> GRUCell<B> {
-    fn new(device: &B::Device, input_size: usize, hidden_size: usize) -> Self {
+impl GRUCell {
+    fn new(device: &Device, input_size: usize, hidden_size: usize) -> Self {
         Self {
             reset_gate: LinearConfig::new(input_size + hidden_size, hidden_size).init(device),
             update_gate: LinearConfig::new(input_size + hidden_size, hidden_size).init(device),
@@ -59,7 +58,7 @@ impl<B: burn::prelude::Backend> GRUCell<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, h_prev: Tensor<B, 2>) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, h_prev: Tensor<2>) -> Tensor<2> {
         let combined = Tensor::cat(vec![x.clone(), h_prev.clone()], 1);
 
         let r = burn::tensor::activation::sigmoid(self.reset_gate.forward(combined.clone()));
@@ -68,22 +67,22 @@ impl<B: burn::prelude::Backend> GRUCell<B> {
         let combined_reset = Tensor::cat(vec![x, r * h_prev.clone()], 1);
         let n = burn::tensor::activation::tanh(self.new_gate.forward(combined_reset));
 
-        let ones: Tensor<B, 2> = Tensor::ones_like(&z);
+        let ones: Tensor<2> = Tensor::ones_like(&z);
         (ones - z.clone()) * n + z * h_prev
     }
 }
 
 #[derive(Module, Debug)]
-struct TemporalAttention<B: burn::prelude::Backend> {
-    query: Linear<B>,
-    key: Linear<B>,
-    value: Linear<B>,
-    output: Linear<B>,
+struct TemporalAttention {
+    query: Linear,
+    key: Linear,
+    value: Linear,
+    output: Linear,
     hidden_size: usize,
 }
 
-impl<B: burn::prelude::Backend> TemporalAttention<B> {
-    fn new(device: &B::Device, hidden_size: usize) -> Self {
+impl TemporalAttention {
+    fn new(device: &Device, hidden_size: usize) -> Self {
         Self {
             query: LinearConfig::new(hidden_size, hidden_size).init(device),
             key: LinearConfig::new(hidden_size, hidden_size).init(device),
@@ -93,26 +92,26 @@ impl<B: burn::prelude::Backend> TemporalAttention<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<3>) -> Tensor<2> {
         let [batch, seq_len, hidden] = x.dims();
 
-        let x_2d: Tensor<B, 2> = x.clone().reshape([batch * seq_len, hidden]);
+        let x_2d: Tensor<2> = x.clone().reshape([batch * seq_len, hidden]);
 
         let q = self.query.forward(x_2d.clone());
         let k = self.key.forward(x_2d.clone());
         let v = self.value.forward(x_2d);
 
-        let q: Tensor<B, 3> = q.reshape([batch, seq_len, hidden]);
-        let k: Tensor<B, 3> = k.reshape([batch, seq_len, hidden]);
-        let v: Tensor<B, 3> = v.reshape([batch, seq_len, hidden]);
+        let q: Tensor<3> = q.reshape([batch, seq_len, hidden]);
+        let k: Tensor<3> = k.reshape([batch, seq_len, hidden]);
+        let v: Tensor<3> = v.reshape([batch, seq_len, hidden]);
 
         let scale = (hidden as f32).sqrt();
-        let scores: Tensor<B, 3> = q.matmul(k.swap_dims(1, 2)) / scale;
+        let scores: Tensor<3> = q.matmul(k.swap_dims(1, 2)) / scale;
 
         let attn_weights = burn::tensor::activation::softmax(scores, 2);
-        let context: Tensor<B, 3> = attn_weights.matmul(v);
+        let context: Tensor<3> = attn_weights.matmul(v);
 
-        let last_context: Tensor<B, 2> = context
+        let last_context: Tensor<2> = context
             .slice([0..batch, seq_len - 1..seq_len, 0..hidden])
             .reshape([batch, hidden]);
 
@@ -121,20 +120,20 @@ impl<B: burn::prelude::Backend> TemporalAttention<B> {
 }
 
 #[derive(Module, Debug)]
-struct TemporalEncoder<B: burn::prelude::Backend> {
-    lstm_cells: Vec<LSTMCell<B>>,
-    gru_cells: Vec<GRUCell<B>>,
-    attention: Option<TemporalAttention<B>>,
-    input_projection: Linear<B>,
+struct TemporalEncoder {
+    lstm_cells: Vec<LSTMCell>,
+    gru_cells: Vec<GRUCell>,
+    attention: Option<TemporalAttention>,
+    input_projection: Linear,
     temporal_type: usize,
     hidden_size: usize,
     num_layers: usize,
     bidirectional: bool,
 }
 
-impl<B: burn::prelude::Backend> TemporalEncoder<B> {
+impl TemporalEncoder {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_size: usize,
         num_layers: usize,
@@ -186,21 +185,21 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>, _seq_lengths: &[usize]) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<3>, _seq_lengths: &[usize]) -> Tensor<2> {
         let [batch, max_seq_len, input_size] = x.dims();
         let device = x.device();
 
-        let x_2d: Tensor<B, 2> = x.clone().reshape([batch * max_seq_len, input_size]);
+        let x_2d: Tensor<2> = x.clone().reshape([batch * max_seq_len, input_size]);
         let projected = self.input_projection.forward(x_2d);
-        let projected: Tensor<B, 3> = projected.reshape([batch, max_seq_len, self.hidden_size]);
+        let projected: Tensor<3> = projected.reshape([batch, max_seq_len, self.hidden_size]);
 
         match self.temporal_type {
             0 => {
-                let mut h: Tensor<B, 2> = Tensor::zeros([batch, self.hidden_size], &device);
-                let mut c: Tensor<B, 2> = Tensor::zeros([batch, self.hidden_size], &device);
+                let mut h: Tensor<2> = Tensor::zeros([batch, self.hidden_size], &device);
+                let mut c: Tensor<2> = Tensor::zeros([batch, self.hidden_size], &device);
 
                 for t in 0..max_seq_len {
-                    let x_t: Tensor<B, 2> = projected
+                    let x_t: Tensor<2> = projected
                         .clone()
                         .slice([0..batch, t..t + 1, 0..self.hidden_size])
                         .reshape([batch, self.hidden_size]);
@@ -214,10 +213,10 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
                 h
             }
             1 => {
-                let mut h: Tensor<B, 2> = Tensor::zeros([batch, self.hidden_size], &device);
+                let mut h: Tensor<2> = Tensor::zeros([batch, self.hidden_size], &device);
 
                 for t in 0..max_seq_len {
-                    let x_t: Tensor<B, 2> = projected
+                    let x_t: Tensor<2> = projected
                         .clone()
                         .slice([0..batch, t..t + 1, 0..self.hidden_size])
                         .reshape([batch, self.hidden_size]);
@@ -232,20 +231,20 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
                 if let Some(ref attn) = self.attention {
                     attn.forward(projected)
                 } else {
-                    let h: Tensor<B, 2> = projected
+                    let h: Tensor<2> = projected
                         .slice([0..batch, max_seq_len - 1..max_seq_len, 0..self.hidden_size])
                         .reshape([batch, self.hidden_size]);
                     h
                 }
             }
             3 => {
-                let mut h: Tensor<B, 2> = Tensor::zeros([batch, self.hidden_size], &device);
-                let mut c: Tensor<B, 2> = Tensor::zeros([batch, self.hidden_size], &device);
+                let mut h: Tensor<2> = Tensor::zeros([batch, self.hidden_size], &device);
+                let mut c: Tensor<2> = Tensor::zeros([batch, self.hidden_size], &device);
 
                 let mut hidden_states = Vec::with_capacity(max_seq_len);
 
                 for t in 0..max_seq_len {
-                    let x_t: Tensor<B, 2> = projected
+                    let x_t: Tensor<2> = projected
                         .clone()
                         .slice([0..batch, t..t + 1, 0..self.hidden_size])
                         .reshape([batch, self.hidden_size]);
@@ -258,7 +257,7 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
                     hidden_states.push(h.clone());
                 }
 
-                let stacked: Tensor<B, 3> = Tensor::stack(hidden_states, 1);
+                let stacked: Tensor<3> = Tensor::stack(hidden_states, 1);
 
                 if let Some(ref attn) = self.attention {
                     attn.forward(stacked)
@@ -272,18 +271,13 @@ impl<B: burn::prelude::Backend> TemporalEncoder<B> {
 }
 
 #[derive(Module, Debug)]
-struct SharedNetwork<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
+struct SharedNetwork {
+    layers: Vec<Linear>,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> SharedNetwork<B> {
-    fn new(
-        device: &B::Device,
-        input_size: usize,
-        hidden_sizes: &[usize],
-        dropout_rate: f64,
-    ) -> Self {
+impl SharedNetwork {
+    fn new(device: &Device, input_size: usize, hidden_sizes: &[usize], dropout_rate: f64) -> Self {
         let mut layers = Vec::new();
         let mut prev_size = input_size;
 
@@ -298,7 +292,7 @@ impl<B: burn::prelude::Backend> SharedNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut h = x;
         for layer in &self.layers {
             h = layer.forward(h);
@@ -316,15 +310,15 @@ impl<B: burn::prelude::Backend> SharedNetwork<B> {
 }
 
 #[derive(Module, Debug)]
-struct CauseHead<B: burn::prelude::Backend> {
-    layers: Vec<Linear<B>>,
-    output: Linear<B>,
+struct CauseHead {
+    layers: Vec<Linear>,
+    output: Linear,
     dropout: Dropout,
 }
 
-impl<B: burn::prelude::Backend> CauseHead<B> {
+impl CauseHead {
     fn new(
-        device: &B::Device,
+        device: &Device,
         input_size: usize,
         hidden_sizes: &[usize],
         num_durations: usize,
@@ -345,7 +339,7 @@ impl<B: burn::prelude::Backend> CauseHead<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 2>, training: bool) -> Tensor<B, 2> {
+    fn forward(&self, x: Tensor<2>, training: bool) -> Tensor<2> {
         let mut h = x;
         for layer in &self.layers {
             h = layer.forward(h);
@@ -359,16 +353,16 @@ impl<B: burn::prelude::Backend> CauseHead<B> {
 }
 
 #[derive(Module, Debug)]
-struct DynamicDeepHitNetwork<B: burn::prelude::Backend> {
-    temporal_encoder: TemporalEncoder<B>,
-    shared_network: SharedNetwork<B>,
-    cause_heads: Vec<CauseHead<B>>,
+struct DynamicDeepHitNetwork {
+    temporal_encoder: TemporalEncoder,
+    shared_network: SharedNetwork,
+    cause_heads: Vec<CauseHead>,
     num_causes: usize,
     num_durations: usize,
 }
 
-impl<B: burn::prelude::Backend> DynamicDeepHitNetwork<B> {
-    fn new(device: &B::Device, n_features: usize, config: &DynamicDeepHitConfig) -> Self {
+impl DynamicDeepHitNetwork {
+    fn new(device: &Device, n_features: usize, config: &DynamicDeepHitConfig) -> Self {
         let temporal_encoder = TemporalEncoder::new(
             device,
             n_features,
@@ -412,7 +406,7 @@ impl<B: burn::prelude::Backend> DynamicDeepHitNetwork<B> {
         }
     }
 
-    fn forward(&self, x: Tensor<B, 3>, seq_lengths: &[usize], training: bool) -> Vec<Tensor<B, 2>> {
+    fn forward(&self, x: Tensor<3>, seq_lengths: &[usize], training: bool) -> Vec<Tensor<2>> {
         let encoded = self.temporal_encoder.forward(x, seq_lengths);
         let shared = self.shared_network.forward(encoded, training);
 
