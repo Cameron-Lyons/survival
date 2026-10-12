@@ -14,7 +14,7 @@ import math
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 import numpy as np
 
@@ -1494,6 +1494,50 @@ def _derived_survfit(
     raise TypeError("the engine result does not belong to this kind of survfit object")
 
 
+def _summary_survfit_frame(summary: SummarySurvfitResult) -> dict[str, list[Any]]:
+    """R's ``summary(fit, data.frame = TRUE)`` of a formula curve."""
+
+    if summary.pstate is None:
+        frame: dict[str, list[Any]] = {}
+        for column, values in (
+            ("time", summary.time),
+            ("n.risk", summary.n_risk),
+            ("n.event", summary.n_event),
+            ("n.censor", summary.n_censor),
+            ("surv", summary.surv),
+            ("cumhaz", summary.cumhaz),
+            ("std.err", summary.std_err),
+            ("std.chaz", summary.std_chaz),
+            ("lower", summary.lower),
+            ("upper", summary.upper),
+        ):
+            if values is not None:
+                frame[column] = list(values)
+        if summary.strata is not None:
+            frame["strata"] = list(summary.strata)
+        return frame
+    states = list(summary.states or ())
+
+    def by_state(values: Any) -> list[Any]:
+        return [row[state] for state in range(len(states)) for row in values]
+
+    frame = {
+        "time": list(summary.time) * len(states),
+        "n.risk": by_state(summary.n_risk),
+        "n.event": by_state(summary.n_event),
+        "n.censor": by_state(summary.n_censor),
+        "pstate": by_state(summary.pstate),
+    }
+    if summary.std_err is not None:
+        frame["std.err"] = by_state(summary.std_err)
+        frame["lower"] = by_state(summary.lower)
+        frame["upper"] = by_state(summary.upper)
+    if summary.strata is not None:
+        frame["strata"] = list(summary.strata) * len(states)
+    frame["state"] = [state for state in states for _ in summary.time]
+    return frame
+
+
 def survfit0(
     x: Any, *args: Any, **kwargs: Any
 ) -> SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | CoxSurvfitMultiStateResult:
@@ -1555,6 +1599,8 @@ def summary_survfit(
     extend: Any = False,
     rmean: Any | None = None,
     dosum: Any | None = None,
+    *,
+    data_frame: Literal[False] = False,
 ) -> SummarySurvfitCoxmsResult: ...
 
 
@@ -1567,7 +1613,23 @@ def summary_survfit(
     extend: Any = False,
     rmean: Any | None = None,
     dosum: Any | None = None,
+    *,
+    data_frame: Literal[False] = False,
 ) -> SummarySurvfitResult: ...
+
+
+@overload
+def summary_survfit(
+    object: SurvfitResult | SurvfitMultiStateResult,
+    times: Any | None = None,
+    censored: Any = False,
+    scale: Any = 1,
+    extend: Any = False,
+    rmean: Any | None = None,
+    dosum: Any | None = None,
+    *,
+    data_frame: Literal[True],
+) -> dict[str, list[Any]]: ...
 
 
 @overload
@@ -1579,7 +1641,9 @@ def summary_survfit(
     extend: Any = False,
     rmean: Any | None = None,
     dosum: Any | None = None,
-) -> SummarySurvfitResult | SummarySurvfitCoxmsResult: ...
+    *,
+    data_frame: Any = False,
+) -> SummarySurvfitResult | SummarySurvfitCoxmsResult | dict[str, list[Any]]: ...
 
 
 def summary_survfit(
@@ -1590,7 +1654,9 @@ def summary_survfit(
     extend: Any = False,
     rmean: Any | None = None,
     dosum: Any | None = None,
-) -> SummarySurvfitResult | SummarySurvfitCoxmsResult:
+    *,
+    data_frame: Any = False,
+) -> SummarySurvfitResult | SummarySurvfitCoxmsResult | dict[str, list[Any]]:
     """R's ``summary.survfit``: the curves at their event times (or at ``times``) and the table.
 
     ``table`` is ``survmean``'s per-curve summary (records, n.max or n.id, n.start, events,
@@ -1602,8 +1668,15 @@ def summary_survfit(
     counts between them; ``False`` looks up counts at each preceding curve row.
     Ordinary curves default to accumulation only for strictly increasing times;
     multi-state curves sort/deduplicate times and default to accumulation.
+    ``data_frame=True`` returns R's ``data.frame = TRUE`` table instead.
     """
 
+    if _logical(data_frame, "data.frame must be TRUE/FALSE"):
+        if not isinstance(object, SurvfitResult | SurvfitMultiStateResult):
+            raise TypeError("data_frame is available for survfit.formula curves")
+        return _summary_survfit_frame(
+            summary_survfit(object, times, censored, scale, extend, rmean, dosum)
+        )
     if not isinstance(
         object,
         SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | CoxSurvfitMultiStateResult,

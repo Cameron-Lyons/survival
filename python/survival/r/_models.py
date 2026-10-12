@@ -87,6 +87,7 @@ from ._surv_summary_print import SurvivalTablePrint
 from ._survfit import (
     _derived_survfit,
     _engine_of,
+    _summary_survfit_frame,
     median_surv,
     median_survfit,
     quantile_surv,
@@ -124,6 +125,7 @@ from ._types import (
     RateTablePrint,
     ResponsePrint,
     SummarySurvfitCoxmsResult,
+    SummarySurvfitResult,
     SurvDiffResult,
     SurvExpResult,
     SurvExpSummary,
@@ -1488,6 +1490,7 @@ as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)
 as_data_frame.register(CoxSurvfitMultiStateResult, _coxms_curves_frame)
 as_data_frame.register(SummarySurvfitCoxmsResult, _summary_coxms_frame)
 as_data_frame.register(SurvfitResult, _survfit_frame)
+as_data_frame.register(SummarySurvfitResult, _summary_survfit_frame)
 as_data_frame.register(CoxZPHResult, _cox_zph_frame)
 as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)
 as_data_frame.register(ConcordanceResult, _concordance_frame)
