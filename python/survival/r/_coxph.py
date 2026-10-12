@@ -2338,17 +2338,16 @@ def residuals_coxph(
     elif otype == "deviance":
         values = list(engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes))
     elif otype == "partial":
-        rows = engine.partial_residuals(
+        values = engine.partial_residuals(
             assign=_active_assign(fit), weighted=weighted_value, collapse=fit_codes
         )
-        values = [list(row) for row in rows]
     else:
         method = {
             "score": engine.score_residuals,
             "dfbeta": engine.dfbeta,
             "dfbetas": engine.dfbetas,
         }[otype]
-        values = [list(row) for row in method(weighted=weighted_value, collapse=fit_codes)]
+        values = method(weighted=weighted_value, collapse=fit_codes)
     if codes is None:
         values = _pad_rows(values, excluded)
     elif padded_codes is not None:
