@@ -58,6 +58,8 @@
   `Surv2` indexing with positions, slices and logical masks.
 - `ratetable()`, R's last unported export; a `ratetable(...)` term in a
   `survexp` or `pyears` formula is read as `rmap`.
+- `summary_coxph`, `summary_coxph_penal`, `summary_aareg`, `summary_cch` and
+  `summary_survreg` are exported from `survival.r`, beside `summary_survfit`.
 - Formula terms accept R's `factor(levels =, labels =)`, `relevel()`,
   `interaction()`, `ifelse()`, `pmin()`/`pmax()`, `round()`, `signif()`,
   `floor()`, `ceiling()`, `trunc()`, `abs()`, `sign()`, `log(x, base)`,
