@@ -136,11 +136,25 @@ def _materialize_1d(values: Any, name: str) -> list[Any]:
     return result
 
 
+_PLAIN_SCALARS = frozenset({float, int, str, bool, type(None)})
+
+
 def _materialize_labels(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
-    if any(isinstance(value, list) for value in result):
+    if not set(map(type, result)) <= _PLAIN_SCALARS and any(
+        isinstance(value, list) for value in result
+    ):
         raise ValueError(f"{name} must be one-dimensional")
     return result
+
+
+def _missing_flags(values: Sequence[Any]) -> list[bool]:
+    """:func:`_is_missing_value` of each value, without a call per value for plain
+    Python numbers, strings and ``None``."""
+
+    if set(map(type, values)) <= _PLAIN_SCALARS:
+        return [value is None or value != value for value in values]
+    return [_is_missing_value(value) for value in values]
 
 
 def _float_vector(values: Any, name: str) -> list[float]:

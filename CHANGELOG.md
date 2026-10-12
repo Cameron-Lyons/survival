@@ -95,6 +95,11 @@
 - Sparse frailty fits touch a group only when its risk set changes:
   `coxph(~ x1 + frailty(id))` with 2,000 groups on 100,000 rows takes 0.33 s,
   down from 5.95 s (R 4.10 s), and the gaussian frailty 0.47 s (R 6.51 s).
+- Data preparation reads plain Python columns without a call per value:
+  `survcondense` on 160,000 intervals takes 0.084 s, down from 0.253 s
+  (R 0.139 s); `survSplit` 0.072 s (R 0.074 s); `neardate` on 50,000 queries
+  0.021 s, down from 0.051 s. Cox `dfbeta`/`score` residuals and curves for many
+  new rows no longer copy their rows.
 
 ## 2.0.0
 

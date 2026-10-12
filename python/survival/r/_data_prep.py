@@ -15,7 +15,7 @@ import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from itertools import chain
+from itertools import chain, compress
 from typing import Any, TypeVar, cast
 
 import numpy as np
@@ -34,6 +34,7 @@ from ._coerce import (
     _match_string_arg,
     _materialize_1d,
     _materialize_labels,
+    _missing_flags,
     _normalize_bool_option,
     _normalize_positive_scale,
     _numeric_ndarray,
@@ -206,27 +207,30 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
-    missing1 = [_is_missing_value(value) for value in id1_values]
+    missing1 = _missing_flags(id1_values)
     id1_labels = [
         "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
     ]
-    id2_labels = ["\x00NA" if _is_missing_value(value) else value for value in id2_values]
-    keep2 = [not math.isnan(value) for value in y2_values]
+    id2_labels = [
+        "\x00NA" if missing else value
+        for value, missing in zip(id2_values, _missing_flags(id2_values), strict=True)
+    ]
+    keep2 = ~np.isnan(np.asarray(y2_values, dtype=np.float64))
+    complete = bool(keep2.all())
     matched = _core.neardate(
         id1_labels,
         y1_values,
-        [value for value, keep in zip(id2_labels, keep2, strict=True) if keep],
-        [value for value, keep in zip(y2_values, keep2, strict=True) if keep],
+        id2_labels if complete else list(compress(id2_labels, keep2.tolist())),
+        y2_values if complete else list(compress(y2_values, keep2.tolist())),
         best_value,
     )
-    rows2 = [row for row, keep in enumerate(keep2) if keep]
-    result: list[int | None] = []
-    for match, missing in zip(matched, missing1, strict=True):
-        if missing:
-            result.append(None)
-        else:
-            result.append(nomatch if match is None else rows2[match])
-    return result
+    rows2 = None if complete else np.flatnonzero(keep2).tolist()
+    if rows2 is None and not any(missing1):
+        return [nomatch if match is None else match for match in matched]
+    return [
+        None if missing else nomatch if match is None else match if rows2 is None else rows2[match]
+        for match, missing in zip(matched, missing1, strict=True)
+    ]
 
 
 def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[Any]:
@@ -730,12 +734,14 @@ def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
     ``NA`` matches ``NA``.
     """
 
+    keyed = [
+        [None if value != value else value for value in column]
+        if set(map(type, column)) <= {float, int}
+        else [None if _is_missing_value(value) else value for value in column]
+        for column in columns
+    ]
     codes: dict[tuple[Any, ...], int] = {}
-    result: list[int] = []
-    for row in zip(*columns, strict=True):
-        key = tuple(None if _is_missing_value(value) else value for value in row)
-        result.append(codes.setdefault(key, len(codes)))
-    return result
+    return [codes.setdefault(row, len(codes)) for row in zip(*keyed, strict=True)]
 
 
 def survcondense(
