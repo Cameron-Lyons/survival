@@ -921,6 +921,7 @@ def _newdata_inputs(
     *,
     allow_missing_predictors: bool = False,
     allow_missing_strata: bool = False,
+    allow_unknown_strata: bool = False,
     as_array: bool = False,
 ) -> _NewData:
     """``model.frame(Terms, newdata, na.action)`` and ``model.matrix(object, newframe)``:
@@ -965,8 +966,22 @@ def _newdata_inputs(
         na_action=na_action,
         allow_missing_predictors=allow_missing_predictors,
         allow_missing_strata=allow_missing_strata,
+        allow_unknown_strata=allow_unknown_strata,
         as_array=as_array,
     )
+
+
+def _missing_prediction_rows(values: Any, rows: Sequence[int]) -> Any:
+    """*values* (a vector or matrix, lists or NumPy arrays) with NA at *rows*."""
+
+    if isinstance(values, np.ndarray):
+        values = values.copy()
+        values[list(rows)] = _NA_REAL
+        return values
+    values = list(values)
+    for row in rows:
+        values[row] = [_NA_REAL] * len(values[row]) if isinstance(values[row], list) else _NA_REAL
+    return values
 
 
 def _term_selection(terms: Any | None, names: Sequence[str]) -> list[int] | None:
@@ -1050,6 +1065,7 @@ def predict_survreg(
             action,
             allow_missing_predictors=True,
             allow_missing_strata=predict_type not in {"quantile", "uquantile"},
+            allow_unknown_strata=True,
             as_array=True,
         )
     )
@@ -1092,6 +1108,15 @@ def predict_survreg(
             if standard_errors is None:
                 raise RuntimeError("native predictor did not return requested standard errors")
             se_values = standard_errors
+        if (
+            new is not None
+            and new.unknown_strata
+            and predict_type in {"quantile", "uquantile"}
+            and _estimated_scale_count(fit.fit) > 1
+        ):
+            predictions = _missing_prediction_rows(predictions, new.unknown_strata)
+            if include_se:
+                se_values = _missing_prediction_rows(se_values, new.unknown_strata)
     if selection is not None and any(value is None for value in selection):
 
         def missing_columns(rows: Any) -> Any:

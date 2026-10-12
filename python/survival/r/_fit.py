@@ -862,6 +862,7 @@ class _NewData:
     offset: list[float] | None
     y: Surv | None
     missing: tuple[int, ...] = ()
+    unknown_strata: tuple[int, ...] = ()
 
     @property
     def n(self) -> int:
@@ -897,6 +898,7 @@ def _newdata_frame(
     na_action: str | None,
     allow_missing_predictors: bool = False,
     allow_missing_strata: bool = False,
+    allow_unknown_strata: bool = False,
     extra_missing: Sequence[int] = (),
     as_array: bool = False,
 ) -> _NewData:
@@ -915,6 +917,8 @@ def _newdata_frame(
     NaNs into the prediction kernel. ``allow_missing_strata`` is used only when
     strata do not affect the requested prediction; missing codes then use a
     valid placeholder. Expected-count predictions ignore a missing event code.
+    ``allow_unknown_strata`` gives a stratum the fit did not see the placeholder code
+    too and lists its rows in ``unknown_strata``, as R's ``match()`` gives them NA.
     """
 
     newdata, _ = _prepare_formula_inputs(newdata)
@@ -1012,18 +1016,25 @@ def _newdata_frame(
     rows = make_design(newdata, design, m, allow_missing=keep_missing)
     offset = _offset_vector(newdata, list(design.offsets), m)
     strata_codes: list[int] | None = None
+    unknown_strata: tuple[int, ...] = ()
     if strata_columns:
         factor = _strata_keep(newdata, strata_terms)
         level_index = {level: idx for idx, level in enumerate(strata_levels)}
-        try:
-            remap = [level_index[level] for level in factor.levels]
-        except KeyError as exc:
-            raise ValueError("New data has a strata not found in the original model") from exc
-        strata_codes = (
-            [0 if code is None else remap[code] for code in factor.codes]
+        remap = [level_index.get(level) for level in factor.levels]
+        if not allow_unknown_strata and None in remap:
+            raise ValueError("New data has a strata not found in the original model")
+        codes = (
+            factor.codes
             if keep_missing and allow_missing_strata
-            else [remap[code] for code in _complete_codes(factor, "missing values in the strata")]
+            else _complete_codes(factor, "missing values in the strata")
         )
+        mapped = [None if code is None else remap[code] for code in codes]
+        unknown_strata = tuple(
+            row
+            for row, (code, value) in enumerate(zip(codes, mapped, strict=True))
+            if code is not None and value is None
+        )
+        strata_codes = [0 if value is None else value for value in mapped]
     y = (
         response
         if response is not None
@@ -1036,6 +1047,7 @@ def _newdata_frame(
         offset=offset,
         y=y,
         missing=tuple(sorted(missing)),
+        unknown_strata=unknown_strata,
     )
 
 

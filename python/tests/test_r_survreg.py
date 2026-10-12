@@ -371,8 +371,9 @@ def test_predict_survreg_newdata_with_strata(lung):
         ],
     )
     assert r.predict(fit, NEWDATA, type="lp") == pytest.approx([6.02063808847565, 6.16707358317737])
-    with pytest.raises(ValueError, match="strata not found in the original model"):
-        r.predict(fit, {"age": [50], "sex": [3]}, type="quantile")
+    unseen = {"age": [50], "sex": [3]}
+    assert all(math.isnan(value) for value in r.predict(fit, unseen, type="quantile"))
+    assert r.predict(fit, unseen, type="lp") == pytest.approx([6.76151238264362])
 
 
 def test_residuals_default_type_follows_the_model(lung, lung_weibull):
@@ -682,3 +683,20 @@ def test_survreg_distribution_functions_match_r():
     assert recycled == pytest.approx(r.dsurvreg([1.0, 2.0, 3.0], mean=[0.0, 1.0, 0.0]))
     with pytest.raises(ValueError, match="Distribution not found"):
         r.dsurvreg([1.0], mean=0.0, distribution="nope")
+
+
+def test_predict_survreg_with_a_stratum_the_fit_did_not_see(lung):
+    """R: ``predict(survreg(Surv(time, status) ~ age + strata(sex), lung),
+    data.frame(age = c(50, 60), sex = c(1, 3)), type = ...)``."""
+
+    fit = r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung)
+    newdata = {"age": [50.0, 60.0], "sex": [1.0, 3.0]}
+    assert r.predict(fit, newdata, type="lp") == pytest.approx([6.2153347000038, 6.09064294346795])
+    assert r.predict(fit, newdata, type="response") == pytest.approx(
+        [500.363432810243, 441.705311415013]
+    )
+    quantile = r.predict(fit, newdata, type="quantile", p=0.5, se_fit=True)
+    assert quantile.fit[0] == pytest.approx(371.887000536715)
+    assert quantile.se_fit[0] == pytest.approx(39.9023095869798)
+    assert math.isnan(quantile.fit[1])
+    assert math.isnan(quantile.se_fit[1])
