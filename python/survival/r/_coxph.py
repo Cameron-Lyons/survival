@@ -90,6 +90,8 @@ from ._formula import (
     _formula_data_rows,
     _formula_design_row_count,
     _prepare_formula_inputs,
+    _r_exp,
+    _r_sqrt,
     _response_arg_columns,
     _strata_covariate,
     _strata_specs,
@@ -1333,20 +1335,20 @@ def _coefficient_table(
     beta = [value * scale for value in fit.coefficients]
     var = fit.var
     naive = fit.naive_var
-    se = [math.sqrt(var[idx][idx]) * scale for idx in range(len(beta))]
+    se = [_r_sqrt(var[idx][idx]) * scale for idx in range(len(beta))]
     rows: list[dict[str, float | str]] = []
     for idx, (name, value) in enumerate(zip(fit.coef_names, beta, strict=True)):
         z = value / se[idx] if se[idx] > 0.0 else math.nan
         row: dict[str, float | str] = {
             "name": name,
             "coef": value,
-            "exp_coef": math.exp(value) if not math.isnan(value) else math.nan,
+            "exp_coef": _r_exp(value),
             "se": se[idx],
             "z": z,
             "p": _core.pchisq(z * z, 1.0, lower_tail=False),
         }
         if naive is not None:
-            row["naive_se"] = math.sqrt(naive[idx][idx])
+            row["naive_se"] = _r_sqrt(naive[idx][idx])
             row["robust_se"] = se[idx]
         rows.append(row)
     columns = ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
@@ -1366,10 +1368,10 @@ def _conf_int_rows(
     return [
         {
             "name": name,
-            "exp(coef)": math.exp(b),
-            "exp(-coef)": math.exp(-b),
-            "lower": math.exp(b - z * error),
-            "upper": math.exp(b + z * error),
+            "exp(coef)": _r_exp(b),
+            "exp(-coef)": _r_exp(-b),
+            "lower": _r_exp(b - z * error),
+            "upper": _r_exp(b + z * error),
         }
         for name, b, error in zip(names, beta, se, strict=True)
     ]
@@ -1686,7 +1688,7 @@ def summary_coxph_penal(
         result["conf_int"] = _conf_int_rows(
             fit.coef_names,
             [value * scale_value for value in beta],
-            [math.sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
+            [_r_sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
             conf_int,
         )
     return result
@@ -2005,7 +2007,7 @@ def predict_coxph(
     elif sparse_only:
         pred, se = _frailty_prediction(fit, new, include_se)
         if predict_type == "risk":
-            pred = [math.exp(value) for value in pred]
+            pred = [_r_exp(value) for value in pred]
         if fitted_codes is not None:
             pred = _rowsum(pred, fitted_codes)
             se = None if se is None else _rowsum(se, fitted_codes, squares=True)
@@ -2099,7 +2101,7 @@ def _frailty_prediction(
     penalized = fit.penalized
     if penalized is None:
         raise ValueError("frailty prediction requires a penalized fit")
-    se = [math.sqrt(penalized.fvar[group]) for group in penalized.frail_index]
+    se = [_r_sqrt(penalized.fvar[group]) for group in penalized.frail_index]
     return fit.linear_predictors, se if se_fit else None
 
 
@@ -2142,7 +2144,7 @@ def _predict_terms(
         if new is None:
             frail, fvar = penalized.frail, penalized.fvar
             values = [frail[group] for group in penalized.frail_index]
-            errors = [math.sqrt(fvar[group]) for group in penalized.frail_index] if se_fit else None
+            errors = [_r_sqrt(fvar[group]) for group in penalized.frail_index] if se_fit else None
         else:
             values = [0.0] * new.n
             errors = [0.0] * new.n if se_fit else None
@@ -2695,7 +2697,7 @@ def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBa
     sfit = survfit_coxph(fit, newdata, se_fit=False)
     hazard: Any = sfit.cumhaz
     if newdata is None and not _normalize_bool_option(centered, "centered"):
-        offset = math.exp(-predict_terms_constant(fit))
+        offset = _r_exp(-predict_terms_constant(fit))
         hazard = [value * offset for value in hazard]
     strata = None
     if sfit.strata is not None:
