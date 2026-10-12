@@ -8084,6 +8084,9 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
       clabel <- "censor"
     }
     values <- output[[event_name]]
+    if (is.factor(values)) {
+      values <- as.character(values)
+    }
     if (is.character(values)) {
       values[!(values %in% states)] <- clabel
       output[[event_name]] <- factor(values, levels = c(clabel, states))
@@ -10491,4 +10494,17 @@ print.summary.survival_py_model <- function(
     sep = ""
   )
   invisible(x)
+}
+
+py_to_r.survival._factor.Factor <- function(x) {
+  builtins <- reticulate::import_builtins(convert = FALSE)
+  values <- reticulate::py_to_r(builtins$list(x))
+  values <- vapply(
+    values, function(value) if (is.null(value)) NA_character_ else as.character(value), "",
+    USE.NAMES = FALSE
+  )
+  levels <- vapply(
+    reticulate::py_to_r(builtins$list(x$categories)), as.character, "", USE.NAMES = FALSE
+  )
+  factor(values, levels = levels, ordered = reticulate::py_to_r(x$ordered))
 }

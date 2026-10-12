@@ -311,6 +311,7 @@
 \alias{print.survival_py_coxph_detail}
 \alias{print.survival_py_anova}
 \alias{print.summary.survival_py_model}
+\alias{py_to_r.survival._factor.Factor}
 \title{R bridge for the Rust-backed Python survival package}
 \description{
 Experimental R facade for the Rust-backed Python \pkg{survival} package.
