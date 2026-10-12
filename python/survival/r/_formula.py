@@ -57,8 +57,8 @@ from ._surv import (
     Surv,
     Surv2,
     _formula_response_argument_name,
+    _match_response_arguments,
     _normalize_surv_type,
-    _ordered_named_response_arguments,
     _repeated_option,
     _strata,
     _subset_surv,
@@ -636,21 +636,11 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
                     "and origin= arguments"
                 )
             continue
-        if named_arguments:
-            raise ValueError(
-                "Surv(...) formula response must not mix positional and named time/time2/event "
-                "arguments"
-            )
         arguments.append(part)
         _append_unique(columns, _response_arg_columns(part))
 
     if named_arguments:
-        if arguments:
-            raise ValueError(
-                "Surv(...) formula response must not mix positional and named time/time2/event "
-                "arguments"
-            )
-        arguments = _ordered_named_response_arguments(named_arguments)
+        arguments = _match_response_arguments(arguments, named_arguments)
     if len(arguments) not in {1, 2, 3}:
         raise ValueError("Surv(...) formula response must have 1, 2, or 3 column arguments")
     return _SurvResponseSpec(

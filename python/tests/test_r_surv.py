@@ -219,3 +219,23 @@ def test_totimeline_expands_counting_rows_like_r_draft():
     assert with_istate.status == [1, 2, 0]
     with pytest.raises(ValueError, match="is not a recognized state"):
         r.totimeline([0], [3], [1], states=["ill"], id=[1], istate=["x"], istate_levels=["y"])
+
+
+def test_named_arguments_are_matched_first_and_positionals_fill_the_rest():
+    """R: ``Surv(c(0, 1, 2), c(1, 2, 3), event = c(1, 0, 1))`` is ``(0,1] (1,2+] (2,3]``;
+    ``coef(coxph(Surv(time, event = status) ~ age, lung))`` is 0.0187201792045515."""
+
+    counting = r.Surv([0, 1, 2], [1, 2, 3], event=[1, 0, 1])
+    assert (counting.type, counting.start, counting.time) == (
+        "counting",
+        (0.0, 1.0, 2.0),
+        (1.0, 2.0, 3.0),
+    )
+    right = r.Surv([1, 2, 3], event=[1, 0, 1])
+    assert (right.type, right.event) == ("right", (1, 0, 1))
+    lung = survival.datasets.load_lung()
+    for response in ("Surv(time, event = status)", "Surv(event = status, time)"):
+        fit = r.coxph(f"{response} ~ age", lung)
+        assert r.coef(fit) == pytest.approx([0.0187201792045515], rel=1e-9)
+    with pytest.raises(TypeError, match="Surv expects"):
+        r.Surv([1, 2], [1, 0], [1, 1], event=[1, 0])

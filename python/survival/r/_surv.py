@@ -79,6 +79,17 @@ def _ordered_named_response_arguments(named_arguments: dict[str, Any]) -> list[A
     return arguments
 
 
+def _match_response_arguments(positional: Sequence[Any], named: dict[str, Any]) -> list[Any]:
+    """R's matching of ``Surv(time, time2, event)``: the named arguments first, then the
+    positional ones fill the remaining formals in order."""
+
+    remaining = [name for name in ("time", "time2", "event") if name not in named]
+    if len(positional) > len(remaining):
+        raise TypeError("Surv expects (time), (time, event), or (time, time2, event)")
+    matched = dict(zip(remaining, positional, strict=False))
+    return _ordered_named_response_arguments({**named, **matched})
+
+
 def _time_column(values: Any, name: str, message: str) -> list[float]:
     """A numeric time column with ``NaN`` for missing values."""
 
@@ -235,10 +246,8 @@ class Surv(_SurvivalOperations):
             for name, value in (("time", time), ("time2", time2), ("event", event))
             if value is not _MISSING
         }
-        if args and named:
-            raise TypeError("Surv(...) must not mix positional and named arguments")
         if named:
-            args = tuple(_ordered_named_response_arguments(named))
+            args = tuple(_match_response_arguments(args, named))
         if not args:
             raise ValueError("Must have a time argument")
         if len(args) > 3:
