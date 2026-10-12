@@ -359,12 +359,12 @@ impl SurvfitKMResult {
     pub fn select_curves(&self, curves: &[usize]) -> SurvivalResult<Self> {
         let ranges = self.curve_ranges();
         check_curve_indices(curves, ranges.len())?;
+        let fitted = self.fitted_levels(ranges.len())?;
         let rows: Vec<usize> = curves
             .iter()
             .flat_map(|&curve| ranges[curve].clone())
             .collect();
         let pick = |values: &[f64]| select_items(values, &rows);
-        let fitted: Vec<usize> = (0..self.n.len()).filter(|&k| self.n[k] > 0).collect();
         let per_level = |values: &[usize]| -> Vec<usize> {
             curves.iter().map(|&curve| values[fitted[curve]]).collect()
         };
@@ -410,6 +410,18 @@ impl SurvfitKMResult {
                 .as_deref()
                 .map(|list| select_items(list, curves)),
         })
+    }
+
+    fn fitted_levels(&self, n_curves: usize) -> SurvivalResult<Vec<usize>> {
+        if let Some(n_id) = &self.n_id {
+            validate_length(self.n.len(), n_id.len(), "n_id")?;
+        }
+        if self.n.len() == n_curves {
+            return Ok((0..n_curves).collect());
+        }
+        let fitted: Vec<usize> = (0..self.n.len()).filter(|&k| self.n[k] > 0).collect();
+        validate_length(n_curves, fitted.len(), "fitted curve counts")?;
+        Ok(fitted)
     }
 
     pub fn from_stacked(curves: StackedCurves) -> SurvivalResult<Self> {
@@ -1836,6 +1848,190 @@ mod tests {
         );
         assert!(late.select_curves(&[1]).is_err());
         assert!(late.select_curves(&[]).is_err());
+    }
+
+    #[test]
+    fn select_stacked_zero_counts_keeps_single_curve_payloads() {
+        for n in [0, 3] {
+            for empty in [false, true] {
+                let rows = usize::from(!empty);
+                let mut stacked = StackedCurves::new(
+                    vec![1.0; rows],
+                    vec![0.0; rows],
+                    vec![0.0; rows],
+                    vec![1.0; rows],
+                    None,
+                    vec![n],
+                );
+                stacked.n_id = Some(vec![n]);
+                stacked.n_censor = Some(vec![0.0; rows]);
+                stacked.std_err = Some(vec![0.0; rows]);
+                stacked.cumhaz = Some(vec![0.0; rows]);
+                stacked.std_chaz = Some(vec![0.0; rows]);
+                stacked.lower = Some(vec![1.0; rows]);
+                stacked.upper = Some(vec![1.0; rows]);
+                stacked.logse = false;
+                stacked.conf_int = 0.8;
+                stacked.conf_type = "plain".into();
+                stacked.type_ = "counting".into();
+                stacked.t0 = -0.5;
+                let result = SurvfitKMResult::from_stacked(stacked).unwrap();
+                let selected = result.select_curves(&[0]).unwrap();
+                assert_eq!(selected, result);
+                assert_eq!(selected.n, vec![n]);
+                assert_eq!(selected.n_id, Some(vec![n]));
+                assert_eq!(selected.time.len(), rows);
+            }
+        }
+    }
+
+    #[test]
+    fn select_stacked_mixed_zero_counts_keeps_repeated_curves_whole() {
+        let stacked = StackedCurves {
+            n_id: Some(vec![0, 1, 0, 0]),
+            n_censor: Some(vec![0.0, 1.0, 0.0]),
+            std_err: Some(vec![0.125, 0.25, 0.0]),
+            cumhaz: Some(vec![0.5, 0.75, 0.0]),
+            std_chaz: Some(vec![0.0625, 0.125, 0.0]),
+            lower: Some(vec![0.25, 0.25, 1.0]),
+            upper: Some(vec![0.75, 0.75, 1.0]),
+            logse: false,
+            conf_int: 0.8,
+            conf_type: "plain".into(),
+            type_: "counting".into(),
+            t0: -0.5,
+            ..StackedCurves::new(
+                vec![1.0, 2.0, 3.0],
+                vec![2.0, 1.0, 0.0],
+                vec![1.0, 0.0, 0.0],
+                vec![0.5, 0.5, 1.0],
+                Some(vec![0, 2, 0, 1]),
+                vec![0, 2, 0, 0],
+            )
+        };
+        let result = SurvfitKMResult::from_stacked(stacked).unwrap();
+        let before = result.clone();
+        let selected = result.select_curves(&[3, 0, 1, 2, 3]).unwrap();
+        let mut expected = SurvfitKMResult::from_stacked(StackedCurves {
+            n_id: Some(vec![0, 0, 1, 0, 0]),
+            n_censor: Some(vec![0.0, 0.0, 1.0, 0.0]),
+            std_err: Some(vec![0.0, 0.125, 0.25, 0.0]),
+            cumhaz: Some(vec![0.0, 0.5, 0.75, 0.0]),
+            std_chaz: Some(vec![0.0, 0.0625, 0.125, 0.0]),
+            lower: Some(vec![1.0, 0.25, 0.25, 1.0]),
+            upper: Some(vec![1.0, 0.75, 0.75, 1.0]),
+            logse: false,
+            conf_int: 0.8,
+            conf_type: "plain".into(),
+            type_: "counting".into(),
+            t0: -0.5,
+            ..StackedCurves::new(
+                vec![3.0, 1.0, 2.0, 3.0],
+                vec![0.0, 2.0, 1.0, 0.0],
+                vec![0.0, 1.0, 0.0, 0.0],
+                vec![1.0, 0.5, 0.5, 1.0],
+                Some(vec![1, 0, 2, 0, 1]),
+                vec![0, 0, 2, 0, 0],
+            )
+        })
+        .unwrap();
+        expected.strata_codes = Some(vec![3, 0, 1, 2, 3]);
+        assert_eq!(selected, expected);
+        assert_eq!(result, before);
+        for curve in [0, 2] {
+            let empty = result.select_curves(&[curve]).unwrap();
+            assert_eq!(empty.n, vec![0]);
+            assert_eq!(empty.n_id, Some(vec![0]));
+            assert!(empty.time.is_empty());
+            assert_eq!(empty.select_curves(&[0]).unwrap(), empty);
+        }
+    }
+
+    #[test]
+    fn select_conditional_curves_maps_additional_original_levels() {
+        let data = SurvfitKMData::try_new(
+            None,
+            vec![1.0, 2.0, 5.0, 6.0, 1.0, 2.0, 7.0, 8.0],
+            vec![1, 0, 1, 0, 1, 0, 1, 0],
+            None,
+            Some(vec![1, 1, 2, 2, 3, 3, 4, 4]),
+            Some((0..8).collect()),
+            None,
+        )
+        .unwrap();
+        let options = SurvfitKMOptions {
+            start_time: Some(5.0),
+            conf_type: ConfType::Plain,
+            influence: InfluenceRequest::Both,
+            ..Default::default()
+        };
+        let result = fit(data, options.clone());
+        assert_eq!(result.n, vec![0, 2, 0, 2]);
+        assert_eq!(result.n_id, Some(vec![0, 2, 0, 2]));
+        for (curve, (times, ids)) in [(vec![5.0, 6.0], vec![2, 3]), (vec![7.0, 8.0], vec![6, 7])]
+            .into_iter()
+            .enumerate()
+        {
+            let alone = fit(
+                SurvfitKMData::try_new(None, times, vec![1, 0], None, None, Some(ids), None)
+                    .unwrap(),
+                options.clone(),
+            );
+            assert_eq!(result.select_curves(&[curve]).unwrap(), alone);
+        }
+        let repeated = result.select_curves(&[1, 0, 1]).unwrap();
+        assert_eq!(repeated.n, vec![2, 2, 2]);
+        assert_eq!(repeated.n_id, Some(vec![2, 2, 2]));
+    }
+
+    #[test]
+    fn select_curves_rejects_incompatible_count_metadata_before_indexing() {
+        let base = SurvfitKMResult::from_stacked(StackedCurves::new(
+            vec![1.0, 2.0],
+            vec![1.0, 1.0],
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            Some(vec![1, 1]),
+            vec![1, 1],
+        ))
+        .unwrap();
+        for n in [vec![], vec![1], vec![0, 1, 1, 1], vec![0, 0, 1]] {
+            let inconsistent = SurvfitKMResult { n, ..base.clone() };
+            assert!(
+                inconsistent
+                    .select_curves(&[0])
+                    .unwrap_err()
+                    .to_string()
+                    .contains("fitted curve counts")
+            );
+        }
+        for n_id in [vec![1], vec![1, 1, 1]] {
+            let inconsistent = SurvfitKMResult {
+                n_id: Some(n_id),
+                ..base.clone()
+            };
+            assert!(
+                inconsistent
+                    .select_curves(&[0])
+                    .unwrap_err()
+                    .to_string()
+                    .contains("n_id")
+            );
+            assert!(
+                inconsistent
+                    .select_curves(&[2])
+                    .unwrap_err()
+                    .to_string()
+                    .contains("out of bounds")
+            );
+            assert!(
+                inconsistent
+                    .select_curves(&[])
+                    .unwrap_err()
+                    .to_string()
+                    .contains("select at least one curve")
+            );
+        }
     }
 
     #[test]
