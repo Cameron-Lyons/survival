@@ -82,7 +82,7 @@ from ._pyears import (
     summary_ratetable,
     summary_survexp,
 )
-from ._surv import Surv
+from ._surv import Surv, Surv2
 from ._surv_summary_print import SurvivalTablePrint
 from ._survfit import (
     _derived_survfit,
@@ -1476,6 +1476,10 @@ def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
     return frame
 
 
+def _surv2_response_frame(response: Surv2) -> dict[str, list[Any]]:
+    return {"time": list(response.time), "status": list(response.status)}
+
+
 @singledispatch
 def as_data_frame(result: Any) -> dict[str, list[Any]]:
     """``as.data.frame``: a result object as a plain column-oriented table."""
@@ -1484,6 +1488,7 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
 
 
 as_data_frame.register(Surv, _surv_response_frame)
+as_data_frame.register(Surv2, _surv2_response_frame)
 as_data_frame.register(CoxSurvfitResult, _cox_survfit_frame)
 as_data_frame.register(CoxBaseHazardResult, _cox_basehaz_frame)
 as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)

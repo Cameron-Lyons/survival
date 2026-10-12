@@ -823,6 +823,36 @@ class Surv2(_SurvivalOperations):
         """Extract the time and normalized status columns for explicit numeric use."""
         return [list(row) for row in zip(self.time, self.status, strict=True)]
 
+    def subset(self, indices: Sequence[int]) -> Surv2:
+        """R's ``x[i]`` on a ``Surv2`` object."""
+
+        rows = list(indices)
+        return Surv2._from_normalized(
+            time=[self.time[idx] for idx in rows],
+            status=[self.status[idx] for idx in rows],
+            states=self.states,
+            repeated=self.repeated,
+            clabel=self.clabel,
+        )
+
+    @classmethod
+    def _from_normalized(
+        cls,
+        *,
+        time: Sequence[float],
+        status: Sequence[int | None],
+        states: Sequence[str] = (),
+        repeated: bool | str = False,
+        clabel: str | None = None,
+    ) -> Surv2:
+        result = object.__new__(cls)
+        object.__setattr__(result, "time", tuple(time))
+        object.__setattr__(result, "status", tuple(status))
+        object.__setattr__(result, "states", tuple(states))
+        object.__setattr__(result, "repeated", repeated)
+        object.__setattr__(result, "clabel", clabel)
+        return result
+
     def replace_times(self, *, time: Sequence[float]) -> Surv2:
         """The same response with its time column replaced (``aeqSurv``)."""
 
