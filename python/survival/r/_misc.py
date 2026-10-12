@@ -821,7 +821,11 @@ def royston(
     ties_value = _normalize_bool_option(ties, "ties")
     adjust_value = _normalize_bool_option(adjust, "adjust")
     if newdata is None:
-        eta = list(engine.linear_predictors)
+        eta = (
+            list(engine.linear_predictors)
+            if engine.strata is None
+            else _float_vector(_models.predict(fit, type="lp"), "eta")
+        )
         response = _fit_response(engine)
     else:
         if engine.strata is not None:

@@ -264,6 +264,40 @@ def test_royston_matches_r_with_and_without_newdata():
         r.royston(object())
 
 
+@pytest.mark.parametrize(
+    ("formula", "loader", "expected"),
+    [
+        (
+            "Surv(time, status) ~ age + strata(sex)",
+            "load_lung",
+            [
+                0.2177287857039173,
+                0.131149491451353,
+                0.0111906587420825,
+                0.0127964175153892,
+                0.0139094754661442,
+                0.5411631691915257,
+            ],
+        ),
+        (
+            "Surv(start, stop, event) ~ age + strata(surgery)",
+            "load_heart",
+            [
+                0.5152694835995139,
+                0.1973481223973161,
+                0.0596060137797686,
+                0.0473126954388025,
+                0.0331964226908076,
+                0.5744613214247559,
+            ],
+        ),
+    ],
+)
+def test_royston_centers_a_stratified_fit_within_strata(formula, loader, expected):
+    fit = r.coxph(formula, data=getattr(survival.datasets, loader)())
+    assert list(r.royston(fit).values()) == pytest.approx(expected, rel=1e-10)
+
+
 def test_brier_matches_r_and_checks_the_data_as_r_does():
     fit = r.coxph("Surv(time, status) ~ x", data=TOY, model=True)
     result = r.brier(fit, times=[2.0, 4.0, 6.0], detail=True)
