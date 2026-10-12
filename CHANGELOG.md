@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## Unreleased (3.0.0)
+
+### Breaking changes
+
+Version 3.0 changes names, result types and module locations; numerical results
+are unchanged. [Migrating to survival 3.0](docs/migration-3.0.md) lists every
+change with its replacement.
 
 ### Fixed
 
