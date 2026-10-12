@@ -70,6 +70,11 @@
   clusters in 200,000 rows take 1.6 s, down from 2.8 s (R 2.2 s).
 - Ridge, P-spline and frailty terms use the array design: `pspline(age, df=4)`
   on 100,000 rows takes 0.71 s, down from 0.86 s (R 1.04 s).
+- Exact-ties Cox recursions run in linear space with per-level scaling, and
+  right-censored fits keep one running recursion per stratum, as R does:
+  `coxph(ties = "exact")` with 324 tied death times on 6,000 rows takes
+  0.010 s, down from 0.58 s (R 0.064 s). Counting-process exact fits take
+  0.21 s, down from 0.56 s.
 
 ## 2.0.0
 

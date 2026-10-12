@@ -220,14 +220,252 @@ fn log_weighted_mix(lhs: f64, rhs: f64) -> (f64, f64, f64) {
     }
 }
 
+const LINEAR_LOG_SPREAD: f64 = 256.0;
+const LINEAR_DENOM_LIMIT: f64 = f64::from_bits((1023 + 256) << 52);
+
 pub(crate) fn exact_tied_moments(
     risk_indices: &[usize],
     deaths: usize,
     log_risk: &[f64],
     covar: &Array2<f64>,
 ) -> ExactTiedMoments {
-    let nvar = covar.ncols();
     debug_assert!(deaths <= risk_indices.len());
+    let (low, high) = risk_indices.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(low, high), &person| (low.min(log_risk[person]), high.max(log_risk[person])),
+    );
+    if risk_indices.is_empty() || high - low > LINEAR_LOG_SPREAD || (high - low).is_nan() {
+        log_space_tied_moments(risk_indices, deaths, log_risk, covar)
+    } else if deaths > risk_indices.len() / 2 {
+        linear_tied_moments::<true>(risk_indices, deaths, log_risk, covar, low)
+    } else {
+        linear_tied_moments::<false>(risk_indices, deaths, log_risk, covar, high)
+    }
+}
+
+fn binary_exponent(value: f64) -> i32 {
+    ((value.to_bits() >> 52) & 0x7ff) as i32 - 1023
+}
+
+fn power_of_two(exponent: i32) -> f64 {
+    f64::from_bits(((1023 + exponent) as u64) << 52)
+}
+
+fn linear_tied_moments<const COMPLEMENTARY: bool>(
+    risk_indices: &[usize],
+    deaths: usize,
+    log_risk: &[f64],
+    covar: &Array2<f64>,
+    log_shift: f64,
+) -> ExactTiedMoments {
+    let nvar = covar.ncols();
+    let rows = covar.as_standard_layout();
+    let rows = rows.as_slice().expect("standard layout");
+    let subset_size = if COMPLEMENTARY {
+        risk_indices.len() - deaths
+    } else {
+        deaths
+    };
+    let mut sums = LinearSubsetSums::<COMPLEMENTARY>::new(subset_size, nvar, log_shift);
+    for &person in risk_indices {
+        sums.add(log_risk[person], &rows[person * nvar..(person + 1) * nvar]);
+    }
+    sums.moments(subset_size, deaths)
+}
+
+pub(crate) type ExactTiedSweep = LinearSubsetSums<false>;
+
+pub(crate) struct LinearSubsetSums<const COMPLEMENTARY: bool> {
+    nvar: usize,
+    log_shift: f64,
+    seen: usize,
+    total_log_risk: f64,
+    denoms: Vec<f64>,
+    ratios: Vec<f64>,
+    exponents: Vec<i64>,
+    means: Vec<f64>,
+    covariances: Vec<f64>,
+    delta: Vec<f64>,
+}
+
+impl<const COMPLEMENTARY: bool> LinearSubsetSums<COMPLEMENTARY> {
+    pub fn new(levels: usize, nvar: usize, log_shift: f64) -> Self {
+        let states = levels + 1;
+        let mut denoms = vec![0.0; states];
+        denoms[0] = 1.0;
+        Self {
+            nvar,
+            log_shift,
+            seen: 0,
+            total_log_risk: 0.0,
+            denoms,
+            ratios: vec![1.0; states],
+            exponents: vec![0; states],
+            means: vec![0.0; states * nvar],
+            covariances: vec![0.0; states * nvar * nvar],
+            delta: vec![0.0; nvar],
+        }
+    }
+
+    pub fn levels(&self) -> usize {
+        self.denoms.len() - 1
+    }
+
+    #[allow(clippy::needless_range_loop)]
+    pub fn add(&mut self, log_risk: f64, x: &[f64]) {
+        let nvar = self.nvar;
+        let square = nvar * nvar;
+        let states = self.denoms.len();
+        let centered = log_risk - self.log_shift;
+        let weight = if COMPLEMENTARY {
+            self.total_log_risk += centered;
+            (-centered).exp()
+        } else {
+            centered.exp()
+        };
+        let max_size = (states - 1).min(self.seen + 1);
+        self.seen += 1;
+        let delta = &mut self.delta;
+        for size in (1..=max_size).rev() {
+            if self.denoms[size] == 0.0 {
+                self.exponents[size] = self.exponents[size - 1];
+                self.ratios[size] = 1.0;
+            }
+            let added = weight * self.denoms[size - 1] * self.ratios[size];
+            let total = self.denoms[size] + added;
+            let inverse = 1.0 / total;
+            let existing_fraction = self.denoms[size] * inverse;
+            let added_fraction = added * inverse;
+
+            let (lower_means, upper_means) = self.means.split_at_mut(size * nvar);
+            let previous_mean = &lower_means[(size - 1) * nvar..];
+            let current_mean = &mut upper_means[..nvar];
+            for variable in 0..nvar {
+                let (existing, added) = if COMPLEMENTARY {
+                    (
+                        current_mean[variable] + x[variable],
+                        previous_mean[variable],
+                    )
+                } else {
+                    (
+                        current_mean[variable],
+                        previous_mean[variable] + x[variable],
+                    )
+                };
+                delta[variable] = added - existing;
+            }
+
+            let (lower, upper) = self.covariances.split_at_mut(size * square);
+            let previous = &lower[(size - 1) * square..];
+            let current = &mut upper[..square];
+            for row in 0..nvar {
+                let scaled = existing_fraction * added_fraction * delta[row];
+                for column in 0..=row {
+                    let cell = row * nvar + column;
+                    current[cell] = existing_fraction * current[cell]
+                        + added_fraction * previous[cell]
+                        + scaled * delta[column];
+                }
+            }
+
+            if existing_fraction >= added_fraction {
+                for variable in 0..nvar {
+                    let existing = if COMPLEMENTARY {
+                        current_mean[variable] + x[variable]
+                    } else {
+                        current_mean[variable]
+                    };
+                    current_mean[variable] = existing + added_fraction * delta[variable];
+                }
+            } else {
+                for variable in 0..nvar {
+                    let added = if COMPLEMENTARY {
+                        previous_mean[variable]
+                    } else {
+                        previous_mean[variable] + x[variable]
+                    };
+                    current_mean[variable] = added - existing_fraction * delta[variable];
+                }
+            }
+
+            self.denoms[size] = total;
+            if !(1.0..=LINEAR_DENOM_LIMIT).contains(&total) {
+                let exponent = binary_exponent(total);
+                let scale = power_of_two(-exponent);
+                self.denoms[size] *= scale;
+                self.exponents[size] += i64::from(exponent);
+                self.ratios[size] *= scale;
+                if size + 1 < states {
+                    self.ratios[size + 1] *= power_of_two(exponent);
+                }
+            }
+        }
+        if COMPLEMENTARY {
+            for (mean, &value) in self.means[..nvar].iter_mut().zip(x) {
+                *mean += value;
+            }
+        }
+    }
+
+    pub fn moments(&self, size: usize, deaths: usize) -> ExactTiedMoments {
+        let nvar = self.nvar;
+        let square = nvar * nvar;
+        let covariances = &self.covariances[size * square..(size + 1) * square];
+        let mut covariance = Array2::zeros((nvar, nvar));
+        for row in 0..nvar {
+            for column in 0..=row {
+                let value = covariances[row * nvar + column];
+                covariance[(row, column)] = value;
+                covariance[(column, row)] = value;
+            }
+        }
+        ExactTiedMoments {
+            log_denom: self.denoms[size].ln()
+                + self.exponents[size] as f64 * std::f64::consts::LN_2
+                + self.total_log_risk
+                + deaths as f64 * self.log_shift,
+            mean: self.means[size * nvar..(size + 1) * nvar].to_vec(),
+            covariance,
+        }
+    }
+}
+
+pub(crate) fn linear_sweep_shift(log_risk: &[f64]) -> Option<f64> {
+    let (low, high) = log_risk
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), &value| {
+            (low.min(value), high.max(value))
+        });
+    (!log_risk.is_empty() && high - low <= LINEAR_LOG_SPREAD).then_some(high)
+}
+
+pub(crate) fn sweep_levels(stratum_rows: usize, tied: &mut [(usize, usize)]) -> usize {
+    tied.sort_unstable_by_key(|&(deaths, _)| std::cmp::Reverse(deaths));
+    let separate = |deaths: usize, nrisk: usize| (nrisk * deaths) as f64;
+    let mut larger = 0.0;
+    let (mut best_levels, mut best_cost) = (0, f64::INFINITY);
+    let mut index = 0;
+    while index < tied.len() {
+        let levels = tied[index].0;
+        let cost = (stratum_rows * levels) as f64 + larger;
+        if cost < best_cost {
+            (best_levels, best_cost) = (levels, cost);
+        }
+        while index < tied.len() && tied[index].0 == levels {
+            larger += separate(tied[index].0, tied[index].1);
+            index += 1;
+        }
+    }
+    if larger <= best_cost { 0 } else { best_levels }
+}
+
+fn log_space_tied_moments(
+    risk_indices: &[usize],
+    deaths: usize,
+    log_risk: &[f64],
+    covar: &Array2<f64>,
+) -> ExactTiedMoments {
+    let nvar = covar.ncols();
     let complementary = deaths > risk_indices.len() / 2;
     let log_shift = if complementary {
         log_risk[risk_indices[0]]
@@ -398,6 +636,67 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn running_sweep_matches_each_growing_risk_set() {
+        let n = 40;
+        let covar = Array2::from_shape_fn((n, 2), |(row, column)| {
+            ((row * 7 + column * 3) % 11) as f64 / 4.0 - 1.0
+        });
+        let log_risk: Vec<f64> = (0..n)
+            .map(|row| ((row * 5) % 13) as f64 / 3.0 - 2.0)
+            .collect();
+        let order: Vec<usize> = (0..n).rev().collect();
+        let mut sweep = ExactTiedSweep::new(6, 2, 3.0);
+        for (seen, &person) in order.iter().enumerate() {
+            sweep.add(log_risk[person], covar.row(person).as_slice().unwrap());
+            let nrisk = seen + 1;
+            for deaths in 2..=6.min(nrisk / 2) {
+                let actual = sweep.moments(deaths, deaths);
+                let expected = exact_tied_moments(&order[..nrisk], deaths, &log_risk, &covar);
+                assert_close(actual.log_denom, expected.log_denom, 1e-11);
+                for i in 0..2 {
+                    assert_close(actual.mean[i], expected.mean[i], 1e-12);
+                    for j in 0..2 {
+                        assert_close(
+                            actual.covariance[(i, j)],
+                            expected.covariance[(i, j)],
+                            1e-12,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn running_sweep_rescales_large_risk_sets() {
+        let n = 3_000;
+        let covar = Array2::from_shape_fn((n, 1), |(row, _)| if row % 2 == 0 { -1.0 } else { 1.0 });
+        let mut sweep = ExactTiedSweep::new(400, 1, 0.0);
+        for row in 0..n {
+            sweep.add(0.0, covar.row(row).as_slice().unwrap());
+        }
+        let moments = sweep.moments(400, 400);
+        let log_binomial: f64 = (0..400)
+            .map(|k| ((n - k) as f64).ln() - ((k + 1) as f64).ln())
+            .sum();
+        assert_close(moments.log_denom, log_binomial, 1e-9);
+        assert_close(moments.mean[0], 0.0, 1e-10);
+        let variance = 400.0 * (n - 400) as f64 / (n - 1) as f64;
+        assert_close(moments.covariance[(0, 0)], variance, 1e-8);
+    }
+
+    #[test]
+    fn sweep_levels_balance_the_sweep_against_separate_ties() {
+        assert_eq!(sweep_levels(1_000, &mut []), 0);
+        assert_eq!(sweep_levels(1_000, &mut [(3, 900), (5, 800), (2, 700)]), 5);
+        assert_eq!(
+            sweep_levels(1_000, &mut [(3, 900), (2, 800), (300, 600)]),
+            3
+        );
+        assert_eq!(sweep_levels(1_000, &mut [(2, 4)]), 0);
     }
 
     #[test]
