@@ -258,6 +258,11 @@ fn control_df(
             theta_history_index: Some(0),
         });
     }
+    if !(dfs[nx - 1].is_finite() && dfs[nx - 2].is_finite()) {
+        return Err(SurvivalError::computation(
+            "degrees-of-freedom search failed: the penalized fit has a non-finite df",
+        ));
+    }
     let done = iter > 1 && (dfs[nx - 1] - target_df).abs() < eps;
     let doing_well = ((dfs[nx - 1] - target_df) / (dfs[nx - 2] - target_df)).abs() <= 0.6;
     let mut ord: Vec<usize> = (0..nx).collect();
@@ -273,10 +278,9 @@ fn control_df(
     } else if y.iter().all(|&v| v < target) {
         nx - 3
     } else {
-        let b1 = (0..nx)
-            .rev()
-            .find(|&i| y[i] <= target)
-            .expect("some y <= target");
+        let b1 = (0..nx).rev().find(|&i| y[i] <= target).ok_or_else(|| {
+            SurvivalError::computation("degrees-of-freedom search has no lower bracket")
+        })?;
         if b1 + 1 == nx {
             return Err(SurvivalError::computation(
                 "degrees-of-freedom search has no upper bracket",
@@ -619,6 +623,25 @@ mod tests {
         assert_eq!(state2.history.len(), 3);
         assert!(state2.theta > state1.theta);
         assert!(!state2.done);
+    }
+
+    #[test]
+    fn df_control_reports_a_non_finite_df_as_an_error() {
+        let control = Control::Df {
+            df: 5.0,
+            eps: 0.1,
+            thetas: vec![0.0],
+            dfs: vec![1.0],
+            guess: 1.0,
+            gamma_correction: false,
+        };
+        let state1 = control
+            .update(&control.initial(), input(1, 0.99, &[], &[]))
+            .unwrap();
+        let error = control
+            .update(&state1, input(2, f64::NAN, &[], &[]))
+            .unwrap_err();
+        assert!(error.to_string().contains("non-finite df"));
     }
 
     #[test]

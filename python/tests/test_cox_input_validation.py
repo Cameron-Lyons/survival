@@ -164,3 +164,22 @@ def test_fit_entry_points_check_lengths_before_optimization(function, empty_even
     }
     with pytest.raises(ValueError, match=field):
         function(**inputs)
+
+
+@pytest.mark.parametrize("df", ["5", "1.5"])
+def test_ridge_df_beyond_its_columns_is_an_ordinary_error(df):
+    """R stops with ``missing value where TRUE/FALSE needed`` once the df search
+    produces a NaN; the port must raise an ``Exception``, not panic."""
+
+    survival = setup_survival_import()
+    lung = survival.datasets.load_lung()
+    with pytest.raises(RuntimeError, match="non-finite df"):
+        survival.r.coxph(f"Surv(time, status) ~ ridge(age, df = {df}) + sex", lung)
+
+
+def test_cox_zph_rejects_a_column_assigned_to_two_terms():
+    fit = core.coxph_fit(
+        [1.0, 2.0, 3.0, 4.0, 5.0], [1, 1, 0, 1, 1], [[0.1], [0.5], [0.2], [0.9], [0.4]]
+    )
+    with pytest.raises(ValueError, match="more than one term"):
+        core.cox_zph(fit, assign=[[0], [0]])
