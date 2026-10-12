@@ -834,7 +834,7 @@ def _model_frame(
         as_array
         and y.type in {"right", "counting"}
         and all(
-            isinstance(factor, _CategoricalDesignTerm)
+            isinstance(factor, _CategoricalDesignTerm | _PenaltyDesignTerm)
             or (isinstance(factor, _NumericDesignTerm) and factor.term.transform != "tt")
             for term in design.covariates
             for factor in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
