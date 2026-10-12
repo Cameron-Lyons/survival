@@ -60,6 +60,16 @@
   `survfit(..., id=)` on 100,000 subjects takes 1.8 s, down from 4.1 s (R 3.2 s).
 - `summary` and `print` of a `survfit` with 4,000 curves take 9 ms and 23 ms,
   down from 1.35 s and 1.06 s; curve subsetting looks labels up in a dict.
+- The LU reciprocal condition uses Higham's 1-norm estimator, as LAPACK and R's
+  `solve` do: `survdiff` with 2,000 groups on 100,000 rows takes 2.5 s, down
+  from 9.0 s (R 2.5 s).
+- Multi-state `residuals(fit, times=)` and `pseudo()` update the influence in a
+  contiguous buffer: 0.97 s for five times on 100,000 rows, down from 2.60 s
+  (R 1.40 s).
+- Clustered Kaplan-Meier variance takes one pass per event time: 50,000
+  clusters in 200,000 rows take 1.6 s, down from 2.8 s (R 2.2 s).
+- Ridge, P-spline and frailty terms use the array design: `pspline(age, df=4)`
+  on 100,000 rows takes 0.71 s, down from 0.86 s (R 1.04 s).
 
 ## 2.0.0
 
