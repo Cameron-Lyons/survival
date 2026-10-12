@@ -284,15 +284,13 @@ impl LuDecomposition {
             }
 
             let pivot = factors[pivot_col * n + pivot_col];
-            for row in (pivot_col + 1)..n {
-                let multiplier_index = row * n + pivot_col;
-                let multiplier = factors[multiplier_index] / pivot;
-                factors[multiplier_index] = multiplier;
-
-                let row_start = row * n;
-                let pivot_start = pivot_col * n;
-                for col in (pivot_col + 1)..n {
-                    factors[row_start + col] -= multiplier * factors[pivot_start + col];
+            let (head, tail) = factors.split_at_mut((pivot_col + 1) * n);
+            let pivot_row = &head[pivot_col * n + pivot_col + 1..(pivot_col + 1) * n];
+            for row in tail.chunks_exact_mut(n) {
+                let multiplier = row[pivot_col] / pivot;
+                row[pivot_col] = multiplier;
+                for (value, &above) in row[pivot_col + 1..].iter_mut().zip(pivot_row) {
+                    *value -= multiplier * above;
                 }
             }
         }
@@ -309,19 +307,91 @@ impl LuDecomposition {
     }
 
     fn reciprocal_condition(&self, anorm: f64) -> f64 {
-        let mut inverse_norm = 0.0_f64;
-        let mut column = vec![0.0; self.n];
-        for unit in 0..self.n {
-            column.fill(0.0);
-            column[unit] = 1.0;
-            self.substitute(&mut column);
-            let norm: f64 = column.iter().map(|value| value.abs()).sum();
-            if norm.is_nan() {
-                return 0.0;
-            }
-            inverse_norm = inverse_norm.max(norm);
+        let inverse_norm = self.inverse_norm_estimate();
+        if inverse_norm.is_nan() {
+            return 0.0;
         }
         1.0 / (anorm * inverse_norm)
+    }
+
+    fn inverse_norm_estimate(&self) -> f64 {
+        let n = self.n;
+        let l1 = |values: &[f64]| values.iter().map(|value| value.abs()).sum::<f64>();
+        let signs = |values: &[f64]| -> Vec<f64> {
+            values
+                .iter()
+                .map(|&value| if value >= 0.0 { 1.0 } else { -1.0 })
+                .collect()
+        };
+        let argmax = |values: &[f64]| -> usize {
+            let mut best = 0;
+            for (index, value) in values.iter().enumerate() {
+                if value.abs() > values[best].abs() {
+                    best = index;
+                }
+            }
+            best
+        };
+        let mut x = vec![1.0 / n as f64; n];
+        self.substitute(&mut x);
+        let mut estimate = l1(&x);
+        if n == 1 || estimate.is_nan() {
+            return estimate;
+        }
+        let mut sign = signs(&x);
+        let mut z = sign.clone();
+        self.substitute_transpose(&mut z);
+        let mut j = argmax(&z);
+        for _ in 1..5 {
+            let mut y = vec![0.0; n];
+            y[j] = 1.0;
+            self.substitute(&mut y);
+            let previous = estimate;
+            estimate = l1(&y);
+            let next_sign = signs(&y);
+            if next_sign == sign || estimate <= previous {
+                estimate = estimate.max(previous);
+                break;
+            }
+            sign = next_sign;
+            z.copy_from_slice(&sign);
+            self.substitute_transpose(&mut z);
+            let last = j;
+            j = argmax(&z);
+            if z[last].abs() == z[j].abs() {
+                break;
+            }
+        }
+        let mut alternative: Vec<f64> = (0..n)
+            .map(|i| {
+                let magnitude = 1.0 + i as f64 / (n - 1) as f64;
+                if i % 2 == 0 { magnitude } else { -magnitude }
+            })
+            .collect();
+        self.substitute(&mut alternative);
+        estimate.max(2.0 * l1(&alternative) / (3.0 * n as f64))
+    }
+
+    fn substitute_transpose(&self, rhs: &mut [f64]) {
+        for row in 0..self.n {
+            let mut value = rhs[row];
+            for (col, &known_value) in rhs.iter().take(row).enumerate() {
+                value -= self.factors[col * self.n + row] * known_value;
+            }
+            rhs[row] = value / self.factors[row * self.n + row];
+        }
+        for row in (0..self.n).rev() {
+            let mut value = rhs[row];
+            for (col, &known_value) in rhs.iter().enumerate().skip(row + 1) {
+                value -= self.factors[col * self.n + row] * known_value;
+            }
+            rhs[row] = value;
+        }
+        for (row, &swap_row) in self.swaps.iter().enumerate().rev() {
+            if row != swap_row {
+                rhs.swap(row, swap_row);
+            }
+        }
     }
 
     fn substitute(&self, rhs: &mut [f64]) {
@@ -440,6 +510,54 @@ pub(crate) fn invert_flat_square_matrix_with_fallback(a: &[f64], n: usize) -> Ve
 mod tests {
     use super::*;
     use ndarray::arr2;
+
+    fn exact_inverse_norm(lu: &LuDecomposition) -> f64 {
+        let inverse = lu.inverse().unwrap();
+        (0..lu.n)
+            .map(|col| (0..lu.n).map(|row| inverse[[row, col]].abs()).sum::<f64>())
+            .fold(0.0, f64::max)
+    }
+
+    fn test_matrix(n: usize, seed: u64) -> Array2<f64> {
+        let mut state = seed;
+        Array2::from_shape_fn((n, n), |(row, col)| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let noise = (state >> 33) as f64 / (1u64 << 31) as f64 - 0.5;
+            if row == col {
+                n as f64 * 0.3 + noise
+            } else {
+                noise
+            }
+        })
+    }
+
+    #[test]
+    fn transpose_substitution_solves_the_transposed_system() {
+        let matrix = test_matrix(7, 3);
+        let lu = LuDecomposition::decompose(&matrix).unwrap();
+        let rhs: Vec<f64> = (0..7).map(|i| i as f64 - 2.5).collect();
+        let mut solution = rhs.clone();
+        lu.substitute_transpose(&mut solution);
+        for col in 0..7 {
+            let value: f64 = (0..7).map(|row| matrix[[row, col]] * solution[row]).sum();
+            assert!((value - rhs[col]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn inverse_norm_estimate_bounds_the_exact_norm() {
+        for (n, seed) in [(1, 1), (2, 5), (5, 9), (12, 17), (40, 23)] {
+            let lu = LuDecomposition::decompose(&test_matrix(n, seed)).unwrap();
+            let exact = exact_inverse_norm(&lu);
+            let estimate = lu.inverse_norm_estimate();
+            assert!(estimate <= exact * (1.0 + 1e-12), "{estimate} > {exact}");
+            assert!(estimate >= exact / 3.0, "{estimate} < {exact} / 3");
+        }
+        let lu = LuDecomposition::decompose(&arr2(&[[4.0, 1.0], [1.0, 3.0]])).unwrap();
+        assert!((lu.inverse_norm_estimate() - exact_inverse_norm(&lu)).abs() < 1e-14);
+    }
 
     #[test]
     fn known_matrix_columns_survive_empty_rows_and_columns() {
