@@ -10,3 +10,17 @@ move.
 Each section below lists what changed and what to write instead.
 
 ## Python
+
+### `survival.r_api` is removed
+
+`survival.r_api` was a second name for `survival.r`. Import `survival.r` (or use
+the package root for R's exported functions):
+
+| 2.x | 3.0 |
+| --- | --- |
+| `from survival import r_api` | `from survival import r` |
+| `survival.r_api.coxph(...)` | `survival.r.coxph(...)` |
+
+The private helpers the R bridge used through `r_api` are attributes of
+`survival.pybridge`. `survivalr` 0.2.0 requires survival 3.0 and checks the
+Python package version when it first loads it.

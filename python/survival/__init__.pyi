@@ -16,7 +16,6 @@ from . import population as population
 from . import pybridge as pybridge
 from . import qol as qol
 from . import r as r
-from . import r_api as r_api
 from . import recurrent as recurrent
 from . import regression as regression
 from . import relative as relative

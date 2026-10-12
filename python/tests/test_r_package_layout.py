@@ -126,7 +126,7 @@ def test_r_bridge_exports_core_survival_entry_points():
 def test_r_bridge_defines_exported_functions():
     bridge = "\n".join(path.read_text() for path in sorted((R_PACKAGE / "R").glob("*.R")))
 
-    assert 'reticulate::import("survival.r_api", convert = TRUE)' in bridge
+    assert 'reticulate::import("survival.r", convert = TRUE)' in bridge
     assert 'inherits(x, "python.builtin.object")' in bridge
     assert '.call_r_api("coef_names", object' in bridge
     assert '.call_r_api("confint", object' in bridge

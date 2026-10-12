@@ -13,7 +13,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 population = survival.population
 datasets = survival.datasets
 

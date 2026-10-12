@@ -11,7 +11,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/pyears_matrix_reference.json").read_text()
 )

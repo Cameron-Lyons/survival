@@ -3,7 +3,16 @@
 
   function() {
     if (is.null(module)) {
-      module <<- reticulate::import("survival.r_api", convert = TRUE)
+      survival <- reticulate::import("survival", convert = TRUE)
+      version <- as.character(reticulate::py_get_attr(survival, "__version__"))
+      major <- suppressWarnings(as.integer(strsplit(version, ".", fixed = TRUE)[[1L]][[1L]]))
+      if (is.na(major) || major < 3L) {
+        stop(
+          "survivalr needs the Python survival package 3.0 or later; found ", version,
+          call. = FALSE
+        )
+      }
+      module <<- reticulate::import("survival.r", convert = TRUE)
     }
     module
   }
@@ -14,6 +23,10 @@ if (getRversion() >= "2.15.1") {
 }
 
 .python_attr <- function(name) {
+  if (startsWith(name, "_")) {
+    .survival_python_module()
+    return(.pybridge_attr(name))
+  }
   reticulate::py_get_attr(.survival_python_module(), name)
 }
 

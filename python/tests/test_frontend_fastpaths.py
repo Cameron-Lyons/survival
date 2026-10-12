@@ -19,7 +19,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 r_coerce = importlib.import_module("survival.r._coerce")
 r_surv = importlib.import_module("survival.r._surv")
 

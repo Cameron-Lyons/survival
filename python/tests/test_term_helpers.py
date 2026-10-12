@@ -103,8 +103,8 @@ def test_fitted_models_supply_matching_labels(case):
     assert r.model_term_names(fit, [2]) == case["labels"][1:2]
     assert matrix["assign"] == case["assign"]
     assert r.attrassign(matrix, fit) == case["expected"]
-    assert survival.r_api.attrassign is r.attrassign
-    assert survival.r_api.untangle_specials is r.untangle_specials
+    assert survival.r.attrassign is r.attrassign
+    assert survival.r.untangle_specials is r.untangle_specials
 
 
 @pytest.mark.parametrize(

@@ -19,7 +19,7 @@ REFERENCE = json.loads(
 @pytest.fixture(scope="module")
 def fits():
     data = dict(REFERENCE["data"])
-    data["event"] = survival.r_api._r_factor(data["event"], REFERENCE["event_levels"])
+    data["event"] = survival.pybridge._r_factor(data["event"], REFERENCE["event_levels"])
     result = {}
     for name, spec in REFERENCE["fits"].items():
         options = {key: spec[key] for key in ("weights", "id", "entry") if key in spec}

@@ -1,6 +1,6 @@
 Package: survivalr
 Title: R Bridge for the Rust/Python Survival Package
-Version: 0.1.0
+Version: 0.2.0
 Author: Cameron Lyons [aut, cre]
 Maintainer: Cameron Lyons <cameron.lyons2@gmail.com>
 Authors@R: person("Cameron", "Lyons", email = "cameron.lyons2@gmail.com", role = c("aut", "cre"))

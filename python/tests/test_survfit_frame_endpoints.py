@@ -10,7 +10,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 core = survival._survival
 survfit_boundary = importlib.import_module("survival.r._survfit")
 types = importlib.import_module("survival.r._types")

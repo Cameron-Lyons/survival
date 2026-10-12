@@ -26,7 +26,7 @@ def response(case):
         status = [row[1] for row in rows]
         if case["states"]:
             levels = [case["clabel"] or "censor", *case["states"]]
-            status = survival.r_api._r_factor(
+            status = survival.pybridge._r_factor(
                 [None if value is None else levels[int(value)] for value in status], levels
             )
         return r.Surv2(times, status, repeated=case["repeated"])

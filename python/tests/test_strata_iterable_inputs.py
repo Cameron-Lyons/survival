@@ -10,7 +10,7 @@ import pytest
 from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
-r = setup_survival_import().r_api
+r = setup_survival_import().r
 factor_codes = importlib.import_module("survival.r._coerce")._factor
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/strata_iterable_reference.json").read_text()

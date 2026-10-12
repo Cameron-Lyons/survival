@@ -8,7 +8,7 @@ from .helpers import setup_survival_import
 from .r_api_support import _toy_data
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 
 def _close(actual, expected, rel=1e-8):
@@ -43,7 +43,7 @@ def test_survdiff_rho_and_surv_input():
 
 def test_survdiff_strata_terms_give_group_by_stratum_tables():
     data = _toy_data()
-    data["s"] = r._r_factor(["y", "x", "y", "x", "y", "x", "y", "x"], ["y", "x"])
+    data["s"] = r._coerce._r_factor(["y", "x", "y", "x", "y", "x", "y", "x"], ["y", "x"])
     result = r.survdiff("Surv(time, status) ~ group + strata(s)", data)
 
     assert result.strata == {"y": 4, "x": 4}

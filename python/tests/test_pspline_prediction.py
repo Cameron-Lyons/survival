@@ -10,7 +10,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/pspline_prediction_reference.json").read_text()
 )

@@ -15,7 +15,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 datasets = survival.datasets
 r_formula = importlib.import_module("survival.r._formula")
 
@@ -451,7 +451,7 @@ def test_coxph_transforms_of_expressions_match_r(rhs, names, coefficients, n):
 
 def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
     lung = datasets.load_lung()
-    data = {**lung, "f": r._r_factor(["1" if sex == 1 else "2" for sex in lung["sex"]], ["1", "2"])}
+    data = {**lung, "f": r._coerce._r_factor(["1" if sex == 1 else "2" for sex in lung["sex"]], ["1", "2"])}
     for rhs, names, coefficients in [
         ("I(f == 2)", ["I(f == 2)TRUE"], [-0.53102353761950805]),
         ("I(f != 2)", ["I(f != 2)TRUE"], [0.53102353761950649]),
@@ -501,8 +501,8 @@ def test_as_numeric_of_a_factor_inside_an_expression_is_its_codes():
     lung = datasets.load_lung()
     data = {
         **lung,
-        "f": r._r_factor([10 if sex == 1 else 20 for sex in lung["sex"]], [10, 20]),
-        "e": r._r_factor(lung["ph.ecog"], [0, 1, 2, 3]),
+        "f": r._coerce._r_factor([10 if sex == 1 else 20 for sex in lung["sex"]], [10, 20]),
+        "e": r._coerce._r_factor(lung["ph.ecog"], [0, 1, 2, 3]),
     }
     for rhs, names, coefficient, n in [
         ("I(as.numeric(f) + 0)", ["I(as.numeric(f) + 0)"], -0.53102353761950816, 228),

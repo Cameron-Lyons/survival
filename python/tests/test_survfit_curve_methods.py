@@ -14,7 +14,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 
 def _close(actual, expected, rel=1e-8):

@@ -12,7 +12,7 @@ import pytest
 
 from .helpers import setup_survival_import
 
-r = setup_survival_import().r_api
+r = setup_survival_import().r
 from survival.r._coerce import _mstate_categories, _r_factor
 from survival.r._formula import model_frame as formula_frame
 

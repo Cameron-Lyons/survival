@@ -9,7 +9,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads((Path(__file__).parent / "fixtures/aj_entry_reference.json").read_text())
 
 
@@ -24,7 +24,7 @@ def test_entry_grid_counts_and_estimates_match_current_stock_r(case, api):
     if case["start_time"] is not None:
         options["start_time"] = case["start_time"]
     if api == "formula":
-        data["event"] = r._r_factor(data["event"], REFERENCE["event_levels"])
+        data["event"] = r._coerce._r_factor(data["event"], REFERENCE["event_levels"])
         fit = r.survfit(
             "Surv(start, stop, event) ~ " + ("group" if case["grouped"] else "1"),
             data,
@@ -101,7 +101,7 @@ def test_subject_gaps_are_rejected_before_constructing_an_entry_grid(api, entry,
             {
                 "start": [0.0, second_start, 0.0],
                 "stop": [2.0, 5.0, 4.0],
-                "event": r._r_factor(["censor", "censor", "a"], ["censor", "a"]),
+                "event": r._coerce._r_factor(["censor", "censor", "a"], ["censor", "a"]),
                 "id": [2, 2, 3],
             },
             id="id",

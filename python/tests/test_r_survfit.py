@@ -17,7 +17,7 @@ from .helpers import setup_survival_import
 from .r_api_support import _toy_data
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 
 def _close(actual, expected, rel=1e-8):
@@ -42,7 +42,7 @@ def _mstate_data():
     return {
         "id": [1, 2, 3, 4, 5, 6],
         "time": [1, 2, 3, 4, 5, 6],
-        "ev": r._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
     }
 
 
@@ -114,7 +114,7 @@ def test_survfit_surv_object_with_group_labels_curves_by_level():
 
 def test_survfit_factor_levels_order_the_curves():
     data = _toy_data()
-    data["group"] = r._r_factor(data["group"], ["B", "A"])
+    data["group"] = r._coerce._r_factor(data["group"], ["B", "A"])
     fit = r.survfit("Surv(time, status) ~ group", data)
 
     assert list(fit.strata) == ["group=B", "group=A"]
@@ -409,7 +409,7 @@ def test_survfit_multistate_argument_rules():
         "id": [1, 1],
         "start": [0, 1],
         "stop": [1, 2],
-        "ev": r._r_factor(["a", "b"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(["a", "b"], ["censor", "a", "b"]),
     }
     with pytest.raises(ValueError, match="id statement is required"):
         r.survfit("Surv(start, stop, ev) ~ 1", counting)

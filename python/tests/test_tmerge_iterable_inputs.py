@@ -11,7 +11,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 RFactor = importlib.import_module("survival.r._coerce")._r_factor
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures" / "tmerge_iterable_reference.json").read_text()

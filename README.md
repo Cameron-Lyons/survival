@@ -484,9 +484,8 @@ Common result objects can be converted to column-oriented tables with
 times; rate-table summaries describe dimensions and date ranges, while
 merged-data summaries report where updates fell relative to each interval.
 The `survival.residuals` name remains the residual diagnostics module; the
-R-style residual generic is available as `survival.r_api.residuals(...)` for
-fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
-package, which holds the implementation split by concern).
+R-style residual generic is `survival.r.residuals(...)` for fitted Cox and
+`survreg` models.
 For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
 order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
 conventions. Working residuals use the location score divided by negative
@@ -1230,7 +1229,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 
 - Native extendr bindings are currently disabled. The experimental
   `r/survivalr` package provides an R facade through reticulate and the Python
-  `survival.r_api` module.
+  `survival.r` module.
 - Python 3.11+ and Rust 1.95+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 

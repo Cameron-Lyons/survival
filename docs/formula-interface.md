@@ -1,7 +1,7 @@
 # Formula interface
 
-`survival.r` is the R-style interface to the package; `survival.r_api` re-exports
-it, and the R bridge package `survivalr` drives it through reticulate. Formula
+`survival.r` is the R-style interface to the package, and the R bridge package
+`survivalr` drives it through reticulate. Formula
 strings are parsed by a restricted parser: formula options are read as literals,
 and Python or R code is never evaluated. This page describes formulas, survival
 responses, model frames and model matrices. Predictions are described in

@@ -13,9 +13,9 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 sa = survival.surv_analysis
-_survfit_strata_curves = r._survfit_strata_curves
+_survfit_strata_curves = r._models._survfit_strata_curves
 
 
 def _weighted():
@@ -230,8 +230,8 @@ def _mixed_istate():
         "id": list(range(1, 13)),
         "start": [0] * 12,
         "stop": [5, 3, 7, 2, 4, 6, 8, 1, 9, 3, 6, 5],
-        "ev": r._r_factor(events, ["censor", "b", "c"]),
-        "istate": r._r_factor(istate, ["a", "b", "c"]),
+        "ev": r._coerce._r_factor(events, ["censor", "b", "c"]),
+        "istate": r._coerce._r_factor(istate, ["a", "b", "c"]),
         "g": [1, 2] * 6,
     }
 

@@ -41,7 +41,7 @@ def test_confidence_bands_match_stock_r(case, arrays, facade):
             field: None if values is None else np.asarray(values)
             for field, values in inputs.items()
         }
-    function = survival.r_api.survfit_confint if facade else survival.surv_analysis.survfit_confint
+    function = survival.r.survfit_confint if facade else survival.surv_analysis.survfit_confint
     actual = function(
         **inputs,
         **{field: case[field] for field in ("logse", "conf_type", "conf_int", "ulimit")},
@@ -56,7 +56,7 @@ def test_scalar_estimates_and_standard_errors_match_stock_r(conf_type):
         for item in REFERENCE["cases"]
         if item["name"] == f"scalar/{conf_type}/TRUE/0.95/absent/TRUE"
     )
-    assert_bands(survival.r_api.survfit_confint(0.5, 0.1, conf_type=conf_type), case["expected"])
+    assert_bands(survival.r.survfit_confint(0.5, 0.1, conf_type=conf_type), case["expected"])
 
 
 @pytest.mark.parametrize("field", ["p", "se", "selow"])
@@ -73,7 +73,7 @@ def test_nullable_confidence_band_inputs_preserve_missing_values(field, containe
         values = np.ma.array([0.8, 99.0, 0.3], mask=[False, True, False])
     arguments = {"p": [0.8, 0.7, 0.3], "se": [0.1, 0.1, 0.1], "selow": [0.15, 0.15, 0.15]}
     arguments[field] = values
-    actual = survival.r_api.survfit_confint(**arguments, conf_type="log-log")
+    actual = survival.r.survfit_confint(**arguments, conf_type="log-log")
     arguments[field] = [0.8, np.nan, 0.3]
     expected = survival.surv_analysis.survfit_confint(**arguments, conf_type="log-log")
     for name in ("lower", "upper"):
@@ -97,7 +97,7 @@ def test_confidence_bands_own_numeric_array_inputs(layout, facade):
             arrays[index] = view
         else:
             source.flags.writeable = False
-    function = survival.r_api.survfit_confint if facade else survival.surv_analysis.survfit_confint
+    function = survival.r.survfit_confint if facade else survival.surv_analysis.survfit_confint
     actual = function(*arrays[:2], selow=arrays[2], conf_type="log")
     expected = survival.surv_analysis.survfit_confint(
         [0.8, 0.7, 0.3], [0.1] * 3, selow=[0.15] * 3, conf_type="log"

@@ -620,7 +620,7 @@ def test_readme_python_examples_reference_public_symbols():
 def _readme_low_level_blocks() -> list[tuple[int, str]]:
     """README blocks that use only the domain modules (the R-style facade has its own tests)."""
     lists = _root_export_lists()
-    module_names = set(lists["_PUBLIC_MODULES"]) - {"r", "r_api"}
+    module_names = set(lists["_PUBLIC_MODULES"]) - {"r"}
     blocks = []
     for index, block in enumerate(_readme_python_blocks(), start=1):
         tree = ast.parse(block)
@@ -708,7 +708,7 @@ def test_package_root_lazy_loads_r_exports():
     assert "survival.r" in sys.modules
     assert "r" in vars(survival)
     assert "Surv" in vars(survival)
-    assert survival.r_api.Surv is survival.Surv
+    assert survival.r.Surv is survival.Surv
 
 
 def test_package_root_version_matches_project_metadata():

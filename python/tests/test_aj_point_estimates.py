@@ -12,7 +12,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads((Path(__file__).parent / "fixtures/aj_entry_reference.json").read_text())
 UNCERTAINTY = {"std_err", "std_chaz", "std_auc", "se0", "lower", "upper", "influence_pstate"}
 
@@ -56,7 +56,7 @@ def fit_case(case, api, se_fit):
     if case["start_time"] is not None:
         options["start_time"] = case["start_time"]
     if api == "formula":
-        data["event"] = r._r_factor(data["event"], REFERENCE["event_levels"])
+        data["event"] = r._coerce._r_factor(data["event"], REFERENCE["event_levels"])
         return r.survfit(
             "Surv(start, stop, event) ~ " + ("group" if case["grouped"] else "1"),
             data,

@@ -11,7 +11,7 @@ import pytest
 
 from .helpers import setup_survival_import
 
-r = setup_survival_import().r_api
+r = setup_survival_import().r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/cox_survfit_single_reference.json").read_text()
 )
@@ -84,7 +84,7 @@ def check_values(actual, expected):
 def test_implicit_single_curve_selection_and_serialization_match_stock(case):
     original = source(case["source"])
     noop = case["selector"] in {"missing", "null"}
-    selected = r._subset_cox_survfit(original, _implicit=not noop)
+    selected = r._survfit._subset_cox_survfit(original, _implicit=not noop)
     assert (selected is original) is noop
     check_values(selected, case["expected"]["value"])
     check_values(pickle.loads(pickle.dumps(selected)), case["expected"]["serialized"])
@@ -114,7 +114,7 @@ def test_margin_and_linear_selection_drop_start_time_except_noops(name):
         "linear_repeat": {"curves": [3, 0, 3]},
         "linear_single": {"curves": [1]},
     }
-    selected = r._subset_cox_survfit(original, **options[name])
+    selected = r._survfit._subset_cox_survfit(original, **options[name])
     expected = REFERENCE["start_time"][name]
     assert selected.start_time == expected["start.time"]
     assert selected.dim == (expected["dim"] or {})

@@ -12,7 +12,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 sa = survival.surv_analysis
 from survival.r._types import (
     CoxSurvfitMultiStateResult,

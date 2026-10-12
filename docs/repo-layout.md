@@ -186,11 +186,10 @@ exactly one module):
 - `population` (`RateTable`, `match_ratetable`, `pyears`, `survexp`),
   `pybridge` (`cox_callback`), `interval` (`turnbull`), `monitoring`, `ml`
 - `bayesian`, `causal`, `joint`, `interpretability`, `spatial`, and related domains
-- `r_api`: R-style formula façade for `Surv`, `survfit`, `survdiff`, `coxph`,
-  `clogit`, `survreg`, Cox `predict`, and residual dispatch. The implementation
-  lives in the `survival.r` package and `r_api` is a thin re-export of its
-  public surface (plus the private helpers the R bridge reaches through
-  `python_attr`), so `survival.r_api` stays the stable import path.
+- `r`: the R-style API (`Surv`, `survfit`, `survdiff`, `coxph`, `clogit`,
+  `survreg`, their generics and R's other exports); the package root re-exports
+  R's exported functions. The internals the R bridge calls are attributes of
+  `pybridge`.
 - `plotting`: optional Matplotlib rendering of fitted survival curves;
   `_plot_data` prepares typed NumPy curve coordinates without importing the renderer.
   `_cox_plot_data` prepares Cox diagnostic curves using the Rust smoother.
@@ -283,10 +282,10 @@ familiar R-style entry points:
   `extractAIC`, `formula`, `terms`, `model.matrix`, `model.frame`, `summary`,
   `fitted`, `predict`, `residuals`, `weights`, and `anova` on bridged model objects
 - `as.data.frame` methods for bridged `Surv` responses and common result objects backed by
-  `survival.r_api.as_data_frame`
+  `survival.r.as_data_frame`
 - `summary` and `print` methods for common tabular result objects
 
-This bridge uses `reticulate` to call `survival.r_api` and should remain a thin
+This bridge uses `reticulate` to call `survival.r` and should remain a thin
 facade until native R/extendr bindings are introduced.
 
 ## Test layout

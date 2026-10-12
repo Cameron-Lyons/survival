@@ -297,3 +297,31 @@ def _survexp_cox_fit(
         times=times,
         method=method,
     ).to_arrays()
+
+
+_R_BRIDGE_HELPERS = {
+    "_r_factor": ("_coerce", "_r_factor"),
+    "_r_term_subscript": ("_coerce", "_r_term_subscript"),
+    "_cox_fit_diagnostic_messages": ("_coxph", "_cox_fit_diagnostic_messages"),
+    "_frailty_encoding": ("_misc", "_frailty_encoding"),
+    "_survcheck_codes": ("_misc", "_survcheck_codes"),
+    "_prediction_term_names": ("_models", "_prediction_term_names"),
+    "_subset_coxms_curves": ("_models", "_subset_coxms_curves"),
+    "_subset_survfit_multistate": ("_models", "_subset_survfit_multistate"),
+    "_survfit_multistate_structure": ("_models", "_survfit_multistate_structure"),
+    "_survfit_strata_curves": ("_models", "_survfit_strata_curves"),
+    "_penalty_control": ("_penalties", "_penalty_control"),
+    "_subset_cox_survfit": ("_survfit", "_subset_cox_survfit"),
+    "_survreg_vcov_names": ("_survreg", "survreg_vcov_names"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """The ``survival.r`` internals the R bridge calls, imported on first use."""
+
+    if name in _R_BRIDGE_HELPERS:
+        from importlib import import_module
+
+        module, attribute = _R_BRIDGE_HELPERS[name]
+        return getattr(import_module(f"survival.r.{module}"), attribute)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

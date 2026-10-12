@@ -157,14 +157,14 @@ evaluated with R's conditional rules; when they are absent, it is not evaluated.
 
 `surv_analysis.survfit_confint` (Rust `surv_analysis::survfit_confint`) computes
 confidence limits for a vector of survival estimates. The R-style
-`r_api.survfit_confint` also accepts scalar estimates, recycles a single standard
+`survival.r.survfit_confint` also accepts scalar estimates, recycles a single standard
 error or lower-band error, and keeps missing values in list, NumPy, nullable
 pandas, Polars and masked inputs:
 
 ```python
-from survival import r_api
+from survival import r
 
-bands = r_api.survfit_confint(
+bands = r.survfit_confint(
     [0.8, None, 0.3], [0.1, 0.2, 0.15], conf_type="log-log"
 )
 ```
