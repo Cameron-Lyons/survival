@@ -295,8 +295,9 @@ def test_domain_modules_expose_exactly_their_bindings():
         module = importlib.import_module(f"survival.{module_name}")
         expected = names - ml_names
         assert set(module.__all__) == expected, module_name
+        wrappers = getattr(module, "_PYTHON_WRAPPERS", frozenset())
         for name in expected:
-            if name in direct.get(module_name, set()):
+            if name in direct.get(module_name, set()) and name not in wrappers:
                 assert getattr(module, name) is getattr(core, name), f"{module_name}.{name}"
             else:
                 assert callable(getattr(module, name)), f"{module_name}.{name}"

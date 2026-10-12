@@ -915,8 +915,9 @@ formula functions or to `pandas.DataFrame`/`polars.DataFrame`.
 
 **Available datasets** (every data frame shipped by R's `survival` 3.8, with R's
 exact values, column names and storage modes: R `double` -> `float`, `integer`
--> `int`, factor/character/Date -> `str` (ISO dates), logical -> `bool`, `NA`
--> `None`):
+-> `int`, factor -> `survival.r.Factor` (a `list` of labels whose `levels` keep
+R's order, so models use R's reference levels), character/Date -> `str` (ISO
+dates), logical -> `bool`, `NA` -> `None`):
 
 `aml` (alias `leukemia`), `bladder`, `bladder1`, `bladder2`, `braking`,
 `capacitor`, `cgd`, `cgd0`, `colon`, `cracks`, `diabetic`, `flchain`, `gbsg`,

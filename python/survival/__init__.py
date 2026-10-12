@@ -65,6 +65,7 @@ _SKLEARN_EXPORTS = [
 
 _R_EXPORTS = [
     "AaregModelResult",
+    "Factor",
     "StrataFactor",
     "CchModelResult",
     "Surv",
