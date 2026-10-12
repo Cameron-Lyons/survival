@@ -1,7 +1,10 @@
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
+use crate::internal::qr::LinpackLeastSquares;
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+
+const CONSTANT_TOLERANCE: f64 = 1e-10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AaregTest {
@@ -251,10 +254,12 @@ fn event_groups(stop: &[f64], status: &[i32]) -> Vec<(f64, Vec<usize>)> {
     groups
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_risk_sums(
     idx: usize,
     sign: f64,
     covariates: ArrayView2<'_, f64>,
+    center: &[f64],
     weights: Option<&[f64]>,
     s0: &mut f64,
     s1: &mut [f64],
@@ -265,9 +270,10 @@ fn update_risk_sums(
     let row = covariates.row(idx);
     let nvar = row.len();
     for column in 0..nvar {
-        s1[column] += weight * row[column];
+        let x = row[column] - center[column];
+        s1[column] += weight * x;
         for inner in 0..nvar {
-            s2[column * nvar + inner] += weight * row[column] * row[inner];
+            s2[column * nvar + inner] += weight * x * (row[inner] - center[inner]);
         }
     }
 }
@@ -293,13 +299,24 @@ fn risk_moments(
         });
     }
 
+    let center: Vec<f64> = (0..nvar)
+        .map(|column| {
+            if n == 0 {
+                0.0
+            } else {
+                covariates.column(column).sum() / n as f64
+            }
+        })
+        .collect();
     let mut s0 = 0.0;
     let mut s1 = vec![0.0; nvar];
     let mut s2 = vec![0.0; nvar * nvar];
     let mut start_pos = 0;
     if start.is_none() {
         for idx in 0..n {
-            update_risk_sums(idx, 1.0, covariates, weights, &mut s0, &mut s1, &mut s2);
+            update_risk_sums(
+                idx, 1.0, covariates, &center, weights, &mut s0, &mut s1, &mut s2,
+            );
         }
         start_pos = n;
     }
@@ -313,6 +330,7 @@ fn risk_moments(
                     start_order[start_pos],
                     1.0,
                     covariates,
+                    &center,
                     weights,
                     &mut s0,
                     &mut s1,
@@ -326,6 +344,7 @@ fn risk_moments(
                 stop_order[stop_pos],
                 -1.0,
                 covariates,
+                &center,
                 weights,
                 &mut s0,
                 &mut s1,
@@ -337,14 +356,22 @@ fn risk_moments(
         let mut mean = vec![0.0; nvar];
         let mut covariance = vec![0.0; nvar * nvar];
         if s0 > 0.0 {
-            for column in 0..nvar {
-                mean[column] = s1[column] / s0;
-            }
+            let centered: Vec<f64> = s1.iter().map(|value| value / s0).collect();
             for row in 0..nvar {
                 for column in 0..nvar {
-                    let value = s2[row * nvar + column] / s0 - mean[row] * mean[column];
-                    covariance[row * nvar + column] = if value.abs() < 1e-15 { 0.0 } else { value };
+                    covariance[row * nvar + column] =
+                        s2[row * nvar + column] / s0 - centered[row] * centered[column];
                 }
+            }
+            for column in 0..nvar {
+                let square = s2[column * nvar + column] / s0;
+                if covariance[column * nvar + column] <= CONSTANT_TOLERANCE * square {
+                    for other in 0..nvar {
+                        covariance[column * nvar + other] = 0.0;
+                        covariance[other * nvar + column] = 0.0;
+                    }
+                }
+                mean[column] = centered[column] + center[column];
             }
         }
         moments.push(RiskMoment {
@@ -391,55 +418,24 @@ fn invert_matrix(values: &[f64], n: usize, tolerance: f64) -> Option<Vec<f64>> {
     if n == 0 {
         return Some(Vec::new());
     }
-    let scale = values
-        .iter()
-        .map(|value| value.abs())
-        .fold(0.0_f64, f64::max);
-    if !scale.is_finite() || scale == 0.0 {
+    if values.iter().any(|value| !value.is_finite()) {
         return None;
     }
-    let mut augmented = vec![0.0; n * 2 * n];
-    let width = 2 * n;
-    for row in 0..n {
-        for column in 0..n {
-            augmented[row * width + column] = values[row * n + column];
-        }
-        augmented[row * width + n + row] = 1.0;
-    }
-    for column in 0..n {
-        let mut pivot_row = column;
-        for row in (column + 1)..n {
-            if augmented[row * width + column].abs() > augmented[pivot_row * width + column].abs() {
-                pivot_row = row;
-            }
-        }
-        let pivot = augmented[pivot_row * width + column];
-        if !pivot.is_finite() || pivot.abs() <= tolerance * scale {
-            return None;
-        }
-        if pivot_row != column {
-            for idx in 0..width {
-                augmented.swap(column * width + idx, pivot_row * width + idx);
-            }
-        }
-        let pivot = augmented[column * width + column];
-        for idx in 0..width {
-            augmented[column * width + idx] /= pivot;
-        }
-        for row in 0..n {
-            if row == column {
-                continue;
-            }
-            let factor = augmented[row * width + column];
-            for idx in 0..width {
-                augmented[row * width + idx] -= factor * augmented[column * width + idx];
-            }
-        }
+    let columns: Vec<Vec<f64>> = (0..n)
+        .map(|column| (0..n).map(|row| values[row * n + column]).collect())
+        .collect();
+    let qr = LinpackLeastSquares::with_tolerance(columns, n, tolerance);
+    if qr.rank() < n {
+        return None;
     }
     let mut inverse = vec![0.0; n * n];
-    for row in 0..n {
-        inverse[row * n..(row + 1) * n]
-            .copy_from_slice(&augmented[row * width + n..row * width + 2 * n]);
+    let mut unit = vec![0.0; n];
+    for column in 0..n {
+        unit.fill(0.0);
+        unit[column] = 1.0;
+        for (row, value) in qr.coefficients(&unit).into_iter().enumerate() {
+            inverse[row * n + column] = value;
+        }
     }
     Some(inverse)
 }

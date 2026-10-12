@@ -30,6 +30,10 @@
 - R bridge multi-state curves fitted without confidence intervals no longer
   fail on `names()` and `$pstate`.
 - Selecting stacked Kaplan-Meier curves with a zero count no longer panics.
+- `aareg` centers covariates before forming risk-set moments and decides rank
+  with R's column-relative QR rule (`qrtol`): covariates offset by large
+  constants keep R's precision, and rescaled covariates such as `age * 1e-6`
+  are no longer reported as rank deficient.
 
 ### Added
 

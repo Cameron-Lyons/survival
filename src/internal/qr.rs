@@ -1,5 +1,7 @@
 use crate::internal::simd::{dot_product, sum_of_squares};
 
+const DEFAULT_TOLERANCE: f64 = 1e-7;
+
 pub(crate) struct LinpackQr {
     householder: Vec<Vec<f64>>,
     rank: usize,
@@ -7,11 +9,14 @@ pub(crate) struct LinpackQr {
 
 impl LinpackQr {
     pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
-        Self::decompose(x, n).0
+        Self::decompose(x, n, DEFAULT_TOLERANCE).0
     }
 
-    fn decompose(mut x: Vec<Vec<f64>>, n: usize) -> (Self, Vec<Vec<f64>>, Vec<usize>) {
-        const TOL: f64 = 1e-7;
+    fn decompose(
+        mut x: Vec<Vec<f64>>,
+        n: usize,
+        tolerance: f64,
+    ) -> (Self, Vec<Vec<f64>>, Vec<usize>) {
         let p = x.len();
         let mut pivot: Vec<usize> = (0..p).collect();
         let mut qraux: Vec<f64> = x.iter().map(|column| norm(column)).collect();
@@ -22,7 +27,7 @@ impl LinpackQr {
         let mut k = p + 1;
         for l in 0..n.min(p) {
             let run = (l..k - 1)
-                .take_while(|&j| qraux[j] < original[j] * TOL)
+                .take_while(|&j| qraux[j] < original[j] * tolerance)
                 .count();
             x[l..].rotate_left(run);
             pivot[l..].rotate_left(run);
@@ -123,7 +128,11 @@ impl LinpackLeastSquares {
     }
 
     pub(crate) fn new(x: Vec<Vec<f64>>, n: usize) -> Self {
-        let (qr, factor, pivot) = LinpackQr::decompose(x, n);
+        Self::with_tolerance(x, n, DEFAULT_TOLERANCE)
+    }
+
+    pub(crate) fn with_tolerance(x: Vec<Vec<f64>>, n: usize, tolerance: f64) -> Self {
+        let (qr, factor, pivot) = LinpackQr::decompose(x, n, tolerance);
         let upper = factor
             .iter()
             .take(qr.rank)
