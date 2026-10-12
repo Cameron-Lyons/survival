@@ -25,9 +25,13 @@ expected = r.survexp("~ sex", lung, ratetable=cox, times=[0, 100, 365])
 Supported terms include `+`, `.` expansion, `-` exclusions, backtick-quoted
 names, `:`, `*`, `%in%` and `/`, powers of term groups, `factor()`,
 `as.factor()`, `strata()`, `cluster()`, `offset()`, `tt()`, `cut()`, `tcut()`,
-the one-column transforms `log()`, `sqrt()` and `exp()`, and `I()`/`identity()`
-arithmetic and comparisons. Categorical variables use treatment contrasts unless
-an ordered factor or an explicit contrast applies.
+the transforms `log()`, `sqrt()` and `exp()`, `I()`/`identity()` arithmetic and
+comparisons, and the R functions listed under
+[R functions in terms](#r-functions-in-terms). Categorical variables use
+treatment contrasts unless an ordered factor or an explicit contrast applies.
+Term and coefficient labels are R's deparsed expressions, whatever the spacing of
+the formula: `I(age>60)` is labelled `I(age > 60)TRUE` and `I(age*1e-3)` is
+`I(age * 0.001)`.
 
 Interaction identity ignores factor order: `age:sex` and `sex:age` name the same
 term, so subtraction and duplicate removal follow R. Grouped nesting such as
@@ -74,6 +78,39 @@ it declares a level order without pandas; the bundled data sets return their
 factor columns this way. Cox and AFT fits record R's `xlevels` and `contrasts`
 (Cox also lists the `strata()` levels; a plain logical column has a contrast but
 no levels).
+
+## R functions in terms
+
+These R functions can be used as terms, inside other calls and in `survfit`,
+`survdiff` and `pyears` groupings, with R's argument matching (exact names,
+unique prefixes, then positions) and R's result types:
+
+- `factor(x, levels, labels, exclude, ordered)`, `as.factor()`, `relevel(x, ref)`
+  and `interaction(..., drop, sep, lex.order)`. Levels given to `factor()` are
+  matched through `as.character`, a single label is numbered (`labels = "e"`
+  gives `e1`, `e2`, …), and `interaction()` varies the first factor fastest
+  unless `lex.order = TRUE`.
+- `ifelse(test, yes, no)`, whose result takes the type of the branches it uses
+  (a character branch makes a factor term; a factor branch contributes its codes).
+- `pmin()` and `pmax()` with `na.rm`; `round(x, digits)` (halves to even),
+  `signif()`, `floor()`, `ceiling()`, `trunc()`, `abs()`, `sign()`, `log(x, base)`,
+  `log1p()`, `expm1()`, `log2()` and `log10()`, with R's `NaNs produced` warning.
+- `as.character()`, `as.integer()`, `as.logical()`, `is.na()`, `c()` of
+  constants and `%in%` inside a call (`I(ph.ecog %in% c(2, 3))`). Outside calls
+  `%in%` remains the nesting operator.
+
+A character result is a factor with sorted levels, so
+`ifelse(age > 60, "old", "young")` gives the column
+`ifelse(age > 60, "old", "young")young`. New data are evaluated with the same
+expressions and coded with the fitted levels (`xlevels`).
+
+```python
+fit = r.coxph(
+    "Surv(time, status) ~ pmin(age, 70) + relevel(factor(ph.ecog), ref = '1')"
+    " + ifelse(wt.loss > 10, 'loss', 'stable')",
+    lung,
+)
+```
 
 ## Typed vector expressions
 

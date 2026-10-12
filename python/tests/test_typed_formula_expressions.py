@@ -222,10 +222,24 @@ def test_declared_empty_and_missing_boolean_array_types(n, wrapper):
 
 @pytest.mark.parametrize(
     "source",
-    ["x[0]", "arbitrary(x)", "x && z", "x || z", "I()", "I(x,z)", "'x", "(x", "x < z < x"],
+    ["x[0]", "arbitrary(x)", "x && z", "x || z", "'x", "(x", "x < z < x", "x %o% z"],
 )
 def test_restricted_expression_parser_rejects_unsupported_syntax(source):
     with pytest.raises(ValueError, match="unsupported formula expression"):
+        formula._expression_values({"x": [1], "z": [2]}, source, 1)
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("I()", 'I\\(\\): argument "x" is missing, with no default'),
+        ("I(x,z)", "I\\(\\): unused argument \\(z\\)"),
+        ("relevel(x, ref = 1)", "'relevel' only for \\(unordered\\) factors"),
+        ("round(x, digits = z)", "z must not refer to data columns"),
+    ],
+)
+def test_calls_match_arguments_as_r_does(source, message):
+    with pytest.raises(ValueError, match=message):
         formula._expression_values({"x": [1], "z": [2]}, source, 1)
 
 

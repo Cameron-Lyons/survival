@@ -806,6 +806,11 @@ this does not show.
   surrogate escapes. Non-UTF-8 byte strings and unpaired Unicode surrogate
   escapes are explicitly refused; R can retain their raw bytes.
 - `cut()` refuses an argument it does not know; R's `cut.default` swallows it.
+- Formula expressions accept a fixed set of R functions (see
+  [Formula interface](formula-interface.md#r-functions-in-terms)); other calls,
+  including the spline bases `ns()`, `bs()`, `nsk()` and `poly()` and `scale()`,
+  are refused. `pmin()`/`pmax()` refuse character arguments, `c()` refuses
+  factors, and `factor(exclude = NULL)` is refused; R accepts all three.
 - Python `subset` is zero-based and accepts integer positions or a full-length
   Boolean mask; negative and fractional positions are refused. The R bridge uses
   R's indexing rules.

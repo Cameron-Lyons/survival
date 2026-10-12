@@ -240,9 +240,11 @@ Formula support is intentionally conservative: `+` terms, `.` expansion,
 `-` exclusions, backtick-quoted column names, categorical treatment coding,
 `factor(...)` / `as.factor(...)`, `strata(...)`, interaction terms with `:`,
 `*` or `%in%`, and numeric `offset(...)` terms are supported, along with
-one-column numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
-`I(...)`/`identity(...)` arithmetic and comparisons, `cut(...)` and
-`tcut(...)`; formula options are read as literals and never evaluated as code.
+numeric transforms `log(...)`, `sqrt(...)`, and `exp(...)`, plus
+`I(...)`/`identity(...)` arithmetic and comparisons, `cut(...)`, `tcut(...)`
+and common R functions such as `pmin`, `ifelse`, `relevel`, `interaction`,
+`round` and `factor(levels =, labels =)`; expressions are parsed by a
+restricted R grammar and never evaluated as code.
 Formula calls also accept `subset=` as a boolean mask or zero-based row indices
 and R's `na_action`: `"na.omit"` (the default, as in R), `"na.exclude"`
 (residuals and predictions padded with NaN at the removed rows), `"na.fail"`
