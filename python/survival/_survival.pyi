@@ -11567,6 +11567,14 @@ def brier_calibration(
     time_point: float,
     n_groups: int | None = None,
 ) -> BrierCalibrationResult: ...
+def bs_basis(
+    x: Sequence[float],
+    df: int | None = None,
+    knots: Sequence[float] | None = None,
+    degree: int = 3,
+    intercept: bool = False,
+    boundary_knots: tuple[float, float] | None = None,
+) -> SplineBasisResult: ...
 def c_index_decomposition(
     time: Sequence[float],
     status: Sequence[int],
@@ -13201,6 +13209,13 @@ def nostutter(
     censor: int | float | str,
     single: bool = False,
 ) -> list[bool]: ...
+def ns_basis(
+    x: Sequence[float],
+    df: int | None = None,
+    knots: Sequence[float] | None = None,
+    intercept: bool = False,
+    boundary_knots: tuple[float, float] | None = None,
+) -> SplineBasisResult: ...
 def nsk(
     x: Sequence[float],
     df: int | None = None,

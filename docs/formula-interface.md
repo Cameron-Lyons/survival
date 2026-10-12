@@ -99,6 +99,18 @@ unique prefixes, then positions) and R's result types:
   constants and `%in%` inside a call (`I(ph.ecog %in% c(2, 3))`). Outside calls
   `%in%` remains the nesting operator.
 
+The matrix bases `ns(x, df, knots, intercept, Boundary.knots)`,
+`bs(x, df, knots, degree, intercept, Boundary.knots)`,
+`poly(x, degree, raw)` and `nsk(x, df, knots, intercept, b, Boundary.knots)` are
+terms of their own, named like R's columns (`ns(age, df = 3)1`, …), and
+`scale(x, center, scale)` is a numeric term. A basis is evaluated on all rows of
+its data column before `subset` and missing-row removal, as `model.frame` does,
+so its knots are R's. New data reuse the fitted knots, boundary and polynomial
+coefficients, as R's `makepredictcall` arranges, and `bs()` extrapolates beyond
+the boundary with R's warning. The basis argument must be a data column
+(`ns(log(age), 3)` needs the transformed column in the data); `ns_basis` and
+`bs_basis` in `survival.core` compute the bases directly.
+
 A character result is a factor with sorted levels, so
 `ifelse(age > 60, "old", "young")` gives the column
 `ifelse(age > 60, "old", "young")young`. New data are evaluated with the same

@@ -211,7 +211,13 @@ _FORMALS: dict[str, tuple[tuple[str, ...], str | None]] = {
     "is.na": (("x",), None),
     "relevel": (("x", "ref"), "after"),
     "interaction": (("drop", "sep", "lex.order"), "before"),
+    "scale": (("x", "center", "scale"), None),
+    "ns": (("x", "df", "knots", "intercept", "Boundary.knots"), None),
+    "bs": (("x", "df", "knots", "degree", "intercept", "Boundary.knots", "warn.outside"), None),
+    "poly": (("x", "degree", "coefs", "raw", "simple"), None),
+    "nsk": (("x", "df", "knots", "intercept", "b", "Boundary.knots"), None),
 }
+_MATRIX_CALLS = frozenset({"ns", "bs", "poly", "nsk"})
 _CALLS = frozenset(_FORMALS)
 _BINDING = {
     "|": 10,
@@ -1374,6 +1380,8 @@ def _evaluate_call(
         values = option(name)
         return default if values is None else _flag(values, function, name)
 
+    if function in _MATRIX_CALLS:
+        raise ValueError(f"{function}() is a matrix term and cannot be used inside an expression")
     if function == "c":
         return _recycled(constant(node), n, function)
     if function in {"pmin", "pmax"}:
@@ -1414,6 +1422,8 @@ def _evaluate_call(
         return _as_logical(x)
     if function == "is.na":
         return _ExpressionVector((_is_missing_value(value) for value in x), "logical")
+    if function == "scale":
+        return _scale(x, option("center"), option("scale"))
     if function in {"round", "signif"}:
         digits = scalar("digits", 0 if function == "round" else 6)
         if _is_missing_value(digits) or isinstance(digits, str):
@@ -1426,3 +1436,46 @@ def _evaluate_call(
         return _math(function, x, label)
     numeric = _numeric_values(x, cast=function == "as.numeric")
     return _ExpressionVector(transform(numeric, function, label), "numeric")
+
+
+def _scale(
+    values: _ExpressionVector,
+    center: _ExpressionVector | None,
+    scale: _ExpressionVector | None,
+) -> _ExpressionVector:
+    """R's ``scale`` of one column: centred by its mean and divided by its standard
+    deviation (or by its root mean square when it is not centred), ignoring NA."""
+
+    if values.kind in {"factor", "character"}:
+        raise ValueError("scale() requires numeric values")
+    numeric = np.asarray(_floats_or_nan(values), dtype=float)
+    observed = numeric[~np.isnan(numeric)]
+
+    def setting(option: _ExpressionVector | None, name: str) -> bool | float:
+        if option is None:
+            return True
+        value = _scalar(option, "scale", name)
+        if option.kind == "logical":
+            return bool(value)
+        return float(value)
+
+    centre = setting(center, "center")
+    if centre is True:
+        array = observed.astype(np.longdouble)
+        mean = np.sum(array) / len(array) if len(array) else np.nan
+        mean += np.sum(array - mean) / len(array) if len(array) else 0.0
+        numeric = numeric - float(mean)
+        observed = observed - float(mean)
+    elif centre is not False:
+        numeric = numeric - float(centre)
+        observed = observed - float(centre)
+    divisor = setting(scale, "scale")
+    if divisor is True:
+        divisor = (
+            math.sqrt(float(np.sum(observed**2)) / (len(observed) - 1))
+            if len(observed) > 1
+            else math.nan
+        )
+    if divisor is not False:
+        numeric = numeric / float(divisor)
+    return _ExpressionVector(numeric.tolist(), "numeric")

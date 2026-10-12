@@ -34,6 +34,7 @@ from ._coerce import (
     _strata_level_sort_key,
     _strata_value_label,
 )
+from ._splines import basis_columns
 from ._types import CoxPenaltyBasis, _CovariateTerm, _PenaltyDesignTerm
 
 PENALTY_FUNCTIONS = (
@@ -526,6 +527,8 @@ def penalty_columns(
     if spec.kind == "ridge":
         return [[float(value) for value in values[column]] for column in spec.columns]
     x = values[spec.columns[0]]
+    if spec.basis is not None:
+        return basis_columns(spec, x)
     if spec.kind == "pspline":
         if spec.boundary is None:
             raise ValueError("spline prediction requires basis boundaries")

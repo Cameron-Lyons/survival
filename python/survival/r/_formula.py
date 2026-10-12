@@ -54,6 +54,7 @@ from ._expression import (
 )
 from ._names import _make_unique
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
+from ._splines import BASIS_FUNCTIONS, basis_arguments, fit_basis
 from ._surv import (
     Surv,
     Surv2,
@@ -1272,6 +1273,8 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
         return list(term.strata.columns)
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         return _penalty_arguments(term.call)[0]
+    if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
+        return [basis_arguments(term.call)[0]]
     if term.arithmetic is not None:
         return _expression_columns(term.arithmetic)
     return [term.column]
@@ -1821,7 +1824,7 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     return _CovariateTerm(term_name)
 
 
-_CALL_TERMS = ("tcut", "cut", *PENALTY_FUNCTIONS)
+_CALL_TERMS = ("tcut", "cut", *PENALTY_FUNCTIONS, *BASIS_FUNCTIONS)
 
 
 def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
@@ -1878,6 +1881,8 @@ def _parse_call_term(term: str) -> _CovariateTerm | None:
             x = _call_arguments(term).get("x")
             if x is None:
                 raise ValueError(f"{function}() requires a variable")
+        elif function in BASIS_FUNCTIONS:
+            x = basis_arguments(term)[0]
         else:
             x = _penalty_arguments(term)[0][0]
         column, quoted = _formula_name(x)
@@ -2267,6 +2272,9 @@ def _fit_single_design_term(
         penalty_values = {column: _column(full_data, column) for column in columns}
         levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, penalty_values, options, levels)
+    if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
+        column, options = basis_arguments(term.call)
+        return fit_basis(term, column, _column(full_data, column), options)
     if not (
         term.categorical
         or term.transform
