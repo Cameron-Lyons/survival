@@ -2318,12 +2318,13 @@ def _fit_single_design_term(
         if term.transform is not None and term.transform != "tt":
             _numeric_variable(data, term, n)
             return _NumericDesignTerm(term)
-        try:
-            _numeric_variable(data, term, n)
-        except (TypeError, ValueError):
-            pass
-        else:
-            return _NumericDesignTerm(term)
+        if not any(isinstance(value, str | bytes) for value in values):
+            try:
+                _numeric_variable(data, term, n)
+            except (TypeError, ValueError):
+                pass
+            else:
+                return _NumericDesignTerm(term)
     return _CategoricalDesignTerm(term, _categorical_levels(values, term.column))
 
 
@@ -2581,6 +2582,11 @@ def _single_design_columns(
         else _term_raw_values(data, spec.term, n)
     )
     levels = spec.levels
+    if any(isinstance(level, str) for level in levels):
+        values = [
+            value if isinstance(value, str) or _is_missing_value(value) else _as_character(value)
+            for value in values
+        ]
     missing: list[int] = []
     for row, value in enumerate(values):
         if _is_missing_value(value):

@@ -829,12 +829,15 @@ def _as_character(value: Any) -> str:
 
 
 def _r_sort_key(value: Any) -> tuple[Any, ...]:
-    """R's ``sort`` order for factor levels: numbers (and logicals) before strings."""
+    """R's ``sort`` order for factor levels: numbers (and logicals) before strings,
+    which sort as strings even when they look like numbers."""
 
     if isinstance(value, tuple):
         return tuple(_r_sort_key(part) for part in value)
     if _is_bool_like(value):
         return (0, int(value))
+    if isinstance(value, str):
+        return (1, value)
     try:
         numeric = float(value)
     except (TypeError, ValueError):

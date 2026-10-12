@@ -1078,10 +1078,10 @@ this does not show.
   The `p0` sum tolerance is `1e-8` instead of R's exact equality check; values
   are not renormalized. Curves and state names are checked for finite numeric
   inputs, nondecreasing hazards and unique, nonempty labels.
-- Character strata, ids and cluster labels are sorted by code point, with
-  numeric-looking strings as numbers ("9" before "10", "B" before "a"); R's
-  `as.factor` uses the locale's collation. Numeric, logical and factor values
-  sort as in R.
+- Character levels (covariates, strata, ids and cluster labels) are sorted by
+  code point ("10" before "9", "B" before "a"); R's `as.factor` uses the
+  locale's collation, which agrees for digits but not for letter case.
+  Numeric, logical and factor values sort as in R.
 - `cch`'s `sc_ids` holds the id values themselves; R's rownames are their
   character form.
 - `survfit.coxph` curve names: ids that differ but print alike are kept apart
