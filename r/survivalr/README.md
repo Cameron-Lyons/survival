@@ -20,8 +20,8 @@ new session. Custom AFT distributions keep their R functions and captured
 environments. Saving captures the current state, without copying the fitted
 model during fitting. Install a compatible `survivalr` and Python `survival`
 package before loading, and read only trusted model files because the state
-uses Python pickle. See [model persistence](../../docs/r-model-persistence.md)
-for the format and verification details.
+uses Python pickle. See [model persistence](../../docs/r-bridge.md#model-persistence)
+for the format and its requirements.
 
 Response semantics and the bridge's CI reference follow survival 3.8-12.
 `Surv2` accepts binary numeric/logical statuses or explicit factors and keeps

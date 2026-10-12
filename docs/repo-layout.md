@@ -1,9 +1,9 @@
-# Repo Layout
+# Repository layout
 
 This repo is organized around stable domain boundaries instead of catch-all
 folders.
 
-## Rust Layout
+## Rust layout
 
 Top-level Rust modules in `src/` map to major feature areas:
 
@@ -121,7 +121,7 @@ Population boundaries revalidate mutable `RateTable` attributes and rates before
 matching or integration. Internal subject loops reuse the validated table.
 Expected-survival group dimensions and public rate offsets use checked arithmetic;
 damaged-table formatting also avoids out-of-range indexing. See
-[rate-table input validation](ratetable-inputs.md).
+[rate tables](population.md#rate-tables).
 
 The core bindings take these types for every numeric vector and matrix input
 (`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
@@ -168,7 +168,7 @@ quantiles and confidence-band transforms also run detached. Building the
 nested-list results of methods such as `CoxPHFit.dfbeta`
 still runs attached, which bounds how far those calls overlap.
 
-## Python Layout
+## Python layout
 
 The Python package in `python/survival/` mirrors the Rust domains; each module
 binds a disjoint subset of the extension through `bind_names` (the generated
@@ -241,12 +241,8 @@ Cox fits. Run a saved package and the current package in separate processes by
 selecting `PYTHONPATH`; use `--compare` with the earlier run's NPZ file to require
 identical fitted values, prediction errors, residuals and baseline hazards.
 Build both packages with the same toolchain and release settings and pin them
-to the same CPU when comparing timings. The
-[Cox architecture measurements](benchmarks/cox-architecture-2026-10-10.json)
-record raw samples and compatibility checks: complete numeric formula fits took
-31–60% less time at 10,000 rows and 43–55% less at 100,000 rows on this machine.
-These measurements cover unstratified right-censored Efron fits. Counting,
-exact and special-term behavior is checked separately by regression tests.
+to the same CPU when comparing timings. See [performance](performance.md) for
+the other benchmarks.
 
 `survival.r` has no stub: the inline annotations of its modules are the typed
 surface (the package ships `py.typed`), so a signature is changed in one place.
@@ -274,7 +270,7 @@ Python source builds use the lean `extension-module` feature set by default.
 Build with `--features extension-module,ml` when the optional ML bindings should
 be present.
 
-## R Layout
+## R layout
 
 The experimental R bridge package lives in `r/survivalr/`. It is named
 `survivalr` so it can coexist with CRAN's `survival` package while exposing
@@ -293,7 +289,7 @@ familiar R-style entry points:
 This bridge uses `reticulate` to call `survival.r_api` and should remain a thin
 facade until native R/extendr bindings are introduced.
 
-## Test Layout
+## Test layout
 
 - Rust unit tests live next to the code they cover; cross-cutting R-parity
   suites live in `src/tests/`.
@@ -303,12 +299,12 @@ facade until native R/extendr bindings are introduced.
   `src/tests/r_fixtures.rs`, kept stable by the `r-fixture-stability` CI job.
   There is no archived Rust reference code in the repo.
 
-## Naming Notes
+## Naming notes
 
 - `survival.reliability` is the callable reliability function.
 - `survival.reliability_tools` is the module that groups reliability-related APIs.
 
-## Typing Surface
+## Typing surface
 
 The main typed entry points are:
 
