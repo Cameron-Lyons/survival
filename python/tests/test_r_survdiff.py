@@ -102,3 +102,14 @@ def test_survdiff_subset_and_na_action():
     assert omitted.n == [3, 4]
     with pytest.raises(ValueError, match="missing values"):
         r.survdiff("Surv(time, status) ~ group", data, **{"na.action": "na.fail"})
+
+
+def test_strata_table_keeps_levels_emptied_by_missing_rows():
+    """R: ``survdiff(Surv(time, status == 2) ~ trt + strata(stage, edema), pbc)$strata``
+    keeps ``stage=1, edema=0.5`` (only in rows with a missing ``trt``) with count 0."""
+
+    result = r.survdiff(
+        "Surv(time, status == 2) ~ trt + strata(stage, edema)", survival.datasets.load_pbc()
+    )
+    assert list(result.strata.values()) == [16, 0, 62, 4, 1, 106, 11, 3, 79, 14, 16]
+    assert result.chisq == pytest.approx(0.379746615680355)
