@@ -262,13 +262,14 @@ class Surv(_SurvivalOperations):
                 raise ValueError("Wrong number of args for this type of survival data")
             if ng != 2 and surv_type in {"right", "left", "interval2"}:
                 raise ValueError("Wrong number of args for this type of survival data")
-        origin_value = _finite_float(origin, "origin")
-        columns = self._build(args, surv_type, mtype == "mstate", origin_value)
+        columns = self._build(args, surv_type, mtype == "mstate", _origin_values(origin))
         for name, value in columns.items():
             object.__setattr__(self, name, value)
 
     @staticmethod
-    def _build(args: tuple[Any, ...], surv_type: str, mstate: bool, origin: float) -> dict:
+    def _build(
+        args: tuple[Any, ...], surv_type: str, mstate: bool, origin: float | list[float]
+    ) -> dict:
         time = _time_column(args[0], "time", "Time variable is not numeric")
         nn = len(time)
         start: list[float] | None = None
@@ -313,14 +314,17 @@ class Surv(_SurvivalOperations):
             if len(status) != nn:
                 raise ValueError("Time and status are different lengths")
             time2 = _interval_time2(time, args[1], status)
-        if origin:
+        shifts = origin if isinstance(origin, list) else [origin] * nn
+        if len(shifts) != nn:
+            raise ValueError("origin must have length 1 or the length of time")
+        if any(shifts):
             if start is not None:
-                start = [value - origin for value in start]
-            time = [value - origin for value in time]
+                start = [value - shift for value, shift in zip(start, shifts, strict=True)]
+            time = [value - shift for value, shift in zip(time, shifts, strict=True)]
         if time2 is not None:
             time2 = [
-                value - origin if code == 3 else 1.0
-                for value, code in zip(time2, status, strict=True)
+                value - shift if code == 3 else 1.0
+                for value, code, shift in zip(time2, status, shifts, strict=True)
             ]
         return {
             "time": tuple(time),
@@ -416,6 +420,15 @@ class Surv(_SurvivalOperations):
         object.__setattr__(result, "states", tuple(states))
         object.__setattr__(result, "clabel", clabel)
         return result
+
+
+def _origin_values(origin: Any) -> float | list[float]:
+    """``Surv``'s ``origin``: one number, or one per observation."""
+
+    if isinstance(origin, str) or not hasattr(origin, "__iter__"):
+        return _finite_float(origin, "origin")
+    values = [_finite_float(value, "origin") for value in _materialize_1d(origin, "origin")]
+    return values[0] if len(values) == 1 else values
 
 
 def _interval2_columns(

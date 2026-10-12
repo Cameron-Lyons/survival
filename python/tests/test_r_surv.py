@@ -259,3 +259,15 @@ def test_surv2_supports_r_vector_methods():
     states = r.Surv2([1, 2, 3], r.Factor(["a", "b", "a"]))
     assert r.levels_surv(states) == ["b"]
     assert r.concat_surv(states, states).states == ("b",)
+
+
+def test_origin_may_hold_one_value_per_observation():
+    """R: ``Surv(c(1, 2, 3), c(1, 0, 1), origin = c(0, 1, 2))`` has times 1, 1, 1 and
+    ``Surv(c(1, 2, NA), c(3, NA, 5), type = "interval2", origin = c(1, 0, 1))`` has
+    ``time1`` 0, 2, 4 and ``time2`` 2, 1, 1."""
+
+    assert r.Surv([1, 2, 3], [1, 0, 1], origin=[0, 1, 2]).time == (1.0, 1.0, 1.0)
+    interval = r.Surv([1, 2, None], [3, None, 5], type="interval2", origin=[1, 0, 1])
+    assert (interval.time, interval.time2) == ((0.0, 2.0, 4.0), (2.0, 1.0, 1.0))
+    with pytest.raises(ValueError, match="origin must have length 1"):
+        r.Surv([1, 2, 3], [1, 0, 1], origin=[0, 1])
