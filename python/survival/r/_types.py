@@ -963,6 +963,20 @@ class SurvfitResult:
 
         return list(self.strata) if self.strata else []
 
+    @property
+    def dim(self) -> dict[str, int]:
+        """R's ``dim(fit)``: the number of curves."""
+
+        return {"strata": len(self.strata) if self.strata else 1}
+
+    def subset(self, *, strata: Any | None = None, drop: bool = True) -> SurvfitResult:
+        """R's ``fit[strata]``: the curves selected by label or 0-based index, in that
+        order; one selected curve loses its stratum label unless ``drop=False``."""
+
+        from ._models import _subset_survfit
+
+        return cast(SurvfitResult, _subset_survfit(self, strata=strata, drop=drop))
+
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         for name in ("influence_surv", "influence_chaz"):
@@ -1039,6 +1053,29 @@ class SurvfitMultiStateResult:
     @property
     def strata_names(self) -> list[str]:
         return list(self.strata) if self.strata else []
+
+    @property
+    def dim(self) -> dict[str, int]:
+        """R's ``dim(fit)``: the numbers of curves and states."""
+
+        return {"strata": len(self.strata) if self.strata else 1, "states": len(self.states)}
+
+    def subset(
+        self,
+        *,
+        strata: Any | None = None,
+        states: Any | None = None,
+        drop: bool = True,
+    ) -> SurvfitMultiStateResult:
+        """R's ``fit[strata, states]``: the curves and states selected by label or 0-based
+        index, in that order."""
+
+        from ._models import _subset_survfit
+
+        return cast(
+            SurvfitMultiStateResult,
+            _subset_survfit(self, strata=strata, states=states, drop=drop),
+        )
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
