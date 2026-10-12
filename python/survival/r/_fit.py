@@ -825,7 +825,7 @@ def _model_frame(
         id_levels=None if id_levels is None else tuple(id_levels),
         istate=istate_values,
         extra={
-            name: _materialize_labels(aligned[name], name)
+            name: _rows_of(aligned[name], _materialize_labels(aligned[name], name))
             for name in (extra or {})
             if aligned[name] is not None
         },
