@@ -700,3 +700,10 @@ def test_predict_survreg_with_a_stratum_the_fit_did_not_see(lung):
     assert quantile.se_fit[0] == pytest.approx(39.9023095869798)
     assert math.isnan(quantile.fit[1])
     assert math.isnan(quantile.se_fit[1])
+
+
+def test_survreg_records_the_matched_distribution_name(lung):
+    """R: ``survreg(..., dist = "exp")$dist`` is ``"exponential"``."""
+
+    assert r.survreg("Surv(time, status) ~ age", data=lung, dist="exp").dist == "exponential"
+    assert r.survreg("Surv(time, status) ~ age", data=lung, dist="logn").dist == "lognormal"

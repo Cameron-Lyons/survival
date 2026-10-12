@@ -798,7 +798,9 @@ def survreg(
         fit=fit,
         formula=formula if isinstance(formula, str) else None,
         coefficient_names=frame.names,
-        dist=dist if isinstance(dist, str) else distribution,
+        dist=_match_arg(dist, "dist", tuple(survreg_distributions))
+        if isinstance(dist, str)
+        else distribution,
         control=control,
         design=frame.design,
         weights=frame.weights,
