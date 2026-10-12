@@ -216,6 +216,20 @@ fn t_density(z: f64, df: f64) -> [f64; 3] {
     ]
 }
 
+fn compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
+    let (mut sum, mut correction) = (0.0_f64, 0.0_f64);
+    for value in values {
+        let next = sum + value;
+        correction += if sum.abs() >= value.abs() {
+            (sum - next) + value
+        } else {
+            (value - next) + sum
+        };
+        sum = next;
+    }
+    sum + correction
+}
+
 impl SurvregDistribution {
     pub fn from_name(name: &str, parms: Option<&[f64]>) -> SurvivalResult<Self> {
         let index = match_arg(name, &BUILTIN_DISTRIBUTIONS.map(|(builtin, ..)| builtin))?;
@@ -420,14 +434,10 @@ impl SurvregDistribution {
             }
             return Ok(values);
         }
-        let total: f64 = weights.iter().sum();
-        let mean = y.iter().zip(weights).map(|(y, w)| y * w).sum::<f64>() / total;
-        let var = y
-            .iter()
-            .zip(weights)
-            .map(|(y, w)| w * (y - mean).powi(2))
-            .sum::<f64>()
-            / total;
+        let total = compensated_sum(weights.iter().copied());
+        let mean = compensated_sum(y.iter().zip(weights).map(|(y, w)| y * w)) / total;
+        let var =
+            compensated_sum(y.iter().zip(weights).map(|(y, w)| w * (y - mean).powi(2))) / total;
         Ok(match self.family {
             SurvregFamily::Custom => unreachable!("handled above"),
             SurvregFamily::ExtremeValue => [mean + 0.572, var / 1.64],

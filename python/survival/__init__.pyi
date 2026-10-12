@@ -303,6 +303,9 @@ from .r import (
     quantile_survfit as quantile_survfit,
 )
 from .r import (
+    ratetable as ratetable,
+)
+from .r import (
     ratetableDate as ratetableDate,
 )
 from .r import (
@@ -322,6 +325,9 @@ from .r import (
 )
 from .r import (
     rttright as rttright,
+)
+from .r import (
+    sort_surv as sort_surv,
 )
 from .r import (
     statefig as statefig,
@@ -427,6 +433,9 @@ from .r import (
 )
 from .r import (
     vcov as vcov,
+)
+from .r import (
+    xtfrm_surv as xtfrm_surv,
 )
 from .r import (
     yates as yates,

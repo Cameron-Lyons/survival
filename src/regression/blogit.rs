@@ -1,6 +1,8 @@
 use crate::internal::statistical::{normal_cdf, probit};
 use pyo3::prelude::*;
 
+const PROBIT_LIMIT: f64 = 8.125890664701906;
+
 fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
     if input.is_nan() {
         return f64::NAN;
@@ -83,7 +85,7 @@ impl LinkFunctionParams {
         value.clamp(f64::EPSILON, 1.0 - f64::EPSILON)
     }
     pub fn bprobit_inverse(&self, eta: f64) -> f64 {
-        normal_cdf(eta)
+        normal_cdf(eta.clamp(-PROBIT_LIMIT, PROBIT_LIMIT))
     }
     pub fn bcloglog_inverse(&self, eta: f64) -> f64 {
         if eta.is_nan() {
@@ -115,6 +117,20 @@ impl LinkFunctionParams {
 mod tests {
     use super::*;
     use std::f64::consts::LN_2;
+
+    #[test]
+    fn probit_inverse_clamps_the_linear_predictor_as_r_does() {
+        let link = LinkFunctionParams::new(0.05);
+        let values: Vec<f64> = [-40.0, -9.0, 0.0, 9.0, 40.0]
+            .iter()
+            .map(|&eta| link.bprobit_inverse(eta))
+            .collect();
+        assert_eq!(values[0], values[1]);
+        assert!((values[0] - 2.2204460492503284e-16).abs() < 1e-30);
+        assert_eq!(values[2], 0.5);
+        assert!((values[4] - (1.0 - f64::EPSILON)).abs() < 1e-16);
+        assert!(link.bprobit_inverse(f64::NAN).is_nan());
+    }
 
     #[test]
     fn inverse_links_roundtrip_and_handle_extreme_predictors() {

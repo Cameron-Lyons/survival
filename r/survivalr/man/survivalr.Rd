@@ -647,7 +647,7 @@ pseudo(fit, times, type, collapse = TRUE, data.frame = FALSE, ...)
 
 survSplit(formula, data, subset, na.action = na.pass, cut,
   start = "tstart", id, zero = 0, episode, end = "tstop",
-  event = "event", added)
+  event = "event", added, timefix = TRUE)
 
 survcondense(formula, data, subset, weights, na.action = na.pass,
   id, start = "tstart", end = "tstop", event = "event")

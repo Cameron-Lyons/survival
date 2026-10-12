@@ -1642,6 +1642,20 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(bridged_agexact_fit$residuals, reference_agexact_fit$residuals, tolerance = 1e-5)
   expect_equal(bridged_agexact_fit$means, reference_agexact_fit$means, tolerance = 1e-12)
   expect_equal(bridged_agexact_fit$method, reference_agexact_fit$method)
+  null_x <- matrix(numeric(), nrow(agreg_fit_x), 0L)
+  bridged_null_agexact <- agexact.fit(
+    null_x, agreg_fit_y, NULL, NULL, NULL, coxph.control(), NULL, "exact", NULL
+  )
+  reference_null_agexact <- survival::agexact.fit(
+    null_x, agreg_fit_y, NULL, NULL, NULL, survival::coxph.control(), NULL, "exact", NULL
+  )
+  expect_equal(names(bridged_null_agexact), names(reference_null_agexact))
+  expect_equal(bridged_null_agexact$loglik, reference_null_agexact$loglik, tolerance = 1e-10)
+  expect_equal(
+    as.numeric(bridged_null_agexact$residuals),
+    as.numeric(reference_null_agexact$residuals),
+    tolerance = 1e-10
+  )
   expect_error(
     agexact.fit(
       agreg_fit_x,

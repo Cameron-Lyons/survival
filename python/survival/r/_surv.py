@@ -40,7 +40,7 @@ from ._coerce import (
     _subset_sequence,
     _warn_outside_package,
 )
-from ._surv_ops import _SurvivalOperations
+from ._surv_ops import _index_rows, _SurvivalOperations
 from ._types import _MISSING, StrataFactor, Timeline
 
 
@@ -346,6 +346,11 @@ class Surv(_SurvivalOperations):
 
     def __len__(self) -> int:
         return len(self.time)
+
+    def __getitem__(self, index: Any) -> Surv:
+        """R's ``x[i]`` with Python's zero-based positions, slices or a logical mask."""
+
+        return self.subset(_index_rows(index, len(self)))
 
     @property
     def status(self) -> tuple[int | None, ...]:
@@ -839,6 +844,11 @@ class Surv2(_SurvivalOperations):
 
     def __len__(self) -> int:
         return len(self.time)
+
+    def __getitem__(self, index: Any) -> Surv2:
+        """R's ``x[i]`` with Python's zero-based positions, slices or a logical mask."""
+
+        return self.subset(_index_rows(index, len(self)))
 
     def as_matrix(self) -> list[list[float | int | None]]:
         """Extract the time and normalized status columns for explicit numeric use."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import numbers
 from dataclasses import Field, fields
 from typing import Any, ClassVar, Never
 
@@ -75,3 +76,29 @@ class _SurvivalOperations:
     __bool__ = __float__ = __int__ = __complex__ = _invalid_operation
     __iter__ = _invalid_operation
     __array__ = __array_ufunc__ = __array_function__ = _invalid_operation
+
+
+def _index_rows(index: Any, n: int) -> list[int]:
+    """Rows of ``x[index]`` with Python indexing: a zero-based position (negative from
+    the end), a slice, a sequence of positions, or a logical mask of length *n*."""
+
+    def position(value: Any) -> int:
+        row = int(value)
+        if row < 0:
+            row += n
+        if not 0 <= row < n:
+            raise IndexError("Surv index out of range")
+        return row
+
+    if isinstance(index, slice):
+        return list(range(n)[index])
+    if isinstance(index, numbers.Integral) and not isinstance(index, bool):
+        return [position(index)]
+    values = list(index.tolist() if hasattr(index, "tolist") else index)
+    if values and all(isinstance(value, bool) for value in values):
+        if len(values) != n:
+            raise IndexError("a logical index needs one value per observation")
+        return [row for row, keep in enumerate(values) if keep]
+    if any(isinstance(value, bool) or not isinstance(value, numbers.Integral) for value in values):
+        raise IndexError("Surv indices must be integers, a slice or a logical mask")
+    return [position(value) for value in values]

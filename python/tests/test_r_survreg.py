@@ -707,3 +707,22 @@ def test_survreg_records_the_matched_distribution_name(lung):
 
     assert r.survreg("Surv(time, status) ~ age", data=lung, dist="exp").dist == "exponential"
     assert r.survreg("Surv(time, status) ~ age", data=lung, dist="logn").dist == "lognormal"
+
+
+def test_identical_exact_times_fail_the_initial_iteration_as_in_r():
+    data = {"time": [5.0] * 10, "status": [1] * 10, "x": list(range(1, 11))}
+    with pytest.raises(RuntimeError, match="initial iteration failed"):
+        r.survreg("Surv(time, status) ~ x", data)
+
+
+def test_stored_y_holds_the_fitted_left_censored_rows():
+    data = {
+        "l": [0, 1, 2, 0, 3, None, 1.5],
+        "u": [2, 3, 2, 1, 5, 4, 2.5],
+        "x": [1, 2, 3, 4, 5, 6, 7],
+    }
+    fit = r.survreg('Surv(l, u, type="interval2") ~ x', data, y=True)
+    assert list(fit.y.time) == [2.0, 1.0, 2.0, 1.0, 3.0, 4.0, 1.5]
+    assert list(fit.y.time2) == [1.0, 3.0, 1.0, 1.0, 5.0, 1.0, 2.5]
+    assert list(fit.y.event) == [2, 3, 1, 2, 3, 2, 3]
+    assert list(fit.coefficients) == pytest.approx([0.296189044720062, 0.111913910804468], rel=1e-9)

@@ -117,6 +117,7 @@ from ._pyears import (
     is_ratetable,
     match_ratetable,
     pyears,
+    ratetable,
     ratetableDate,
     summary_pyears,
     summary_ratetable,
@@ -151,9 +152,11 @@ from ._surv_vector import (
     levels_surv,
     rep_surv,
     rev_surv,
+    sort_surv,
     tail_surv,
     transpose_surv,
     unique_surv,
+    xtfrm_surv,
 )
 from ._survdiff import survdiff
 from ._survfit import (
@@ -393,6 +396,8 @@ __all__ = [
     "levels_surv",
     "rep_surv",
     "rev_surv",
+    "sort_surv",
+    "xtfrm_surv",
     "tail_surv",
     "transpose_surv",
     "unique_surv",
@@ -412,6 +417,7 @@ __all__ = [
     "nostutter",
     "nsk",
     "pyears",
+    "ratetable",
     "pspline",
     "pseudo",
     "predict",
