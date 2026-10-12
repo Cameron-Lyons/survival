@@ -597,6 +597,46 @@ def _model_matrix_evaluated(
     return result
 
 
+def _fitted_xlevels(
+    design: _FormulaDesign | None,
+    data: Any | None = None,
+    strata_levels: Sequence[str] | None = None,
+) -> dict[str, list[str]] | None:
+    """R's ``fit$xlevels``: the levels of each factor variable in formula order, and with
+    ``strata_levels`` (coxph) those of the ``strata()`` terms; ``None`` without any."""
+
+    if design is None:
+        return None
+    levels: dict[str, list[str]] = {}
+    for term in design.covariates:
+        for factor in term.factors if isinstance(term, _InteractionDesignTerm) else (term,):
+            if not isinstance(factor, _CategoricalDesignTerm):
+                continue
+            wrapped = factor.term.categorical_wrapper is not None or (
+                factor.term.arithmetic or ""
+            ).startswith(("factor(", "as.factor("))
+            if factor.levels == (False, True) and not wrapped:
+                continue
+            name = _covariate_term_name(factor.term, frame=True)
+            levels.setdefault(name, [_strata_value_label(level) for level in factor.levels])
+    strata = [variable for variable in design.variables if variable.strata is not None]
+    xlevels: dict[str, list[str]] = {}
+    for variable in design.variables:
+        name = _covariate_term_name(variable, frame=True)
+        if variable.strata is None:
+            if name in levels:
+                xlevels[name] = levels[name]
+        elif strata_levels is not None:
+            if len(strata) == 1:
+                xlevels[name] = list(strata_levels)
+            elif data is not None:
+                strata_factor = _strata_term_values(data, variable.strata)
+                xlevels[name] = list(getattr(strata_factor, "categories", ()))
+    for name, values in levels.items():
+        xlevels.setdefault(name, values)
+    return xlevels or None
+
+
 def _model_matrix_contrasts(
     design: _FormulaDesign | None, *, fitted_design: _FormulaDesign | None = None
 ) -> dict[str, Any] | None:

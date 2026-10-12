@@ -83,3 +83,26 @@ def test_newdata_numbers_match_string_levels_as_r_characters():
     numeric = r.predict(fit, newdata={"age": [-5.0, 3.0], "transplant": [0, 1]})
     character = r.predict(fit, newdata={"age": [-5.0, 3.0], "transplant": ["0", "1"]})
     assert_close(numeric, np.ravel(character))
+
+
+def test_fits_record_r_xlevels_and_contrasts(data):
+    """R: ``coxph(Surv(time, status) ~ factor(sex) + e + age + strata(inst), d)$xlevels``
+    lists the factors and the strata; ``survreg`` leaves the strata out; a plain logical
+    column has a contrast but no levels; a fit without factors has neither."""
+
+    fit = r.coxph("Surv(time, status) ~ factor(sex) + e + age + strata(inst)", data)
+    xlevels = fit.xlevels
+    assert list(xlevels) == ["factor(sex)", "e", "strata(inst)"]
+    assert xlevels["e"] == ["0", "1", "2", "3"]
+    assert xlevels["strata(inst)"][:2] == ["inst=1", "inst=2"]
+    assert fit.contrasts == {"factor(sex)": "contr.treatment", "e": "contr.treatment"}
+    aft = r.survreg("Surv(time, status) ~ factor(sex) + age + strata(ph.ecog)", data)
+    assert aft.xlevels == {"factor(sex)": ["1", "2"]}
+    logical = dict(data)
+    logical["old"] = [age > 65 for age in data["age"]]
+    fit = r.coxph("Surv(time, status) ~ old + factor(ph.ecog > 1)", logical)
+    assert fit.xlevels == {"factor(ph.ecog > 1)": ["FALSE", "TRUE"]}
+    assert list(fit.contrasts) == ["old", "factor(ph.ecog > 1)"]
+    plain = r.coxph("Surv(time, status) ~ age", data)
+    assert plain.xlevels is None
+    assert plain.contrasts is None

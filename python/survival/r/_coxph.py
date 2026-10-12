@@ -62,8 +62,10 @@ from ._fit import (
     _design_names_and_assign,
     _empty_prediction,
     _excluded_rows,
+    _fitted_xlevels,
     _model_frame,
     _model_frame_levels,
+    _model_matrix_contrasts,
     _ModelFrame,
     _NewData,
     _newdata_columns,
@@ -197,6 +199,19 @@ class CoxphModel:
     @property
     def coefficients(self) -> list[float]:
         return [float(value) for value in self.fit.coefficients]
+
+    @property
+    def xlevels(self) -> dict[str, list[str]] | None:
+        """R's ``fit$xlevels``: the levels of the factor and ``strata()`` variables."""
+
+        data = None if self._frame is None else self._frame.data
+        return _fitted_xlevels(self.design, data, self.strata_levels)
+
+    @property
+    def contrasts(self) -> dict[str, Any] | None:
+        """R's ``fit$contrasts``: the coding of each factor variable."""
+
+        return _model_matrix_contrasts(self.design) or None
 
     @property
     def var(self) -> list[list[float]]:
