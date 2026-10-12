@@ -217,3 +217,26 @@ def test_ratetable_helpers_match_r():
     assert isinstance(r.is_ratetable({**attributes, "types": [2, 9]}, verbose=True), list)
     assert list(r.survexp_mn().dims) == [110, 2, 51]
     assert r.survexp_usr().dimid == ["age", "sex", "race", "year"]
+
+
+def test_tcut_splits_calendar_dates_as_r_days():
+    """R: ``pyears(Surv(time, status) ~ tcut(entry, as.Date(c("1995-01-01", "1998-01-01",
+    "2005-01-01"))), d, scale = 1)`` with Date ``entry`` gives pyears 250, 500 and events
+    2, 1; ``tcut(d$entry, ...)`` holds days since 1970-01-01."""
+
+    entry = [
+        datetime.date(1996, 5, 1),
+        datetime.date(1999, 3, 1),
+        datetime.date(2003, 1, 1),
+        datetime.date(1997, 7, 1),
+    ]
+    data = {"time": [100, 200, 300, 150], "status": [1, 0, 1, 1], "entry": entry}
+    breaks = 'as.Date(c("1995-01-01", "1998-01-01", "2005-01-01"))'
+    result = r.pyears(f"Surv(time, status) ~ tcut(entry, {breaks})", data, scale=1)
+    assert list(result.pyears) == [250.0, 500.0]
+    assert list(result.event) == [2.0, 1.0]
+    cut = r.tcut(
+        entry, [datetime.date(1995, 1, 1), datetime.date(1998, 1, 1), datetime.date(2005, 1, 1)]
+    )
+    assert list(cut.values) == [9617.0, 10651.0, 12053.0, 10043.0]
+    assert list(cut.labels) == [" 9131+ thru 10227", "10227+ thru 12784"]

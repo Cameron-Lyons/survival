@@ -92,6 +92,17 @@ def _numeric_or_nan(values: Any, name: str) -> list[float]:
     return result
 
 
+def _tcut_numbers(values: Any, name: str) -> list[float]:
+    """R's ``as.numeric`` in ``tcut``: dates become days since 1970-01-01."""
+
+    from ._pyears import _is_date_value, _ratetable_day
+
+    materialized = _materialize_1d(values, name)
+    if any(_is_date_value(value) for value in materialized):
+        return [_ratetable_day(value) for value in materialized]
+    return _numeric_or_nan(materialized, name)
+
+
 def tcut(x: Any, breaks: Any, labels: Any | None = None, scale: Any = 1) -> TcutResult:
     """R's ``tcut``: a time-dependent categorisation for ``pyears``."""
 
@@ -99,8 +110,8 @@ def tcut(x: Any, breaks: Any, labels: Any | None = None, scale: Any = 1) -> Tcut
         None if labels is None else [str(value) for value in _materialize_1d(labels, "labels")]
     )
     return _core.tcut(
-        _numeric_or_nan(x, "x"),
-        _numeric_or_nan(_scalar_or_vector(breaks, "breaks"), "breaks"),
+        _tcut_numbers(x, "x"),
+        _tcut_numbers(_scalar_or_vector(breaks, "breaks"), "breaks"),
         label_values,
         _normalize_positive_scale(scale),
     )
