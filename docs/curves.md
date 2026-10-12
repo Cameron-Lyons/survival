@@ -4,7 +4,7 @@ This page covers fitted survival and multi-state curves: fitting options, time
 handling, summaries, quantiles, confidence bands, selection, aggregation,
 transition-matrix curves, residuals and pseudo-values, restricted-mean
 comparisons and log-rank tests. Reports and plots of curves are described in
-[Reports and graphics](reports-and-graphics.md); differences from R are listed
+[Printing and graphics](printing-and-graphics.md); differences from R are listed
 in [R compatibility](r-compatibility.md#survival-curves).
 
 ## Fitting curves
