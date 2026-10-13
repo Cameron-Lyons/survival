@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -955,7 +955,7 @@ def fit_multistate(
     )
 
 
-def coef_coxphms(fit: CoxphmsModel, *, matrix: bool = False) -> Any:
+def coef_coxphms(fit: CoxphmsModel, *, matrix: bool = False) -> list[float] | NamedMatrix:
     """R's ``coef.coxphms``: the coefficients, or with ``matrix`` a matrix shaped like
     ``cmap`` holding each transition's coefficient of each covariate (0 where it has
     none); the states are ``fit.states``."""
@@ -968,7 +968,9 @@ def coef_coxphms(fit: CoxphmsModel, *, matrix: bool = False) -> Any:
     return NamedMatrix(list(fit.cmap.rownames or []), list(fit.cmap.colnames), values.tolist())
 
 
-def vcov_coxphms(fit: CoxphmsModel, *, complete: bool = True, matrix: bool = False) -> Any:
+def vcov_coxphms(
+    fit: CoxphmsModel, *, complete: bool = True, matrix: bool = False
+) -> list[list[float]] | dict[str, NamedMatrix]:
     """R's ``vcov.coxphms``: the variance, or with ``matrix`` one ``nrow(cmap)``-square
     matrix per transition, the covariances of that transition's coefficients (0 where
     a covariate has none).  R's own result recycles an index and is not that."""
@@ -1065,7 +1067,8 @@ def predict_coxphms(
         )
     if reference_name == "sample":
         x = x - np.asarray(fit.ms.means)
-    beta = np.asarray(coef_coxphms(fit, matrix=True).values, dtype=np.float64)
+    layout = cast(NamedMatrix, coef_coxphms(fit, matrix=True))
+    beta = np.asarray(layout.values, dtype=np.float64)
     eta = x @ beta[: len(fit.ms.x_names)]
     values = eta if predict_type == "lp" else np.exp(eta)
     return NamedMatrix(rownames, list(fit.cmap.colnames), values.tolist())

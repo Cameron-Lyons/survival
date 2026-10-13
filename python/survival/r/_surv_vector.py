@@ -35,7 +35,7 @@ def _columns(x: Surv | Surv2) -> tuple[tuple[Any, ...], ...]:
     return x.time, x.event
 
 
-def concat_surv(*objects: Any) -> Any:
+def concat_surv(*objects: Any) -> Surv | Surv2:
     """R's ``c.Surv`` and ``c.Surv2``: join rows with matching censoring type and states."""
 
     if not objects:

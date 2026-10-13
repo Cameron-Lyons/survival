@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any, cast
+from typing import Any, cast, overload
 
 import numpy as np
 
@@ -77,6 +77,7 @@ from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
     RatetableMatch,
+    SummaryPyearsResult,
     SummaryRatetableResult,
     _pyears_result_frame,
     _survexp_frame,
@@ -124,14 +125,19 @@ from ._types import (
     CoxSurvfitResult,
     CoxZphResult,
     ModelPrint,
+    NamedMatrix,
     PyearsResult,
     QuantileSurvfitResult,
     RatetablePrint,
     ResponsePrint,
+    SummaryAaregResult,
     SummaryCchResult,
+    SummaryCoxphPenalResult,
+    SummaryCoxphResult,
     SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
+    SummarySurvregResult,
     SurvdiffResult,
     SurvexpResult,
     SurvfitMultiStateResult,
@@ -209,7 +215,7 @@ def _no_method(generic: str) -> TypeError:
 
 
 @_r_generic
-def coef(fit: Any, *, matrix: Any = False) -> Any:
+def coef(fit: Any, *, matrix: Any = False) -> list[float] | float | NamedMatrix:
     """``coef``: ``fit$coefficients`` (``NaN`` marks an aliased coefficient, like R's
     ``NA``; a survreg fit's location coefficients), or a concordance's estimate.
     ``matrix`` is ``coef.coxphms``'s: a multi-state fit's coefficients laid out like its
@@ -224,12 +230,12 @@ def _coef_fit(fit: CoxphModel | CchModel | SurvregModel, *, matrix: Any = False)
 
 
 @coef.register(CoxphmsModel)
-def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> Any:
+def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> list[float] | NamedMatrix:
     return coef_coxphms(fit, matrix=_normalize_bool_option_with_default(matrix, "matrix", False))
 
 
 @coef.register(ConcordanceResult)
-def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> Any:
+def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> float | list[float]:
     return fit.concordance
 
 
@@ -253,7 +259,9 @@ coef_names.register(SurvregModel, coef_names_survreg)
 
 
 @_r_generic
-def vcov(fit: Any, *, complete: Any = True, matrix: Any = False) -> Any:
+def vcov(
+    fit: Any, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]] | dict[str, NamedMatrix] | float | None:
     """``vcov``: the robust variance when the fit used one, else the model-based one;
     a concordance's variance.  ``matrix`` is ``vcov.coxphms``'s: a multi-state fit's
     variance per transition (see :func:`survival.r._coxphms.vcov_coxphms`); other fits
@@ -275,7 +283,9 @@ def _vcov_cox(
 
 
 @vcov.register(CoxphmsModel)
-def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_coxphms(
+    fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]] | dict[str, NamedMatrix]:
     return vcov_coxphms(
         fit,
         complete=_normalize_bool_option_with_default(complete, "complete", True),
@@ -284,12 +294,16 @@ def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = Fals
 
 
 @vcov.register(SurvregModel)
-def _vcov_survreg(fit: SurvregModel, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_survreg(
+    fit: SurvregModel, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]]:
     return vcov_survreg(fit, complete=complete)
 
 
 @vcov.register(ConcordanceResult)
-def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_concordance(
+    fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False
+) -> float | list[list[float]] | None:
     return fit.var
 
 
@@ -832,29 +846,51 @@ confint.register(SurvregModel, confint_survreg)
 
 
 @_r_generic
-def model_summary(fit: Any, **kwargs: Any) -> Any:
-    """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
-    curve, an expected-survival result, a population rate/person-years table,
-    or merged event data."""
+def _model_summary(fit: Any, **kwargs: Any) -> Any:
 
     raise TypeError(
         "model_summary requires a fitted model, survival curve, population result, or TmergeFrame"
     )
 
 
-model_summary.register(CoxphModel, summary_coxph)
-model_summary.register(AaregModel, summary_aareg)
-model_summary.register(SurvregModel, model_summary_survreg)
-model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
-model_summary.register(PyearsResult, summary_pyears)
-model_summary.register(SurvexpResult, summary_survexp)
-model_summary.register(_core.RateTable, summary_ratetable)
-model_summary.register(TmergeFrame, summary_tmerge)
+_model_summary.register(CoxphModel, summary_coxph)
+_model_summary.register(AaregModel, summary_aareg)
+_model_summary.register(SurvregModel, model_summary_survreg)
+_model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
+_model_summary.register(PyearsResult, summary_pyears)
+_model_summary.register(SurvexpResult, summary_survexp)
+_model_summary.register(_core.RateTable, summary_ratetable)
+_model_summary.register(TmergeFrame, summary_tmerge)
 
 
-@model_summary.register(CchModel)
+@_model_summary.register(CchModel)
 def _model_summary_cch(fit: CchModel, **kwargs: Any) -> SummaryCchResult:
     return summary_cch(fit)
+
+
+@overload
+def model_summary(
+    fit: CoxphModel, **kwargs: Any
+) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel: ...
+@overload
+def model_summary(fit: SurvregModel, **kwargs: Any) -> SummarySurvregResult: ...
+@overload
+def model_summary(fit: AaregModel, **kwargs: Any) -> SummaryAaregResult: ...
+@overload
+def model_summary(fit: CchModel, **kwargs: Any) -> SummaryCchResult: ...
+@overload
+def model_summary(fit: PyearsResult, **kwargs: Any) -> SummaryPyearsResult: ...
+@overload
+def model_summary(fit: SurvexpResult, **kwargs: Any) -> SummarySurvexpResult: ...
+@overload
+def model_summary(fit: Any, **kwargs: Any) -> Any: ...
+def model_summary(fit: Any = _MISSING, **kwargs: Any) -> Any:
+    """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
+    curve, an expected-survival result, a population rate/person-years table,
+    or merged event data."""
+
+    fit = _first_argument(fit, kwargs, "fit", "object", "model_summary")
+    return _model_summary(fit, **kwargs)
 
 
 def _add_optional_survfit_column(
