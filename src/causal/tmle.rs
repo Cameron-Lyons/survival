@@ -4,7 +4,7 @@ use crate::constants::{DIVISION_FLOOR, normal_ci_95};
 use crate::internal::statistical::normal_sf;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TMLEConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -163,7 +163,7 @@ fn linear_predict(x: &[Vec<f64>], coeffs: &[f64], intercept: f64) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TMLEResult {
     #[pyo3(get)]
     pub ate: f64,
@@ -306,7 +306,7 @@ pub fn tmle_ate(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TMLESurvivalResult {
     #[pyo3(get)]
     pub survival_diff: Vec<f64>,

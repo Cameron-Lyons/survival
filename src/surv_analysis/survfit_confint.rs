@@ -74,7 +74,7 @@ impl ConfLower {
 #[doc = " Lower and upper confidence limits, element for element with the curve"]
 #[doc = " they were computed for.  `NaN` marks a limit R reports as `NA`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConfidenceBands {
     #[pyo3(get)]
     pub lower: Vec<f64>,

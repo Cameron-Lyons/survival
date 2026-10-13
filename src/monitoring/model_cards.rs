@@ -2,7 +2,7 @@ use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ModelPerformanceMetrics {
     #[pyo3(get, set)]
     pub c_index: f64,
@@ -61,7 +61,7 @@ impl ModelPerformanceMetrics {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SubgroupPerformance {
     #[pyo3(get)]
     pub subgroup_name: String,
@@ -84,7 +84,7 @@ impl SubgroupPerformance {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ModelCard {
     #[pyo3(get)]
     pub model_name: String,
@@ -276,7 +276,7 @@ pub fn create_model_card(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FairnessAuditResult {
     #[pyo3(get)]
     pub protected_attribute: String,

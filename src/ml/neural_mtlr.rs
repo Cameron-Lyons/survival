@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NeuralMTLRConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -107,7 +107,7 @@ fn cumsum_from_end(probs: &[f64]) -> Vec<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NeuralMTLRModel {
     weights: Vec<Vec<f64>>,
     biases: Vec<f64>,

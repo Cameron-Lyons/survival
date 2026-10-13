@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NegativeBinomialFrailtyConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -24,7 +24,7 @@ impl NegativeBinomialFrailtyConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NegativeBinomialFrailtyResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,
@@ -353,7 +353,7 @@ fn lgamma(x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AndersonGillResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

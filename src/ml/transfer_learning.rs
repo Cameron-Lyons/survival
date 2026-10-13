@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum TransferStrategy {
     FineTune,
     FeatureExtraction,
@@ -21,7 +21,7 @@ impl TransferStrategy {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TransferLearningConfig {
     #[pyo3(get, set)]
     pub strategy: TransferStrategy,
@@ -77,7 +77,7 @@ fn relu(x: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PretrainedSurvivalModel {
     encoder_weights: Vec<Vec<f64>>,
     encoder_biases: Vec<f64>,
@@ -220,7 +220,7 @@ pub fn pretrain_survival_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TransferredModel {
     base_model: PretrainedSurvivalModel,
     adaptation_weights: Vec<Vec<f64>>,
@@ -352,7 +352,7 @@ pub fn transfer_survival_model(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DomainAdaptationResult {
     #[pyo3(get)]
     pub source_loss: f64,

@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DistillationConfig {
     #[pyo3(get, set)]
     pub temperature: f64,
@@ -92,7 +92,7 @@ fn kl_divergence(p: &[f64], q: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DistilledSurvivalModel {
     weights: Vec<Vec<f64>>,
     biases: Vec<f64>,
@@ -176,7 +176,7 @@ impl DistilledSurvivalModel {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DistillationResult {
     #[pyo3(get)]
     pub student_c_index: f64,
@@ -364,7 +364,7 @@ fn compute_correlation(x: &[f64], y: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PruningResult {
     #[pyo3(get)]
     pub original_params: usize,

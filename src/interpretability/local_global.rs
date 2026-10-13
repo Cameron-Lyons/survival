@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum ViewRecommendation {
     UseGlobal,
     UseLocal,
@@ -33,7 +33,7 @@ impl ViewRecommendation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LocalGlobalConfig {
     #[pyo3(get, set)]
     pub heterogeneity_threshold: f64,
@@ -86,7 +86,7 @@ impl LocalGlobalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FeatureViewAnalysis {
     #[pyo3(get)]
     pub feature_idx: usize,
@@ -119,7 +119,7 @@ impl FeatureViewAnalysis {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LocalGlobalResult {
     #[pyo3(get)]
     pub analyses: Vec<FeatureViewAnalysis>,
@@ -161,7 +161,7 @@ impl LocalGlobalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LocalGlobalSummary {
     #[pyo3(get)]
     pub mean_heterogeneity: f64,

@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 #[doc = " unique event time; the next `nrisk[k]` entries of `index`/`status` are"]
 #[doc = " its members (zero-based rows of the input) and their event indicators."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxCountOutput {
     #[pyo3(get)]
     pub time: Vec<f64>,

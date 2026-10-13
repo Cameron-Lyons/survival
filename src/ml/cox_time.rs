@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxTimeConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -209,7 +209,7 @@ fn _compute_cox_time_loss(log_hazard: Tensor<2>, event: &[i32], time_order: &[us
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxTimeModel {
     weights: Vec<f32>,
     config: CoxTimeConfig,

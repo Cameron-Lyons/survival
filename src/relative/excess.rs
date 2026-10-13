@@ -81,7 +81,7 @@ fn validate_excess_hazard_inputs(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RelativeSurvivalResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,
@@ -230,7 +230,7 @@ pub fn relative_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ExcessHazardModelResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

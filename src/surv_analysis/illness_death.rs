@@ -6,7 +6,7 @@ use crate::internal::statistical::normal_sf;
 use crate::internal::validation::{validate_finite, validate_no_nan, validate_non_negative};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum IllnessDeathType {
     Progressive,
     Reversible,
@@ -29,7 +29,7 @@ impl IllnessDeathType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IllnessDeathConfig {
     #[pyo3(get, set)]
     pub model_type: IllnessDeathType,
@@ -121,7 +121,7 @@ fn validate_illness_death_config_values(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TransitionHazard {
     #[pyo3(get)]
     pub from_state: String,
@@ -156,7 +156,7 @@ impl TransitionHazard {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IllnessDeathResult {
     #[pyo3(get)]
     pub transition_hazards: Vec<TransitionHazard>,
@@ -612,7 +612,7 @@ fn validate_illness_death_fit_inputs(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IllnessDeathPrediction {
     #[pyo3(get)]
     pub state_probs: Vec<Vec<f64>>,

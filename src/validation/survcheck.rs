@@ -28,7 +28,7 @@ pub struct SurvCheckInput<'a> {
 #[doc = " `jump` and `teleport` components).  Rows are 0-based indices into the"]
 #[doc = " input; `id` lists the distinct subjects in order of first appearance."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckProblem {
     pub row: Vec<usize>,
     pub id: Vec<i64>,
@@ -72,7 +72,7 @@ crate::internal::pickle::picklable!(SurvCheckFlags, SurvCheckTransitions, SurvCh
 
 #[doc = " Result of [`survcheck`], mirroring R's `survcheck` object."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvCheckResult {
     #[doc = " All state names, initial states that are never destinations first."]
     pub states: Vec<String>,

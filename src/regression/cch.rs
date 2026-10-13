@@ -134,7 +134,7 @@ pub struct CchOptions {
 #[doc = " R's `cch` object: the underlying Cox fit plus the case-cohort variance"]
 #[doc = " pieces."]
 #[derive(Debug, Clone)]
-#[pyclass(skip_from_py_object)]
+#[pyclass(module = "survival._survival", skip_from_py_object)]
 pub struct CchFitResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

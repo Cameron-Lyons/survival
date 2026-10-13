@@ -136,6 +136,10 @@ fn unpickle(cls: &Bound<'_, pyo3::types::PyType>, state: &[u8]) -> PyResult<Py<P
         crate::validation::SurvCheckEvents,
         crate::data_prep::TcutResult,
         crate::core::SplineBasisResult,
+        crate::surv_analysis::SurvDiffResult,
+        crate::population::SurvExpResult,
+        crate::population::PyearsResult,
+        crate::population::RateTable,
     );
     Err(pyo3::exceptions::PyValueError::new_err(format!(
         "_unpickle cannot restore a {}",

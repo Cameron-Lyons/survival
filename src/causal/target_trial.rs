@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use crate::constants::{exp_ci_95, normal_ci_95};
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TargetTrialResult {
     #[pyo3(get)]
     pub hazard_ratio: f64,
@@ -37,7 +37,7 @@ pub struct TargetTrialResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TrialEmulationConfig {
     #[pyo3(get, set)]
     pub grace_period: f64,

@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TwoSidedConformalResult {
     #[pyo3(get)]
     pub lower_bound: Vec<f64>,
@@ -20,7 +20,7 @@ pub struct TwoSidedConformalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TwoSidedCalibrationResult {
     #[pyo3(get)]
     pub lower_quantile: f64,

@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub enum CureDistribution {
     Weibull,
@@ -29,7 +29,7 @@ impl CureDistribution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum LinkFunction {
     Logit,
     Probit,
@@ -154,7 +154,7 @@ fn exponential_pdf(t: f64, rate: f64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MixtureCureConfig {
     #[pyo3(get, set)]
     pub distribution: CureDistribution,
@@ -190,7 +190,7 @@ impl MixtureCureConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MixtureCureResult {
     #[pyo3(get)]
     pub cure_coef: Vec<f64>,

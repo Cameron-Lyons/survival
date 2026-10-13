@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 #[doc = " never reaches); the restricted mean is absent when `rmean` is `None`"]
 #[doc = " and the limits when the curve has none."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvfitSummaryRow {
     pub records: f64,
     pub n_max: f64,
@@ -50,7 +50,7 @@ impl SurvfitSummaryRow {
 
 #[doc = " Restricted mean of one group with a normal confidence interval."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct RmstGroupResult {
     pub group: i32,
     pub n: usize,
@@ -65,7 +65,7 @@ pub struct RmstGroupResult {
 #[doc = " the first (reference) group, and a global Wald test on `k - 1` degrees"]
 #[doc = " of freedom."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct RmstComparisonResult {
     pub tau: f64,
     pub groups: Vec<RmstGroupResult>,

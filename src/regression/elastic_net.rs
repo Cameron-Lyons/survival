@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum PenaltyType {
     Lasso,
     Ridge,
@@ -32,7 +32,7 @@ impl PenaltyType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ElasticNetConfig {
     #[pyo3(get, set)]
     pub alpha: f64,
@@ -92,7 +92,7 @@ impl ElasticNetConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ElasticNetCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -117,7 +117,7 @@ pub struct ElasticNetCoxResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ElasticNetCoxPath {
     #[pyo3(get)]
     pub lambdas: Vec<f64>,
@@ -132,7 +132,7 @@ pub struct ElasticNetCoxPath {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ElasticNetPathConfig {
     #[pyo3(get, set)]
     pub l1_ratio: f64,
@@ -197,7 +197,7 @@ impl ElasticNetPathConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ElasticNetCVConfig {
     #[pyo3(get, set)]
     pub l1_ratio: f64,

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 
 #[doc = " A hazard changepoint retained by the search."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct ChangepointInfo {
     pub time: f64,
     pub hazard_before: f64,
@@ -19,7 +19,7 @@ pub struct ChangepointInfo {
 
 #[doc = " The chosen horizon and the restricted mean survival time up to it."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct RMSTOptimalThresholdResult {
     pub optimal_tau: f64,
     pub max_followup: f64,

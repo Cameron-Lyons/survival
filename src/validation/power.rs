@@ -69,7 +69,7 @@ fn validate_sample_size_options(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SampleSizeResult {
     #[pyo3(get)]
     pub n_total: usize,
@@ -268,7 +268,7 @@ pub fn power_survival(
     ))
 }
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AccrualResult {
     #[pyo3(get)]
     pub n_total: usize,

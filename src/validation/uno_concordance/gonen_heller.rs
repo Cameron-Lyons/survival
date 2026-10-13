@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all, from_py_object)]
+#[pyclass(module = "survival._survival", str, get_all, from_py_object)]
 pub struct GonenHellerResult {
     pub cpe: f64,
     pub n_pairs: usize,

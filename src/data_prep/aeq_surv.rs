@@ -6,7 +6,7 @@ pub const DEFAULT_TOLERANCE: f64 = 1.4901161193847656e-8;
 
 #[doc = " The time columns of a `Surv` object after `aeqSurv`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AeqSurvResult {
     #[doc = " The (first) time column with near ties collapsed."]
     #[pyo3(get)]

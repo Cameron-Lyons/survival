@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use crate::constants::normal_ci_bounds_95;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MultipleImputationResult {
     #[pyo3(get)]
     pub pooled_coefficients: Vec<f64>,
@@ -29,7 +29,7 @@ pub struct MultipleImputationResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum ImputationMethod {
     PMM,
     Regression,

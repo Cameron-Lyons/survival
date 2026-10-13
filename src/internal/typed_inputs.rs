@@ -32,7 +32,7 @@ fn validate_strata_len(strata: &[i32], expected: usize) -> SurvivalResult<()> {
 #[doc = " sign). `status` is any non-negative code so that multi-state outcomes can"]
 #[doc = " share the container; routines needing 0/1 validate that themselves."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalData {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -78,7 +78,7 @@ impl SurvivalData {
 
 #[doc = " Row-major `n_obs x n_vars` design matrix with finite entries."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CovariateMatrix {
     #[pyo3(get)]
     pub values: Vec<f64>,
@@ -135,7 +135,7 @@ impl CovariateMatrix {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct Weights {
     #[pyo3(get)]
     pub values: Vec<f64>,
@@ -184,7 +184,7 @@ impl Weights {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CountingProcessData {
     #[pyo3(get)]
     pub start: Vec<f64>,
@@ -233,7 +233,7 @@ impl CountingProcessData {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxRegressionInput {
     pub covariates: CovariateMatrix,
     pub survival: SurvivalData,
@@ -349,7 +349,7 @@ impl CoxRegressionInput {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxMartInput {
     pub survival: SurvivalData,
     pub score: Vec<f64>,
@@ -418,7 +418,7 @@ impl CoxMartInput {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AndersenGillInput {
     pub counting: CountingProcessData,
     pub score: Vec<f64>,

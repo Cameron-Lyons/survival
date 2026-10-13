@@ -103,7 +103,7 @@ impl<'a> From<&'a CoxpenalFit> for ZphPenalty<'a> {
 
 #[doc = " One row of the `cox.zph` table."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxZphTest {
     #[pyo3(get)]
     pub chisq: f64,
@@ -116,7 +116,7 @@ pub struct CoxZphTest {
 
 #[doc = " `cox.zph(fit)` result."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxZph {
     #[doc = " One test per term, in `assign` order."]
     #[pyo3(get)]

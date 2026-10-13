@@ -190,7 +190,7 @@ pub fn ensemble_uncertainty(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct QuantileRegressionResult {
     #[pyo3(get)]
     pub median: Vec<Vec<f64>>,
@@ -301,7 +301,7 @@ pub fn quantile_regression_intervals(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CalibrationUncertaintyResult {
     #[pyo3(get)]
     pub expected_coverage: f64,

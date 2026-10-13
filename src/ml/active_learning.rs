@@ -44,7 +44,7 @@ fn validate_nonnegative_finite(name: &str, value: f64) -> PyResult<()> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ActiveLearningConfig {
     #[pyo3(get, set)]
     pub strategy: String,
@@ -166,7 +166,7 @@ fn compute_qbc_disagreement(ensemble_predictions: &[Vec<Vec<f64>>]) -> Vec<f64> 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ActiveLearningResult {
     #[pyo3(get)]
     pub selected_indices: Vec<usize>,
@@ -252,7 +252,7 @@ pub fn active_learning_selection(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct QBCResult {
     #[pyo3(get)]
     pub selected_indices: Vec<usize>,
@@ -315,7 +315,7 @@ pub fn query_by_committee(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LogrankSampleSizeResult {
     #[pyo3(get)]
     pub required_events: usize,
@@ -427,7 +427,7 @@ pub fn sample_size_logrank(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LogrankPowerResult {
     #[pyo3(get)]
     pub power: f64,
@@ -502,7 +502,7 @@ pub fn power_logrank(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AdaptiveDesignResult {
     #[pyo3(get)]
     pub stage: usize,

@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CureModelComparisonResult {
     #[pyo3(get)]
     pub model_names: Vec<String>,

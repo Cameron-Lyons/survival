@@ -17,7 +17,7 @@ pub struct SurvObrienInput<'a> {
 
 #[doc = " The expanded data set (R's returned data frame)."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvObrienExpansion {
     #[doc = " Original (0-based) row of each expanded row; R's `.id.` is `row + 1`."]
     pub row: Vec<usize>,

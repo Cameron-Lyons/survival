@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CVPlusCalibrationResult {
     #[pyo3(get)]
     pub conformity_scores: Vec<f64>,
@@ -16,7 +16,7 @@ pub struct CVPlusCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CVPlusConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,

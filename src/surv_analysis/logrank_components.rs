@@ -61,8 +61,8 @@ impl SurvdiffData {
 
 #[doc = " A `survdiff` object.  `obs` and `exp` are `groups x strata` (one column"]
 #[doc = " without strata), `var` is the `groups x groups` covariance of `obs - exp`."]
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvDiffResult {
     #[doc = " Observations per group (`table(groups)`)."]
     #[pyo3(get)]
@@ -617,3 +617,5 @@ mod tests {
         );
     }
 }
+
+crate::internal::pickle::picklable!(SurvDiffResult);

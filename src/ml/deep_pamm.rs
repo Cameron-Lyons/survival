@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DeepPAMMConfig {
     #[pyo3(get, set)]
     pub hidden_dims: Vec<usize>,
@@ -128,7 +128,7 @@ fn create_knot_sequence(min_t: f64, max_t: f64, num_knots: usize, degree: usize)
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DeepPAMMModel {
     baseline_coeffs: Vec<f64>,
     nn_weights: Vec<Vec<f64>>,

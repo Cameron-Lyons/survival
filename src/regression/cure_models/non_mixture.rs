@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum NonMixtureType {
     GeometricGeneralized,
     NegativeBinomial,
@@ -25,7 +25,7 @@ impl NonMixtureType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NonMixtureCureConfig {
     #[pyo3(get, set)]
     pub model_type: NonMixtureType,
@@ -61,7 +61,7 @@ impl NonMixtureCureConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NonMixtureCureResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

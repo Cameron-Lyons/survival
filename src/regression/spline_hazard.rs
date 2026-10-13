@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 use crate::constants::clamped_normal_ci_bounds_95;
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct SplineConfig {
     #[pyo3(get, set)]
@@ -168,7 +168,7 @@ fn validate_restricted_cubic_knots(knots: &[f64]) -> PyResult<()> {
     Ok(())
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct FlexibleParametricResult {
     #[pyo3(get)]
@@ -459,7 +459,7 @@ fn compute_approximate_se(beta: &[f64], gamma: &[f64], n: usize) -> Vec<f64> {
     se
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct RestrictedCubicSplineResult {
     #[pyo3(get)]
@@ -567,7 +567,7 @@ fn compute_quantile_knots(x: &[f64], n_knots: usize) -> Vec<f64> {
         .collect()
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct HazardSplineResult {
     #[pyo3(get)]

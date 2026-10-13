@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub struct DynamicPredictionResult {
     #[pyo3(get)]

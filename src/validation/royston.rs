@@ -24,7 +24,7 @@ pub struct RoystonInput<'a> {
 
 #[doc = " R's named result vector."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct RoystonResult {
     pub d: f64,
     pub se_d: f64,

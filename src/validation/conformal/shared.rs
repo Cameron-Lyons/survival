@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConformalCalibrationResult {
     #[pyo3(get)]
     pub conformity_scores: Vec<f64>,
@@ -18,7 +18,7 @@ pub struct ConformalCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConformalPredictionResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,
@@ -29,7 +29,7 @@ pub struct ConformalPredictionResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConformalDiagnostics {
     #[pyo3(get)]
     pub empirical_coverage: f64,

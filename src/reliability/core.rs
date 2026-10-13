@@ -3,7 +3,7 @@ use crate::internal::statistical::{normal_inverse_cdf, normal_sf};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum ReliabilityScale {
     Surv,
     Cumhaz,
@@ -32,7 +32,7 @@ impl ReliabilityScale {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ReliabilityResult {
     #[pyo3(get)]
     pub time: Vec<f64>,

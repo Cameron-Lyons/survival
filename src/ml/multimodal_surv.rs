@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum FusionStrategy {
     Early,
     Late,
@@ -23,7 +23,7 @@ impl FusionStrategy {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MultimodalSurvConfig {
     #[pyo3(get, set)]
     pub clinical_hidden_dims: Vec<usize>,
@@ -140,7 +140,7 @@ fn attention_fusion(embeddings: &[Vec<f64>], attention_weights: &[Vec<f64>]) -> 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MultimodalSurvModel {
     clinical_weights: Vec<Vec<f64>>,
     clinical_biases: Vec<f64>,

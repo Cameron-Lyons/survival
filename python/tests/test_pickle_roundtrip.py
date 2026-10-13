@@ -387,3 +387,21 @@ def test_renamed_class_instances_round_trip():
     fit = r.survdiff("Surv(time, status) ~ sex", survival.datasets.load_lung())
     assert type(fit).__name__ == "SurvdiffResult"
     assert round_trip(fit).chisq == fit.chisq
+
+
+def test_native_kernel_results_pickle_and_name_their_module(lung):
+    kernels = survival.kernels
+    table = kernels.survexp_us()
+    restored = round_trip(table)
+    assert type(table).__module__ == "survival._survival"
+    assert (restored.source, restored.dims, restored.rates) == (
+        table.source,
+        table.dims,
+        table.rates,
+    )
+    diff = kernels.survdiff(lung["time"], [s - 1 for s in lung["status"]], lung["sex"])
+    assert round_trip(diff).chisq == diff.chisq
+    classes = [
+        getattr(native, name) for name in dir(native) if isinstance(getattr(native, name), type)
+    ]
+    assert all(cls.__module__ == "survival._survival" for cls in classes)

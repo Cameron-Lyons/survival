@@ -11,7 +11,7 @@ pub struct StrataVariable {
 
 #[doc = " The strata factor."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StrataResult {
     #[doc = " Zero-based stratum of each observation, `None` where any component"]
     #[doc = " is missing (and `na_group` is off)."]

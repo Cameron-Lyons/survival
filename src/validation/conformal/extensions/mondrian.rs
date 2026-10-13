@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MondrianDiagnostics {
     #[pyo3(get)]
     pub group_labels: Vec<i32>,
@@ -16,7 +16,7 @@ pub struct MondrianDiagnostics {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MondrianCalibrationResult {
     #[pyo3(get)]
     pub group_thresholds: std::collections::HashMap<i32, f64>,
@@ -33,7 +33,7 @@ pub struct MondrianCalibrationResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MondrianConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,

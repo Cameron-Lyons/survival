@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum UncertaintySet {
     Wasserstein,
     KLDivergence,
@@ -24,7 +24,7 @@ impl UncertaintySet {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DROSurvivalConfig {
     #[pyo3(get, set)]
     pub uncertainty_set: UncertaintySet,
@@ -64,7 +64,7 @@ impl DROSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DROSurvivalResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -99,7 +99,7 @@ impl DROSurvivalResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RobustnessAnalysis {
     #[pyo3(get)]
     pub radii: Vec<f64>,

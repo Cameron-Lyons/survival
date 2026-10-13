@@ -23,7 +23,7 @@ fn validate_alpha_quantile(alpha: f64) -> PyResult<f64> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ModelSelectionCriteria {
     #[pyo3(get)]
     pub log_likelihood: f64,
@@ -167,7 +167,7 @@ pub fn compute_model_selection_criteria(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalModelComparison {
     #[pyo3(get)]
     pub model_names: Vec<String>,
@@ -345,7 +345,7 @@ pub fn compare_models(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CrossValidatedScore {
     #[pyo3(get)]
     pub mean_score: f64,

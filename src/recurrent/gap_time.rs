@@ -7,7 +7,7 @@ use crate::recurrent::validation::{
 };
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GapTimeResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

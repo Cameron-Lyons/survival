@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all, from_py_object)]
+#[pyclass(module = "survival._survival", str, get_all, from_py_object)]
 pub struct CIndexDecompositionResult {
     pub c_index: f64,
     pub c_index_ee: f64,

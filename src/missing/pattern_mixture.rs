@@ -6,7 +6,7 @@ type CoxEstimate = (Vec<f64>, Vec<f64>);
 type SensitivityResult = (f64, Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PatternMixtureResult {
     #[pyo3(get)]
     pub pattern_coefficients: Vec<Vec<f64>>,
@@ -29,7 +29,7 @@ pub struct PatternMixtureResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum SensitivityAnalysisType {
     TiltingModel,
     SelectionModel,

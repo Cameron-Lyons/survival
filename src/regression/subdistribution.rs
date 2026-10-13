@@ -14,7 +14,7 @@ fn value_error(message: impl Into<String>) -> PyErr {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all, from_py_object)]
+#[pyclass(module = "survival._survival", str, get_all, from_py_object)]
 pub struct FineGrayResult {
     pub coefficients: Vec<f64>,
     pub std_errors: Vec<f64>,
@@ -124,7 +124,7 @@ impl FineGrayResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all, from_py_object)]
+#[pyclass(module = "survival._survival", str, get_all, from_py_object)]
 pub struct CompetingRisksCIF {
     pub times: Vec<f64>,
     pub cif: Vec<f64>,

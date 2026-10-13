@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct WarrantyConfig {
     #[pyo3(get, set)]
     pub warranty_period: f64,
@@ -38,7 +38,7 @@ impl WarrantyConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct WarrantyResult {
     #[pyo3(get)]
     pub expected_failures: f64,
@@ -159,7 +159,7 @@ pub fn warranty_analysis(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RenewalResult {
     #[pyo3(get)]
     pub expected_renewals: f64,
@@ -263,7 +263,7 @@ pub fn renewal_analysis(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ReliabilityGrowthResult {
     #[pyo3(get)]
     pub initial_mtbf: f64,

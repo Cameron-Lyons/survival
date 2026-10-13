@@ -32,7 +32,7 @@ impl Default for PyearsSummaryOptions {
 #[doc = " (which include the \"Total\" margins when they were requested).  A"]
 #[doc = " missing entry (R's `NA`) is `NaN`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PyearsSummary {
     #[pyo3(get)]
     pub dims: Vec<usize>,

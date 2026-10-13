@@ -103,7 +103,7 @@ impl SurvregControl {
 #[doc = " `time2`; `time2` is only read for code-3 rows.  Weights must be positive"]
 #[doc = " (`survreg.fit`: \"Invalid weights, must be >0\").  Strata and cluster are"]
 #[doc = " zero-based codes."]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregData {
     #[pyo3(get)]

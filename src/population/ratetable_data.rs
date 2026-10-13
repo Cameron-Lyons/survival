@@ -91,7 +91,7 @@ fn load(cell: &'static OnceLock<RateTable>, name: &'static str, text: &str) -> &
     cell.get_or_init(|| {
         let mut table =
             parse(name, text).unwrap_or_else(|e| panic!("embedded rate table is malformed: {e}"));
-        table.source = Some(name);
+        table.source = Some(name.to_string());
         table
     })
 }
@@ -193,7 +193,7 @@ mod tests {
             (survexp_usr(), "survexp.usr"),
             (survexp_mn(), "survexp.mn"),
         ] {
-            assert_eq!(table.source, Some(name));
+            assert_eq!(table.source.as_deref(), Some(name));
         }
         assert_eq!(parse("custom", SURVEXP_US_TSV).unwrap().source, None);
     }

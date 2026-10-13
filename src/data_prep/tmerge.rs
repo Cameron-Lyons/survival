@@ -64,7 +64,7 @@ pub const TCOUNT_NAMES: [&str; 9] = [
 
 #[doc = " The outcome of one `tmerge` argument."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TmergeStep {
     #[doc = " Zero-based row of the input data set behind each output row; rows"]
     #[doc = " split by an event time appear several times."]

@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 type DendrogramHistory = Vec<(usize, usize, f64, usize)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum GroupingMethod {
     Hierarchical,
     KMeans,
@@ -28,7 +28,7 @@ impl GroupingMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum LinkageType {
     Single,
     Complete,
@@ -53,7 +53,7 @@ impl LinkageType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct VariableGroupingConfig {
     #[pyo3(get, set)]
     pub method: GroupingMethod,
@@ -106,7 +106,7 @@ impl VariableGroupingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FeatureGroup {
     #[pyo3(get)]
     pub group_id: usize,
@@ -133,7 +133,7 @@ impl FeatureGroup {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct VariableGroupingResult {
     #[pyo3(get)]
     pub groups: Vec<FeatureGroup>,

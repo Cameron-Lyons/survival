@@ -6,7 +6,7 @@ use ndarray::{ArrayView1, ArrayView2};
 use pyo3::prelude::*;
 
 #[doc = " The `type` argument of `predict.survreg` (`link`/`linear` are `lp`)."]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvregPredictType {
     #[doc = " `itrans(eta)`: the prediction on the original response scale."]
@@ -39,7 +39,7 @@ impl SurvregPredictType {
 }
 
 #[doc = " The value of `predict.survreg`."]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregPrediction {
     #[doc = " Column count retained independently of the row count."]

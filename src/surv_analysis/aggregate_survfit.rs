@@ -69,7 +69,7 @@ impl AggregateFun {
 #[doc = " column (`codes[j]` indexes `levels`) and, for a named list, the element's"]
 #[doc = " name."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GroupingFactor {
     #[pyo3(get)]
     pub name: Option<String>,
@@ -122,7 +122,7 @@ impl GroupingFactor {
 #[doc = " The `newdata` of the aggregated object: one row per group with the level"]
 #[doc = " label of every grouping variable."]
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AggregateGroups {
     #[doc = " The column names: the names of `by`, `Group.k` for an unnamed element"]
     #[doc = " of a list, or the single column `aggregate` for a bare vector."]
@@ -135,7 +135,7 @@ pub struct AggregateGroups {
 
 #[doc = " The collapsed columns of the aggregated survfit object."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AggregateSurvfitResult {
     #[doc = " `surv[time][group]`; absent when the object had no `surv`."]
     #[pyo3(get)]

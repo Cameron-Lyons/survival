@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StreamingCoxConfig {
     #[pyo3(get, set)]
     pub learning_rate: f64,
@@ -41,7 +41,7 @@ impl StreamingCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StreamingCoxModel {
     coefficients: Vec<f64>,
     n_features: usize,
@@ -232,7 +232,7 @@ impl StreamingCoxModel {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StreamingKaplanMeier {
     time_points: Vec<f64>,
     at_risk: Vec<f64>,
@@ -348,7 +348,7 @@ impl StreamingKaplanMeier {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConceptDriftDetector {
     #[pyo3(get)]
     pub window_size: usize,

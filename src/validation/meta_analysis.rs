@@ -55,7 +55,7 @@ fn validate_meta_inputs(effects: &[f64], std_errors: &[f64], min_studies: usize)
     validate_positive_finite_slice(std_errors, "std_errors")
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaAnalysisConfig {
     #[pyo3(get, set)]
@@ -81,7 +81,7 @@ impl MetaAnalysisConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaAnalysisResult {
     #[pyo3(get)]
@@ -389,7 +389,7 @@ fn t_distribution_quantile(_p: f64, df: usize) -> f64 {
     Z_SCORE_95
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MetaForestPlotData {
     #[pyo3(get)]
@@ -479,7 +479,7 @@ pub fn generate_forest_plot_data(
     })
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PublicationBiasResult {
     #[pyo3(get)]

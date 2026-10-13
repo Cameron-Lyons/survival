@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RDSurvivalConfig {
     #[pyo3(get, set)]
     pub bandwidth: f64,
@@ -32,7 +32,7 @@ impl RDSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RDSurvivalResult {
     #[pyo3(get)]
     pub treatment_effect: f64,

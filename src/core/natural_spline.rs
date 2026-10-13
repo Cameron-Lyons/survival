@@ -31,7 +31,7 @@ crate::internal::pickle::picklable!(SplineBasisResult);
 #[doc = " `df`), boundary knots (`None` = the 5%/95% quantiles of the data, R's"]
 #[doc = " `b = 0.05` default) and whether the basis carries an intercept column."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NaturalSplineKnot {
     #[pyo3(get)]
     pub knots: Vec<f64>,

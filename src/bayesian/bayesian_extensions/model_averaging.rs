@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianModelAveragingConfig {
     #[pyo3(get, set)]
     pub n_iter: usize,
@@ -27,7 +27,7 @@ impl BayesianModelAveragingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianModelAveragingResult {
     #[pyo3(get)]
     pub posterior_inclusion_prob: Vec<f64>,

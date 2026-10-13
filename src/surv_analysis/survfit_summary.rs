@@ -240,7 +240,7 @@ impl RmeanOption {
 #[doc = " `RmeanOption::None` and the median limits are absent when the fit has no"]
 #[doc = " confidence limits."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvmeanTable {
     #[pyo3(get)]
     pub records: Vec<f64>,
@@ -661,7 +661,7 @@ fn summary_time_indices(
 #[doc = " confidence bands (`quantile.survfit`).  Rows are curves, columns"]
 #[doc = " `probs`; `NaN` where the curve never reaches the probability."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitQuantiles {
     #[pyo3(get)]
     pub probs: Vec<f64>,

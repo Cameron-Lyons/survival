@@ -110,7 +110,7 @@ fn compute_net_benefit(predicted_risk: &[f64], outcomes: &[i32], thresholds: &[f
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DecisionCurveResult {
     #[pyo3(get)]
     pub thresholds: Vec<f64>,
@@ -215,7 +215,7 @@ pub fn decision_curve_analysis(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ClinicalUtilityResult {
     #[pyo3(get)]
     pub threshold: f64,
@@ -321,7 +321,7 @@ pub fn clinical_utility_at_threshold(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ModelComparisonResult {
     #[pyo3(get)]
     pub model_names: Vec<String>,

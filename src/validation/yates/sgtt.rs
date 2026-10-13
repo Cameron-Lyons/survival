@@ -19,7 +19,7 @@ pub struct YatesSgttInput<'a> {
 
 #[doc = " The estimable SAS hypothesis matrix and one test per requested term."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesSgttResult {
     pub sas: Vec<Vec<f64>>,
     #[doc = " Original full-design column numbers retained by the QR (zero based)."]

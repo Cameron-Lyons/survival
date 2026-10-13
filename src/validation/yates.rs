@@ -66,7 +66,7 @@ crate::internal::pickle::picklable!(YatesContrast);
 #[doc = " One level's population marginal mean and standard error (R's"]
 #[doc = " `estimate` data frame); `pmm` is `NaN` for a non-estimable level."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesEstimate {
     pub pmm: f64,
     pub std: f64,
@@ -76,7 +76,7 @@ pub struct YatesEstimate {
 #[doc = " the simulated mean survival of each level at every time of the baseline"]
 #[doc = " curve, one row per time and one column per level."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesCurves {
     pub surv: Vec<Vec<f64>>,
     #[doc = " `-log(surv)`."]
@@ -89,7 +89,7 @@ pub struct YatesCurves {
 
 #[doc = " R's `yates` object."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct YatesResult {
     pub estimate: Vec<YatesEstimate>,
     pub test: Vec<YatesContrast>,

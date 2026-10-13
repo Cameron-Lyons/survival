@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CausalForestConfig {
     #[pyo3(get, set)]
     pub n_trees: usize,
@@ -297,7 +297,7 @@ fn predict_tree(node: &CausalTreeNode, x: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CausalForestSurvival {
     trees: Vec<CausalTreeNode>,
     _config: CausalForestConfig,
@@ -378,7 +378,7 @@ impl CausalForestSurvival {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CausalForestResult {
     #[pyo3(get)]
     pub cate_estimates: Vec<f64>,

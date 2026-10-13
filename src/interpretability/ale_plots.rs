@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ALEResult {
     #[pyo3(get)]
     pub feature_values: Vec<f64>,
@@ -25,7 +25,7 @@ impl ALEResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ALE2DResult {
     #[pyo3(get)]
     pub feature1_values: Vec<f64>,

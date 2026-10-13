@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 
 #[doc = " Schoenfeld residuals, one row per event in order of (stratum, time)."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxschoResiduals {
     #[doc = " Event time of each row."]
     #[pyo3(get)]

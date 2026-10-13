@@ -10,7 +10,7 @@ type SurvivalCurveSummary = (
 );
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum PriorType {
     Normal,
     Laplace,
@@ -37,7 +37,7 @@ impl PriorType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianCoxConfig {
     #[pyo3(get, set)]
     pub prior_type: PriorType,
@@ -86,7 +86,7 @@ impl BayesianCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianCoxResult {
     #[pyo3(get)]
     pub posterior_mean: Vec<f64>,

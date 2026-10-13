@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct WLWConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -27,7 +27,7 @@ impl WLWConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct WLWResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

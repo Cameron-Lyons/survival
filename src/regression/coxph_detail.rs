@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 
 #[doc = " `coxph.detail(fit)`: one entry per unique death time."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxphDetail {
     #[pyo3(get)]
     pub time: Vec<f64>,

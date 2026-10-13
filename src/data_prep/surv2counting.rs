@@ -26,7 +26,7 @@ impl Repeated {
 
 #[doc = " Counting-process rows, in the order of the input rows they start from."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct Surv2CountingResult {
     #[doc = " Zero-based input row each interval starts from (all but the last"]
     #[doc = " row of every subject)."]

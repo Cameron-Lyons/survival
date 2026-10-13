@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 
 #[doc = " Numerical diagnostic curves in transformed time and coefficient units."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxZphSmooth {
     #[pyo3(get)]
     pub x: Vec<f64>,

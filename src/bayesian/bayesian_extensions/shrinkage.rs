@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SpikeSlabConfig {
     #[pyo3(get, set)]
     pub spike_var: f64,
@@ -40,7 +40,7 @@ impl SpikeSlabConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SpikeSlabResult {
     #[pyo3(get)]
     pub posterior_inclusion_prob: Vec<f64>,
@@ -195,7 +195,7 @@ pub fn spike_slab_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct HorseshoeConfig {
     #[pyo3(get, set)]
     pub tau_global: f64,
@@ -222,7 +222,7 @@ impl HorseshoeConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct HorseshoeResult {
     #[pyo3(get)]
     pub posterior_mean: Vec<f64>,

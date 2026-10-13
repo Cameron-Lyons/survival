@@ -2,7 +2,7 @@ use crate::internal::statistical::concordance_index_with_horizon;
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DriftConfig {
     #[pyo3(get, set)]
     pub window_size: usize,
@@ -133,7 +133,7 @@ fn compute_ks_statistic(reference: &[f64], current: &[f64]) -> (f64, f64) {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FeatureDriftResult {
     #[pyo3(get)]
     pub feature_name: String,
@@ -160,7 +160,7 @@ impl FeatureDriftResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DriftReport {
     #[pyo3(get)]
     pub feature_results: Vec<FeatureDriftResult>,
@@ -309,7 +309,7 @@ pub fn detect_drift(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PerformanceDriftResult {
     #[pyo3(get)]
     pub time_periods: Vec<String>,

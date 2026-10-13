@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use crate::internal::statistical::{chi2_cdf, ln_gamma};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum TimeVaryingTestType {
     SlopeTest,
     VarianceTest,
@@ -27,7 +27,7 @@ impl TimeVaryingTestType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TimeVaryingTestConfig {
     #[pyo3(get, set)]
     pub test_type: TimeVaryingTestType,
@@ -80,7 +80,7 @@ impl TimeVaryingTestConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TimeVaryingTestResult {
     #[pyo3(get)]
     pub feature_idx: usize,
@@ -115,7 +115,7 @@ impl TimeVaryingTestResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TimeVaryingAnalysis {
     #[pyo3(get)]
     pub results: Vec<TimeVaryingTestResult>,

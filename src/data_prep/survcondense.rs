@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 
 #[doc = " Which rows survive and their (possibly moved back) start times."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvcondenseResult {
     #[doc = " Start time of every input row after merging; only the rows in"]
     #[doc = " `keep` are meaningful."]

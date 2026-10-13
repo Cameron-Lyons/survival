@@ -58,7 +58,7 @@ fn validate_federated_config(config: &FederatedConfig) -> PyResult<()> {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FederatedConfig {
     #[pyo3(get, set)]
     pub n_rounds: usize,
@@ -247,7 +247,7 @@ fn fedprox_aggregate(client_models: &[ClientModel], global_weights: &[f64], mu: 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FederatedSurvivalResult {
     #[pyo3(get)]
     pub global_weights: Vec<f64>,
@@ -418,7 +418,7 @@ pub fn federated_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SecureAggregationResult {
     #[pyo3(get)]
     pub aggregated_gradient: Vec<f64>,
@@ -520,7 +520,7 @@ pub fn secure_aggregate(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PrivacyAccountant {
     epsilon_spent: f64,
     delta: f64,

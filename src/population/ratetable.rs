@@ -5,8 +5,8 @@ use pyo3::prelude::*;
 use std::fmt;
 
 #[doc = " R's `type` attribute of a `ratetable` dimension."]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum DimType {
     #[doc = " Type 1: a categorical dimension, indexed by level (`sex`, `race`)."]
     Factor = 1,
@@ -42,7 +42,7 @@ impl DimType {
 #[doc = " Outcome of R's `is.ratetable(x, verbose = TRUE)`: an empty `messages`"]
 #[doc = " list means the structure is a valid rate table."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RatetableCheck {
     #[pyo3(get)]
     pub valid: bool,
@@ -51,8 +51,8 @@ pub struct RatetableCheck {
 }
 
 #[doc = " A rate table with R's attributes."]
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RateTable {
     #[doc = " `dim(x)`."]
     #[pyo3(get)]
@@ -76,7 +76,7 @@ pub struct RateTable {
     #[doc = " Built-in table name, used to retain its R match-summary convention."]
     #[doc = " Tables constructed from raw attributes have no source-specific summary."]
     #[pyo3(get)]
-    pub source: Option<&'static str>,
+    pub source: Option<String>,
 }
 
 impl fmt::Display for RateTable {
@@ -353,6 +353,12 @@ impl RateTable {
 
 #[pymethods]
 impl RateTable {
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[doc = " Construct from R's attributes; `types` are R's integer codes 1-4."]
     #[new]
     #[pyo3(signature = (dims, dimid, dimnames, cutpoints, types, rates))]
@@ -426,7 +432,7 @@ pub fn is_ratetable(
 
 #[doc = " A proleptic Gregorian calendar date, the components of an R `Date`."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CalendarDate {
     #[pyo3(get)]
     pub year: i32,

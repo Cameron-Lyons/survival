@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CQRConformalResult {
     #[pyo3(get)]
     pub lower_bound: Vec<f64>,

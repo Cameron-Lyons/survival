@@ -3,7 +3,7 @@ use crate::internal::statistical::normal_cdf;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct GEEConfig {
     #[pyo3(get, set)]
@@ -37,7 +37,7 @@ impl GEEConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct GEEResult {
     #[pyo3(get)]
