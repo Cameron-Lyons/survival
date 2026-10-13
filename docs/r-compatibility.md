@@ -36,7 +36,9 @@ The interfaces themselves are described in the topic guides:
 
 The exported API inventory covers all 80 exports in stock survival 3.8-12.
 That inventory checks entry points; the independent references and deliberate
-differences below describe the tested argument and numerical behavior.
+differences below describe the tested argument and numerical behavior. R's
+`uspop2` population array (age by sex by year, 2000–2020) is the one data object
+that is not shipped.
 
 ## Deliberate fixes of R defects
 
@@ -542,6 +544,11 @@ this does not show.
   in interpolation. A null Cox model keeps the population row count when its
   rate-data frame has no columns, where R drops those rows and errors before
   prediction.
+- A `ratetable(age = ..., sex = ..., year = ...)` term in a `survexp` or
+  `pyears` formula, as older survival code wrote it, is read as the equivalent
+  `rmap`. R 3.8 ignores the term's arguments and looks for columns named after
+  the rate-table dimensions, so it agrees only when those names match and
+  otherwise fails ("object 'age' not found"); `pyears` fails outright.
 - `pyears(expect = "pyears")` with a zero rate uses the limit of
   `(1 - exp(-lambda t)) / lambda` at `lambda = 0`, which is `t`; R's C code
   divides by zero.
@@ -553,6 +560,10 @@ this does not show.
 
 ### Data preparation
 
+- `tmerge` takes numeric times; R also accepts `Date` times and returns `Date`
+  `tstart`/`tstop`. Convert dates to day counts first. `event(censor = )` sets
+  the value of censored rows, which R's `tmerge` ignores (a character event
+  censors at `""` there).
 - `survSplit`: a row with a missing endpoint is episode 2 as in R, keeps its
   status and gets `added = FALSE`; `survsplit.c` leaves its censor flag
   uninitialized, so R's status and `added` there depend on memory contents.

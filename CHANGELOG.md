@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- `bprobit()`'s inverse link clamps the linear predictor at
+  `±qnorm(.Machine$double.eps)`, as R's probit link does.
+- `survreg` on identical exact times stops with R's "initial iteration failed
+  (use starting estimates?)"; the initial variance is summed with compensation,
+  as R's long-double sums give, instead of leaving a degenerate fit.
+- `survreg(..., y=True)` stores interval rows with a zero lower bound as the
+  left-censored rows that were fitted, as R's `fit$y` does.
+- R bridge: `agexact.fit` fits a design without columns, as R does, and leaves
+  residuals unnamed for `rownames = NULL`; `survSplit` takes `timefix` and
+  `added`, keeps the data's column order for `~ .` and returns a double event.
 - Expression terms are labelled with R's deparsed text: `I(age>60)` gives the
   coefficient `I(age > 60)TRUE` and `I(age*1e-3)` gives `I(age * 0.001)`, as in
   R, instead of repeating the formula's spacing.
@@ -44,6 +54,14 @@
 
 ### Added
 
+- `xtfrm_surv` and `sort_surv` (R's `xtfrm.Surv` and `sort`), and `Surv` /
+  `Surv2` indexing with positions, slices and logical masks.
+- `ratetable()`, R's last unported export; a `ratetable(...)` term in a
+  `survexp` or `pyears` formula is read as `rmap`.
+- `summary_coxph`, `summary_coxph_penal`, `summary_aareg`, `summary_cch` and
+  `summary_survreg` are exported from `survival.r`, beside `summary_survfit`.
+- Cox and Aalen fit objects print a short repr (formula, coefficients, sizes)
+  instead of their engine handle, design and full arrays.
 - Formula terms accept R's `factor(levels =, labels =)`, `relevel()`,
   `interaction()`, `ifelse()`, `pmin()`/`pmax()`, `round()`, `signif()`,
   `floor()`, `ceiling()`, `trunc()`, `abs()`, `sign()`, `log(x, base)`,

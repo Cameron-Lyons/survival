@@ -830,6 +830,11 @@ pub(crate) fn intercept_only_fit(
     } else {
         (4.0 * coef[1]).ln() / 2.0
     };
+    if !vars.is_finite() {
+        return Err(SurvivalError::computation(
+            "initial iteration failed (use starting estimates?)",
+        ));
+    }
     let mut coef0 = vec![coef[0]];
     coef0.extend(std::iter::repeat_n(vars, nstrata));
     let (dg, ddg) = derfun(distribution, response, &yy, |_| vars.exp())?;

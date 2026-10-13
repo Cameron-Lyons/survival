@@ -675,6 +675,37 @@ def _matrix_frame(
     )
 
 
+def _left_censored_zero_bounds(response: Any, distribution: Any) -> Any:
+    """``survreg``'s stored ``y``: for a log-time family, interval rows with a lower
+    bound of 0 are the left-censored rows ``(upper, 1, 2)`` that were fitted."""
+
+    if (
+        not isinstance(response, Surv)
+        or response.type != "interval"
+        or response.time2 is None
+        or getattr(distribution, "transform", None) != _core.SurvregTransform.Log
+    ):
+        return response
+    fix = [
+        time == 0.0 and event == 3
+        for time, event in zip(response.time, response.event, strict=True)
+    ]
+    if not any(fix):
+        return response
+    return Surv._from_normalized(
+        time=[
+            upper if moved else time
+            for time, upper, moved in zip(response.time, response.time2, fix, strict=True)
+        ],
+        event=[2 if moved else event for event, moved in zip(response.event, fix, strict=True)],
+        start=response.start,
+        time2=[1.0 if moved else upper for upper, moved in zip(response.time2, fix, strict=True)],
+        surv_type=response.type,
+        states=response.states,
+        clabel=response.clabel,
+    )
+
+
 def survreg(
     formula: str | Surv | None = None,
     data: Any | None = None,
@@ -819,7 +850,7 @@ def survreg(
         weights=frame.weights,
         cluster=frame.cluster if fit.naive_variance_matrix is not None else None,
         x=frame.x if keep_x else None,
-        y=response if keep_y else None,
+        y=_left_censored_zero_bounds(response, distribution) if keep_y else None,
         model=frame.model,
         score=list(fit.score if penalized is None else penalized.score) if keep_score else None,
         assign=frame.assign,

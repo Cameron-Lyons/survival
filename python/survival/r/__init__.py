@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from .._factor import Factor
 from .._survival import AnovaCoxphResult
-from ._aareg import aareg
+from ._aareg import aareg, summary_aareg
 from ._aareg_print import print_aareg, print_summary_aareg
 from ._array_print import print_ratetable, print_surv, print_surv2
-from ._cch import cch
+from ._cch import cch, summary_cch
 from ._concordance import concordance, concordancefit, survConcordance, survConcordance_fit
 from ._coxph import (
     ClogitModel,
@@ -30,6 +30,8 @@ from ._coxph import (
     coxph_control,
     coxph_detail,
     coxph_wtest,
+    summary_coxph,
+    summary_coxph_penal,
 )
 from ._coxph_lowlevel import CoxFitResult, agexact_fit, agreg_fit, coxph_fit
 from ._coxph_print import (
@@ -117,6 +119,7 @@ from ._pyears import (
     is_ratetable,
     match_ratetable,
     pyears,
+    ratetable,
     ratetableDate,
     summary_pyears,
     summary_ratetable,
@@ -151,9 +154,11 @@ from ._surv_vector import (
     levels_surv,
     rep_surv,
     rev_surv,
+    sort_surv,
     tail_surv,
     transpose_surv,
     unique_surv,
+    xtfrm_surv,
 )
 from ._survdiff import survdiff
 from ._survfit import (
@@ -183,6 +188,9 @@ from ._survreg import (
     survreg_control,
     survreg_distributions,
     survregDtest,
+)
+from ._survreg import (
+    model_summary_survreg as summary_survreg,
 )
 from ._survreg_lowlevel import SurvregFitResult, survreg_fit
 from ._survreg_print import print_summary_survreg, print_survreg
@@ -393,6 +401,8 @@ __all__ = [
     "levels_surv",
     "rep_surv",
     "rev_surv",
+    "sort_surv",
+    "xtfrm_surv",
     "tail_surv",
     "transpose_surv",
     "unique_surv",
@@ -412,6 +422,7 @@ __all__ = [
     "nostutter",
     "nsk",
     "pyears",
+    "ratetable",
     "pspline",
     "pseudo",
     "predict",
@@ -468,9 +479,14 @@ __all__ = [
     "survobrien",
     "survexp_us",
     "survexp_usr",
+    "summary_aareg",
+    "summary_cch",
+    "summary_coxph",
+    "summary_coxph_penal",
     "summary_pyears",
     "summary_ratetable",
     "summary_survexp",
+    "summary_survreg",
     "summary_tmerge",
     "summary_survfit",
     "survfit",

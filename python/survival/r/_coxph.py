@@ -145,28 +145,28 @@ class CoxphModel:
     ``na_action`` (``fit$na.action``) the rows the ``na.action`` removed.
     """
 
-    fit: _core.CoxPHFit
+    fit: _core.CoxPHFit = field(repr=False)
     formula: str
-    design: _FormulaDesign
-    terms: _FormulaTerms
+    design: _FormulaDesign = field(repr=False)
+    terms: _FormulaTerms = field(repr=False)
     coef_names: tuple[str, ...]
-    assign: dict[str, tuple[int, ...]]
-    y: Surv
+    assign: dict[str, tuple[int, ...]] = field(repr=False)
+    y: Surv = field(repr=False)
     strata_levels: tuple[str, ...]
-    concordance: dict[str, float]
+    concordance: dict[str, float] = field(repr=False)
     n: int
     timefix: bool
     tt: bool
-    id: tuple[Any, ...] | None = None
-    cluster: tuple[Any, ...] | None = None
-    model: dict[str, Any] | None = None
+    id: tuple[Any, ...] | None = field(default=None, repr=False)
+    cluster: tuple[Any, ...] | None = field(default=None, repr=False)
+    model: dict[str, Any] | None = field(default=None, repr=False)
     weights_column: str | None = None
     id_column: str | None = None
-    penalized: Any | None = None
-    na_action: NaAction | None = None
+    penalized: Any | None = field(default=None, repr=False)
+    na_action: NaAction | None = field(default=None, repr=False)
     _frame: _ModelFrame | None = field(default=None, repr=False, compare=False)
-    cluster_levels: tuple[Any, ...] | None = None
-    id_levels: tuple[Any, ...] | None = None
+    cluster_levels: tuple[Any, ...] | None = field(default=None, repr=False)
+    id_levels: tuple[Any, ...] | None = field(default=None, repr=False)
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
     _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
     _matrix_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)

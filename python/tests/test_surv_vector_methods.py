@@ -135,3 +135,29 @@ def test_missing_rows_deduplicate_by_column_without_merging_statuses():
     x = r.Surv([math.nan, math.nan, math.nan, 0, -0.0], [0, 1, 0, 1, 1])
     assert r.duplicated_surv(x) == [False, False, True, False, True]
     assert r.duplicated_surv(x, from_last=True) == [True, False, False, True, False]
+
+
+def test_xtfrm_and_sort_order_responses_as_r_does():
+    right = r.Surv([3.0, 1.0, 3.0, None, 2.0, 1.0], [0, 1, 1, 1, 0, 0])
+    assert r.xtfrm_surv(right) == [5, 1, 4, None, 3, 2]
+    ordered = r.sort_surv(right)
+    assert list(ordered.time) == [1.0, 1.0, 2.0, 3.0, 3.0]
+    assert list(ordered.event) == [1, 0, 0, 1, 0]
+    assert list(r.sort_surv(right, decreasing=True).time) == [3.0, 3.0, 2.0, 1.0, 1.0]
+    counting = r.Surv([0.0, 1.0, 0.0, 2.0], [5.0, 5.0, 3.0, 5.0], [1, 0, 1, 1])
+    assert r.xtfrm_surv(counting) == [2, 4, 1, 3]
+    interval = r.Surv([0.0, 1.0, None, 2.0, 1.5], [2.0, 1.0, 3.0, 4.0, None], type="interval2")
+    assert r.xtfrm_surv(interval) == [2, 1, 4, 5, 3]
+    assert r.xtfrm_surv(r.Surv([3.0, 1.0, 3.0], [1, 0, 0], type="left")) == [3, 1, 2]
+
+
+def test_responses_take_python_indices():
+    response = r.Surv([3.0, 1.0, 3.0, 4.0, 2.0, 1.0], [0, 1, 1, 1, 0, 0])
+    assert len(response[1:4]) == 3
+    assert list(response[[0, -1]].time) == [3.0, 1.0]
+    assert list(response[[True, False, True, False, False, False]].time) == [3.0, 3.0]
+    assert list(response[2].event) == [1]
+    with pytest.raises(IndexError):
+        response[6]
+    with pytest.raises(IndexError):
+        response[[True, False]]

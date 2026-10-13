@@ -16,7 +16,7 @@ from ._coerce import (
     _scalar_or_vector,
     _warn_outside_package,
 )
-from ._surv import Surv, Surv2
+from ._surv import Surv, Surv2, is_na_surv
 
 
 def _response(x: Any) -> Any:
@@ -221,6 +221,53 @@ def rev_surv(x: Surv) -> Surv:
 
     x = _response(x)
     return x.subset(range(len(x) - 1, -1, -1))
+
+
+def xtfrm_surv(x: Surv) -> list[int | None]:
+    """R's ``xtfrm.Surv``, the ranks behind ``order`` and ``sort``: by time with deaths
+    before censorings at ties, interval rows at their midpoints (left-censored, exact,
+    interval, then right-censored), and counting data by stop time, status and start.
+    Missing rows rank as ``None``."""
+
+    x = _response(x)
+    if not isinstance(x, Surv):
+        raise TypeError("xtfrm_surv requires a Surv object")
+    missing = is_na_surv(x)
+    rows = [row for row, absent in enumerate(missing) if not absent]
+    event = x.event
+    keys: list[tuple[Any, ...]]
+    if x.type == "interval":
+        upper = x.time2 or x.time
+        place = {2: 0, 1: 1, 3: 2, 0: 3}
+        keys = [
+            (
+                (x.time[row] + upper[row]) / 2 if event[row] == 3 else x.time[row],
+                place[cast(int, event[row])],
+            )
+            for row in rows
+        ]
+    elif x.type == "left":
+        keys = [(x.time[row], event[row]) for row in rows]
+    elif x.start is None:
+        keys = [(x.time[row], event[row] == 0, event[row]) for row in rows]
+    else:
+        keys = [(x.time[row], event[row] == 0, event[row], x.start[row]) for row in rows]
+    order = sorted(range(len(rows)), key=keys.__getitem__)
+    ranks: list[int | None] = [None] * len(x)
+    for rank, position in enumerate(order, start=1):
+        ranks[rows[position]] = rank
+    return ranks
+
+
+def sort_surv(x: Surv, decreasing: bool = False) -> Surv:
+    """R's ``sort`` of a ``Surv``: rows in ``xtfrm_surv`` order, missing rows dropped."""
+
+    ranks = xtfrm_surv(x)
+    present = sorted((rank, row) for row, rank in enumerate(ranks) if rank is not None)
+    rows = [row for _rank, row in present]
+    if _normalize_bool_option(decreasing, "decreasing"):
+        rows.reverse()
+    return _response(x).subset(rows)
 
 
 def duplicated_surv(x: Surv, from_last: bool = False, **kwargs: Any) -> list[bool]:

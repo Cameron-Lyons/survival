@@ -293,3 +293,17 @@ def test_r_namespace_exports_are_available_from_the_root():
         assert name in survival.r.__all__, r_name
         if name not in R_FITTERS:
             assert getattr(survival, name) is getattr(survival.r, name), r_name
+
+
+def test_each_model_summary_method_is_exported():
+    import survival.r as r
+
+    for name in (
+        "summary_coxph",
+        "summary_coxph_penal",
+        "summary_aareg",
+        "summary_cch",
+        "summary_survreg",
+    ):
+        assert name in r.__all__
+        assert callable(getattr(r, name))

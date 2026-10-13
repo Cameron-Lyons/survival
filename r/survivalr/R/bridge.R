@@ -7153,9 +7153,6 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
 
   n <- nrow(x)
   nvar <- ncol(x)
-  if (nvar == 0L) {
-    stop("Cannot handle a null model + exact calculation (yet)", call. = FALSE)
-  }
   if (!missing(weights) && !is.null(weights) && length(weights) != n) {
     stop("weights and y have different numbers of rows", call. = FALSE)
   }
@@ -7199,13 +7196,13 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   if (missing(control) || is.null(control)) {
     control <- coxph.control()
   }
-  if (missing(rownames) || is.null(rownames)) {
+  if (missing(rownames)) {
     rownames <- rownames(y)
     if (is.null(rownames)) {
       rownames <- as.character(seq_len(n))
     }
   }
-  if (length(rownames) != n) {
+  if (!is.null(rownames) && length(rownames) != n) {
     stop("rownames and y have different lengths", call. = FALSE)
   }
 
@@ -7260,8 +7257,8 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
     coefficients = coefficients,
     var = variance,
     loglik = .as_numeric_vector(.result_field(agfit, "loglik")),
-    score = as.numeric(.result_field(agfit, "sctest")),
-    iter = as.integer(.result_field(agfit, "iter")),
+    score = if (nvar == 0L) 0 else as.numeric(.result_field(agfit, "sctest")),
+    iter = if (nvar == 0L) 1L else as.integer(.result_field(agfit, "iter")),
     linear.predictors = linear_predictors,
     means = means,
     method = "coxph"
@@ -8019,7 +8016,7 @@ statefig <- function(layout, connect, margin = 0.03, box = TRUE, cex = 1,
 
 survSplit <- function(formula, data, subset, na.action = na.pass, cut,
                       start = "tstart", id, zero = 0, episode,
-                      end = "tstop", event = "event", added) {
+                      end = "tstop", event = "event", added, timefix = TRUE) {
   if (missing(formula)) {
     stop("either a formula or the end and event arguments are required", call. = FALSE)
   }
@@ -8068,12 +8065,24 @@ survSplit <- function(formula, data, subset, na.action = na.pass, cut,
     event = event_name,
     episode = if (missing(episode)) NULL else as.character(episode),
     id = if (missing(id)) NULL else as.character(id),
-    zero = zero
+    zero = zero,
+    added = if (missing(added)) NULL else as.character(added),
+    timefix = isTRUE(timefix)
   )
   output <- .restore_r_column_classes(
     as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE),
     covariates
   )
+  if (is.integer(output[[event_name]])) {
+    output[[event_name]] <- as.numeric(output[[event_name]])
+  }
+  if (!missing(data) && is.data.frame(data) &&
+      identical(deparse(formula[[length(formula)]]), ".")) {
+    output <- output[c(
+      intersect(names(data), names(output)),
+      setdiff(names(output), names(data))
+    )]
+  }
   states <- attr(response, "states")
   if (!is.null(states)) {
     if (!missing(id)) {

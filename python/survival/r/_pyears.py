@@ -61,6 +61,8 @@ from ._formula import (
     _formula_columns,
     _formula_input_row_count,
     _formula_name,
+    _formula_named_option,
+    _formula_response_parts,
     _formula_rhs_terms,
     _literal_vector,
     _model_strata,
@@ -69,6 +71,7 @@ from ._formula import (
     _numeric_vector,
     _prepare_formula_inputs,
     _r_literal,
+    _split_top_level,
     _response_spec,
     _seq_length,
     _term_values,
@@ -259,6 +262,60 @@ def ratetableDate(x: Any) -> float | list[float]:
     if isinstance(x, str | _Date | _DateTime) or not hasattr(x, "__iter__"):
         return _ratetable_day(x)
     return [_ratetable_day(value) for value in _materialize_1d(x, "x")]
+
+
+def ratetable(**variables: Any) -> dict[str, list[Any]]:
+    """R's ``ratetable(...)``: the named rate-table variables as columns.
+
+    In a ``survexp`` or ``pyears`` formula, a ``ratetable(age = ..., sex = ...,
+    year = ...)`` term of older survival code is read as the equivalent ``rmap``.
+    """
+
+    if not variables:
+        raise ValueError("ratetable() requires named variables")
+    columns = {
+        name: [values]
+        if isinstance(values, str | bytes) or not hasattr(values, "__iter__")
+        else list(_materialize_1d(values, name))
+        for name, values in variables.items()
+    }
+    longest = max(len(values) for values in columns.values())
+    for name, values in columns.items():
+        if len(values) == 1 and longest > 1:
+            columns[name] = values * longest
+        elif len(values) != longest:
+            raise ValueError("ratetable() variables must have the same length")
+    return columns
+
+
+def _ratetable_term(
+    formula: str, rmap: Mapping[str, Any] | None
+) -> tuple[str, Mapping[str, Any] | None]:
+    """An older-style ``ratetable(name = expr, ...)`` formula term read as ``rmap``."""
+
+    lhs, sep, rhs = formula.partition("~")
+    if not sep or "ratetable(" not in rhs:
+        return formula, rmap
+    kept: list[str] = []
+    entries: dict[str, str] | None = None
+    for term in _split_top_level(rhs, "+"):
+        text = term.strip()
+        if not (text.startswith("ratetable(") and text.endswith(")")):
+            kept.append(text)
+            continue
+        if entries is not None:
+            raise ValueError("a formula can have only one ratetable() term")
+        entries = {}
+        for part in _formula_response_parts(text[len("ratetable(") : -1]):
+            named = _formula_named_option(part)
+            if named is None:
+                raise ValueError("ratetable() arguments must be named")
+            entries[named[0]] = named[1]
+    if entries is None:
+        return formula, rmap
+    if rmap is not None:
+        raise ValueError("use either rmap or a ratetable() term, not both")
+    return f"{lhs}~ {' + '.join(kept) or '1'}", entries
 
 
 def survexp_us() -> RateTable:
@@ -1236,6 +1293,9 @@ def pyears(
         )
     elif any(value is not None for value in (time, start, stop, event, group)):
         raise ValueError("formula calls cannot be combined with direct response or group arguments")
+    formula, rmap = _ratetable_term(formula, rmap)
+    if rmap is not None and table is None:
+        raise ValueError("No rate table specified")
     calls = _pyears_calls(formula, data)
     extra = (
         {}
@@ -1745,6 +1805,7 @@ def survexp(
         formula = "time ~ 1"
     if not isinstance(formula, str):
         raise ValueError("A formula argument is required")
+    formula, rmap = _ratetable_term(formula, rmap)
     from ._coxph import CoxphModel, _check_interaction_margins, _survfit_newdata, predict_coxph
     from ._coxphms import CoxphmsModel
 

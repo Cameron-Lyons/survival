@@ -240,3 +240,29 @@ def test_tcut_splits_calendar_dates_as_r_days():
     )
     assert list(cut.values) == [9617.0, 10651.0, 12053.0, 10043.0]
     assert list(cut.labels) == [" 9131+ thru 10227", "10227+ thru 12784"]
+
+
+def test_a_ratetable_term_is_read_as_rmap():
+    data = {
+        "futime": [100.0, 200.0, 300.0],
+        "agex": [60 * 365.25, 65 * 365.25, 70 * 365.25],
+        "sexx": ["male", "female", "male"],
+        "yr": [datetime.date(1990, 1, 1), datetime.date(1995, 6, 1), datetime.date(2000, 1, 1)],
+    }
+    expected = [0.9956186821717087, 0.9928494458300235, 0.9745966416098604]
+    term = r.survexp(
+        "futime ~ ratetable(age = agex, sex = sexx, year = yr)",
+        data,
+        ratetable=r.survexp_us(),
+        method="individual.s",
+    )
+    assert term == pytest.approx(expected, rel=1e-12)
+    with pytest.raises(ValueError, match="either rmap or a ratetable"):
+        r.survexp(
+            "futime ~ ratetable(age = agex)",
+            data,
+            ratetable=r.survexp_us(),
+            rmap={"age": "agex"},
+            method="individual.s",
+        )
+    assert r.ratetable(age=[1, 2], sex="male") == {"age": [1, 2], "sex": ["male", "male"]}
