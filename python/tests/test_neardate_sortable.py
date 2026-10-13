@@ -158,3 +158,23 @@ def test_nomatch_must_not_be_a_valid_row():
     with pytest.raises(ValueError, match="is a row of id2"):
         r.neardate([1, 2], [1, 1], [1, 5], [2, 3], nomatch=0)
     assert r.neardate([1, 2], [1, 1], [1, 5], [2, 3], nomatch=2) == [0, 2]
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.int32, np.uint16])
+def test_integer_id_arrays_match_label_inputs(dtype):
+    rng = np.random.default_rng(7)
+    id1 = rng.integers(0, 40, 300).astype(dtype)
+    id2 = rng.integers(0, 40, 250).astype(dtype)
+    y1 = rng.uniform(0, 50, 300)
+    y2 = rng.uniform(0, 50, 250)
+    y2[::9] = np.nan
+    for best in ("after", "prior"):
+        expected = r.neardate(
+            id1.tolist(),
+            id2.tolist(),
+            y1.tolist(),
+            [None if np.isnan(v) else v for v in y2],
+            best=best,
+            nomatch=-1,
+        )
+        assert r.neardate(id1, id2, y1, y2, best=best, nomatch=-1) == expected

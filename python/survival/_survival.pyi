@@ -13072,10 +13072,10 @@ def multiple_imputation_survival(
     seed: int | None = None,
 ) -> MultipleImputationResult: ...
 def neardate(
-    id1: Sequence[int | float | str],
-    y1: Sequence[float],
-    id2: Sequence[int | float | str],
-    y2: Sequence[float],
+    id1: ArrayLike | Sequence[int | float | str],
+    y1: ArrayLike,
+    id2: ArrayLike | Sequence[int | float | str],
+    y2: ArrayLike,
     best: str = "after",
 ) -> list[int | None]: ...
 def negative_binomial_frailty(

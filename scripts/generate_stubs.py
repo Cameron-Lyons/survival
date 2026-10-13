@@ -78,6 +78,10 @@ PARAM_OVERRIDES: dict[str, dict[str, str]] = {
         "fun": "str | Callable[[NDArray[np.float64]], float | np.number[Any] | NDArray[Any]] | None",
     },
     "cox_zph": {"fit": "CoxPHFit | CoxpenalFit", "transform": "str | Sequence[float] | None"},
+    "neardate": {
+        "id1": "ArrayLike | Sequence[int | float | str]",
+        "id2": "ArrayLike | Sequence[int | float | str]",
+    },
     **{
         name: {"normal_draws": "ArrayLike | Callable[[int, int], ArrayLike] | None"}
         for name in ("yates_risk", "yates_survival", "yates_response", "yates_predict")

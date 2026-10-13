@@ -75,17 +75,52 @@ pub fn neardate<I: SubjectId>(
         .collect())
 }
 
+#[doc = " Subject ids from Python: an int64 array is read without per-element"]
+#[doc = " conversion, anything else as int, float or str labels."]
+pub(crate) enum NeardateIds {
+    Ints(Vec<i64>),
+    Labels(Vec<IdValue>),
+}
+
+impl NeardateIds {
+    fn into_labels(self) -> Vec<IdValue> {
+        match self {
+            Self::Ints(values) => values.into_iter().map(IdValue::Int).collect(),
+            Self::Labels(values) => values,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl<'py> FromPyObject<'_, 'py> for NeardateIds {
+    type Error = PyErr;
+
+    fn extract(obj: pyo3::Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
+        use numpy::PyReadonlyArray1;
+
+        if let Ok(array) = obj.extract::<PyReadonlyArray1<'py, i64>>() {
+            return Ok(Self::Ints(array.as_array().to_vec()));
+        }
+        Ok(Self::Labels(obj.extract()?))
+    }
+}
+
 #[doc = " Python entry point of [`neardate`]."]
 #[pyfunction(name = "neardate")]
 #[pyo3(signature = (id1, y1, id2, y2, best="after"))]
 pub(crate) fn neardate_py(
-    id1: Vec<IdValue>,
-    y1: Vec<f64>,
-    id2: Vec<IdValue>,
-    y2: Vec<f64>,
+    py: Python<'_>,
+    id1: NeardateIds,
+    y1: crate::internal::numpy_utils::FloatVec,
+    id2: NeardateIds,
+    y2: crate::internal::numpy_utils::FloatVec,
     best: &str,
 ) -> PyResult<Vec<Option<usize>>> {
-    Ok(neardate(&id1, &y1, &id2, &y2, NeardateBest::parse(best)?)?)
+    let best = NeardateBest::parse(best)?;
+    Ok(py.detach(|| match (id1, id2) {
+        (NeardateIds::Ints(id1), NeardateIds::Ints(id2)) => neardate(&id1, &y1, &id2, &y2, best),
+        (id1, id2) => neardate(&id1.into_labels(), &y1, &id2.into_labels(), &y2, best),
+    })?)
 }
 
 #[cfg(test)]
