@@ -14,7 +14,6 @@ on the Cox fit of the stacked data and put its rows back on the data rows throug
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -860,10 +859,8 @@ def fit_multistate(
     cluster: Sequence[int] | np.ndarray | None = None
     if frame.cluster is not None:
         if not use_robust:
-            warnings.warn(
-                "cluster specified with robust=FALSE, cluster ignored",
-                RuntimeWarning,
-                stacklevel=3,
+            _warn_outside_package(
+                "cluster specified with robust=FALSE, cluster ignored", RuntimeWarning
             )
         cluster = _cluster_codes(frame.cluster)
     elif use_robust:
@@ -900,7 +897,7 @@ def fit_multistate(
         columns = " ".join(str(idx + 1) for idx in aliased)
         raise ValueError(f"X matrix deemed to be singular; variable {columns}")
     for message in _cox_fit_diagnostic_messages(engine, iter_max, eps, toler_inf):
-        warnings.warn(message, RuntimeWarning, stacklevel=3)
+        _warn_outside_package(message, RuntimeWarning)
 
     labels = list(tmap.labels)
     user_strata = None if frame.strata is None else np.asarray(frame.strata, dtype=np.int32)

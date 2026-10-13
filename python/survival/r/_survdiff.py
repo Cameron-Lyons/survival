@@ -8,6 +8,7 @@ from typing import Any
 from .. import _survival as _core
 from ._coerce import (
     _finite_float,
+    _first_argument,
     _is_bool_like,
     _pop_dotted_keyword,
     _subset_indices,
@@ -28,7 +29,14 @@ from ._formula import (
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._survfit import _curve_factor
-from ._types import NaAction, StrataFactor, SurvdiffResult, _InteractionTerm, _ModelCovariateTerm
+from ._types import (
+    _MISSING,
+    NaAction,
+    StrataFactor,
+    SurvdiffResult,
+    _InteractionTerm,
+    _ModelCovariateTerm,
+)
 
 
 def _response_check(y: Surv) -> None:
@@ -147,7 +155,7 @@ def _k_sample(
 
 
 def survdiff(
-    response: Any,
+    response: Any = _MISSING,
     data: Any | None = None,
     subset: Any | None = None,
     na_action: str | None = "na.omit",
@@ -163,6 +171,8 @@ def survdiff(
     in ``data``; an ``offset(expected)`` term of expected survival probabilities gives the
     one-sample test.  A ``Surv`` object with ``group`` compares its groups.
     """
+
+    response = _first_argument(response, kwargs, "response", "formula", "survdiff")
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.omit")
     if kwargs:

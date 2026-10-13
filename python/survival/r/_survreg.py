@@ -12,7 +12,6 @@ calls the kernel and labels the result.
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import chain
@@ -50,6 +49,7 @@ from ._coerce import (
     _quantile_vector,
     _rowsum_groups,
     _scalar_or_vector,
+    _warn_outside_package,
 )
 from ._fit import (
     _empty_prediction,
@@ -617,10 +617,9 @@ def _formula_frame(
         offset = _offset_vector(data, terms.offsets, n)
     if terms.clusters:
         if cluster is not None:
-            warnings.warn(
+            _warn_outside_package(
                 "cluster appears both in a formula and as an argument, formula term ignored",
                 RuntimeWarning,
-                stacklevel=3,
             )
         else:
             cluster = _formula_cluster_values(data, terms, n)
@@ -800,10 +799,8 @@ def survreg(
 
     distribution = _resolve_distribution(dist, parms)
     if distribution.scale is not None and scale_value != 0.0:
-        warnings.warn(
-            f"{distribution.name} has a fixed scale, user specified value ignored",
-            RuntimeWarning,
-            stacklevel=2,
+        _warn_outside_package(
+            f"{distribution.name} has a fixed scale, user specified value ignored", RuntimeWarning
         )
         scale_value = 0.0
     if scale_value < 0.0:
@@ -860,9 +857,7 @@ def survreg(
             nstrat=len(frame.strata_levels) or None,
         )
         if control.iter_max > 1 and not fit.converged:
-            warnings.warn(
-                "Ran out of iterations and did not converge", RuntimeWarning, stacklevel=2
-            )
+            _warn_outside_package("Ran out of iterations and did not converge", RuntimeWarning)
 
     return SurvregModel(
         fit=fit,
@@ -1453,10 +1448,8 @@ def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> AnovaResult:
     responses = [fit.formula.partition("~")[0].strip() if fit.formula else "" for fit in fits]
     keep = [response == responses[0] for response in responses]
     if not all(keep):
-        warnings.warn(
-            "Some fit objects deleted because response differs from the first model",
-            RuntimeWarning,
-            stacklevel=3,
+        _warn_outside_package(
+            "Some fit objects deleted because response differs from the first model", RuntimeWarning
         )
     fits = [fit for fit, same in zip(fits, keep, strict=True) if same]
     if len(fits) == 1:
@@ -1643,7 +1636,7 @@ def _random_sample_count(n: Any) -> int:
 
     if isinstance(value, complex | np.complexfloating):
         if value.imag != 0:
-            warnings.warn("imaginary parts discarded in coercion", RuntimeWarning, stacklevel=3)
+            _warn_outside_package("imaginary parts discarded in coercion", RuntimeWarning)
         value = value.real
     try:
         if isinstance(value, str):
@@ -1657,7 +1650,7 @@ def _random_sample_count(n: Any) -> int:
             numeric = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
         if isinstance(value, str):
-            warnings.warn("NAs introduced by coercion", RuntimeWarning, stacklevel=3)
+            _warn_outside_package("NAs introduced by coercion", RuntimeWarning)
         raise ValueError("invalid arguments") from exc
     if not math.isfinite(numeric):
         raise ValueError("invalid arguments")

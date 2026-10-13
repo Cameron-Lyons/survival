@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import math
 import numbers
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -888,7 +887,7 @@ def rttright(
                 raise ValueError("weights must be non-negative")
             casewt.append(weight)
     if mf.terms.offsets and warn_offset:
-        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+        _warn_outside_package("Offset term ignored", RuntimeWarning)
     groups = _model_strata(mf)
     strata_codes = None
     if groups is not None:
@@ -1348,7 +1347,7 @@ def _apply_tmerge_argument(
         raise ValueError(f"attempt to turn time-dependent covariate {name} into an event")
     prior = newdata.get(name)
     if kind == "tdc" and name not in tdcvar and prior is not None:
-        warnings.warn(f"replacement of variable '{name}'", stacklevel=3)
+        _warn_outside_package(f"replacement of variable '{name}'")
         prior = None
     if kind in {"event", "cumevent"} and name not in tevent:
         prior = None

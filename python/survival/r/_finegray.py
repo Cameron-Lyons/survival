@@ -8,7 +8,6 @@ times) and the per-stratum split (the ``finegray`` kernel).
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Sequence
 from typing import Any
 
@@ -21,6 +20,7 @@ from ._coerce import (
     _normalize_bool_option,
     _pop_dotted_keyword,
     _select_rows,
+    _warn_outside_package,
 )
 from ._formula import _model_variables, _strata_keep, _strata_specs, model_frame
 from ._names import _make_names
@@ -40,7 +40,7 @@ def _etype_index(states: Sequence[str], etype: Any) -> int:
     if any(value is None for value in index) or not index:
         raise ValueError("etype argument has a state that is not in the data")
     if len(index) > 1:
-        warnings.warn("only the first endpoint was used", stacklevel=3)
+        _warn_outside_package("only the first endpoint was used")
     return int(index[0] or 1)
 
 

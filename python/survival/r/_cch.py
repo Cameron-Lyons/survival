@@ -4,7 +4,6 @@ the Prentice/SelfPrentice/LinYing/Borgan estimators run in Rust."""
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,6 +15,7 @@ from ._coerce import (
     _materialize_1d,
     _normalize_bool_option_with_default,
     _pop_dotted_keyword,
+    _warn_outside_package,
 )
 from ._fit import _model_frame, _r_levels
 from ._formula import _column_source
@@ -57,8 +57,8 @@ def _stratified_cohort_sizes(cohort_size: Any, levels: Sequence[str]) -> list[in
         if len(sizes) != len(levels):
             raise ValueError("cohort.size and stratum do not match")
         if any(level not in sizes for level in levels):
-            warnings.warn(
-                "stratum levels and names(cohort.size) do not agree", RuntimeWarning, stacklevel=3
+            _warn_outside_package(
+                "stratum levels and names(cohort.size) do not agree", RuntimeWarning
             )
             return list(sizes.values())
         return [sizes[level] for level in levels]
@@ -112,20 +112,16 @@ def cch(
     robust_value = _normalize_bool_option_with_default(robust, "robust", False)
     if stratified:
         if robust_value:
-            warnings.warn(
-                "`robust' not implemented for stratified analysis.", RuntimeWarning, stacklevel=2
+            _warn_outside_package(
+                "`robust' not implemented for stratified analysis.", RuntimeWarning
             )
         if stratum is None:
             raise ValueError(f"method ({method_name}) requires 'stratum'")
     else:
         if method_name != "LinYing" and robust_value:
-            warnings.warn(
-                f"`robust' ignored for  method ({method_name})", RuntimeWarning, stacklevel=2
-            )
+            _warn_outside_package(f"`robust' ignored for  method ({method_name})", RuntimeWarning)
         if stratum is not None:
-            warnings.warn(
-                f"'stratum' ignored for method ({method_name})", RuntimeWarning, stacklevel=2
-            )
+            _warn_outside_package(f"'stratum' ignored for method ({method_name})", RuntimeWarning)
         stratum = None
     robust_value = robust_value and method_name == "LinYing"
 
@@ -141,7 +137,7 @@ def cch(
     if y.type not in {"right", "counting"}:
         raise ValueError(f'Cox model doesn\'t support "{y.type}" survival data')
     if frame.terms.offsets:
-        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+        _warn_outside_package("Offset term ignored", RuntimeWarning)
     if not frame.names:
         raise ValueError("cch formula must contain at least one covariate")
     id_values = list(frame.id or [])
