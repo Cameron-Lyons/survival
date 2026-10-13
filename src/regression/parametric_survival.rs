@@ -1234,7 +1234,7 @@ pub(crate) fn survreg_from_codes(
 #[pyfunction(name = "survreg_fit")]
 #[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, robust=None, nstrat=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn survreg_fit_py(
+pub(crate) fn survreg_fit_py(
     py: Python<'_>,
     data: &SurvregData,
     distribution: &SurvregDistribution,

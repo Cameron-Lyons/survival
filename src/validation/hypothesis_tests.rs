@@ -100,7 +100,11 @@ pub fn score_test(score: &[f64], information: &[Vec<f64>]) -> SurvivalResult<Tes
 }
 
 #[pyfunction(name = "lrt_test")]
-pub fn lrt_test_py(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult<TestResult> {
+pub(crate) fn lrt_test_py(
+    loglik_full: f64,
+    loglik_reduced: f64,
+    df: usize,
+) -> PyResult<TestResult> {
     Ok(likelihood_ratio_test(loglik_full, loglik_reduced, df)?)
 }
 
@@ -108,7 +112,7 @@ pub fn lrt_test_py(loglik_full: f64, loglik_reduced: f64, df: usize) -> PyResult
 #[doc = " matrix as nested rows."]
 #[pyfunction(name = "wald_test")]
 #[pyo3(signature = (coef, var, init=None))]
-pub fn wald_test_py(
+pub(crate) fn wald_test_py(
     coef: Vec<f64>,
     var: Vec<Vec<f64>>,
     init: Option<Vec<f64>>,
@@ -117,7 +121,7 @@ pub fn wald_test_py(
 }
 
 #[pyfunction(name = "score_test")]
-pub fn score_test_py(score: Vec<f64>, information: Vec<Vec<f64>>) -> PyResult<TestResult> {
+pub(crate) fn score_test_py(score: Vec<f64>, information: Vec<Vec<f64>>) -> PyResult<TestResult> {
     Ok(score_test(&score, &information)?)
 }
 

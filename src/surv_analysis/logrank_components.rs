@@ -368,7 +368,7 @@ pub fn survdiff_one_sample(
 #[pyfunction(name = "survdiff")]
 #[pyo3(signature = (time, status, group, start=None, strata=None, rho=0.0, timefix=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn survdiff_py(
+pub(crate) fn survdiff_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,
@@ -391,7 +391,7 @@ pub fn survdiff_py(
 #[doc = " Python binding of [`survdiff_one_sample`]."]
 #[pyfunction(name = "survdiff_one_sample")]
 #[pyo3(signature = (status, expected, rho=0.0))]
-pub fn survdiff_one_sample_py(
+pub(crate) fn survdiff_one_sample_py(
     py: Python<'_>,
     status: IntVec,
     expected: FloatVec,

@@ -479,7 +479,7 @@ pub fn tmerge_step<I: SubjectId>(
 #[pyfunction(name = "tmerge_step")]
 #[pyo3(signature = (id, start, stop, update_id, update_time, kind, value=None, missing=None, prior=None, default=f64::NAN, delay=0.0, na_rm=true, check_ids=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn tmerge_step_py(
+pub(crate) fn tmerge_step_py(
     py: Python<'_>,
     id: Vec<IdValue>,
     start: FloatVec,

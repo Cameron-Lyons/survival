@@ -865,7 +865,7 @@ fn stacked_fit(
 #[pyfunction(name = "turnbull")]
 #[pyo3(signature = (time1, time2, status, weights=None, group=None, conf_level=0.95, conf_type="log", timefix=true, se_fit=true, robust=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn turnbull_py(
+pub(crate) fn turnbull_py(
     py: Python<'_>,
     time1: Vec<f64>,
     time2: Vec<f64>,

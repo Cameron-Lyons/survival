@@ -1462,7 +1462,7 @@ pub fn survfitkm(
 #[pyfunction(name = "survfitkm")]
 #[pyo3(signature = (time, status, start=None, weights=None, strata=None, id=None, cluster=None, stype=1, ctype=1, se_fit=true, conf_int=0.95, conf_type="log", conf_lower="usual", start_time=None, robust=None, influence=0, entry=false, timefix=true, reverse=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitkm_py(
+pub(crate) fn survfitkm_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

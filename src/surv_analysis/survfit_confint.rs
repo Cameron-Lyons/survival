@@ -243,7 +243,7 @@ pub fn survfit_confint(
 #[pyfunction(name = "survfit_confint")]
 #[pyo3(signature = (p, se, logse=true, conf_type="log", conf_int=0.95, selow=None, ulimit=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfit_confint_py(
+pub(crate) fn survfit_confint_py(
     py: Python<'_>,
     p: FloatVec,
     se: FloatVec,

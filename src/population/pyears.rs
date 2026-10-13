@@ -434,7 +434,7 @@ pub fn pyears(
     scale=365.25,
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn pyears_py(
+pub(crate) fn pyears_py(
     py: Python<'_>,
     stop: FloatVec,
     start: Option<FloatVec>,

@@ -76,7 +76,7 @@ pub(crate) fn wald_statistic(var: &Array2<f64>, b: &[f64], toler_chol: f64) -> S
 #[doc = " `coxph.wtest(var, b, toler.chol)`; `b` is given as one row per test."]
 #[pyfunction(name = "coxph_wtest")]
 #[pyo3(signature = (var, b, toler_chol=1e-9))]
-pub fn coxph_wtest_py(
+pub(crate) fn coxph_wtest_py(
     var: Vec<Vec<f64>>,
     b: Vec<Vec<f64>>,
     toler_chol: f64,

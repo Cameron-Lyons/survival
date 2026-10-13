@@ -67,7 +67,7 @@ pub fn totimeline<I: SubjectId>(
 
 #[doc = " Python entry point of [`totimeline`]."]
 #[pyfunction(name = "totimeline")]
-pub fn totimeline_py(
+pub(crate) fn totimeline_py(
     id: Vec<IdValue>,
     time1: Vec<f64>,
     time2: Vec<f64>,

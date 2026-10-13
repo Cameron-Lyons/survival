@@ -161,7 +161,7 @@ pub fn royston(input: &RoystonInput<'_>) -> SurvivalResult<RoystonResult> {
 #[pyfunction(name = "royston")]
 #[pyo3(signature = (eta, time, status, loglik, n_event, n_coef, entry_times=None, ties=true, adjust=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn royston_py(
+pub(crate) fn royston_py(
     eta: Vec<f64>,
     time: Vec<f64>,
     status: Vec<i32>,

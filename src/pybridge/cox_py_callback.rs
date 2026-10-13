@@ -61,7 +61,7 @@ pub(crate) fn evaluate_penalty(
 
 #[pyfunction]
 #[pyo3(signature = (which, coef, fexpr))]
-pub(crate) fn cox_callback(
+pub fn cox_callback(
     which: i32,
     coef: FloatVec,
     fexpr: &Bound<'_, PyAny>,

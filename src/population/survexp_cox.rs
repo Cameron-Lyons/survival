@@ -201,7 +201,7 @@ pub fn survexp_cox_prepared(
 #[pyfunction(name = "survexp_cox_prepared")]
 #[pyo3(signature=(time, cumhaz, lengths, risk, strata, group, weights, y=None, times=None, method="ederer"))]
 #[allow(clippy::too_many_arguments)]
-pub fn survexp_cox_prepared_py(
+pub(crate) fn survexp_cox_prepared_py(
     py: Python<'_>,
     time: FloatVec,
     cumhaz: FloatVec,
@@ -418,7 +418,7 @@ pub fn survexp_cox(
 
 #[pyfunction(name = "survexp_cox")]
 #[pyo3(signature=(curves, group, weights, y=None, times=None, method="ederer"))]
-pub fn survexp_cox_py(
+pub(crate) fn survexp_cox_py(
     py: Python<'_>,
     curves: Vec<CoxSurvfitCurve>,
     group: Vec<usize>,

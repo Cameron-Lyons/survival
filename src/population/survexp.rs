@@ -255,7 +255,7 @@ pub fn survexp(ratetable: &RateTable, input: SurvexpInput<'_>) -> SurvivalResult
 #[pyfunction(name = "survexp")]
 #[pyo3(signature = (ratetable, positions, y=None, group=None, times=None, method=None, cohort=true, conditional=false, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
-pub fn survexp_py(
+pub(crate) fn survexp_py(
     py: Python<'_>,
     ratetable: &RateTable,
     positions: FloatMatrix,

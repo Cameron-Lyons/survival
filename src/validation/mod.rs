@@ -32,7 +32,8 @@ pub(crate) mod uncertainty;
 pub(crate) mod uno_c_index_module;
 pub(crate) mod yates;
 
-pub use anova::{AnovaCoxphResult, AnovaKind, AnovaRow, anova_coxph, anova_coxph_py};
+pub(crate) use anova::anova_coxph_py;
+pub use anova::{AnovaCoxphResult, AnovaKind, AnovaRow, anova_coxph};
 pub use bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
 pub use brier::{BrierInput, BrierResult, brier};
 pub use calibration_module::{
@@ -40,8 +41,9 @@ pub use calibration_module::{
     TdAUCResult, TimeDependentCalibrationResult, advanced_calibration_metrics, calibration,
     predict_cox, risk_stratification, td_auc, time_dependent_calibration,
 };
-pub use chisq::pchisq_py;
-pub use cipoisson::{CipoissonMethod, CipoissonResult, cipoisson, cipoisson_py};
+pub(crate) use chisq::pchisq_py;
+pub(crate) use cipoisson::cipoisson_py;
+pub use cipoisson::{CipoissonMethod, CipoissonResult, cipoisson};
 pub use conformal::{
     BootstrapConformalResult, CQRConformalResult, CVPlusCalibrationResult, CVPlusConformalResult,
     ConformalCalibrationPlot, ConformalCalibrationResult, ConformalDiagnostics,
@@ -76,14 +78,14 @@ pub use hyperparameter::{
     BenchmarkResult, HyperparameterResult, HyperparameterSearchConfig, NestedCVResult,
     SearchStrategy, benchmark_models, hyperparameter_search, nested_cross_validation,
 };
-pub use hypothesis_tests::{
-    TestResult, likelihood_ratio_test, lrt_test_py, score_test, score_test_py, wald_test,
-    wald_test_py,
-};
+pub use hypothesis_tests::{TestResult, likelihood_ratio_test, score_test, wald_test};
 pub use landmark::{
     ConditionalSurvivalResult, HazardRatioResult, LandmarkResult, LifeTableResult,
-    SurvivalAtTimeResult, conditional_survival_py, hazard_ratio_py, landmark_analysis_batch_py,
-    landmark_analysis_py, life_table_py, survival_at_times_py,
+    SurvivalAtTimeResult,
+};
+pub(crate) use landmark::{
+    conditional_survival_py, hazard_ratio_py, landmark_analysis_batch_py, landmark_analysis_py,
+    life_table_py, survival_at_times_py,
 };
 pub use logrank::{LogRankResult, logrank_test};
 pub use meta_analysis::{
@@ -105,18 +107,22 @@ pub use reporting::{
 };
 pub use rmst::{
     ChangepointInfo, NNTResult, RMSTOptimalThresholdResult, RmstComparisonResult, RmstGroupResult,
-    SurvfitCurveQuantiles, SurvfitSummaryRow, number_needed_to_treat, number_needed_to_treat_py,
-    quantile_survfit_curves_py, rmst_comparison, rmst_comparison_py, rmst_optimal_threshold,
+    SurvfitCurveQuantiles, SurvfitSummaryRow, number_needed_to_treat, rmst_comparison,
+    rmst_optimal_threshold,
+};
+pub(crate) use rmst::{
+    number_needed_to_treat_py, quantile_survfit_curves_py, rmst_comparison_py,
     rmst_optimal_threshold_py, survmean_curves_py,
 };
-pub use royston::{RoystonInput, RoystonResult, royston, royston_py};
+pub(crate) use royston::royston_py;
+pub use royston::{RoystonInput, RoystonResult, royston};
+pub(crate) use survcheck::survcheck_py;
 pub use survcheck::{
     SurvCheckEvents, SurvCheckFlags, SurvCheckInput, SurvCheckIstate, SurvCheckProblem,
-    SurvCheckResult, SurvCheckTransitions, survcheck, survcheck_py,
+    SurvCheckResult, SurvCheckTransitions, survcheck,
 };
-pub use survobrien::{
-    SurvObrienExpansion, SurvObrienInput, survobrien, survobrien_expand, survobrien_py,
-};
+pub(crate) use survobrien::survobrien_py;
+pub use survobrien::{SurvObrienExpansion, SurvObrienInput, survobrien, survobrien_expand};
 pub use time_dependent_auc_module::{
     CumulativeDynamicAUCResult, TimeDepAUCResult, cumulative_dynamic_auc,
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
@@ -136,9 +142,12 @@ pub use uno_c_index_module::{
 pub use yates::{
     YatesContrast, YatesCurves, YatesEstimate, YatesInput, YatesPrediction, YatesPredictor,
     YatesResult, YatesSgttInput, YatesSgttResult, YatesSimulation, YatesTest, population_means,
-    population_means_py, yates, yates_estimable, yates_estimable_py, yates_py, yates_risk_py,
-    yates_sgtt, yates_sgtt_py, yates_simulate, yates_simulate_with_draws, yates_survival_py,
-    yates_survival_summary, yates_survival_summary_py,
+    yates, yates_estimable, yates_sgtt, yates_simulate, yates_simulate_with_draws,
+    yates_survival_summary,
+};
+pub(crate) use yates::{
+    population_means_py, yates_estimable_py, yates_py, yates_risk_py, yates_sgtt_py,
+    yates_survival_py, yates_survival_summary_py,
 };
 #[cfg(feature = "python")]
-pub use yates::{yates_predict_py, yates_response_py};
+pub(crate) use yates::{yates_predict_py, yates_response_py};

@@ -830,13 +830,13 @@ pub fn quantile_survfit_from(
 
 #[doc = " Python binding of [`survfit0`]."]
 #[pyfunction(name = "survfit0")]
-pub fn survfit0_py(py: Python<'_>, fit: &SurvfitKMResult) -> SurvfitKMResult {
+pub(crate) fn survfit0_py(py: Python<'_>, fit: &SurvfitKMResult) -> SurvfitKMResult {
     py.detach(|| survfit0(fit))
 }
 
 #[doc = " Python binding of [`survfit0_aj`]."]
 #[pyfunction(name = "survfit0_aj")]
-pub fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult {
+pub(crate) fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult {
     py.detach(|| survfit0_aj(fit))
 }
 
@@ -844,7 +844,7 @@ pub fn survfit0_aj_py(py: Python<'_>, fit: &SurvfitAJResult) -> SurvfitAJResult 
 #[doc = " `\"individual\"` or a number."]
 #[pyfunction(name = "survmean")]
 #[pyo3(signature = (fit, scale=1.0, rmean="common"))]
-pub fn survmean_py(
+pub(crate) fn survmean_py(
     py: Python<'_>,
     fit: &SurvfitKMResult,
     scale: f64,
@@ -857,7 +857,7 @@ pub fn survmean_py(
 #[doc = " Python binding of [`summary_survfit`] and [`summary_survfit_times`]."]
 #[pyfunction(name = "summary_survfit")]
 #[pyo3(signature = (fit, times=None, censored=false, extend=false, dosum=None))]
-pub fn summary_survfit_py(
+pub(crate) fn summary_survfit_py(
     py: Python<'_>,
     fit: &SurvfitKMResult,
     times: Option<FloatVec>,
@@ -876,7 +876,7 @@ pub fn summary_survfit_py(
 #[doc = " quartiles and `start_time` (R's `x$start.time`) to 0."]
 #[pyfunction(name = "quantile_survfit")]
 #[pyo3(signature = (fit, probs=None, conf_int=true, scale=1.0, tolerance=None, start_time=0.0))]
-pub fn quantile_survfit_py(
+pub(crate) fn quantile_survfit_py(
     py: Python<'_>,
     fit: &SurvfitKMResult,
     probs: Option<FloatVec>,

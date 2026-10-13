@@ -129,7 +129,7 @@ pub fn strata(
 #[doc = " and per-observation codes."]
 #[pyfunction(name = "strata")]
 #[pyo3(signature = (names, levels, codes, na_group=false, shortlabel=false, sep=", "))]
-pub fn strata_py(
+pub(crate) fn strata_py(
     names: Vec<String>,
     levels: Vec<Vec<String>>,
     codes: Vec<Vec<Option<usize>>>,

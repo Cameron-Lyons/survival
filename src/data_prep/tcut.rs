@@ -122,7 +122,7 @@ pub fn tcut(
 #[doc = " Python entry point of [`tcut`]."]
 #[pyfunction(name = "tcut")]
 #[pyo3(signature = (x, breaks, labels=None, scale=1.0))]
-pub fn tcut_py(
+pub(crate) fn tcut_py(
     x: Vec<f64>,
     breaks: Vec<f64>,
     labels: Option<Vec<String>>,

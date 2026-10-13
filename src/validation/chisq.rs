@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 #[doc = " and `q <= 0` has lower tail 0."]
 #[pyfunction(name = "pchisq")]
 #[pyo3(signature = (q, df, lower_tail=true, log_p=false))]
-pub fn pchisq_py(q: f64, df: f64, lower_tail: bool, log_p: bool) -> f64 {
+pub(crate) fn pchisq_py(q: f64, df: f64, lower_tail: bool, log_p: bool) -> f64 {
     dist::pchisq(q, df, lower_tail, log_p)
 }
 

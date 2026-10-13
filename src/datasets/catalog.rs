@@ -547,13 +547,13 @@ datasets! {
 
 #[doc = " R's `cancer` is the same data frame as `lung` (`identical(cancer, lung)`)."]
 #[pyfunction]
-pub(crate) fn load_cancer(py: Python<'_>) -> PyResult<Py<PyDict>> {
+pub fn load_cancer(py: Python<'_>) -> PyResult<Py<PyDict>> {
     LUNG.to_pydict(py)
 }
 
 #[doc = " R's `leukemia` is the same data frame as `aml` (`identical(leukemia, aml)`)."]
 #[pyfunction]
-pub(crate) fn load_leukemia(py: Python<'_>) -> PyResult<Py<PyDict>> {
+pub fn load_leukemia(py: Python<'_>) -> PyResult<Py<PyDict>> {
     AML.to_pydict(py)
 }
 

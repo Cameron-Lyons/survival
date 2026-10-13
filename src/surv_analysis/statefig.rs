@@ -140,7 +140,7 @@ pub fn statefig(
 #[doc = " centres directly."]
 #[pyfunction(name = "statefig")]
 #[pyo3(signature = (connect, states, layout=None, column=false, coordinates=None))]
-pub fn statefig_py(
+pub(crate) fn statefig_py(
     connect: Vec<Vec<f64>>,
     states: Vec<String>,
     layout: Option<Vec<usize>>,

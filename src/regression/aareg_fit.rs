@@ -1165,7 +1165,7 @@ pub fn aareg_fit(data: &AaregData, options: &AaregOptions) -> SurvivalResult<Aar
     test_cluster=None
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn aareg_fit_py(
+pub(crate) fn aareg_fit_py(
     py: Python<'_>,
     stop: FloatVec,
     status: IntVec,

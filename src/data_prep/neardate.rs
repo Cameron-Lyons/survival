@@ -78,7 +78,7 @@ pub fn neardate<I: SubjectId>(
 #[doc = " Python entry point of [`neardate`]."]
 #[pyfunction(name = "neardate")]
 #[pyo3(signature = (id1, y1, id2, y2, best="after"))]
-pub fn neardate_py(
+pub(crate) fn neardate_py(
     id1: Vec<IdValue>,
     y1: Vec<f64>,
     id2: Vec<IdValue>,

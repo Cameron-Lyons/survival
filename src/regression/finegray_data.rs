@@ -162,7 +162,7 @@ fn validate_finegray_inputs(
 
 #[doc = " Python entry point of [`finegray`]."]
 #[pyfunction(name = "finegray")]
-pub fn finegray_py(
+pub(crate) fn finegray_py(
     py: Python<'_>,
     tstart: FloatVec,
     tstop: FloatVec,

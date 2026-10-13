@@ -91,7 +91,7 @@ pub fn summary_survexp(
 #[doc = " Python entry point with row-major `time x curve` matrices."]
 #[pyfunction(name = "summary_survexp")]
 #[pyo3(signature = (time, surv, n_risk, times=None, scale=1.0, method=String::new()))]
-pub fn summary_survexp_py(
+pub(crate) fn summary_survexp_py(
     time: Vec<f64>,
     surv: Vec<Vec<f64>>,
     n_risk: Vec<Vec<f64>>,

@@ -259,7 +259,7 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
 #[pyfunction(name = "rttright")]
 #[pyo3(signature = (time, status, start=None, strata=None, weights=None, id=None, times=None, timefix=true, renorm=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn rttright_py(
+pub(crate) fn rttright_py(
     time: Vec<f64>,
     status: Vec<i32>,
     start: Option<Vec<f64>>,

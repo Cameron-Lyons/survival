@@ -41,10 +41,10 @@ pub(crate) mod survreg_lowlevel;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
-pub use aareg_fit_module::{
-    AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit, aareg_fit_py,
-};
-pub use agexact::{AgexactFit, AgexactOptions, agexact_fit, agexact_py};
+pub(crate) use aareg_fit_module::aareg_fit_py;
+pub use aareg_fit_module::{AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit};
+pub(crate) use agexact::agexact_py;
+pub use agexact::{AgexactFit, AgexactOptions, agexact_fit};
 pub use blogit::LinkFunctionParams;
 pub use cause_specific_cox_module::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
@@ -53,10 +53,10 @@ pub use cause_specific_cox_module::{
 pub use cch::{CchFitResult, cch, cch_borgan, cch_borgan_fit, cch_fit};
 pub use cox_optimizer::TieMethod;
 #[cfg(feature = "python")]
-pub use cox_zph::cox_zph_py;
+pub(crate) use cox_zph::cox_zph_py;
 pub use cox_zph::{CoxZph, CoxZphTest, ZphFit, ZphTransform, cox_zph};
 #[cfg(feature = "python")]
-pub use cox_zph_smooth::cox_zph_smooth_py;
+pub(crate) use cox_zph_smooth::cox_zph_smooth_py;
 pub use cox_zph_smooth::{CoxZphSmooth, cox_zph_smooth};
 pub use coxpenal::{
     COXPENAL_OUTER_MAX, CoxPenalty, CoxPenaltyTerms, CoxpenalData, CoxpenalFit, CoxpenalOptions,
@@ -69,10 +69,12 @@ pub use coxph::{
     Basehaz, CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxTermsPrediction, CoxphData,
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,
 };
-pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
+pub(crate) use coxph_detail::coxph_detail_py;
+pub use coxph_detail::{CoxphDetail, coxph_detail};
 pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
 pub use coxph_lowlevel::{CoxphFitResult, coxph_fit_raw};
-pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
+pub(crate) use coxph_wtest::coxph_wtest_py;
+pub use coxph_wtest::{CoxphWtest, wald_tests};
 pub use coxphms::coxphms_fit;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
@@ -90,8 +92,10 @@ pub use fast_cox_module::{
     FastCoxCVConfig, FastCoxConfig, FastCoxPath, FastCoxPathConfig, FastCoxResult,
     FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
-pub use finegray_data::{FineGrayOutput, finegray, finegray_py};
-pub use finegray_expand::{FineGrayInput, finegray_expand, finegray_expand_py};
+pub(crate) use finegray_data::finegray_py;
+pub use finegray_data::{FineGrayOutput, finegray};
+pub(crate) use finegray_expand::finegray_expand_py;
+pub use finegray_expand::{FineGrayInput, finegray_expand};
 pub use finegray_regression_module::{
     CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
 };
@@ -113,8 +117,9 @@ pub use longitudinal_survival::{
     TimeVaryingCoxResult, joint_longitudinal_model, landmark_cox_analysis,
     longitudinal_dynamic_pred, time_varying_cox,
 };
+pub(crate) use parametric_survival::survreg_fit_py;
 pub use parametric_survival::{
-    SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_py, survreg_fit_with_nstrata,
+    SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_with_nstrata,
 };
 pub use penalized::{PenaltyControl, PenaltyControlInput, PenaltyControlState, PenaltyController};
 pub use recurrent_events::{

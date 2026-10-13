@@ -127,7 +127,7 @@ pub fn aeq_times(time: &[f64]) -> Vec<f64> {
 #[doc = " Python entry point of [`aeq_surv`]."]
 #[pyfunction(name = "aeq_surv")]
 #[pyo3(signature = (time, time2=None, tolerance=None))]
-pub fn aeq_surv_py(
+pub(crate) fn aeq_surv_py(
     time: Vec<f64>,
     time2: Option<Vec<f64>>,
     tolerance: Option<f64>,

@@ -1529,7 +1529,7 @@ pub fn survfitaj(
 #[pyfunction(name = "survfitaj")]
 #[pyo3(signature = (time, state, states, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, se_fit=true, conf_int=0.95, conf_type="log", influence=false, start_time=None, p0=None, entry=false, time0=false, timefix=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitaj_py(
+pub(crate) fn survfitaj_py(
     py: Python<'_>,
     time: FloatVec,
     state: IntVec,

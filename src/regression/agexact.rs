@@ -108,7 +108,7 @@ pub fn agexact_fit(data: CoxphData, options: &AgexactOptions) -> SurvivalResult<
 #[pyfunction(name = "agexact")]
 #[pyo3(signature = (start, stop, event, x, offset=None, strata=None, init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn agexact_py(
+pub(crate) fn agexact_py(
     py: Python<'_>,
     start: FloatVec,
     stop: FloatVec,

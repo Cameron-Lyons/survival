@@ -466,7 +466,7 @@ pub fn aggregate_survfit_with(
 #[cfg(feature = "python")]
 #[pyfunction(name = "aggregate_survfit")]
 #[pyo3(signature = (surv=None, pstate=None, by=None, fun=None, **_kwargs))]
-pub fn aggregate_survfit_py(
+pub(crate) fn aggregate_survfit_py(
     py: Python<'_>,
     surv: Option<FloatMatrix>,
     pstate: Option<FloatArray3>,
