@@ -1225,7 +1225,7 @@ of the historical reference JSON files were changed. The differences are:
 
 | Checks | Fixture family | Reason |
 | ---: | --- | --- |
-| 7 | Aalen regression, veteran data | The reference continues through rank-deficient risk sets and contains missing coefficients and values around 10¹⁵. The port truncates at the last nonsingular risk set and returns finite estimates. |
+| 7 | Aalen regression, veteran data | The reference continues through rank-deficient risk sets and contains missing coefficients and values around 10¹⁵. The port truncates at the last nonsingular risk set and returns finite estimates. An earlier singular risk set (common with (start, stop] data, such as `heart` before the first transplant) gives an aliased covariate no step and no time weight, R's `qr.coef` with the missing value as zero; R's own step there comes from rounding in its risk sums. |
 | 6 | Cox concordance | Exact linear-predictor ties depend on floating-point/BLAS rounding. The reference and this platform classify a few tied pairs differently. |
 | 1 | Exact counting-process Cox deviance residuals | The reference's unclassed fit dispatch returns martingale residuals for a deviance request. The port computes deviance residuals. |
 | 18 | Interval-censored AFT residual derivatives | The reference has opposite signs in some scale derivatives. The port's likelihood derivatives are checked against finite differences for every censoring type and distribution family. |
