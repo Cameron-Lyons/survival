@@ -9112,6 +9112,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
   }
   result <- .as_model_summary_list(result)
   model_type <- if (inherits(object, "survival_py_survreg")) "survreg" else "coxph"
+  result$model_type <- model_type
   robust_key <- if (identical(model_type, "survreg")) "robust" else "used_robust"
   robust <- isTRUE(as.logical(result[[robust_key]]))
   coefficient_table <- .as_coefficient_table(
