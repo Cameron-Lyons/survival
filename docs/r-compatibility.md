@@ -828,6 +828,15 @@ this does not show.
 - Python `subset` is zero-based and accepts integer positions or a full-length
   Boolean mask; negative and fractional positions are refused. The R bridge uses
   R's indexing rules.
+- Row and column numbers follow one convention per kind of value:
+
+  | Value | Base |
+  | --- | --- |
+  | Arguments that select rows or columns (`subset`, `pcols`, `assign`) and the row numbers that functions return (`neardate`, the `data_prep` helpers, `assign2`) | zero-based, as Python indexes |
+  | Row numbers recorded in a result as R records them (`NaAction.rows`, `SurvcheckProblem.row`, the curve number of `survfit` rows) | one-based, as in R, so they read like R's output |
+
+  `neardate(nomatch=)` refuses a value that is also a valid zero-based row of
+  `id2`, such as R's habitual `nomatch=0`; use None (the default) or -1.
 - Last value carried forward in timeline data runs over the data columns the
   formula reads, not R's evaluated model-frame variables: `I(x + z)` carries
   each column forward on its own.

@@ -152,3 +152,9 @@ def test_all_missing_character_reference_dates_raise_r_error(which):
     query = [None] if which else ["a"]
     with pytest.raises(ValueError, match="No valid entries in data set 2"):
         r.neardate([1], [1], query, [None])
+
+
+def test_nomatch_must_not_be_a_valid_row():
+    with pytest.raises(ValueError, match="is a row of id2"):
+        r.neardate([1, 2], [1, 1], [1, 5], [2, 3], nomatch=0)
+    assert r.neardate([1, 2], [1, 1], [1, 5], [2, 3], nomatch=2) == [0, 2]

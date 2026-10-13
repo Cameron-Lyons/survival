@@ -207,6 +207,15 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
+    if (
+        isinstance(nomatch, int | np.integer)
+        and not isinstance(nomatch, bool)
+        and 0 <= nomatch < len(id2_values)
+    ):
+        raise ValueError(
+            f"nomatch={nomatch} is a row of id2: rows are zero-based, so R's nomatch=0 "
+            "is ambiguous here; use None or -1"
+        )
     missing1 = _missing_flags(id1_values)
     id1_labels = [
         "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
