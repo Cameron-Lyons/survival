@@ -109,8 +109,13 @@ benchmarks.
 - Breslow and Efron evaluations reuse predictor, risk and risk-set buffers for
   every trial coefficient vector. Exact ties use a subset dynamic program with
   `k + 1` states, `k = min(d, n - d)` for d deaths among n at risk, computing the
-  complementary subset when most rows die together, with stable mixing of log
-  weights and anchored means. Counting-process exact fits walk each stratum once by
+  complementary subset when most rows die together, with anchored means. Weights
+  are scaled by the largest risk score and each state keeps a power-of-two
+  exponent, so the recursion runs in linear arithmetic; a risk set whose log-risk
+  spread exceeds 256 mixes log weights instead. Right-censored fits keep one
+  running recursion per stratum, as R's `coxexact.c` does, and read each tie of at
+  most `n / 2` deaths from it: about `n L` cells per evaluation for L levels,
+  instead of `n d` per tie. Counting-process exact fits walk each stratum once by
   decreasing stop and entry time, using a running accumulator for growing risk sets
   and a tree of 16-row blocks otherwise: O(n log n) preparation and
   O(n log n (p² + 1)) per untied evaluation in general.

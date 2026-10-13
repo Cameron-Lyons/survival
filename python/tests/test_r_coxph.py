@@ -99,6 +99,26 @@ def test_coxph_matches_r_components(fit):
     assert fit.model is None
 
 
+def test_exact_ties_across_growing_stratified_risk_sets():
+    rows = range(600)
+    data = {
+        "time": [min((i * 7) % 23 + 1, 20) for i in rows],
+        "status": [float(i % 3 != 0) for i in rows],
+        "x1": [math.sin(i) for i in rows],
+        "x2": [i % 5 - 2 for i in rows],
+        "g": [i % 2 for i in rows],
+    }
+    fit = r.coxph("Surv(time, status) ~ x1 + x2 + strata(g)", data, ties="exact")
+    assert fit.coefficients == approx([0.0068047576233009, -0.00428642314089259])
+    assert fit.loglik == approx([-1289.22711794687, -1289.21716938647])
+    assert fit.var == approx(
+        [
+            [0.00599135120327077, -2.65020555292925e-05],
+            [-2.65020555292925e-05, 0.00148898333870292],
+        ]
+    )
+
+
 def test_coxph_ties_init_and_control(ovarian):
     breslow = r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, ties="breslow")
     assert breslow.method == "breslow"

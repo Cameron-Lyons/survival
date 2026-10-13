@@ -6,7 +6,10 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2, CowArray, Ix1, Ix2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::exact_ties::{ExactRiskAccumulator, ExactRiskTree, exact_tied_moments};
+use super::exact_ties::{
+    ExactRiskAccumulator, ExactRiskTree, ExactTiedSweep, exact_tied_moments, linear_sweep_shift,
+    sweep_levels,
+};
 
 mod workspace;
 use workspace::EvaluationWorkspace;
@@ -783,8 +786,40 @@ impl CoxData {
         Ok(loglik)
     }
 
+    fn exact_sweep(
+        &self,
+        stratum_start: usize,
+        stratum_end: usize,
+        log_risk: &[f64],
+    ) -> Option<ExactTiedSweep> {
+        let mut tied = Vec::new();
+        let mut time_end = stratum_end;
+        loop {
+            let event_time = self.time[time_end];
+            let mut time_start = time_end;
+            while time_start > stratum_start && self.time[time_start - 1] == event_time {
+                time_start -= 1;
+            }
+            let deaths = (time_start..=time_end)
+                .filter(|&person| self.status[person] != 0)
+                .count();
+            let nrisk = stratum_end + 1 - time_start;
+            if deaths >= 2 && deaths <= nrisk / 2 {
+                tied.push((deaths, nrisk));
+            }
+            if time_start == stratum_start {
+                break;
+            }
+            time_end = time_start - 1;
+        }
+        let levels = sweep_levels(stratum_end + 1 - stratum_start, &mut tied);
+        let shift = linear_sweep_shift(&log_risk[stratum_start..=stratum_end])?;
+        (levels >= 2).then(|| ExactTiedSweep::new(levels, self.covar.ncols(), shift))
+    }
+
     fn coxexact(&self, beta: &[f64], u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
+        let row = self.rows();
         let mut loglik = 0.0;
         let mut stratum_start = 0usize;
 
@@ -795,6 +830,7 @@ impl CoxData {
             let mut risk_indices = Vec::with_capacity(stratum_end - stratum_start + 1);
             let mut death_indices = Vec::new();
             let mut singleton_moments = ExactRiskAccumulator::new(self.covar.ncols());
+            let mut sweep = self.exact_sweep(stratum_start, stratum_end, &log_risk);
             let mut time_end = stratum_end;
             loop {
                 let event_time = self.time[time_end];
@@ -810,11 +846,32 @@ impl CoxData {
                     .skip(time_start)
                 {
                     singleton_moments.add(person, log_weight, &self.covar);
+                    if let Some(sweep) = sweep.as_mut() {
+                        sweep.add(log_weight, row(person));
+                    }
                 }
                 death_indices.clear();
                 death_indices
                     .extend((time_start..=time_end).filter(|&person| self.status[person] != 0));
-                if !death_indices.is_empty() {
+                let swept = sweep.as_ref().filter(|sweep| {
+                    (2..=sweep.levels()).contains(&death_indices.len())
+                        && death_indices.len() <= risk_indices.len() / 2
+                });
+                if let Some(moments) =
+                    swept.map(|sweep| sweep.moments(death_indices.len(), death_indices.len()))
+                {
+                    loglik += apply_exact_event_moments(
+                        &self.covar,
+                        &self.weights,
+                        u,
+                        imat,
+                        &death_indices,
+                        &linear_predictors,
+                        moments.log_denom,
+                        &moments.mean,
+                        moments.covariance.view(),
+                    );
+                } else if !death_indices.is_empty() {
                     loglik += if death_indices.len() == 1 && risk_indices.len() > 1 {
                         apply_exact_event_moments(
                             &self.covar,
