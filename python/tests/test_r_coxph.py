@@ -645,7 +645,7 @@ def test_basehaz_matches_r(fit, strata_fit):
 
 def test_cox_zph_matches_r(fit):
     zph = r.cox_zph(fit)
-    assert isinstance(zph, r.CoxZPHResult)
+    assert isinstance(zph, r.CoxZphResult)
     assert [row["name"] for row in zph.table] == ["age", "rx", "GLOBAL"]
     assert [row["chisq"] for row in zph.table] == approx(
         [0.224265642197981, 0.779606879884519, 0.918669928516088], rel=1e-6
@@ -693,7 +693,7 @@ def test_cox_zph_matches_r(fit):
 
 def test_coxph_detail_matches_r(fit):
     detail = r.coxph_detail(fit)
-    assert isinstance(detail, r.CoxPHDetailResult)
+    assert isinstance(detail, r.CoxphDetailResult)
     assert len(detail.time) == 12
     assert detail.time[:3] == [59.0, 115.0, 156.0]
     assert detail.nevent[:3] == [1, 1, 1]

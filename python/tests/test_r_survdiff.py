@@ -20,7 +20,7 @@ def _close(actual, expected, rel=1e-8):
 def test_survdiff_formula_matches_r_logrank():
     result = r.survdiff("Surv(time, status) ~ group", _toy_data())
 
-    assert isinstance(result, r.SurvDiffResult)
+    assert isinstance(result, r.SurvdiffResult)
     assert result.n == [4, 4]
     assert result.groups == ["group=A", "group=B"]
     assert result.strata is None

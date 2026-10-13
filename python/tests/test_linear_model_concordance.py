@@ -18,7 +18,7 @@ REFERENCE = json.loads(
 
 
 def model(case, spec, stored=True):
-    return r.YatesModel(
+    return r.YatesFitAdapter(
         spec["formula"],
         case["data"],
         [np.nan if x is None else x for x in spec["coefficients"]],
@@ -69,7 +69,7 @@ def test_external_model_matches_r(case, stored):
 
 @pytest.mark.parametrize("container", ["lists", "numpy", "dataframe"])
 def test_newdata_omits_response_and_covariates_together(container):
-    fit = r.YatesModel(
+    fit = r.YatesFitAdapter(
         "y ~ x + offset(o)",
         {"y": [1, 4, 2, 3], "x": [2, 3, 1, 4], "o": [0, 0.5, -0.5, 1]},
         [1.0, 0.3],
@@ -140,7 +140,7 @@ def test_external_concordance_requires_numeric_vector_response(response):
     data = {"x": [1, 2, 3, 4]}
     if response is not None:
         data["y"] = response
-    fit = r.YatesModel("~ x" if response is None else "y ~ x", data, [1.0, 0.3], np.eye(2))
+    fit = r.YatesFitAdapter("~ x" if response is None else "y ~ x", data, [1.0, 0.3], np.eye(2))
     with pytest.raises(ValueError, match="numeric vector"):
         r.concordance(fit)
 
@@ -177,7 +177,7 @@ def test_stored_training_ties_are_distinct_from_reconstructed_predictions():
 @pytest.mark.parametrize("timefix", [True, False])
 def test_numeric_responses_retain_near_ties_in_training(timefix):
     data = {"y": [1.0, 1.0 + 1e-12, 2.0, 3.0], "x": [2.0, 1.0, 3.0, 4.0]}
-    fit = r.YatesModel("y ~ x", data, [0.0, 1.0], np.eye(2))
+    fit = r.YatesFitAdapter("y ~ x", data, [0.0, 1.0], np.eye(2))
     raw = r.concordancefit(data["y"], data["x"], timefix=timefix)
     training = r.concordance(fit, timefix=timefix)
     assert (

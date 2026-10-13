@@ -44,7 +44,7 @@ def lung_weibull(lung):
 
 def test_survreg_weibull_matches_r_object(lung_weibull):
     fit = lung_weibull
-    assert isinstance(fit, _survreg.SurvregModelResult)
+    assert isinstance(fit, _survreg.SurvregModel)
     assert r.coef(fit) == pytest.approx([6.27485305842, -0.0122570255889, 0.382085139659])
     assert fit.coefficients == r.coef(fit)
     assert fit.scale == pytest.approx([0.754050947641])
@@ -69,7 +69,7 @@ def test_survreg_weibull_matches_r_object(lung_weibull):
     assert len(fit.linear_predictors) == 228
     assert len(fit.y) == 228
     assert r.aic(fit) == pytest.approx(-2 * -1147.05443143 + 8)
-    assert repr(fit).startswith("SurvregModelResult(formula='Surv(time, status) ~ age + sex', ")
+    assert repr(fit).startswith("SurvregModel(formula='Surv(time, status) ~ age + sex', ")
 
 
 def test_survreg_fixed_scale(lung):

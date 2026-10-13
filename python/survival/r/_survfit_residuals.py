@@ -18,8 +18,8 @@ from ._fit import _excluded_rows, _pad_rows
 from ._survfit import _survfit_data_from_fit, _SurvfitData
 from ._types import (
     CoxSurvfitResult,
+    ResidualsSurvfitResult,
     SurvfitMultiStateResult,
-    SurvfitResidualsResult,
     SurvfitResult,
 )
 
@@ -196,14 +196,14 @@ def _residuals_result(
     type_: str,
     *,
     excluded: list[int] | None = None,
-) -> SurvfitResidualsResult:
+) -> ResidualsSurvfitResult:
     multistate = isinstance(fit, SurvfitMultiStateResult)
     excluded = [] if excluded is None else excluded
     ids = _pad_rows(_row_labels(frame, result.id), excluded)
     for row in excluded:
         ids[row] = row + 1
     curve = [int(code) + 1 for code in result.curve] if fit.strata is not None else None
-    return SurvfitResidualsResult(
+    return ResidualsSurvfitResult(
         resid=_pad_survfit_rows(result.values, excluded),
         time=result.times,
         id=ids,
@@ -216,7 +216,7 @@ def _residuals_result(
     )
 
 
-def _residual_frame(result: SurvfitResidualsResult) -> dict[str, list[Any]]:
+def _residual_frame(result: ResidualsSurvfitResult) -> dict[str, list[Any]]:
     """R's ``data.frame = TRUE`` layout: one row per (id, column, time), times slowest."""
 
     n = len(result.id)

@@ -22,7 +22,7 @@ for case in REFERENCE["cases"]:
 
 def fitted(name):
     values = REFERENCE["fits"][name]
-    return survival.r.CoxZPHResult(
+    return survival.r.CoxZphResult(
         table=[],
         x=values["x"],
         time=values["time"],

@@ -231,7 +231,7 @@ class _FormulaDesign:
 
 
 @dataclass(frozen=True)
-class CchModelResult:
+class CchModel:
     """R's ``cch`` object: the engine fit plus the formula metadata ``cch()`` keeps.
 
     ``sc_ids`` are the ids of the rows of the Borgan estimators' ``sc`` (R's rownames), in
@@ -284,7 +284,7 @@ class CchModelResult:
 
 
 @dataclass(frozen=True)
-class AaregModelResult:
+class AaregModel:
     n: list[int]
     times: list[float] = field(repr=False)
     n_risk: list[float] = field(repr=False)
@@ -529,7 +529,7 @@ class _Timeline:
 
 
 @dataclass(frozen=True)
-class SurvExpResult:
+class SurvexpResult:
     """R's ``survexp`` object: expected survival at ``time`` for each group.
 
     ``surv`` and ``n_risk`` are vectors for one curve and row-major
@@ -569,10 +569,10 @@ class SurvExpResult:
 
 
 @dataclass(frozen=True)
-class SurvExpSummary:
+class SummarySurvexpResult:
     """Selected expected-survival rows, with one vector or a time-by-curve matrix.
 
-    ``strata`` names the curve columns, as in :class:`SurvExpResult`.
+    ``strata`` names the curve columns, as in :class:`SurvexpResult`.
     """
 
     time: list[float]
@@ -634,7 +634,7 @@ class PyearsResult:
         return labels
 
 
-class FineGrayFrame(dict[str, list[Any]]):
+class FinegrayFrame(dict[str, list[Any]]):
     """Column-oriented Fine-Gray expansion with the selected endpoint attached."""
 
     event: Any
@@ -651,14 +651,14 @@ class FineGrayFrame(dict[str, list[Any]]):
                 self[str(name)] = values if isinstance(values, list) else list(values)
         self.event = event
 
-    def copy(self) -> FineGrayFrame:
+    def copy(self) -> FinegrayFrame:
         """Return a shallow copy that retains the selected endpoint."""
 
-        return FineGrayFrame(self, event=self.event)
+        return FinegrayFrame(self, event=self.event)
 
 
 @dataclass(frozen=True)
-class TMergeOperation:
+class TmergeOperation:
     """A time-dependent update consumed by :func:`tmerge`."""
 
     kind: str
@@ -669,7 +669,7 @@ class TMergeOperation:
 
 
 @dataclass(frozen=True)
-class TMergeFrame(Mapping[str, list[Any]]):
+class TmergeFrame(Mapping[str, list[Any]]):
     """Column-oriented start/stop data with retained ``tmerge`` metadata."""
 
     columns: dict[str, list[Any]]
@@ -687,8 +687,8 @@ class TMergeFrame(Mapping[str, list[Any]]):
     def __len__(self) -> int:
         return len(self.columns)
 
-    def copy(self) -> TMergeFrame:
-        return TMergeFrame(
+    def copy(self) -> TmergeFrame:
+        return TmergeFrame(
             columns={name: values.copy() for name, values in self.columns.items()},
             tname=dict(self.tname),
             tevent=dict(self.tevent),
@@ -698,7 +698,7 @@ class TMergeFrame(Mapping[str, list[Any]]):
 
 
 @dataclass(frozen=True)
-class CoxZPHResult:
+class CoxZphResult:
     """R's ``cox.zph`` object: ``table`` rows (``name``, ``chisq``, ``df``, ``p``), the
     transformed times ``x``, the death times ``time``, the scaled Schoenfeld residual
     matrix ``y`` (one column per term, named by ``names``) and its variance ``var``.
@@ -715,7 +715,7 @@ class CoxZPHResult:
 
     def subset(
         self, indices: Sequence[int], table_indices: Sequence[int] | None = None
-    ) -> CoxZPHResult:
+    ) -> CoxZphResult:
         """``[.cox.zph``: keep the selected terms (0-based), dropping deaths that
         played no role in them (strata by covariate interactions).  ``table_indices``
         are the rows of the table the same subscript selects (R applies it to the
@@ -732,7 +732,7 @@ class CoxZPHResult:
         keep = list(range(len(y)))
         if self.strata is not None:
             keep = [idx for idx, row in enumerate(y) if not all(math.isnan(v) for v in row)]
-        return CoxZPHResult(
+        return CoxZphResult(
             table=[self.table[row] for row in rows],
             x=[self.x[idx] for idx in keep],
             time=[self.time[idx] for idx in keep],
@@ -745,7 +745,7 @@ class CoxZPHResult:
 
 
 @dataclass(frozen=True)
-class CoxPHDetailResult:
+class CoxphDetailResult:
     """R's ``coxph.detail`` list: one entry per unique event time (``time``,
     ``nevent``, ``nrisk``, ``hazard``, ``varhaz``, ``wtrisk``, ``means``, ``score``,
     ``imat``) plus the ``x``/``y`` data in ``rorder`` order."""
@@ -779,7 +779,7 @@ class CoxPHDetailResult:
 
 
 @dataclass(frozen=True)
-class CoxPHWTestResult:
+class CoxphWtestResult:
     """R's ``coxph.wtest`` list."""
 
     test: list[float]
@@ -788,7 +788,7 @@ class CoxPHWTestResult:
 
 
 @dataclass(frozen=True)
-class CoxBaseHazardResult:
+class BasehazResult:
     """R's ``basehaz`` data frame: ``hazard`` (one column per newdata row when
     ``newdata`` had several), ``time`` and the ``strata`` labels."""
 
@@ -1297,7 +1297,7 @@ class ResponsePrint:
 
 
 @dataclass(frozen=True)
-class RateTablePrint:
+class RatetablePrint:
     """Full-precision rates in column-major order plus bounded array display.
 
     ``max_print`` limits text only. ``rates`` retains every cell, and
@@ -1317,7 +1317,7 @@ class RateTablePrint:
 
 
 @dataclass(frozen=True)
-class SurvfitQuantileResult:
+class QuantileSurvfitResult:
     """``quantile.survfit``: rows are curves, columns ``probs``; the limits when requested."""
 
     probs: list[float]
@@ -1328,7 +1328,7 @@ class SurvfitQuantileResult:
 
 
 @dataclass(frozen=True)
-class SurvfitResidualsResult:
+class ResidualsSurvfitResult:
     """``residuals.survfit``: ``resid[row][time]``, or ``resid[row][column][time]`` for a
     multi-state curve where ``columns`` are the states (or the transitions of ``cumhaz``).
 
@@ -1346,7 +1346,7 @@ class SurvfitResidualsResult:
 
 
 @dataclass(frozen=True)
-class SurvDiffResult:
+class SurvdiffResult:
     """R's ``survdiff`` object.
 
     ``obs`` and ``exp`` are per group, or ``groups x strata`` matrices when the formula has a
@@ -1370,7 +1370,7 @@ SurvfitConfidenceIntervalResult = _core.ConfidenceBands
 
 
 @dataclass(frozen=True)
-class SurvCheckProblem:
+class SurvcheckProblem:
     """Rows and subjects of one kind of data problem (R's ``overlap``, ``gap``, ``jump``,
     ``teleport``): 1-based row numbers of the data given to ``survcheck`` (after ``subset``,
     before ``na.action``) as R reports them, and the distinct subject identifiers involved.
@@ -1381,7 +1381,7 @@ class SurvCheckProblem:
 
 
 @dataclass(frozen=True)
-class SurvCheckResult:
+class SurvcheckResult:
     """R's ``survcheck`` object."""
 
     states: list[str]
@@ -1392,10 +1392,10 @@ class SurvCheckResult:
     n_id: int
     n_observations: int
     n_transitions: int
-    overlap: SurvCheckProblem | None
-    gap: SurvCheckProblem | None
-    jump: SurvCheckProblem | None
-    teleport: SurvCheckProblem | None
+    overlap: SurvcheckProblem | None
+    gap: SurvcheckProblem | None
+    jump: SurvcheckProblem | None
+    teleport: SurvcheckProblem | None
     y: Surv
     id: list[Any]
     na_action: list[int] | None
@@ -1451,7 +1451,7 @@ class BrierResult:
 
 
 @dataclass(frozen=True)
-class StateFigResult:
+class StatefigResult:
     """R's ``statefig`` value: the box centres it returns invisibly (``positions``, one
     ``(x, y)`` pair per state, ``states`` being R's row names) and the arrows it draws.
     """
@@ -1515,3 +1515,40 @@ class PsplineResult:
     @property
     def n_cols(self) -> int:
         return len(self.basis[0]) if self.basis else 0
+
+
+def _renamed_classes(namespace: dict[str, Any], renamed: dict[str, str]) -> Any:
+    """A module ``__getattr__`` that serves classes renamed in survival 3.0 under their
+    2.x names, so that pickles made by survival 2.x still load."""
+
+    def module_getattr(name: str) -> Any:
+        if name in renamed:
+            return namespace[renamed[name]]
+        raise AttributeError(f"module {namespace['__name__']!r} has no attribute {name!r}")
+
+    return module_getattr
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "AaregModelResult": "AaregModel",
+        "CchModelResult": "CchModel",
+        "CoxPHDetailResult": "CoxphDetailResult",
+        "CoxPHWTestResult": "CoxphWtestResult",
+        "CoxZPHResult": "CoxZphResult",
+        "CoxBaseHazardResult": "BasehazResult",
+        "SurvDiffResult": "SurvdiffResult",
+        "SurvExpResult": "SurvexpResult",
+        "SurvExpSummary": "SummarySurvexpResult",
+        "RateTablePrint": "RatetablePrint",
+        "SurvCheckResult": "SurvcheckResult",
+        "SurvCheckProblem": "SurvcheckProblem",
+        "StateFigResult": "StatefigResult",
+        "TMergeFrame": "TmergeFrame",
+        "TMergeOperation": "TmergeOperation",
+        "FineGrayFrame": "FinegrayFrame",
+        "SurvfitQuantileResult": "QuantileSurvfitResult",
+        "SurvfitResidualsResult": "ResidualsSurvfitResult",
+    },
+)

@@ -365,3 +365,29 @@ def test_fitted_coxph_goes_to_a_worker_process(cox_fits):
     with ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn")) as pool:
         lp = pool.submit(r.predict, fit, type="lp").result(timeout=120)
     assert np.asarray(lp) == approx(np.asarray(r.predict(fit, type="lp")))
+
+
+@pytest.mark.parametrize(
+    ("module", "old", "new"),
+    [
+        ("_types", "SurvDiffResult", "SurvdiffResult"),
+        ("_types", "CoxZPHResult", "CoxZphResult"),
+        ("_types", "AaregModelResult", "AaregModel"),
+        ("_survreg", "SurvregModelResult", "SurvregModel"),
+        ("_coxsurv", "CoxSurvFitResult", "CoxsurvRawResult"),
+        ("_pyears", "PyearsSummary", "SummaryPyearsResult"),
+        ("_yates_model", "YatesModel", "YatesFitAdapter"),
+        ("_coxph_lowlevel", "CoxFitResult", "CoxphFitResult"),
+    ],
+)
+def test_pickles_naming_2x_classes_still_load(module, old, new):
+    reference = f"csurvival.r.{module}\n{old}\n.".encode()
+    assert pickle.loads(reference) is getattr(r, new)
+    assert not hasattr(r, old)
+    assert old not in r.__all__
+
+
+def test_renamed_class_instances_round_trip():
+    fit = r.survdiff("Surv(time, status) ~ sex", survival.datasets.load_lung())
+    assert type(fit).__name__ == "SurvdiffResult"
+    assert round_trip(fit).chisq == fit.chisq

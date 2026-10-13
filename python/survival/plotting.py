@@ -25,7 +25,7 @@ from ._plot_helpers import axes as _axes
 from ._plot_helpers import panel_axes
 from ._plot_helpers import styles as _styles
 from .r._surv import Surv, Surv2
-from .r._types import AaregModelResult, CoxZPHResult, SurvExpResult
+from .r._types import AaregModel, CoxZphResult, SurvexpResult
 
 __all__ = [
     "SurvivalCurve",
@@ -338,21 +338,21 @@ def plot_surv(response: Surv, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
     return plot_survfit(survfit(response), ax=ax, **kwargs)
 
 
-def lines_survexp(fit: SurvExpResult, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
+def lines_survexp(fit: SurvexpResult, *, ax: Any = None, **kwargs: Any) -> SurvivalPlot:
     """Overlay expected-survival curves, joining their time grid with straight lines.
 
     Accepts the options of ``lines_survfit``; override ``drawstyle`` to draw steps.
     No confidence intervals or observed censor counts are inferred.
     """
 
-    if not isinstance(fit, SurvExpResult):
+    if not isinstance(fit, SurvexpResult):
         raise TypeError("fit must be returned by survival.r.survexp")
     kwargs.setdefault("drawstyle", "default")
     return lines_survfit(fit, ax=ax, **kwargs)
 
 
 def plot(
-    value: SurvivalFit | Surv | Surv2 | AaregModelResult | CoxZPHResult,
+    value: SurvivalFit | Surv | Surv2 | AaregModel | CoxZphResult,
     *,
     ax: Any = None,
     **kwargs: Any,
@@ -363,15 +363,15 @@ def plot(
         raise ValueError("method not defined for a Surv2 object")
     if isinstance(value, Surv):
         return plot_surv(value, ax=ax, **kwargs)
-    if isinstance(value, AaregModelResult):
+    if isinstance(value, AaregModel):
         return plot_aareg(value, ax=ax, **kwargs)
-    if isinstance(value, CoxZPHResult):
+    if isinstance(value, CoxZphResult):
         return plot_cox_zph(value, ax=ax, **kwargs)
     return plot_survfit(value, ax=ax, **kwargs)
 
 
 def lines(
-    value: SurvivalFit | Surv | Surv2 | AaregModelResult,
+    value: SurvivalFit | Surv | Surv2 | AaregModel,
     *,
     ax: Any = None,
     **kwargs: Any,
@@ -380,9 +380,9 @@ def lines(
 
     if isinstance(value, Surv | Surv2):
         raise ValueError(f"method not defined for a {type(value).__name__} object")
-    if isinstance(value, AaregModelResult):
+    if isinstance(value, AaregModel):
         return lines_aareg(value, ax=ax, **kwargs)
-    if isinstance(value, SurvExpResult):
+    if isinstance(value, SurvexpResult):
         return lines_survexp(value, ax=ax, **kwargs)
     return lines_survfit(value, ax=ax, **kwargs)
 
@@ -437,7 +437,7 @@ class CoxDiagnosticPlot:
 
 
 def plot_cox_zph(
-    result: CoxZPHResult,
+    result: CoxZphResult,
     *,
     ax: Any = None,
     resid: bool = True,

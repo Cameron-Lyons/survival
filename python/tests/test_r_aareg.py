@@ -22,7 +22,7 @@ def ovarian():
 
 def test_aareg_matches_r(ovarian):
     fit = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian)
-    assert isinstance(fit, r.AaregModelResult)
+    assert isinstance(fit, r.AaregModel)
     assert fit.n == [26, 12, 12]
     assert fit.times[:3] == [59.0, 115.0, 156.0]
     assert fit.nrisk[:3] == [26.0, 25.0, 24.0]

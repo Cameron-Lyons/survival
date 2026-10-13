@@ -199,7 +199,7 @@ exactly one module):
 The `python/survival/r/` package exposes only the R-style API from
 `survival.r` itself: R's exported functions (under Python spellings such as
 `survreg_control` and `cox_zph`) and the classes they return (`CoxphModel`,
-`SurvregModelResult`, `BrierResult`, ...). The implementation modules are
+`SurvregModel`, `BrierResult`, ...). The implementation modules are
 private (underscore names) and layered so imports form a DAG (each module only
 imports from the ones above it):
 

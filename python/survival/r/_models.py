@@ -73,8 +73,8 @@ from ._formula import (
 from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
-    RateTableMatch,
-    RateTableSummary,
+    RatetableMatch,
+    SummaryRatetableResult,
     _pyears_result_frame,
     _survexp_frame,
     summary_pyears,
@@ -98,7 +98,7 @@ from ._survfit_residuals import residuals_survfit
 from ._survpenal_print import SurvregPenalPrint
 from ._survreg import (
     SurvregAnovaResult,
-    SurvregModelResult,
+    SurvregModel,
     _prediction_term_labels,
     coef_names_survreg,
     confint_survreg,
@@ -111,27 +111,27 @@ from ._survreg import (
     vcov_survreg,
 )
 from ._types import (
-    AaregModelResult,
-    CchModelResult,
+    AaregModel,
+    BasehazResult,
+    CchModel,
     ConcordanceResult,
-    CoxBaseHazardResult,
-    CoxPHDetailResult,
+    CoxphDetailResult,
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
-    CoxZPHResult,
+    CoxZphResult,
     ModelPrint,
     PyearsResult,
-    RateTablePrint,
+    QuantileSurvfitResult,
+    RatetablePrint,
     ResponsePrint,
+    SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
-    SurvDiffResult,
-    SurvExpResult,
-    SurvExpSummary,
+    SurvdiffResult,
+    SurvexpResult,
     SurvfitMultiStateResult,
-    SurvfitQuantileResult,
     SurvfitResult,
-    TMergeFrame,
+    TmergeFrame,
     YatesPrint,
     _ModelCovariateTerm,
     _ModelStrataTerm,
@@ -141,7 +141,7 @@ _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
 
 
 @singledispatch
-def quantile(x: Any, probs: Any = (0.25, 0.5, 0.75), **kwargs: Any) -> SurvfitQuantileResult:
+def quantile(x: Any, probs: Any = (0.25, 0.5, 0.75), **kwargs: Any) -> QuantileSurvfitResult:
     """R's quantile methods for ``Surv`` responses and fitted survival curves.
 
     ``probs`` defaults to the quartiles; ``conf_int``, ``scale`` and ``tolerance``
@@ -152,11 +152,11 @@ def quantile(x: Any, probs: Any = (0.25, 0.5, 0.75), **kwargs: Any) -> SurvfitQu
 
 
 @singledispatch
-def median(x: Any, **kwargs: Any) -> SurvfitQuantileResult:
+def median(x: Any, **kwargs: Any) -> QuantileSurvfitResult:
     """R's median methods for responses and survival curves.
 
     A response includes confidence bounds by default; a fitted curve returns
-    only its median. Both return a ``SurvfitQuantileResult`` with ``probs=[0.5]``.
+    only its median. Both return a ``QuantileSurvfitResult`` with ``probs=[0.5]``.
     """
 
     raise TypeError("median requires a Surv response or survfit object")
@@ -188,10 +188,8 @@ def coef(fit: Any, *, matrix: Any = False) -> Any:
     raise _no_method("coef")
 
 
-@coef.register(CoxphModel | CchModelResult | SurvregModelResult)
-def _coef_fit(
-    fit: CoxphModel | CchModelResult | SurvregModelResult, *, matrix: Any = False
-) -> list[float]:
+@coef.register(CoxphModel | CchModel | SurvregModel)
+def _coef_fit(fit: CoxphModel | CchModel | SurvregModel, *, matrix: Any = False) -> list[float]:
     return fit.coefficients
 
 
@@ -212,8 +210,8 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
     raise _no_method("coef_names")
 
 
-@coef_names.register(CoxphModel | CchModelResult)
-def _coef_names_cox(fit: CoxphModel | CchModelResult, *, complete: Any | None = None) -> list[str]:
+@coef_names.register(CoxphModel | CchModel)
+def _coef_names_cox(fit: CoxphModel | CchModel, *, complete: Any | None = None) -> list[str]:
     include = _normalize_bool_option_with_default(complete, "complete", True)
     names = list(fit.coef_names)
     if include:
@@ -221,7 +219,7 @@ def _coef_names_cox(fit: CoxphModel | CchModelResult, *, complete: Any | None = 
     return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]
 
 
-coef_names.register(SurvregModelResult, coef_names_survreg)
+coef_names.register(SurvregModel, coef_names_survreg)
 
 
 @singledispatch
@@ -234,9 +232,9 @@ def vcov(fit: Any, *, complete: Any = True, matrix: Any = False) -> Any:
     raise _no_method("vcov")
 
 
-@vcov.register(CoxphModel | CchModelResult)
+@vcov.register(CoxphModel | CchModel)
 def _vcov_cox(
-    fit: CoxphModel | CchModelResult, *, complete: Any = True, matrix: Any = False
+    fit: CoxphModel | CchModel, *, complete: Any = True, matrix: Any = False
 ) -> list[list[float]]:
     include = _normalize_bool_option_with_default(complete, "complete", True)
     var = fit.var
@@ -255,8 +253,8 @@ def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = Fals
     )
 
 
-@vcov.register(SurvregModelResult)
-def _vcov_survreg(fit: SurvregModelResult, *, complete: Any = True, matrix: Any = False) -> Any:
+@vcov.register(SurvregModel)
+def _vcov_survreg(fit: SurvregModel, *, complete: Any = True, matrix: Any = False) -> Any:
     return vcov_survreg(fit, complete=complete)
 
 
@@ -273,8 +271,8 @@ def loglik(fit: Any) -> float:
     raise _no_method("loglik")
 
 
-@loglik.register(CoxphModel | SurvregModelResult)
-def _loglik_fit(fit: CoxphModel | SurvregModelResult) -> float:
+@loglik.register(CoxphModel | SurvregModel)
+def _loglik_fit(fit: CoxphModel | SurvregModel) -> float:
     return fit.loglik[-1]
 
 
@@ -291,8 +289,8 @@ def _nobs_cox(fit: CoxphModel) -> int:
     return fit.nevent
 
 
-@nobs.register(SurvregModelResult)
-def _nobs_survreg(fit: SurvregModelResult) -> int:
+@nobs.register(SurvregModel)
+def _nobs_survreg(fit: SurvregModel) -> int:
     return fit.n
 
 
@@ -309,8 +307,8 @@ def _degrees_freedom_cox(fit: CoxphModel) -> float:
     return _coxph_df(fit)
 
 
-@degrees_freedom.register(SurvregModelResult)
-def _degrees_freedom_survreg(fit: SurvregModelResult) -> float:
+@degrees_freedom.register(SurvregModel)
+def _degrees_freedom_survreg(fit: SurvregModel) -> float:
     return survreg_df(fit)
 
 
@@ -326,8 +324,8 @@ def _df_residual_cox(fit: CoxphModel) -> float:
     raise TypeError("df_residual is only defined for fitted survreg models")
 
 
-@df_residual.register(SurvregModelResult)
-def _df_residual_survreg(fit: SurvregModelResult) -> float:
+@df_residual.register(SurvregModel)
+def _df_residual_survreg(fit: SurvregModel) -> float:
     return fit.df_residual
 
 
@@ -351,14 +349,7 @@ def extract_aic(fit: Any, *, scale: Any = 0.0, k: Any = 2.0) -> list[float]:
     return [float(degrees_freedom(fit)), aic(fit, k=k)]
 
 
-_FormulaFits = (
-    CoxphModel
-    | CchModelResult
-    | AaregModelResult
-    | SurvregModelResult
-    | PyearsResult
-    | SurvExpResult
-)
+_FormulaFits = CoxphModel | CchModel | AaregModel | SurvregModel | PyearsResult | SurvexpResult
 
 
 @singledispatch
@@ -404,15 +395,15 @@ def _model_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> list[str
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
-@model_term_names.register(AaregModelResult | PyearsResult | SurvExpResult)
+@model_term_names.register(AaregModel | PyearsResult | SurvexpResult)
 def _model_term_names_stored(
-    fit: AaregModelResult | PyearsResult | SurvExpResult, terms: Any | None = None
+    fit: AaregModel | PyearsResult | SurvexpResult, terms: Any | None = None
 ) -> list[str]:
     names = list(fit.term_labels)
     return [names[idx] for idx in _terms_selection(terms, names)]
 
 
-model_term_names.register(SurvregModelResult, model_term_names_survreg)
+model_term_names.register(SurvregModel, model_term_names_survreg)
 
 
 @singledispatch
@@ -427,10 +418,8 @@ def _prediction_term_names_cox(fit: CoxphModel, terms: Any | None = None) -> lis
     return [names[i] for i in _terms_selection(terms, names)]
 
 
-@_prediction_term_names.register(SurvregModelResult)
-def _prediction_term_names_aft(
-    fit: SurvregModelResult, terms: Any | None = None
-) -> list[str | None]:
+@_prediction_term_names.register(SurvregModel)
+def _prediction_term_names_aft(fit: SurvregModel, terms: Any | None = None) -> list[str | None]:
     names = _prediction_term_labels(fit)
     selection = _matrix_term_selection(terms, names, warn_overflow=False)
     return (
@@ -445,9 +434,9 @@ def model_weights(fit: Any) -> list[float] | None:
     raise _no_method("model_weights")
 
 
-@model_weights.register(CoxphModel | AaregModelResult | SurvregModelResult)
+@model_weights.register(CoxphModel | AaregModel | SurvregModel)
 def _model_weights_fit(
-    fit: CoxphModel | AaregModelResult | SurvregModelResult,
+    fit: CoxphModel | AaregModel | SurvregModel,
 ) -> list[float] | None:
     return None if fit.weights is None else list(fit.weights)
 
@@ -578,7 +567,7 @@ def _model_matrix_cox(
     return result
 
 
-model_matrix.register(SurvregModelResult, model_matrix_survreg)
+model_matrix.register(SurvregModel, model_matrix_survreg)
 
 
 @singledispatch
@@ -632,20 +621,20 @@ def _model_frame_cox(fit: CoxphModel, *, _with_metadata: bool = False) -> dict[s
 
 
 @model_frame.register(
-    AaregModelResult
-    | SurvregModelResult
+    AaregModel
+    | SurvregModel
     | SurvfitResult
     | SurvfitMultiStateResult
     | PyearsResult
-    | SurvExpResult
+    | SurvexpResult
 )
 def _model_frame_stored(
-    fit: AaregModelResult
-    | SurvregModelResult
+    fit: AaregModel
+    | SurvregModel
     | SurvfitResult
     | SurvfitMultiStateResult
     | PyearsResult
-    | SurvExpResult,
+    | SurvexpResult,
     *,
     _with_metadata: bool = False,
 ) -> dict[str, Any]:
@@ -744,7 +733,7 @@ def _predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
 
 
 _predict.register(CoxphModel, predict_coxph)
-_predict.register(SurvregModelResult, predict_survreg)
+_predict.register(SurvregModel, predict_survreg)
 
 
 @singledispatch
@@ -772,7 +761,7 @@ def residuals(fit: Any, **kwargs: Any) -> Any:
 
 
 residuals.register(CoxphModel, residuals_coxph)
-residuals.register(SurvregModelResult, residuals_survreg)
+residuals.register(SurvregModel, residuals_survreg)
 residuals.register(_SurvfitCurves, residuals_survfit)
 
 
@@ -790,9 +779,9 @@ def confint(
     raise _no_method("confint")
 
 
-@confint.register(CoxphModel | CchModelResult)
+@confint.register(CoxphModel | CchModel)
 def _confint_cox(
-    fit: CoxphModel | CchModelResult, parm: Any | None = None, *, level: Any = 0.95
+    fit: CoxphModel | CchModel, parm: Any | None = None, *, level: Any = 0.95
 ) -> list[dict[str, float | str]]:
     z = NormalDist().inv_cdf(1.0 - (1.0 - _normalize_conf_level(level, "level")) / 2.0)
     names = coef_names(fit)
@@ -808,7 +797,7 @@ def _confint_cox(
     ]
 
 
-confint.register(SurvregModelResult, confint_survreg)
+confint.register(SurvregModel, confint_survreg)
 
 
 @singledispatch
@@ -818,22 +807,22 @@ def model_summary(fit: Any, **kwargs: Any) -> Any:
     or merged event data."""
 
     raise TypeError(
-        "model_summary requires a fitted model, survival curve, population result, or TMergeFrame"
+        "model_summary requires a fitted model, survival curve, population result, or TmergeFrame"
     )
 
 
 model_summary.register(CoxphModel, summary_coxph)
-model_summary.register(AaregModelResult, summary_aareg)
-model_summary.register(SurvregModelResult, model_summary_survreg)
+model_summary.register(AaregModel, summary_aareg)
+model_summary.register(SurvregModel, model_summary_survreg)
 model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
 model_summary.register(PyearsResult, summary_pyears)
-model_summary.register(SurvExpResult, summary_survexp)
+model_summary.register(SurvexpResult, summary_survexp)
 model_summary.register(_core.RateTable, summary_ratetable)
-model_summary.register(TMergeFrame, summary_tmerge)
+model_summary.register(TmergeFrame, summary_tmerge)
 
 
-@model_summary.register(CchModelResult)
-def _model_summary_cch(fit: CchModelResult, **kwargs: Any) -> dict[str, Any]:
+@model_summary.register(CchModel)
+def _model_summary_cch(fit: CchModel, **kwargs: Any) -> dict[str, Any]:
     return summary_cch(fit)
 
 
@@ -1315,7 +1304,7 @@ def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
     return frame
 
 
-def _cox_basehaz_frame(result: CoxBaseHazardResult) -> dict[str, list[Any]]:
+def _cox_basehaz_frame(result: BasehazResult) -> dict[str, list[Any]]:
     hazard = result.hazard
     frame: dict[str, list[Any]] = {}
     if hazard and isinstance(hazard[0], list):
@@ -1375,7 +1364,7 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     return frame
 
 
-def _survdiff_frame(result: SurvDiffResult) -> dict[str, list[Any]]:
+def _survdiff_frame(result: SurvdiffResult) -> dict[str, list[Any]]:
     """One row per group: the observed and expected counts (summed over strata) and
     the diagonal of the variance."""
 
@@ -1400,7 +1389,7 @@ def _survdiff_frame(result: SurvDiffResult) -> dict[str, list[Any]]:
     }
 
 
-def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
+def _cox_zph_frame(result: CoxZphResult) -> dict[str, list[Any]]:
     return {
         "name": [str(row["name"]) for row in result.table],
         "chisq": [float(row["chisq"]) for row in result.table],
@@ -1409,7 +1398,7 @@ def _cox_zph_frame(result: CoxZPHResult) -> dict[str, list[Any]]:
     }
 
 
-def _coxph_detail_frame(result: CoxPHDetailResult) -> dict[str, list[Any]]:
+def _coxph_detail_frame(result: CoxphDetailResult) -> dict[str, list[Any]]:
     frame: dict[str, list[Any]] = {
         "time": result.time,
         "nevent": result.nevent,
@@ -1494,19 +1483,19 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
 as_data_frame.register(Surv, _surv_response_frame)
 as_data_frame.register(Surv2, _surv2_response_frame)
 as_data_frame.register(CoxSurvfitResult, _cox_survfit_frame)
-as_data_frame.register(CoxBaseHazardResult, _cox_basehaz_frame)
+as_data_frame.register(BasehazResult, _cox_basehaz_frame)
 as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)
 as_data_frame.register(CoxSurvfitMultiStateResult, _coxms_curves_frame)
 as_data_frame.register(SummarySurvfitCoxmsResult, _summary_coxms_frame)
 as_data_frame.register(SurvfitResult, _survfit_frame)
 as_data_frame.register(SummarySurvfitResult, _summary_survfit_frame)
-as_data_frame.register(CoxZPHResult, _cox_zph_frame)
-as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)
+as_data_frame.register(CoxZphResult, _cox_zph_frame)
+as_data_frame.register(CoxphDetailResult, _coxph_detail_frame)
 as_data_frame.register(ConcordanceResult, _concordance_frame)
 as_data_frame.register(PyearsResult, _pyears_result_frame)
-as_data_frame.register(SurvExpResult | SurvExpSummary, _survexp_frame)
+as_data_frame.register(SurvexpResult | SummarySurvexpResult, _survexp_frame)
 as_data_frame.register(_core.FineGrayOutput, _finegray_frame)
-as_data_frame.register(SurvDiffResult, _survdiff_frame)
+as_data_frame.register(SurvdiffResult, _survdiff_frame)
 as_data_frame.register(_core.AnovaCoxphResult, _anova_frame)
 
 
@@ -1542,8 +1531,8 @@ def _response_print_frame(result: ResponsePrint) -> dict[str, list[Any]]:
     return {name: list(values) for name, values in result.data.items()}
 
 
-@as_data_frame.register(RateTablePrint)
-def _ratetable_print_frame(result: RateTablePrint) -> dict[str, list[Any]]:
+@as_data_frame.register(RatetablePrint)
+def _ratetable_print_frame(result: RatetablePrint) -> dict[str, list[Any]]:
     frame: dict[str, list[Any]] = {}
     stride = 1
     names = _make_unique([*result.dimid, "rate"])
@@ -1554,8 +1543,8 @@ def _ratetable_print_frame(result: RateTablePrint) -> dict[str, list[Any]]:
     return frame
 
 
-@as_data_frame.register(RateTableMatch)
-def _ratetable_match_frame(result: RateTableMatch) -> dict[str, list[Any]]:
+@as_data_frame.register(RatetableMatch)
+def _ratetable_match_frame(result: RatetableMatch) -> dict[str, list[Any]]:
     return {name: [row[j] for row in result.r] for j, name in enumerate(result.dimid)}
 
 
@@ -1584,8 +1573,8 @@ def _survival_table_print_frame(result: SurvivalTablePrint) -> dict[str, list[An
     return frame
 
 
-@as_data_frame.register(RateTableSummary)
-def _ratetable_summary_frame(result: RateTableSummary) -> dict[str, list[Any]]:
+@as_data_frame.register(SummaryRatetableResult)
+def _ratetable_summary_frame(result: SummaryRatetableResult) -> dict[str, list[Any]]:
     return {name: list(values) for name, values in result.dimensions.items()}
 
 

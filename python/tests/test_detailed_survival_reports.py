@@ -34,7 +34,11 @@ def input_object(case):
     if method in {"survexp", "summary.survexp"}:
         common = {name: values[name] for name in ("time", "surv", "n_risk")}
         common.update(method=source["method"], strata=source["names"])
-        return r.SurvExpResult(**common, n=0) if method == "survexp" else r.SurvExpSummary(**common)
+        return (
+            r.SurvexpResult(**common, n=0)
+            if method == "survexp"
+            else r.SummarySurvexpResult(**common)
+        )
     for name in ("time", "n_risk", "n_event", "n_censor"):
         values[name] = values[name] or []
     common = {name: values[name] for name in ("time", "n_risk", "n_event", "n_censor")}

@@ -23,7 +23,7 @@ from ._print import (
     print_options,
 )
 from ._survpenal_print import _naprint
-from ._types import ModelPrint, NamedMatrix, PyearsResult, SurvCheckResult, YatesPrint, YatesResult
+from ._types import ModelPrint, NamedMatrix, PyearsResult, SurvcheckResult, YatesPrint, YatesResult
 
 
 def _total(values: Any) -> float:
@@ -65,9 +65,9 @@ def _table_lines(table: NamedMatrix, width: int, row_title: str, column_title: s
     return [" " * indent + column_title if line == "" else line for line in lines]
 
 
-def print_survcheck(x: SurvCheckResult, *, width: Any = 80) -> ModelPrint:
+def print_survcheck(x: SurvcheckResult, *, width: Any = 80) -> ModelPrint:
     """Return transition/subject counts and all reported data-consistency problems."""
-    if not isinstance(x, SurvCheckResult):
+    if not isinstance(x, SurvcheckResult):
         raise TypeError("print_survcheck requires a survival-data consistency result")
     _, digits, width = print_options(1, None, width, 7)
     n = [x.n_id, x.n_observations, x.n_transitions]

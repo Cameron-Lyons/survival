@@ -72,10 +72,10 @@ from ._types import (
     _MISSING,
     BrierResult,
     PsplineResult,
-    StateFigResult,
+    StatefigResult,
     SurvCheckCodes,
-    SurvCheckProblem,
-    SurvCheckResult,
+    SurvcheckProblem,
+    SurvcheckResult,
     _InteractionTerm,
 )
 
@@ -172,7 +172,7 @@ def statefig(
     alwd: Any | None = None,
     alty: Any | None = None,
     offset: Any = 0,
-) -> StateFigResult:
+) -> StatefigResult:
     """Box coordinates and arrows of R's ``statefig`` state-space figure.
 
     R draws the figure and returns the box centres invisibly; this returns them as
@@ -191,7 +191,7 @@ def statefig(
     figure = _core.statefig(
         rows, _statefig_state_names(connect, states), **_statefig_layout(layout)
     )
-    return StateFigResult(
+    return StatefigResult(
         states=list(figure.states),
         positions=list(zip(figure.x, figure.y, strict=True)),
         arrows=list(figure.arrows),
@@ -560,10 +560,10 @@ def _survcheck_states(response: Surv) -> list[str]:
 
 def _survcheck_problem(
     problem: Any, row_numbers: list[int], id_levels: list[Any]
-) -> SurvCheckProblem | None:
+) -> SurvcheckProblem | None:
     if problem is None:
         return None
-    return SurvCheckProblem(
+    return SurvcheckProblem(
         row=[row_numbers[row] for row in problem.row],
         id=[id_levels[code - 1] for code in problem.id],
     )
@@ -615,7 +615,7 @@ def survcheck(
     istate: Any | None = None,
     istate0: str = "(s0)",
     timefix: bool = True,
-) -> SurvCheckResult:
+) -> SurvcheckResult:
     """Consistency checks of (multi-state) survival data, like R's ``survcheck``.
 
     ``formula`` is ``Surv(...) ~ ...`` evaluated in ``data`` (or a ``Surv`` object); ``id`` and
@@ -665,7 +665,7 @@ def survcheck(
         timefix=timefix,
     )
     row_numbers = [idx + 1 for idx in frame.kept]
-    return SurvCheckResult(
+    return SurvcheckResult(
         states=raw.states,
         transitions=raw.transitions,
         events=raw.events,

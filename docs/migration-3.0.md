@@ -80,6 +80,31 @@ have no `constant`, as in R.
 raise `TypeError` for an unknown keyword, as the other functions do; the message
 is still R's "Argument ... not matched".
 
+### Result class names
+
+Result classes follow one rule: the R function's name with each dotted part
+capitalized, then `Result`, or `Model` for a fitted model. `CoxSurvFitResult`
+(the `coxsurv.fit` result) and `CoxSurvfitResult` (`survfit.coxph`) differed
+only in case; the first is now `CoxsurvRawResult`. The classes are the same, so
+only imports, annotations and `isinstance` checks change, and pickles made by
+2.x still load.
+
+| 2.x | 3.0 |
+| --- | --- |
+| `AaregModelResult`, `CchModelResult`, `SurvregModelResult` | `AaregModel`, `CchModel`, `SurvregModel` |
+| `YatesModel` (an input adapter, not a fit) | `YatesFitAdapter` |
+| `CoxSurvFitResult`, `CoxSurvFitList` | `CoxsurvRawResult`, `CoxsurvRawList` |
+| `CoxFitResult` | `CoxphFitResult` |
+| `CoxPHDetailResult`, `CoxPHWTestResult`, `CoxZPHResult` | `CoxphDetailResult`, `CoxphWtestResult`, `CoxZphResult` |
+| `CoxBaseHazardResult` | `BasehazResult` |
+| `SurvDiffResult`, `SurvExpResult`, `SurvCheckResult`, `SurvCheckProblem`, `StateFigResult` | `SurvdiffResult`, `SurvexpResult`, `SurvcheckResult`, `SurvcheckProblem`, `StatefigResult` |
+| `SurvExpSummary`, `PyearsSummary`, `RateTableSummary` | `SummarySurvexpResult`, `SummaryPyearsResult`, `SummaryRatetableResult` |
+| `SurvfitQuantileResult`, `SurvfitResidualsResult` | `QuantileSurvfitResult`, `ResidualsSurvfitResult` |
+| `RateTableMatch`, `RateTablePrint` | `RatetableMatch`, `RatetablePrint` |
+| `TMergeFrame`, `TMergeOperation`, `FineGrayFrame` | `TmergeFrame`, `TmergeOperation`, `FinegrayFrame` |
+
+The native kernel classes in `survival.kernels` keep their names.
+
 ## R bridge (survivalr)
 
 - `cox_zph()` and `coxph_detail()` are removed; call R's `cox.zph()` and

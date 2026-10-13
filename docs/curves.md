@@ -120,7 +120,7 @@ reject missing rows unless `na_rm=True` and refuse multiple-endpoint responses, 
 R does. `median(Surv(...))` includes confidence bounds by default, while
 `median(survfit(...))` returns point estimates. Results have one row per curve
 (grouped fits and Cox prediction columns each give a row) and one column per
-probability, and are always a `SurvfitQuantileResult`. Conditional Cox
+probability, and are always a `QuantileSurvfitResult`. Conditional Cox
 predictions use their start time as the curve origin; ordinary KM quantiles keep
 R's zero origin even when fitting starts later.
 

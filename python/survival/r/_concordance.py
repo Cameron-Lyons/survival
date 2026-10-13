@@ -46,9 +46,9 @@ from ._formula import (
     model_frame,
 )
 from ._surv import Surv
-from ._survreg import SurvregModelResult, predict_survreg
+from ._survreg import SurvregModel, predict_survreg
 from ._types import ConcordanceResult, SurvConcordanceResult, _StrataSpec
-from ._yates_model import YatesModel
+from ._yates_model import YatesFitAdapter
 
 _TIMEWT_CHOICES = ("n", "S", "S/G", "n/G2", "I")
 _COUNT_NAMES = ("concordant", "discordant", "tied.x", "tied.y", "tied.xy")
@@ -416,7 +416,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
     """``cord.getdata``.  An explicit ``cluster`` replaces the fit's own; a survreg
     fit's ``cluster()`` term is not used, as in R."""
 
-    if isinstance(fit, YatesModel):
+    if isinstance(fit, YatesFitAdapter):
         return _external_fit_data(fit, newdata, need_weights, cluster)
     if isinstance(fit, CoxphmsModel):
         raise ValueError(
@@ -440,7 +440,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
             weights=fit.weights if need_weights else None,
             cluster=cluster,
         )
-    if isinstance(fit, SurvregModelResult):
+    if isinstance(fit, SurvregModel):
         if newdata is not None:
             return _newdata_fit_data(fit, newdata, fit.strata_terms, predict_survreg, cluster)
         if fit.y is None:
@@ -458,7 +458,7 @@ def _fit_data(fit: Any, newdata: Any | None, need_weights: bool, cluster: Any | 
 
 
 def _external_fit_data(
-    fit: YatesModel, newdata: Any | None, need_weights: bool, cluster: Any | None
+    fit: YatesFitAdapter, newdata: Any | None, need_weights: bool, cluster: Any | None
 ) -> _FitData:
     """Linear predictors of an external lm/GLM; inverse links are unused."""
     frame = model_frame(
@@ -557,11 +557,7 @@ def _concordance_fits(
     scored with its own response, strata, weights and clusters."""
 
     family = next(
-        (
-            kind
-            for kind in (CoxphModel, SurvregModelResult, YatesModel)
-            if isinstance(fits[0], kind)
-        ),
+        (kind for kind in (CoxphModel, SurvregModel, YatesFitAdapter) if isinstance(fits[0], kind)),
         None,
     )
     if family is None or any(not isinstance(fit, family) for fit in fits):
@@ -672,7 +668,7 @@ def concordance(
 ) -> ConcordanceResult:
     """R's ``concordance``: for a formula (``Surv(time, status) ~ x + strata(g)``),
     for one or more ``coxph``/``survreg`` fits or external linear models supplied
-    as ``YatesModel`` (their linear predictors, with ``reverse=TRUE`` for Cox
+    as ``YatesFitAdapter`` (their linear predictors, with ``reverse=TRUE`` for Cox
     models), or for a ``Surv`` plus ``scores``."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)

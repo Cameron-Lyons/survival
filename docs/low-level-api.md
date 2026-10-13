@@ -27,7 +27,7 @@ buffers, so the bindings release the GIL while fitting.
 
 ## Bare Cox fitting
 
-`r.coxph_fit`, `r.agreg_fit` and `r.agexact_fit` return a `CoxFitResult` with
+`r.coxph_fit`, `r.agreg_fit` and `r.agexact_fit` return a `CoxphFitResult` with
 coefficients, model-based variance, initial and final log likelihood, score test,
 iteration count, linear predictors, means and optional martingale residuals.
 `agreg_fit` also returns the final score vector (`first`) and iteration
@@ -486,12 +486,12 @@ assert curves.surv.shape == (3, 2)
   codes, and may be omitted for one training stratum. Intervals with no baseline
   times contribute no rows.
 
-With `unlist=True`, `CoxSurvFitResult` stacks time rows across curves; `n` gives
+With `unlist=True`, `CoxsurvRawResult` stacks time rows across curves; `n` gives
 each curve's observation count, `strata` maps labels to row counts when there is
 more than one curve, `row_names` records explicit `rownames` or a pandas index, and
 `surv`, `cumhaz` and `std_err` (on the cumulative-hazard scale) have one column per
 prediction row, or are vectors for one row or a trajectory. No confidence limits or
-`survfit` class are added. `unlist=False` returns a `CoxSurvFitList` with `names`;
+`survfit` class are added. `unlist=False` returns a `CoxsurvRawList` with `names`;
 ordinary curves also expose `hazard`, `varhaz`, `ndeath` and `xbar`, which
 trajectories lack. Python names individual trajectories by their ids. Arrays are
 read-only views of a frozen native result (use `.copy()` for writable arrays); list

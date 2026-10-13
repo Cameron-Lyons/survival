@@ -68,12 +68,12 @@ from ._types import (
     CoxSurvfitResult,
     NaAction,
     NamedMatrix,
+    QuantileSurvfitResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
     SurvfitCall,
     SurvfitInfluenceMatrix,
     SurvfitMultiStateResult,
-    SurvfitQuantileResult,
     SurvfitResult,
     _InteractionTerm,
     _ModelClusterTerm,
@@ -1927,7 +1927,7 @@ def quantile_survfit(
     scale: Any = 1,
     tolerance: Any | None = None,
     **kwargs: Any,
-) -> SurvfitQuantileResult:
+) -> QuantileSurvfitResult:
     """R's ``quantile.survfit``: the quantiles of each curve and of its confidence bands.
 
     A ``survfit.coxph`` object uses its ``start_time`` (else 0) as the curve origin and
@@ -1975,7 +1975,7 @@ def quantile_survfit(
         parts = [getattr(result, name) for result in results]
         return None if parts[0] is None else [row for part in parts for row in part]
 
-    return SurvfitQuantileResult(
+    return QuantileSurvfitResult(
         probs=results[0].probs,
         quantile=[row for result in results for row in result.quantile],
         strata=labels or None,
@@ -1993,7 +1993,7 @@ def quantile_surv(
     scale: Any = 1,
     tolerance: Any | None = None,
     **kwargs: Any,
-) -> SurvfitQuantileResult:
+) -> QuantileSurvfitResult:
     """R's ``quantile.Surv``: fit the response, then invert its survival curve.
 
     The fitted curve uses Kaplan–Meier for right/counting responses and
@@ -2014,7 +2014,7 @@ def quantile_surv(
     )
 
 
-def median_surv(x: Surv, na_rm: Any = False, **kwargs: Any) -> SurvfitQuantileResult:
+def median_surv(x: Surv, na_rm: Any = False, **kwargs: Any) -> QuantileSurvfitResult:
     """R's ``median.Surv``: a 0.5 quantile, including confidence bounds by default."""
 
     return quantile_surv(x, probs=0.5, na_rm=na_rm, **kwargs)
@@ -2022,7 +2022,7 @@ def median_surv(x: Surv, na_rm: Any = False, **kwargs: Any) -> SurvfitQuantileRe
 
 def median_survfit(
     x: Any, *, scale: Any = 1, tolerance: Any | None = None, **kwargs: Any
-) -> SurvfitQuantileResult:
+) -> QuantileSurvfitResult:
     """R's ``median.survfit``: one median per curve, without confidence bounds."""
 
     return quantile_survfit(

@@ -138,7 +138,7 @@ def test_summary_pyears_gives_empty_cells_missing_rates_and_limits():
     summary = r.summary_pyears(
         result, rate=True, totals=True, scale=1000, **{"ci.r": True, "ci.rr": True}
     )
-    assert isinstance(summary, r.PyearsSummary)
+    assert isinstance(summary, r.SummaryPyearsResult)
     assert summary.dim == [4]
     assert summary.dimnames == {"g": ["a", "b", "c", "Total"]}
     assert summary.n == [3, 3, 0, 6]

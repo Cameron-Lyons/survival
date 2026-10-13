@@ -38,7 +38,7 @@ def objects():
             model = (
                 r.coxph(source["formula"], source["data"])
                 if source["cox"]
-                else r.YatesModel(
+                else r.YatesFitAdapter(
                     source["formula"],
                     source["data"],
                     [math.nan if x is None else x for x in source["beta"]],
@@ -89,12 +89,12 @@ def snapshot(case):
             return (
                 None
                 if value is None
-                else r.SurvCheckProblem(
+                else r.SurvcheckProblem(
                     np.atleast_1d(value["row"]).tolist(), np.atleast_1d(value["id"]).tolist()
                 )
             )
 
-        return r.SurvCheckResult(
+        return r.SurvcheckResult(
             [],
             SimpleNamespace(
                 from_states=transitions["rows"],

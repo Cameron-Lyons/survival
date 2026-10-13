@@ -99,6 +99,7 @@ from ._types import (
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
+    _renamed_classes,
     _StrataSpec,
 )
 
@@ -127,7 +128,7 @@ _TRANSFORMS = {"log": _core.SurvregTransform.Log, "identity": _core.SurvregTrans
 
 
 @dataclass(frozen=True)
-class SurvregModelResult:
+class SurvregModel:
     """R's ``survreg`` object: the Rust ``SurvregFit`` plus the metadata R keeps on it.
 
     Most properties are R's components: ``coefficients`` are the location coefficients
@@ -726,7 +727,7 @@ def survreg(
     score: Any = False,
     offset: Any | None = None,
     **kwargs: Any,
-) -> SurvregModelResult:
+) -> SurvregModel:
     """Fit a parametric survival regression model, like R's ``survreg``.
 
     ``formula`` is an R formula string (``"Surv(time, status) ~ age + strata(sex)"``) or a
@@ -838,7 +839,7 @@ def survreg(
                 "Ran out of iterations and did not converge", RuntimeWarning, stacklevel=2
             )
 
-    return SurvregModelResult(
+    return SurvregModel(
         fit=fit,
         formula=formula if isinstance(formula, str) else None,
         coefficient_names=frame.names,
@@ -869,7 +870,7 @@ def _estimated_scale_count(model: Any) -> int:
     return len(model.coefficients) - len(model.means)
 
 
-def survreg_df(fit: SurvregModelResult) -> int | float:
+def survreg_df(fit: SurvregModel) -> int | float:
     """``sum(fit$df)``: the number of coefficients, the estimated scales included, or the
     fractional total of a penalized fit."""
 
@@ -878,7 +879,7 @@ def survreg_df(fit: SurvregModelResult) -> int | float:
     return float(fit.fit.df)
 
 
-def _location_names(fit: SurvregModelResult, complete: bool = True) -> list[str]:
+def _location_names(fit: SurvregModel, complete: bool = True) -> list[str]:
     """``names(coef(fit, complete))``: without ``complete`` the aliased (``NA``)
     coefficients are left out."""
 
@@ -890,7 +891,7 @@ def _location_names(fit: SurvregModelResult, complete: bool = True) -> list[str]
     ]
 
 
-def _scale_labels(fit: SurvregModelResult, stratum_template: str) -> list[str]:
+def _scale_labels(fit: SurvregModel, stratum_template: str) -> list[str]:
     """The labels of the estimated scales: ``Log(scale)`` for a single scale; for a scale
     per stratum, ``stratum_template`` filled with each stratum (``names(fit$scale)``)."""
 
@@ -900,21 +901,21 @@ def _scale_labels(fit: SurvregModelResult, stratum_template: str) -> list[str]:
     return ["Log(scale)"] * scales
 
 
-def survreg_summary_names(fit: SurvregModelResult) -> list[str]:
+def survreg_summary_names(fit: SurvregModel) -> list[str]:
     """Row names of ``summary.survreg``'s table: a stratum's scale row is named by the
     stratum."""
 
     return _location_names(fit) + _scale_labels(fit, "{}")
 
 
-def survreg_vcov_names(fit: SurvregModelResult, complete: bool = True) -> list[str]:
+def survreg_vcov_names(fit: SurvregModel, complete: bool = True) -> list[str]:
     """``dimnames(vcov(fit, complete))``: the location names (the aliased ones left out
     without ``complete``), then ``Log(scale)``, or ``Log(scale[<stratum>])`` per stratum."""
 
     return _location_names(fit, complete) + _scale_labels(fit, "Log(scale[{}])")
 
 
-def survreg_vcov(fit: SurvregModelResult, complete: bool = True) -> list[list[float]]:
+def survreg_vcov(fit: SurvregModel, complete: bool = True) -> list[list[float]]:
     """R's ``vcov.survreg``: ``fit$var``; without ``complete`` the rows and columns of the
     aliased location coefficients are dropped and the ``Log(scale)`` rows kept."""
 
@@ -929,7 +930,7 @@ def survreg_vcov(fit: SurvregModelResult, complete: bool = True) -> list[list[fl
     return [[variance[row][column] for column in keep] for row in keep]
 
 
-def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
+def survreg_summary(fit: SurvregModel) -> dict[str, Any]:
     """The pieces of ``summary.survreg`` that are not the coefficient table."""
 
     model = fit.fit
@@ -961,7 +962,7 @@ def survreg_summary(fit: SurvregModelResult) -> dict[str, Any]:
 
 
 def _newdata_inputs(
-    fit: SurvregModelResult,
+    fit: SurvregModel,
     newdata: Any,
     na_action: str,
     *,
@@ -1050,7 +1051,7 @@ def _term_selection(terms: Any | None, names: Sequence[str]) -> list[int] | None
     return selected
 
 
-def _prediction_term_labels(fit: SurvregModelResult) -> list[str]:
+def _prediction_term_labels(fit: SurvregModel) -> list[str]:
     """Prediction columns follow coefficient assignments, excluding scale strata."""
     return [fit.term_labels[code - 1] for code in sorted(set(fit.assign) - {0})]
 
@@ -1074,7 +1075,7 @@ def _drop(values: Any, keep_matrix: bool) -> Any:
 
 
 def predict_survreg(
-    fit: SurvregModelResult,
+    fit: SurvregModel,
     newdata: Any | None = None,
     type: str = "response",
     se_fit: bool = False,
@@ -1283,7 +1284,7 @@ def _collapse_groups(collapse: Any, n: int) -> tuple[list[int], list[str | None]
 
 
 def residuals_survreg(
-    fit: SurvregModelResult,
+    fit: SurvregModel,
     type: str = "response",
     rsigma: bool = True,
     collapse: Any = False,
@@ -1317,7 +1318,7 @@ def residuals_survreg(
     return {"values": result, "group_names": group_names} if _with_group_names else result
 
 
-def _refit_terms(fit: SurvregModelResult, keep: int) -> Any:
+def _refit_terms(fit: SurvregModel, keep: int) -> Any:
     """``update(fit, ~ . - <dropped terms>)``: refit with the first ``keep`` terms, through
     survpenal.fit while a ``ridge()`` or ``pspline()`` term remains.  The stored penalty
     objects and basis columns are what ``update`` rebuilds from the same data."""
@@ -1377,7 +1378,7 @@ def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
     return p_values
 
 
-def _anova_single(fit: SurvregModelResult, with_test: bool) -> SurvregAnovaResult:
+def _anova_single(fit: SurvregModel, with_test: bool) -> SurvregAnovaResult:
     model = fit.fit
     labels = list(fit.term_labels)
     loglik = [0.0] * (len(labels) + 1)
@@ -1423,7 +1424,7 @@ def _diff_term(previous: Sequence[str], current: Sequence[str], position: int) -
     return f"{position - 1} vs. {position}"
 
 
-def _anova_list(fits: Sequence[SurvregModelResult], with_test: bool) -> SurvregAnovaResult:
+def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> SurvregAnovaResult:
     responses = [fit.formula.partition("~")[0].strip() if fit.formula else "" for fit in fits]
     keep = [response == responses[0] for response in responses]
     if not all(keep):
@@ -1461,7 +1462,7 @@ def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
     if not fits:
         raise TypeError("anova requires at least one fitted model")
     for fit in fits:
-        if not isinstance(fit, SurvregModelResult):
+        if not isinstance(fit, SurvregModel):
             raise TypeError("anova.survreg requires survreg model fits")
     with_test = _match_arg(test, "test", ("Chisq", "none")) == "Chisq"
     if len(fits) == 1:
@@ -1679,7 +1680,7 @@ def _normal_two_sided_p_value(statistic: float) -> float:
     return math.erfc(abs(statistic) / math.sqrt(2.0))
 
 
-def coef_names_survreg(fit: SurvregModelResult, *, complete: Any | None = None) -> list[str]:
+def coef_names_survreg(fit: SurvregModel, *, complete: Any | None = None) -> list[str]:
     """``names(coef(fit))``; ``complete=False`` drops the aliased coefficients, as
     ``coef(fit, complete=FALSE)``, and ``complete=True`` gives ``vcov(fit)``'s names,
     the ``Log(scale)`` rows appended."""
@@ -1691,14 +1692,14 @@ def coef_names_survreg(fit: SurvregModelResult, *, complete: Any | None = None) 
     return _location_names(fit, complete=False)
 
 
-def vcov_survreg(fit: SurvregModelResult, *, complete: Any = True) -> list[list[float]]:
+def vcov_survreg(fit: SurvregModel, *, complete: Any = True) -> list[list[float]]:
     """``vcov.survreg``: ``fit$var``, less the aliased coefficients without ``complete``."""
 
     return survreg_vcov(fit, _normalize_bool_option_with_default(complete, "complete", True))
 
 
 def confint_survreg(
-    fit: SurvregModelResult, parm: Any | None = None, *, level: Any = 0.95
+    fit: SurvregModel, parm: Any | None = None, *, level: Any = 0.95
 ) -> list[dict[str, float | str]]:
     """``confint.survreg``: normal-approximation intervals for the location coefficients."""
 
@@ -1716,7 +1717,7 @@ def confint_survreg(
     ]
 
 
-def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) -> list[str]:
+def model_term_names_survreg(fit: SurvregModel, terms: Any | None = None) -> list[str]:
     """``attr(terms(fit), 'term.labels')``, optionally the subset ``terms`` selects."""
 
     names = list(fit.term_labels)
@@ -1725,7 +1726,7 @@ def model_term_names_survreg(fit: SurvregModelResult, terms: Any | None = None) 
 
 
 def model_matrix_survreg(
-    fit: SurvregModelResult,
+    fit: SurvregModel,
     data: Any | None = None,
     *,
     na_action: str | None = _DEFAULT_NA_ACTION,
@@ -1792,7 +1793,7 @@ def model_matrix_survreg(
     return result
 
 
-def model_summary_survreg(fit: SurvregModelResult, correlation: Any = False) -> dict[str, Any]:
+def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[str, Any]:
     """``summary.survreg``: the coefficient table, the pieces of the fit R copies
     (``loglik`` as (intercept-only, full), ``var``, ``scale``, ...) and, with
     ``correlation``, the correlation matrix of the coefficients that are not ``NA``
@@ -1853,3 +1854,11 @@ def model_summary_survreg(fit: SurvregModelResult, correlation: Any = False) -> 
     }
     result.update(survreg_summary(fit))
     return result
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "SurvregModelResult": "SurvregModel",
+    },
+)

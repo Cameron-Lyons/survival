@@ -25,7 +25,7 @@ def reference_fit(name):
     influence = value["dfbeta"]
     if influence is not None:
         influence = np.asarray(influence["values"]).reshape(influence["dim"], order="F").tolist()
-    return r.AaregModelResult(
+    return r.AaregModel(
         n=[],
         times=value["time"],
         coefficient=value["coefficient"],

@@ -66,13 +66,13 @@ def compare(actual, expected, *, kp=False):
 def test_direct_curves_match_r(case):
     fitted = r.coxsurv_fit(**arguments(case))
     if case["unlist"]:
-        assert isinstance(fitted, r.CoxSurvFitResult)
+        assert isinstance(fitted, r.CoxsurvRawResult)
         compare(fitted, case["expected"], kp=case["stype"] == 1)
         if fitted.strata is not None:
             assert list(fitted.strata) == case["names"]
         assert fitted.hazard is None
     else:
-        assert isinstance(fitted, r.CoxSurvFitList)
+        assert isinstance(fitted, r.CoxsurvRawList)
         expected = case["expected"]
         assert len(fitted) == len(expected)
         for curve, reference in zip(fitted, expected.values(), strict=True):

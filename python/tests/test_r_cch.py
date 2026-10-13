@@ -47,7 +47,7 @@ def test_prentice_matches_r(ccoh_data):
         id="seqno",
         cohort_size=4028,
     )
-    assert isinstance(fit, r.CchModelResult)
+    assert isinstance(fit, r.CchModel)
     assert fit.coef_names == ("stageII", "stageIII", "stageIV", "histolUH", "age")
     assert fit.coefficients == approx(
         [

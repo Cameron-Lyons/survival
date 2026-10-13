@@ -6422,8 +6422,7 @@ points.survival_py_survfit <- function(x, fun, censor = FALSE, col = 1,
 residuals.survival_py_survfit <- function(object, times, type = "pstate",
                                           collapse = FALSE, weighted = collapse,
                                           data.frame = FALSE, extra = FALSE, ...) {
-  if (inherits(object, c("survival.r_api.CoxSurvfitResult",
-                         "survival.r._types.CoxSurvfitResult"))) {
+  if (inherits(object, "survival.r._types.CoxSurvfitResult")) {
     stop("residuals method for coxph survival curve not found", call. = FALSE)
   }
   if (missing(times)) {
@@ -9829,7 +9828,7 @@ dim.survival_py_survfit <- function(x) {
 }
 
 .is_cox_curves <- function(x) {
-  inherits(x, c("survival.r_api.CoxSurvfitResult", "survival.r._types.CoxSurvfitResult"))
+  inherits(x, "survival.r._types.CoxSurvfitResult")
 }
 
 .as_survival_py_cox_curve_list <- function(x) {

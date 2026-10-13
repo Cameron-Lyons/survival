@@ -45,7 +45,7 @@ def model(case, protocol="mapping"):
         family = SimpleNamespace(linkinv=inverse)
     else:
         family = SimpleNamespace(link=SimpleNamespace(inverse=inverse))
-    return r.YatesModel(
+    return r.YatesFitAdapter(
         case["formula"],
         case["data"],
         [math.nan if v is None else v for v in case["beta"]],

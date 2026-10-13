@@ -37,7 +37,7 @@ from ._types import (
     _InteractionTerm,
     _SingleDesignTerm,
 )
-from ._yates_model import YatesModel
+from ._yates_model import YatesFitAdapter
 from ._yates_setup import (
     _COXPH_PREDICT,
     _cox_survival_baseline,
@@ -165,7 +165,9 @@ def _factorial_population(
 def _yates_model_frame(fit: Any) -> dict[str, list[Any]]:
     """``mframe <- fit$model; if (is.null(mframe)) mframe <- model.frame(fit)``."""
 
-    return _plain_model_frame(fit.model if isinstance(fit, YatesModel) else _coxph_model_frame(fit))
+    return _plain_model_frame(
+        fit.model if isinstance(fit, YatesFitAdapter) else _coxph_model_frame(fit)
+    )
 
 
 def _yates_population(
@@ -243,7 +245,7 @@ def _yates_sgtt(
 ) -> tuple[Any, list[str]]:
     """Build R's full indicator design and delegate the type III tests to Rust."""
 
-    external = isinstance(fit, YatesModel)
+    external = isinstance(fit, YatesFitAdapter)
     full_intercept = design.intercept or not external
     factors: dict[str, _SingleDesignTerm] = {}
     for factor in _design_factors(design):
@@ -342,7 +344,7 @@ def _yates_setup(fit: Any, predict: Any, options: Any | None) -> _YatesSetup:
 
     if callable(predict) or isinstance(predict, Mapping):
         raise ValueError("user written prediction functions are not yet supported")
-    if isinstance(fit, YatesModel):
+    if isinstance(fit, YatesFitAdapter):
         response = yates_setup(fit, predict)
         if response is None:
             return _YatesSetup("linear")
@@ -385,7 +387,7 @@ def _yates_estimable(fit: Any, design: _FormulaDesign, xmatlist: list[Any]) -> l
     """R's estimability check for a fit with aliased coefficients, against the unique rows
     of ``model.matrix(fit)`` (a Cox model's with a leading column of ones)."""
 
-    if isinstance(fit, YatesModel):
+    if isinstance(fit, YatesFitAdapter):
         n = len(next(iter(fit.model.values())))
         return _core.yates_estimable(xmatlist, _design_rows_from_spec(fit.model, design, n))
     return _core.yates_estimable(xmatlist, fit.x, intercept=design.intercept)
@@ -410,7 +412,7 @@ def yates(
     latter two average ``nsim`` coefficient draws, and ``options={"seed": 0}`` seeds
     their R-compatible random stream.  ``population`` is ``"data"``, ``"factorial"``,
     ``"sas"`` or a data frame.  With aliased coefficients, a level the fit cannot
-    estimate has an NA mean and the tests that use it are NA.  ``YatesModel`` adapts
+    estimate has an NA mean and the tests that use it are NA.  ``YatesFitAdapter`` adapts
     externally fitted linear models and GLMs without refitting them. Supply
     its ``family`` and use ``predict="response"`` for inverse-link simulations.
     As in R, nonlinear population averages are unweighted; case weights apply
@@ -426,7 +428,7 @@ def yates(
 
     if isinstance(fit, CoxphmsModel):
         raise ValueError("multi-state coxph not yet supported")
-    external = isinstance(fit, YatesModel)
+    external = isinstance(fit, YatesFitAdapter)
     engine = None if external else _coxph_engine(fit, "the fit does not have a terms structure")
     design = _formula_design_for_fit(fit)
     if design is None:

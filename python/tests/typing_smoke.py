@@ -80,7 +80,7 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
         r.print_survcheck(r.survcheck("Surv(time, status) ~ 1", data, id="id")), r.ModelPrint
     )
     assert_type(r.print_yates(r.yates(cox, "age", levels=[40, 60, 80])), r.YatesPrint)
-    glm = r.YatesModel(
+    glm = r.YatesFitAdapter(
         "y ~ age",
         data,
         [1.0, 0.1],
@@ -89,12 +89,12 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
         weights=[1.0] * len(data["y"]),
         linear_predictors=[1.0] * len(data["y"]),
     )
-    assert_type(glm, r.YatesModel)
+    assert_type(glm, r.YatesFitAdapter)
     assert_type(r.concordance(glm), r.ConcordanceResult)
     assert_type(r.concordance(glm, newdata=data), r.ConcordanceResult)
     assert_type(r.yates(glm, "age", levels=[40, 60], predict="response"), r.YatesResult)
     aft = r.survreg("Surv(time, status) ~ age", data)
-    assert_type(aft, r.SurvregModelResult)
+    assert_type(aft, r.SurvregModel)
     assert_type(r.print_survreg(aft), r.ModelPrint | r.SurvregPenalPrint)
     assert_type(r.print_summary_survreg(r.model_summary(aft)), r.ModelPrint)
     assert_type(
@@ -116,19 +116,19 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(raw_km.n, list[int])
     assert_type(raw_km.strata, dict[str, int] | None)
     direct = r.coxsurv_fit(y=y, x=data, x2=data, risk=data["age"], risk2=data["age"])
-    assert_type(direct, r.CoxSurvFitResult | r.CoxSurvFitList)
-    if isinstance(direct, r.CoxSurvFitResult):
+    assert_type(direct, r.CoxsurvRawResult | r.CoxsurvRawList)
+    if isinstance(direct, r.CoxsurvRawResult):
         assert_type(direct.n, list[int])
         assert_type(direct.strata, dict[str, int] | None)
     else:
-        assert_type(direct[0], r.CoxSurvFitResult)
-    assert_type(r.survfitcoxph_fit(y, data), r.CoxSurvFitResult | r.CoxSurvFitList)
+        assert_type(direct[0], r.CoxsurvRawResult)
+    assert_type(r.survfitcoxph_fit(y, data), r.CoxsurvRawResult | r.CoxsurvRawList)
     bare = r.coxph_fit(data["age"], y)
-    assert_type(bare, r.CoxFitResult)
+    assert_type(bare, r.CoxphFitResult)
     assert_type(bare.coefficients, list[float] | None)
     assert_type(bare.residuals, list[float] | None)
-    assert_type(r.agreg_fit(data["age"], y), r.CoxFitResult)
-    assert_type(r.agexact_fit(data["age"], y), r.CoxFitResult)
+    assert_type(r.agreg_fit(data["age"], y), r.CoxphFitResult)
+    assert_type(r.agexact_fit(data["age"], y), r.CoxphFitResult)
     bare_aft = r.survreg_fit(data, y)
     assert_type(bare_aft, r.SurvregFitResult)
     assert_type(bare_aft.coefficients, list[float])
@@ -141,13 +141,13 @@ def _check_public_return_types(data: dict[str, list[Any]], curves: r.CoxSurvfitR
     assert_type(r.print_survreg_penal(bare_penal), r.SurvregPenalPrint)
     assert_type(r.print_surv(y), r.ResponsePrint)
     assert_type(r.print_surv2(r.Surv2(data["time"], data["status"])), r.ResponsePrint)
-    assert_type(r.print_ratetable(r.survexp_us()), r.RateTablePrint)
-    assert_type(r.match_ratetable(data, r.survexp_us()), r.RateTableMatch)
+    assert_type(r.print_ratetable(r.survexp_us()), r.RatetablePrint)
+    assert_type(r.match_ratetable(data, r.survexp_us()), r.RatetableMatch)
     assert_type(r.survexp_us().match_levels(1, ["m", "f"]), list[int])
     assert_type(r.concordancefit(y, data["age"]), r.ConcordanceResult)
     assert_type(r.survConcordance("Surv(time, status) ~ age", data), r.SurvConcordanceResult)
     additive = r.aareg("Surv(time, status) ~ age", data)
-    assert_type(additive, r.AaregModelResult)
+    assert_type(additive, r.AaregModel)
     assert_type(r.print_aareg(additive), r.ModelPrint)
     assert_type(r.print_summary_aareg(r.model_summary(additive)), r.ModelPrint)
     assert_type(r.aggregate_survfit(curves), r.CoxSurvfitResult)

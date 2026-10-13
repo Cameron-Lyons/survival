@@ -80,13 +80,14 @@ from ._formula import (
 )
 from ._surv import Surv
 from ._types import (
+    _renamed_classes,
     ModelFrame,
     NaAction,
     PyearsResult,
     RateTable,
     StrataFactor,
-    SurvExpResult,
-    SurvExpSummary,
+    SurvexpResult,
+    SummarySurvexpResult,
     TcutResult,
     _CovariateTerm,
     _InteractionTerm,
@@ -99,7 +100,7 @@ _RATETABLE_ATTRIBUTES = ("dims", "dimid", "dimnames", "cutpoints", "types")
 
 
 @dataclass(frozen=True)
-class RateTableSummary:
+class SummaryRatetableResult:
     """Rate-table dimensions, canonical attributes and the native summary text."""
 
     dimensions: dict[str, list[Any]]
@@ -111,7 +112,7 @@ class RateTableSummary:
 
 
 @dataclass(frozen=True)
-class RateTableMatch:
+class RatetableMatch:
     """Matched rows in rate-table dimension order, cutpoints and a built-in summary.
 
     Categorical positions are one-based; continuous positions keep their units
@@ -124,7 +125,7 @@ class RateTableMatch:
     summary: str | None
 
 
-def match_ratetable(data: Any, ratetable: RateTable) -> RateTableMatch:
+def match_ratetable(data: Any, ratetable: RateTable) -> RatetableMatch:
     """Match named data columns to a rate table, validating declared factor levels.
 
     Accept a mapping or data frame. Required columns may be numeric, categorical,
@@ -135,7 +136,7 @@ def match_ratetable(data: Any, ratetable: RateTable) -> RateTableMatch:
         raise TypeError("Invalid rate table")
     matched = _match_rate_columns(data, ratetable)
     positions = matched.r
-    return RateTableMatch(
+    return RatetableMatch(
         positions,
         ratetable.dimid,
         matched.cutpoints,
@@ -143,7 +144,7 @@ def match_ratetable(data: Any, ratetable: RateTable) -> RateTableMatch:
     )
 
 
-def summary_ratetable(object: RateTable, **_kwargs: Any) -> RateTableSummary:
+def summary_ratetable(object: RateTable, **_kwargs: Any) -> SummaryRatetableResult:
     """Describe each rate-table dimension and retain its canonical attributes.
 
     The dimension table gives levels for factors and lower/upper cutpoints
@@ -164,7 +165,7 @@ def summary_ratetable(object: RateTable, **_kwargs: Any) -> RateTableSummary:
             bounds = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]
         lower.append(bounds[0])
         upper.append(bounds[1])
-    return RateTableSummary(
+    return SummaryRatetableResult(
         dimensions={
             "dimension": names,
             "type": types,
@@ -1397,7 +1398,7 @@ def _flatten(values: Any, dims: Sequence[int]) -> list[float]:
 
 
 @dataclass(frozen=True)
-class PyearsSummary:
+class SummaryPyearsResult:
     """The tables R's ``summary.pyears`` prints.
 
     Each table is a row-major nested list over ``dim`` like :class:`PyearsResult`'s
@@ -1466,7 +1467,7 @@ def summary_pyears(
     conf_level: Any = 0.95,
     scale: Any = 1,
     **kwargs: Any,
-) -> PyearsSummary:
+) -> SummaryPyearsResult:
     """R's ``summary.pyears``: the tables of a ``pyears`` result, with rates and ratios.
 
     ``rate`` is ``scale * event / pyears`` and ``rr`` the observed/expected ratio (R's
@@ -1523,7 +1524,7 @@ def summary_pyears(
             return None
         return _row_major(list(zip(lower, upper, strict=True)), dims)
 
-    return PyearsSummary(
+    return SummaryPyearsResult(
         n=_reshape(summary.n, dims),
         pyears=_reshape(summary.pyears, dims),
         offtable=float(summary.offtable),
@@ -1621,16 +1622,16 @@ def _survexp_vectors(
     return columns, rmap
 
 
-def _survexp_result(result: Any, levels: list[str] | None, n: int) -> SurvExpResult:
+def _survexp_result(result: Any, levels: list[str] | None, n: int) -> SurvexpResult:
     if levels is None:
-        return SurvExpResult(
+        return SurvexpResult(
             time=list(result.time),
             surv=[row[0] for row in result.surv],
             n_risk=[row[0] for row in result.n_risk],
             method=str(result.method),
             n=n,
         )
-    return SurvExpResult(
+    return SurvexpResult(
         time=list(result.time),
         surv=[list(row) for row in result.surv],
         n_risk=[list(row) for row in result.n_risk],
@@ -1641,7 +1642,7 @@ def _survexp_result(result: Any, levels: list[str] | None, n: int) -> SurvExpRes
 
 
 def _survexp_retained(
-    output: SurvExpResult,
+    output: SurvexpResult,
     mf: ModelFrame,
     data: Any,
     rmap: Mapping[str, Any] | None,
@@ -1652,7 +1653,7 @@ def _survexp_retained(
     levels: list[str] | None,
     response: list[float] | None,
     default_followup: float | None = None,
-) -> SurvExpResult:
+) -> SurvexpResult:
     categories: StrataFactor | list[float] | None = None
     if retention[1]:
         if groups is None or levels is None:
@@ -1686,8 +1687,8 @@ def _survexp_retained(
 
 
 def summary_survexp(
-    object: SurvExpResult, times: Any | None = None, scale: Any = 1, **_kwargs: Any
-) -> SurvExpSummary:
+    object: SurvexpResult, times: Any | None = None, scale: Any = 1, **_kwargs: Any
+) -> SummarySurvexpResult:
     """R's ``summary.survexp``, using the native expected-curve time selector.
 
     Requested times are sorted, retaining duplicates and removing missing or
@@ -1696,7 +1697,7 @@ def summary_survexp(
     keep every source row. Curve labels name matrix columns, as on the fit.
     """
 
-    if not isinstance(object, SurvExpResult):
+    if not isinstance(object, SurvexpResult):
         raise TypeError("Invalid data")
     surv = _curve_matrix(object.surv)
     n_risk = _curve_matrix(object.n_risk)
@@ -1710,7 +1711,7 @@ def summary_survexp(
         object.method,
     )
     ncols = len(surv[0]) if surv else len(object.strata or [""])
-    return SurvExpSummary(
+    return SummarySurvexpResult(
         time=list(result.time),
         surv=[row[0] for row in result.surv] if ncols == 1 else result.surv,
         n_risk=[row[0] for row in result.n_risk] if ncols == 1 else result.n_risk,
@@ -1719,7 +1720,7 @@ def summary_survexp(
     )
 
 
-def _survexp_frame(result: SurvExpResult | SurvExpSummary) -> dict[str, list[Any]]:
+def _survexp_frame(result: SurvexpResult | SummarySurvexpResult) -> dict[str, list[Any]]:
     """Expected curves as one row per (curve, time)."""
 
     matrix = bool(result.surv and isinstance(result.surv[0], list))
@@ -1765,7 +1766,7 @@ def survexp(
     year: Any = None,
     sex: Any = None,
     **kwargs: Any,
-) -> SurvExpResult | list[float]:
+) -> SurvexpResult | list[float]:
     """R's ``survexp``: expected survival from a population rate table.
 
     ``formula`` is ``~ group``, ``time ~ group`` or ``Surv(time, status) ~ group``
@@ -1935,3 +1936,13 @@ def survexp(
         response,
         max(requested) if requested else None,
     )
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "PyearsSummary": "SummaryPyearsResult",
+        "RateTableSummary": "SummaryRatetableResult",
+        "RateTableMatch": "RatetableMatch",
+    },
+)

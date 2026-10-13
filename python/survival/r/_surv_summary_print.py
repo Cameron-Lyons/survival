@@ -12,10 +12,10 @@ from ._coerce import _normalize_bool_option, _r_format_number
 from ._print import numeric_matrix_lines, numeric_vector_lines, print_options
 from ._types import (
     NamedMatrix,
+    SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
-    SurvExpResult,
-    SurvExpSummary,
+    SurvexpResult,
 )
 
 
@@ -227,7 +227,11 @@ def print_summary_survfitms(
 
 
 def _expected_table(
-    x: SurvExpResult | SurvExpSummary, scale: float, *, summary: bool, omit_missing: bool = False
+    x: SurvexpResult | SummarySurvexpResult,
+    scale: float,
+    *,
+    summary: bool,
+    omit_missing: bool = False,
 ) -> NamedMatrix:
     rows = len(x.time)
     ncurve = len(x.strata or [""])
@@ -258,7 +262,7 @@ def _expected_table(
 
 
 def print_survexp(
-    x: SurvExpResult,
+    x: SurvexpResult,
     scale: Any = 1,
     digits: Any = None,
     naprint: Any = False,
@@ -267,13 +271,13 @@ def print_survexp(
 ) -> SurvivalTablePrint:
     """Format expected curves as time, per-curve risk counts and survival columns.
 
-    Names on ``SurvExpResult.strata`` label columns, not blocks of rows. As in R,
+    Names on ``SurvexpResult.strata`` label columns, not blocks of rows. As in R,
     rows with too many missing cells are omitted unless ``naprint=True``. Stored
     expected curves have no standard errors. Original call and rate-table prose
     are not reconstructed. Individual-method vectors are not curve results.
     """
 
-    if not isinstance(x, SurvExpResult):
+    if not isinstance(x, SurvexpResult):
         raise TypeError("print_survexp requires an expected-survival curve")
     scale, digits, width = print_options(scale, digits, width)
     show_na = _normalize_bool_option(naprint, "naprint")
@@ -282,14 +286,14 @@ def print_survexp(
 
 
 def print_summary_survexp(
-    x: SurvExpSummary,
+    x: SummarySurvexpResult,
     digits: Any = None,
     *,
     width: Any = 80,
 ) -> SurvivalTablePrint:
     """Format selected expected-survival times, retaining one risk column per curve."""
 
-    if not isinstance(x, SurvExpSummary):
+    if not isinstance(x, SummarySurvexpResult):
         raise TypeError("print_summary_survexp requires an expected-survival summary")
     _, digits, width = print_options(1, digits, width)
     return _report([_expected_table(x, 1, summary=True)], [None], digits, width)

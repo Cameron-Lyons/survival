@@ -23,7 +23,7 @@ def assert_close(actual, expected):
 def model(case):
     if case["cox"]:
         return r.coxph(case["formula"], case["data"])
-    return r.YatesModel(
+    return r.YatesFitAdapter(
         case["formula"],
         case["data"],
         [math.nan if value is None else value for value in case["beta"]],
@@ -97,7 +97,7 @@ def test_numeric_selection_includes_the_last_fitted_term():
         actual = r.yates(fit, selector)
         assert actual.estimate == expected.estimate
         assert actual.mvar == expected.mvar
-    one = r.YatesModel("y ~ a", case["data"], [1, 2, 3], np.eye(3).tolist())
+    one = r.YatesFitAdapter("y ~ a", case["data"], [1, 2, 3], np.eye(3).tolist())
     assert r.yates(one, 1).estimate == r.yates(one, "a").estimate
 
 
