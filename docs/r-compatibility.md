@@ -7,298 +7,30 @@ fits, covariance matrices, predictions, residuals, survival curves and utilities
 They establish compatibility for the tested inputs, rather than a claim that
 every R expression, plotting method or extension package is supported.
 Newer regression tests and generated fixtures use values from R survival
-3.8-12 (R 4.5.3); the few places where 3.8-12 changed behaviour are listed under
+3.8-12 (R 4.5.3); the few places where 3.8-12 changed behavior are listed under
 [Versions](#versions).
 
 This page records every known difference from R:
 
-- [API coverage](#api-coverage): exported entry points and tested contracts;
-- [AFT distribution queries](#aft-distribution-queries): recycling and callbacks;
-- [Curve aggregation callbacks](#curve-aggregation-callbacks): function contracts;
-- [Reference differences retained deliberately](#reference-differences-retained-deliberately):
-  the fixture checks that are expected to fail;
-- [Deliberate fixes of R defects](#deliberate-fixes-of-r-defects):
-  inputs where R errors, crashes or returns wrong numbers and the port returns
-  the intended result;
+- [API coverage](#api-coverage): exported entry points;
+- [Deliberate fixes of R defects](#deliberate-fixes-of-r-defects): inputs where R
+  errors, crashes or returns wrong numbers and the port returns the intended
+  result;
 - [Other deliberate differences](#other-deliberate-differences): versions,
   numerics, messages, labels, sort orders and Python-specific representations;
+- [R behavior reproduced deliberately](#r-behavior-reproduced-deliberately): R
+  quirks the port keeps on purpose;
+- [Reference differences retained deliberately](#reference-differences-retained-deliberately):
+  the fixture checks that are expected to fail;
 - [Reference limitations](#reference-limitations): operations refused by R itself.
 
-## Formula and population interfaces
-
-Penalized Cox formulas support `ridge`, `pspline`, `frailty`, `frailty.gamma`,
-`frailty.gaussian` and `frailty.t`; penalized `survreg` formulas support
-`ridge` and `pspline` (R's `survreg` refuses frailty terms, and so does the
-port). Basis construction and penalty optimization run in Rust. Prediction
-reuses training knots and factor levels. Formula options are parsed as
-literals; Python or R code is never evaluated.
-
-Vector expressions support R precedence and three-valued `&`, `|`, and `!`.
-Nested `I()` and `identity()` preserve logical and factor types, while arithmetic
-and `as.numeric()` remain numeric. Logical offsets retain model-frame types and
-contrast metadata. Evaluation precedes subsetting and missing-row removal;
-prediction reuses fitted levels, including empty or entirely missing vectors.
-See [typed formula expressions](typed-formula-expressions.md) for examples and
-the independent stock-R reference checks.
-
-Custom `survreg` distribution dictionaries can supply density, initialization,
-quantile, deviance, variance, and response-transform callbacks. Ordinary and
-penalized fitting, prediction, residuals, distribution functions, and Python
-pickle retain these callbacks. Native Rust callers implement
-`regression::SurvregCallbacks`. See [AFT distribution callbacks](survreg-density.md)
-for the batch contract, examples, and serialization requirements.
-
-The R facade also supports saving fitted models and responses with the standard
-R serialization functions. It embeds Python pickle state and saves original
-R callbacks with their environments, restoring Python objects on first use.
-See [R model persistence](r-model-persistence.md) for the version and installation
-requirements.
-
-Cox and AFT formulas support stratum-specific effects such as
-`age * strata(sex)`, `age:strata(sex)`, and interactions with compound strata
-or categorical covariates. The strata still determine the Cox baseline hazards
-or AFT scales. Cox constructs the full model matrix before dropping the strata
-main effects; AFT removes those main effects before assigning contrasts. The
-port preserves this difference, including factor order and column labels.
-Cox survival curves for these models require `newdata`, as in R.
-
-Strata arguments may be comparisons, arithmetic, numeric transforms, factors,
-`cut()` calls, or nested strata. Named arguments set grouping labels;
-`shortlabel`, `sep`, and `na.group` accept literal options. For example,
-`strata(sex == 1)` groups by a comparison and
-`strata(g, na.group = TRUE)` retains missing values as a group. Arithmetic-created
-NaN forms a distinct `NaN` level, following R's factor conversion; input NaN
-continues to represent R's NA. Evaluated strata are reused within a model frame
-and subsetted with its rows, so data-dependent cut points are determined before
-subsetting. R-facing subset arguments now use R row indexing and data/formula
-environments, while Python positions remain zero-based. Missing selected rows
-reach the shared missing-data action, and response status coding is preserved
-before selection; see [formula subsets](formula-subsets.md).
-Responses are also normalized before missing-row removal without a subset;
-invalid statuses and interval endpoints share the constructor's missingness rules.
-R native model frames use the same constructor and bulk response conversion;
-see [response normalization](response-normalization.md).
-
-Python `Surv` and `Surv2` consume one-shot event inputs once, keeping all event
-rows aligned with their times. Declared factor levels survive preparation,
-and numeric arrays retain their dtypes for status coding. See
-[response input validation](surv-iterable-inputs.md) for independent stock
-constructor references and complete-construction measurements.
-
-KM fitting accepts infinite right/counting endpoints and `start.time`, and
-ordinary curve summaries accept infinite query times. Finite near-tie
-normalization retains nonfinite endpoints and response rows, correcting
-stock `aeqSurv` truncation and row-recycling defects. Infinite-origin summary
-tables retain R's undefined arithmetic. Independent complete fits, summaries,
-quantiles and raw stock discrepancies are described in
-[infinite KM times](km-infinite-times.md).
-
-Near-tie normalization also keeps distinct large finite times when their
-magnitude sum overflows. Its relative scale remains finite, preserving both
-real ties and delayed-entry intervals. See [large finite times](aeq-large-times.md)
-for independent stock normalization and complete-curve checks.
-
-Time-dependent `tmerge` updates prepare shared iterator sources once across
-both frames and all operations, including the first event's implicit range.
-Categorical censor metadata survives preparation, and unrelated update columns
-remain unread. See [time-dependent inputs](tmerge-iterable-inputs.md).
-
-Python `strata()` consumes one-shot iterator columns once and preserves
-declared factor levels. Its returned `StrataFactor` retains categorical level
-order when reused in a response, model column, nested strata or prediction.
-Numeric short labels therefore remain categories rather than becoming a
-continuous predictor. A literal `"NA"` event-state label stays distinct from a
-missing factor value. The 142 independent source cases and a numerical
-three-group AFT fit are described in [reusable strata factors](strata-factor-inputs.md).
-`scripts/generate_strata_expression_reference.R` checks model fits,
-predictions, missing-value actions, survival curves, and log-rank tests.
-On the local 100,000-row NumPy benchmark, constructing the model frame for
-`age * strata(sex)` fell from 97.1 ms to 71.5 ms; ordinary additive strata stayed
-near 24 ms. `scripts/bench_strata.py` measures this independently of model fitting.
-
-Inferred factors prepare one-shot grouping columns once for curve aggregation
-and deprecated concordance strata. Clustered concordance separately prepares
-iterator clusters before ordering them, retaining declared category order.
-The 51 independent stock cases check aggregate values and full concordance
-outputs; see [factor and cluster inputs](factor-iterable-inputs.md).
-
-Formula frames, fitters and new-data predictions retain used iterator columns
-and direct row-aligned arguments within each call. Shared iterator aliases read
-one buffer; unrelated columns remain unread through fitting, copying and pickle.
-Declared factor metadata, numeric expression types, matrix response missingness
-and stock model-frame row counts are preserved. Independent controls include
-88 fits/frames, 24 row-count cases and 124 complete new-data predictions; see
-[formula iterator inputs](formula-iterator-inputs.md).
-Population models prepare cut/time-cut and rate-map inputs before evaluating
-them. Response-free formulas use actual weights, referenced rate sources and
-external rate vectors to determine rows, with scalar mappings expanded before
-integration. See [population formula inputs](population-iterable-inputs.md),
-including the stock scalar-map limitation and its expanded-vector oracle.
-Public Rust population calculations also revalidate mutable rate-table fields
-and check index/group arithmetic; see [rate-table inputs](ratetable-inputs.md).
-
-`scripts/generate_strata_interaction_reference.R` checks coefficients,
-covariances, design matrices, predictions, residuals, curves, and proportional
-hazards diagnostics. Its cases include delayed entry, Breslow ties, case
-weights, combined strata, and AFT scale strata. R's `predict.coxph` can remove
-the wrong columns when a strata interaction follows a multi-column factor:
-linear prediction errors and term prediction can silently use different
-columns. The fixture retains those R results and separately calculates the
-intended predictions from R's correct `model.matrix.coxph` output; the port
-uses that model matrix consistently.
-
-R's curve prediction fails for the same factor models, so the reference
-generator verifies their curves against equivalent separate fits within each
-stratum. R's proportional-hazards test also fails for redundant full factor
-indicators; the port's global test agrees with the equivalent treatment-coded
-model. The fixture records these R errors alongside the working references.
-
-`model_matrix(survreg_fit, data)` builds prediction rows with the fitted
-contrasts and drops incomplete rows. R's method can fail while rebuilding
-the terms of a model with strata interactions. Yates factorial and SAS
-populations retain compound strata as evaluated factors; their labels are
-not parsed back into the original source columns.
-
-Penalized Cox/AFT matrices use formula/basis column labels separately from
-coefficient labels. Cox reconstruction includes sparse frailty terms, recodes
-new sparse groups before omission, and retains fitted full dense contrasts.
-Automatic sparse-to-dense changes follow R's reevaluated constructor. Stored
-sparse extraction inserts the original codes into one owned row snapshot.
-The 168-case reference retains raw R outputs alongside explicit corrections
-for its strata-branch contrast typo, lost unpenalized spline options and empty
-spline inputs; see [model matrices](cox-model-matrices.md).
-
-Formula expansion also handles `offset()` and `cluster()` inside products,
-nesting, and powers. Each distinct offset contributes once even if it appears
-in a removed term, matching R's `terms()` behavior. Cluster main terms supply
-robust-variance groups; their interaction columns remain in the design. R's
-checks for multiple clusters and missing interaction margins are preserved.
-Cluster IDs may also be arithmetic expressions, comparisons, numeric
-transforms, or factor conversions, such as `cluster(site + id)` and
-`cluster(group > 5)`. Their evaluated values determine robust-variance groups
-in Cox/AFT fits and clustered survival curves. Source missing values and NaNs
-created by these expressions take part in model-frame row omission, including
-when the cluster main effect has been removed from the coefficient design.
-
-Variables removed by formula subtraction remain in the model frame and take
-part in training-row omission. For new-data predictions, `na.pass` allows a
-missing unused variable without losing the prediction; `na.omit`,
-`na.exclude`, and `na.fail` still check it. Cox and AFT cluster extraction
-rebuilds the formula and drops such unused variables, as R does.
-
-`scripts/generate_formula_special_reference.R` checks these cases against R,
-including numeric and categorical clusters and transformed missing values.
-It retains R's raw offset predictions alongside the intended values: the port
-includes AFT new-data offsets and consistently centers Cox offsets even for
-models without coefficients. For models without covariate terms, term
-prediction returns an empty-column matrix where R's method errors.
-
-Interaction identity ignores factor order: `age:sex` and `sex:age` name the
-same term, so subtraction and duplicate removal follow R. Grouped nesting
-such as `(a + b)/c` produces `a + b + a:b:c`; powers bind before interactions
-and products, and intercept changes inside parentheses are retained.
-Categorical contrasts account for margins contained in earlier interactions,
-even when those margins are not explicit main effects.
-`scripts/generate_formula_algebra_reference.R` records independent R design
-matrices, column names, assignments, and frame variables for these cases.
-
-```python
-from survival import datasets, r
-
-lung = datasets.load_lung()
-fit = r.coxph("Surv(time, status) ~ pspline(age, df=4) + sex", lung)
-prediction = r.predict(fit, {"age": [50, 70], "sex": [1, 2]}, type="lp")
-effective_df = r.degrees_freedom(fit)
-
-cox = r.coxph("Surv(time, status) ~ age + sex", lung, model=True)
-expected = r.survexp("~ sex", lung, ratetable=cox, times=[0, 100, 365])
-```
-
-Multi-state Cox models (`coxph` on a factor-status `Surv` with `id=`, formula
-lists, `istate=` and `statedata=`) return a `CoxphmsModel` with R's `cmap`,
-`smap`, `states` and `transitions`, and support `coef`/`vcov(matrix=True)`,
-`predict`, `residuals`, `cox_zph`, `coxph_detail` and `survfit` (R's
-`survfit.coxphms`, with `p0`, `summary_survfit`, `survfit0` and
-`aggregate_survfit`).
-
-Multistate `summary_survfit` returns probabilities, state-specific counts,
-confidence limits and a table of restricted mean time in each state. Requested
-times are sorted and deduplicated; events and censors accumulate between them.
-`scale`, `extend`, `censored` and the common, individual, numeric and omitted
-restricted-mean options are supported. Rust callers can use
-`surv_analysis::{summary_survfit_aj, survmean_aj}`.
-
-Ordinary and multistate summaries support explicit `dosum` selection for
-cumulative or per-time counts, including Cox prediction curves. Dense ordinary
-summary queries sweep the observed time grid once; sparse queries retain
-binary search. Native time inputs accept NumPy vectors directly. See
-[summary counts](summary-counts.md) for defaults, Rust entry points, stock-R
-comparisons and reproducible benchmarks.
-
-Curve data frames preserve fitted terminal uncertainty and confidence limits.
-Robust fits can have zero standard errors and zero bounds at survival zero;
-these values remain zero in `as_data_frame` and R curve quantiles. Undefined
-native values remain missing, and logarithmic standard errors still convert
-to the survival scale. Twenty-four independent full-column stock references
-cover finite and infinite endpoints, grouped curves, robust and naive fits,
-and both ordinary estimate types.
-
-Compact ordinary summary tables stream restricted means and their variance
-without copying the observed arrays, and release the Python interpreter lock.
-Median searches stop at the required crossing or plateau endpoint. See
-[summary-table validation and timings](survival-summary-tables.md) for the 400
-independent stock-R tables and measured native calls.
-
-Restricted-mean comparisons validate observation lengths before selecting
-groups, gather each group's rows once and preserve sorted reference labels.
-The comparison and stacked-table bindings accept owned NumPy vectors and run
-without the Python interpreter lock. See
-[comparison validation and timings](rmst-comparison.md).
-
-Survival-response repetition follows R's first-element warnings, nonfinite
-defaults, fractional truncation and argument precedence. The Python interface
-repeats immutable response columns without allocating expanded row indices.
-See [repetition validation and timings](surv-repetition.md) for the 392 stock
-calls across seven response kinds and complete-call allocation measurements.
-
-`survfit` also accepts a square matrix of ordinary KM or Cox curves, with
-`None` for missing transitions (`survfit.matrix`). It supports both `discrete`
-and `matexp`, vector or per-curve `p0`, grouped curves, multiple Cox prediction
-columns, and `start_time`. The default is `discrete`, matching R's actual
-dispatch for both kinds of curve. The computation is available directly to
-Rust callers as `surv_analysis::survfit_matrix`. See
-[transition-curve matrices](survfit-matrix.md) for the representation and
-the additional R 3.8-12 differential fixtures.
-
-`blogit`, `bprobit`, `bcloglog` and `blog` accept `inverse=True` for the inverse
-link, with scalar or vector input.
-
-`concordance` also accepts external linear models and GLMs through `YatesModel`,
-including optional stored linear predictors, new data and joint comparisons.
-The R bridge exposes the corresponding `lm` method. Plain numeric responses
-retain near ties; survival-time responses apply `timefix`. See
-[external-model concordance](linear-model-concordance.md) for input contracts,
-R differences, numerical references and complete-call benchmarks.
-
-The R fitted-model method also uses the shared Python model preparation and
-comparison path. Each Cox or AFT model retains its own response, strata,
-weights and applicable clusters, including joint comparisons and omitted
-training rows. See [fitted-model concordance](model-concordance.md) for the
-wrapper corrections, metadata conventions and complete-call measurements.
-
-`yates(..., predict="risk", nsim=200, options={"seed": 123})` uses Rust simulation
-with R's default Mersenne-Twister/inversion normal stream. An explicit seed gives
-reproducible covariance estimates without altering a global RNG. The default
-seed is zero. External linear models can supply their coefficients and covariance
-through `r.YatesModel(formula, data, coefficients, variance, sigma2=None)`;
-coefficients must follow the formula's columns, including its intercept. R's
-`lm` is part of the separate `stats` package; the adapter does not refit it.
-External GLMs also supply `family=...` with `linkinv` or `link.inverse` and
-use `predict="response"`. The shared Rust simulation loop calls that inverse
-link once per coefficient draw for all populations together. Linear/link
-predictions can use optional case weights; nonlinear means remain unweighted
-and model offsets are omitted, following R. See [Yates setup](yates-setup.md)
-for the callback contract, reference coverage and ownership rules.
+The interfaces themselves are described in the topic guides:
+[formula interface](formula-interface.md), [predictions](prediction.md),
+[low-level fitting](low-level-api.md), [survival curves](curves.md),
+[printing and graphics](printing-and-graphics.md),
+[population calculations](population.md), [data preparation](data-preparation.md),
+[concordance](concordance.md), [marginal means](yates.md),
+[R bridge](r-bridge.md) and [performance](performance.md).
 
 ## API coverage
 
@@ -306,118 +38,77 @@ The exported API inventory covers all 80 exports in stock survival 3.8-12.
 That inventory checks entry points; the independent references and deliberate
 differences below describe the tested argument and numerical behavior.
 
-## AFT distribution queries
-
-`dsurvreg`, `psurvreg`, `qsurvreg` and `rsurvreg` recycle location and scale
-vectors separately at each arithmetic stage. Empty vectors, missing values,
-nonfinite values and nonpositive scales follow stock query arithmetic. For
-example, `rsurvreg(2, mean=1:3)` draws two uniforms and returns three values,
-with a fractional recycling warning. Density and quantile callbacks receive
-the complete intermediate batches, including empty and missing entries.
-
-Named Student-t queries require explicit numeric `parms`; the parameters
-recycle inside the distribution functions. Other named built-ins ignore
-`parms`. Constructed Student-t distribution objects retain their df = 4
-default. Query behavior does not relax fitting validation.
-
-Python arithmetic warnings use `RuntimeWarning`. The R bridge forwards
-`RuntimeWarning` and `UserWarning` as they occur, including when warnings stop
-evaluation. Other callback warning categories retain Python's warning hook.
-Python query callback exceptions retain their original identity. Independent
-stock references cover recycling, callback order, missing-value kinds,
-parameter vectors, warnings and random-stream consumption; see
-[AFT distributions](survreg-density.md).
-
-## Ordinary Cox curve selection
-
-Ordinary Cox curves from `r.survfit` expose
-`curves.subset(strata=..., data=..., drop=...)`. Python positions are zero-based;
-stratum labels and prediction-row names can also select their margins.
-The R bridge accepts the usual `curves[strata, data, drop=FALSE]` form.
-Reordering, repeated selections and empty margins retain counts, curve arrays,
-confidence components and prediction metadata. Repeated stratum display names
-remain available in summaries, quantiles and subsequent selections.
-
-`drop=True` removes singleton margins using stock R's rules, including keeping
-a matrix when the selected stratum contains one time row. A single R subscript
-on an object with both margins selects curve cells in column-major order and
-concatenates the selected curves. The independent
-`cox_survfit_subset_reference.json` checks complete selected objects and their
-initial values, summaries and quantiles against stock R.
-
-Single curves without an explicit margin also follow R's raw subscript rules,
-including repeated ones, empty subscripts and metadata removal. No-op selectors
-retain `start.time`; actual selections remove it. The independent
-`cox_survfit_single_reference.json` records these cases and the stale
-`std.chaz` aggregation defect described below.
-
-## Curve aggregation callbacks
-
-`aggregate_survfit` accepts `mean`, `median`, `min`, `max`, `sum` and numeric
-scalar callbacks. Rust exposes `aggregate_survfit_with`; Python accepts a
-callable in `FUN` or the native `fun` argument; the R bridge accepts R summary
-functions. Callback checks use each group's one-based prediction-row indices
-before evaluating survival rows, followed by state probabilities in state/time
-order. Extra function arguments are ignored as in stock R. See
-[curve aggregation](aggregate-survival-curves.md) for complete contracts,
-exceptional arithmetic, independent references and measurements.
-
-## Reference differences retained deliberately
-
-The Python fixture suite (`python/tests/test_r_fixtures.py`) has **37 expected
-numerical differences**, with no missing-feature or API-error exemptions. None
-of the historical reference JSON files were changed. The differences are:
-
-| Checks | Fixture family | Reason |
-| ---: | --- | --- |
-| 7 | Aalen regression, veteran data | The reference continues through rank-deficient risk sets and contains missing coefficients and values around 10¹⁵. The port truncates at the last nonsingular risk set and returns finite estimates. |
-| 6 | Cox concordance | Exact linear-predictor ties depend on floating-point/BLAS rounding. The reference and this platform classify a few tied pairs differently. |
-| 1 | Exact counting-process Cox deviance residuals | The reference's unclassed fit dispatch returns martingale residuals for a deviance request. The port computes deviance residuals. |
-| 18 | Interval-censored AFT residual derivatives | The reference has opposite signs in some scale derivatives. The port's likelihood derivatives are checked against finite differences for every censoring type and distribution family. |
-| 4 | AFT prediction with a new-data offset | R's `predict.survreg` drops new-data offsets on the linear-predictor/response path; only its stratified quantile path extracts them. The port includes them in the linear predictor and transformed predictions. |
-| 1 | `survcondense` with no rows to merge | The reference produces zero rows through negative indexing of an empty index. The port preserves all input rows. |
-
-These cases remain explicit `xfail(strict=True)` entries (`KNOWN_FAILURES`), so
-a future change in behavior requires review. They are not counted as passing
-comparisons. The Rust fixture adapter also records cases it cannot construct;
-those harness limitations are separate from the Python tests of the same Rust
-engines.
-
-Two fixture transport details are handled by the adapters: CSV factor columns
-recover the recorded R levels, and the near-tie test recovers the generator's
-IEEE floating-point expressions before fitting. Output time comparisons allow
-only the JSON format's 15-significant-digit rounding. Counts and the number of
-distinct times remain checked separately.
-
 ## Deliberate fixes of R defects
 
-In each case below R errors, crashes, reads uninitialised memory or returns a
+In each case below R errors, crashes, reads uninitialized memory or returns a
 result that contradicts its own documentation or code comments, and the port
 returns what R intends. Regression tests pin the intended values. Where a
 current-stock reference records defective output, it retains that output
-alongside the corrected oracle described below.
+alongside the corrected oracle.
 
-The current-stock summary-count reference also records one R defect separately
-from the historical fixtures: without requested times, grouped multistate
-summaries index count matrices as vectors and lose state/transition columns.
-The port accumulates each column within its stratum. The new reference retains
-R's raw output and computes intended counts from R's original fitted matrices;
-see [summary counts](summary-counts.md).
+### Formulas and model matrices
 
-Stock `aggregate.survfit` retains the original `std.chaz` columns after combining
-prediction rows. In a four-prediction example, aggregating to two groups changes
-`surv` from 12 by 4 to 12 by 2, while `std.chaz` remains 12 by 4. Selecting an
-aggregate group can then return another group's original cumulative-hazard
-error. The port clears this stale uncertainty component together with the other
-unavailable aggregate errors; see [curve aggregation](aggregate-survival-curves.md).
+- **Strata interactions after a multi-column factor**: R's `predict.coxph` can
+  remove the wrong columns when a strata interaction follows a multi-column
+  factor, so linear prediction errors and term predictions can silently use
+  different columns. The port uses R's correct `model.matrix.coxph` design
+  consistently. R's curve prediction fails for the same factor models (the port's
+  curves agree with separate fits within each stratum), and R's
+  proportional-hazards test fails for redundant full factor indicators (the
+  port's global test agrees with the equivalent treatment-coded model).
+- **`model.matrix.survreg` with strata interactions**: R's method can fail while
+  rebuilding the terms. `model_matrix(survreg_fit, data)` builds the prediction
+  rows with the fitted contrasts and drops incomplete rows.
+- **Cox model matrices**: the strata-removal branch of `model.matrix.coxph`
+  misspells `contrasts.arg`, so a rebuilt dense frailty loses its first indicator;
+  the port keeps the fitted full contrasts. `makepredictcall.pspline` drops the
+  original `df` and `penalty = FALSE` options, so a valid small unpenalized basis
+  fails under the default `df = 4`; the port keeps the original options and
+  fitted boundary knots. R's spline constructor fails on empty input; the port
+  returns the fitted columns and assignments with zero rows.
+- **Interaction-only time transforms**: `coxph` counts main-effect terms rather
+  than distinct transform variables, so a `tt()` term that occurs only in an
+  interaction can fail; the port runs each distinct transform once.
 
-Stock `neardate` fails when converting POSIXct/POSIXlt dates because it passes
-the two-element class vector to `methods::as`. The bridge converts to the
-single calendar class and matches the intended numeric epoch reference.
-Python also preserves exact timestamp ordering and character dates, rejects
-factor dates, and speeds numeric preparation. Python character comparisons
-use Unicode order; the R facade uses R's locale collation. See
-[sortable date matching](neardate-sortable.md) for validation and timings.
+### Predictions and residuals
+
+- **Offsets in predictions**: the port includes AFT new-data offsets in the linear
+  predictor (see the [retained reference
+  differences](#reference-differences-retained-deliberately)) and consistently
+  centers Cox offsets, even for models without coefficients. For models without
+  covariate terms, term prediction returns an empty-column matrix where R's method
+  errors.
+- **Empty AFT term predictions**: stock AFT term prediction fails on empty new data,
+  when omission leaves zero rows (including entirely omitted new data, in
+  `attrassign()`) and for intercept-only models (in the empty term loop). The port
+  returns a matrix with the selected column names and width and the retained row
+  count, or missing-value padding under `na.exclude`.
+- **All spline inputs missing**: stock prediction raises an empty-derivatives error;
+  the port returns the empty or padded output.
+- **Penalized Cox survival predictions**: the stock penalized wrapper refuses `type
+  = "survival"`, before validating a term selector; the port computes the prediction
+  from the fitted state.
+- **AFT term labels with standalone strata**: stock AFT prediction passes the full
+  formula terms to `attrassign()` after its model matrix has removed standalone
+  strata columns. When strata precede covariates, the remaining columns get
+  displaced labels (a `flag` contribution can be labeled `strata(g)`) and a named
+  selection can choose the wrong contribution. The port names prediction columns
+  from the fitted coefficient assignments.
+- **Grouped predictions and residuals**: stock sparse Cox predictions can be
+  collapsed both in the delegated prediction method and in the penalized method;
+  sparse term reconstruction and partial residuals can fail for a one-column dense
+  design; and Cox residuals reject logical group vectors through a scalar logical
+  condition. The port groups each prediction or residual once and accepts logical
+  groups (excluded rows are covered under [Cox models](#cox-models)). The R wrapper
+  keeps the group labels even where a stock method loses them while dropping a
+  one-column matrix.
+- **Null Cox models**: stock expected and survival predictions for a null Cox model
+  fail when multiplying by `NULL` coefficients; the port returns the baseline hazard
+  and its exponential survival.
+- **Empty AFT probability requests**: stock Gaussian, lognormal and t predictions
+  reject `p = NULL`, and estimated-scale empty predictions with `se.fit = TRUE`
+  fail; some fixed-scale predictions keep a nonempty error vector beside an empty
+  fit. The port returns empty fit and error matrices of the same width.
 
 ### Cox models
 
@@ -426,12 +117,15 @@ use Unicode order; the R facade uses R's locale collation. See
   without `cholesky2`, so its variance is not the inverse information. The port
   factors it. Lung `age + sex + ph.ecog`, `iter.max = 2`: R's `var[1, 1]` is
   8.330972e-05 (Efron), the port's 8.588522e-05.
-- **agfit4 centre moves**: a centre move of more than 709 raises "exp overflow
+- **agfit4 center moves**: a center move of more than 709 raises "exp overflow
   due to covariates" whenever the running sums are positive. R tests only
   `denom` and carries on with the deaths already added: two tied deaths alone
   at risk with offsets 0 and 1419 give R a log likelihood of -709.5 (the true
   value is -1419), where the port raises; with offsets 0 and 1418 R returns
   -709 and the port -1418.
+- **Exact counting-process fits with a large common offset**: R's front end
+  rejects a common offset of +1,000; the port fits it, giving the fit obtained
+  after removing the common shift.
 - **coxph.detail**: a stratum whose largest linear predictor lies beyond ±200
   has its risk scores shifted by it; R computes `exp(lp)` and overflows. The
   outputs agree wherever R's are finite.
@@ -451,10 +145,15 @@ use Unicode order; the R facade uses R's locale collation. See
 - **cox.zph with a sparse frailty that is not the last term**: R stops with
   "subscript out of bounds"; each term gets its own df here.
 - **Collapsed residuals of an na.exclude fit**: `residuals(collapse = TRUE)` and
-  `predict(collapse =)` sum the fit's rows; R fails in `rowsum` on vectors of
-  different lengths.
+  `predict(collapse =)` pad the excluded rows and sum the fit's rows; R checks a
+  padded group vector against the unpadded response and fails in `rowsum` on
+  vectors of different lengths.
 - **Stratified scaled Schoenfeld residuals** with several covariates keep
   their strata attribute; R loses it as a side effect of `%*%`.
+- **Tied deaths across strata in `Ccoxcount2`** (`coxcount1.c`): R indexes the
+  sorted stratum boundaries through original row indices while walking tied
+  deaths, which affects counting-process `tt()` expansions with tied stop times.
+  The reference checks use distinct stop times, so this case has no R reference.
 
 ### Penalized Cox models (`coxpenal.fit`)
 
@@ -468,7 +167,8 @@ use Unicode order; the R facade uses R's locale collation. See
 - **Frailty diagonal in coxfit5**: `coxfit5.c:403` leaves the frailty diagonal
   of the information unweighted. With case weights, `age + frailty(inst)` gives
   0.0179368 in R's sparse fit; the port gives R's dense fit, 0.0179446, for
-  both.
+  both. This affects the covariance, frailty variance and degrees of freedom of
+  weighted sparse fits, including time-transform frailties.
 - **nocenter with a sparse frailty first**: `coxpenal.fit.R:290` computes the
   0/1 column flags on `x` but applies them to `xx`, so R's means and
   `survfit(fit)` depend on the order of the terms (`frailty(inst) + age +
@@ -477,7 +177,15 @@ use Unicode order; the R facade uses R's locale collation. See
   for every order.
 - **predict(type = "terms") with a sparse frailty** puts the frailty column at
   its own place for any term order (R returns a zero column after a frailty in
-  the middle), and supports `terms =` and `collapse` with a frailty (R errors).
+  the middle, and its wrapper can return malformed term dimensions), adds the
+  fitted frailty contributions and errors (zeros for new data), and supports
+  `terms =` and `collapse` with a frailty (R errors).
+- **Penalized time-transform martingale residuals**: R's cleanup can violate the
+  risk-set sum identities (nonzero sums within one-event risk sets for
+  transformed splines); the port computes the residuals with the ordinary Cox
+  kernel at the fitted linear predictors.
+- **vcov of a sparse-only fit**: R's `vcov()` fails because the dense covariance
+  is `NULL`; the port returns an empty dense matrix.
 
 ### Multi-state Cox models (`coxph` on multi-state data, `survfit.coxphms`)
 
@@ -542,7 +250,7 @@ Methods (`predict.coxphms`, `residuals.coxphms`, `cox.zph`, `coxph.detail`):
 - Data rows in no stacked block get zero score/dfbeta rows (R fails setting row
   names); a one-coefficient model gives one-column matrices (R: "object 'rr'
   not found", "'dimnames' applied to non-array").
-- A collapse vector with missing values gives a last group labelled "NA"; a
+- A collapse vector with missing values gives a last group labeled "NA"; a
   factor collapse vector with unused levels labels only the levels present (R
   fails setting dimnames in both cases). Groups follow first appearance, also
   for a factor id or cluster.
@@ -578,47 +286,10 @@ Curves (`survfit.coxphms`, `coxsurv1-4.c`):
   user-strata value belong to no curve and are left out of the counts.
 - Subsetting keeps `n_id` and every `n_transition` column (R drops `n.id` and
   keeps only the first column); an unknown state name or an out-of-range index
-  is an error (R returns curves filled with NA).
-
-Multistate Cox curves expose `curves.subset(strata=..., data=..., states=...)`
-in Python; the R wrapper uses its existing bracket syntax. Select by zero-based
-indices, stratum labels or state names. Omitted dimensions retain all values.
-Selected curves keep the corresponding Rust count engine, so `summary_survfit`,
-`survfit0`, `as_data_frame`, reports and aggregation remain available. Reordering,
-repeated states and successive selections preserve the original state names in
-`oldstate`; probabilities are not renormalized. Arrays and mutable count rows
-are independent of the source. A state selection drops transition hazards and
-transition counts unless every state remains in its original order.
-
-`n_censor` follows the selected state columns, correcting R 3.8-12's retention
-of the original columns. Repeated stratum labels gain unique suffixes such as
-`b`, `b.1`, so the Python dictionary retains every selected time block.
-The 24-case generator
-[`generate_coxms_subset_reference.R`](../scripts/generate_coxms_subset_reference.R)
-covers weighted counting-process data, conditional starts, initial rows,
-reordered strata/prediction rows and repeated states. It records raw R censor
-counts and summary tables alongside aligned references. As well as aligning
-`n_id` and censor columns after selection, it independently accumulates censor
-counts for event-only summaries (R drops the matrix to one column when joining
-strata) and corrects the documented `survmean2` event-column ordering.
-Probabilities, risk/event counts and restricted means come from stock R.
-
-[`bench_coxms_subset_summary.py`](../benches/python/bench_coxms_subset_summary.py)
-compares summarizing one prepared state with summarizing all three states then
-projecting the same output. On Python 3.14.7 with a release build, 2,000 MGUS
-prediction rows and 268 times took 3.782 ms (3.668–3.863), versus 13.509 ms
-(12.905–13.791). Preparing the subset took 1.669 ms (1.619–1.715).
-For one prediction row the times were 0.293 ms (0.292–0.299), 0.424 ms
-(0.418–0.442) and 0.133 ms (0.125–0.138), respectively. These are seven
-alternating samples after three warmups, including summary calculation and
-numeric output materialization, excluding fitting and prediction. This compares
-two current workflows; subset preparation is a separate cost. Whole output
-arrays are checked before timing.
-
-```python
-death = curves.subset(states=["death"])
-summary = survival.r.summary_survfit(death, times=[100, 200])
-```
+  is an error (R returns curves filled with NA). After a state selection,
+  `n_censor` follows the selected state columns (R 3.8-12 keeps the original
+  columns), and event-only summaries keep per-state censor counts where R drops
+  the matrix to one column when joining strata.
 
 ### Parametric regression (`survreg`)
 
@@ -629,7 +300,7 @@ summary = survival.r.summary_survfit(death, times=[100, 200])
   families.
 - **t-family deviance**: R's `center` is `rowMeans(y)`, which averages the
   status column into interval rows, and its log likelihood takes the log of a
-  negative number (`survreg.distributions.R:147-148`). The port centres on the
+  negative number (`survreg.distributions.R:147-148`). The port centers on the
   interval and evaluates the likelihood; response residuals of interval rows
   differ, and R's deviance residuals there are NaN ("NaNs produced").
 - **Negative deviance terms** from rounding are clamped to 0 before the square
@@ -638,7 +309,7 @@ summary = survival.r.summary_survfit(death, times=[100, 200])
   coefficients. R's `var[keep, keep]` recycles the location-length NA pattern
   over the scale rows: it usually stops in `dimnames<-` (`~ age + age2 +
   strata(grp)` with three strata), and when one scale row is left it returns
-  that row labelled "Log(scale)" (`~ one + age + strata(sex)` loses sex = 2's
+  that row labeled "Log(scale)" (`~ one + age + strata(sex)` loses sex = 2's
   scale).
 - **summary(correlation = TRUE)** with an aliased coefficient returns the
   correlation of the coefficients that are not NA (R stops in `dimnames<-`);
@@ -655,6 +326,23 @@ summary = survival.r.summary_survfit(death, times=[100, 200])
 - **Frailty terms** are refused by penalty kind; R greps "frailty" in every
   model-frame column name, so it also refuses a ridge/pspline model with a
   covariate named like `frailty_score`.
+- **Empty scale strata**: AFT keeps scale strata after subset or missing-row
+  removal, including zero covariance rows for empty groups. This matches R for
+  empty interior strata. A trailing empty level makes R fail assigning scale
+  names; R's quantile standard errors and influence residuals infer their column
+  count from the largest observed code, omitting trailing scale positions; and
+  penalized fitting tries to invert the intercept-only covariance including the
+  empty scale's zero row and column. The port keeps every scale position and
+  computes the penalized effective sample size from the observed scales only.
+- **Interval-censored callback fits**: fits with custom callback distributions
+  and interval-censored rows avoid R's unsafe callback C path; the reference
+  checks compare them with R's equivalent built-in families.
+- **Constant design columns**: AFT leaves constant columns unscaled, allowing
+  nonbinary constants and unused Helmert contrasts to reach the rank-aware solver.
+  The fit keeps the design, marks singular coefficients as NA and returns the
+  identified fitted values and covariance. R's automatic zero-standard-deviation
+  scaling can fail with a coefficient-name error or return a nonfinite fit;
+  initialized R fits give the same identified result as the port.
 
 Penalized survreg (`survpenal.fit`, `survreg7.c`):
 
@@ -674,7 +362,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   arguments".
 - Penalized t fits with interval-censored rows work: `survpenal.fit.R:85` drops
   `parms` from the upper-endpoint density, and `survreg7.c:220` sizes the
-  callback buffer at `n` entries, which overflows the heap.
+  callback buffer at `n` entries, while `survregc2.c` also writes every
+  interval's upper endpoint, which overflows the heap. The same callback path
+  serves custom distributions.
 - A sparse frailty with a callback distribution (t) is evaluated with correct
   indexing; `survregc2.c` adds `beta[i]` instead of `beta[i + nf]` to eta and
   reads a multi-strata scale at `beta[strata + nvar]` instead of
@@ -690,7 +380,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 - `concordancefit(std.err = FALSE)` with two or more strata returns the
   per-stratum counts. R reshapes the five counts per stratum into rows of six,
   misaligning its counts and concordance (0.4948 instead of 0.1905 for
-  ovarian's `rx`), with a "data length is not a sub-multiple" warning.
+  ovarian's `rx`), with a "data length is not a sub-multiple" warning. With
+  several predictors, R 3.8-12's `concordancefit(std.err = FALSE)` fails; the
+  port supports it.
 - `ranks = TRUE` with strata works (R: "number of items to replace is not a
   multiple of replacement length"); several predictors with strata give one
   pooled value per predictor (R: "length of dimnames [1] not equal to array
@@ -700,9 +392,9 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   overruns its arrays. Here, event times with no weighted observations at risk
   contribute zero to the Cox variance numerator, so they do not turn otherwise
   valid `cvar` results into `NaN`.
-- `timefix = FALSE` is honoured. R's `concordance.formula` and `cord.work` call
-  `concordancefit` with its default `timefix = TRUE`, so near-tied times are
-  merged either way.
+- `timefix = FALSE` is honored. R's `concordance.formula`, `cord.work` and its
+  model dispatcher call `concordancefit` with its default `timefix = TRUE`, so
+  near-tied times are merged either way.
 - More than ten strata with `keepstrata = FALSE` and `timewt` "S", "S/G" or
   "n/G2": R errors in `colSums` ("x must be an array of at least two
   dimensions"); lung `strata(inst)` with `timewt = "S"` gives 0.4258949 here.
@@ -720,16 +412,19 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   refused. R compares only the number of groups and pairs their influence
   rows by position, which can reverse a covariance's sign. Fitted Cox models
   retain categorical cluster levels, and plain character cluster labels use
-  lexical order. See [cluster alignment](concordance-clusters.md).
+  lexical order. See [concordance](concordance.md#fitted-models).
 - A missing strata or cluster value raises ("strata contains missing values",
   "cluster contains missing values"); R either errors ("NAs are not allowed in
   subscripted assignments") or, with `std.err = FALSE`, misaligns its counts,
   and its `rowsum` makes a missing cluster a group of its own. A factor-like
   strata value outside its declared levels raises (R's `factor()` makes it NA,
   which then fails as above).
-- `concordance(fit, newdata)` with a row missing only its response drops the
-  row from both the frame and the predictions; R drops it from one and stops
-  with "x and y are not the same length".
+- AFT new-data concordance includes formula offsets in the predictions; see
+  [offsets in predictions](#predictions-and-residuals).
+- `concordance(fit, newdata)`, including for external linear models, with a row
+  missing only its response drops the row from both the frame and the
+  predictions; R drops it from one and stops with "x and y are not the same
+  length".
 
 ### Survival curves
 
@@ -742,13 +437,23 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 - `summary(fit, times)` of a multi-state curve with a time before its first
   time reports `p0` there. R's `findInterval` index is 0 for that time, so its
   `pstate` has one row fewer than its `time`.
+- Without requested times, R's grouped multi-state summaries index the count
+  matrices as vectors and lose the state and transition columns; the port
+  accumulates each column within its stratum.
+- A summary whose first stratum selects no times keeps the fitted vectors of the
+  other strata (R can lose them), and an entirely empty summary keeps
+  numeric-vector shapes.
 - `survfit0` adds the zero influence column only to the curves that get the t0
   row. R's `lapply(x$influence.surv, addcol)` runs over every curve as soon as
   one needs a row, so a curve already at t0 gets one column more than it has
-  times.
+  times. `survfit0` also inserts the unweighted count rows, which R leaves at
+  their old row count.
 - `aggregate_survfit` drops `std.chaz` with the other components that do not
   collapse. R's list names `"std.cumhaz"`, which no survfit object has, so R
-  keeps the uncollapsed `std.chaz`.
+  keeps the uncollapsed `std.chaz`: in a four-prediction example, aggregating to
+  two groups changes `surv` from 12 by 4 to 12 by 2 while `std.chaz` stays 12 by
+  4, and selecting an aggregate group can return another group's
+  cumulative-hazard error.
 - The id/cluster check warns whenever an id appears in two clusters. R's
   `.Call(Ctwoclust, id, cluster, order(id))` passes 1-based positions to 0-based
   C code and misses cases, and with `start.time` compares trimmed ids with the
@@ -767,12 +472,23 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   compares separate single-group fits. Neither the installed R namespace nor
   its numerical kernels are changed. Initial interval boundaries without
   events or terminal censoring are omitted, following the 3.8-12 grid rule.
+- **Infinite endpoints and near ties**: once R's `aeqSurv` finds a near tie it
+  applies finite cutpoints to every endpoint. Positive infinity then becomes the
+  final finite time, and a negative-infinity zero index drops a value before R
+  recycles or reconstructs columns, which can change censoring times, scramble
+  response rows or give a dimension error. The port leaves nonfinite endpoints and
+  their statuses in their own rows. Infinite-origin summary tables keep R's
+  undefined arithmetic.
+- `survfitKM`: default weights and absent `id`/`cluster` are resolved before
+  `start_time` filtering (R's lazy default weights can be evaluated after
+  filtering, producing the wrong length, and R can access missing `id` or
+  `cluster` arguments), and unused levels get empty influence components (some
+  R combinations try to set row names on a missing matrix and fail).
 - Grouped Aalen–Johansen residual and pseudo-value tables work for a single
   requested time. R 3.8-12 calls `col()` on a three-dimensional residual array
   and errors; the port agrees with the same rows of R's successful multi-time
   table. Excluded multi-time residual arrays retain their state and row
-  metadata, which R loses while reinserting missing rows. See
-  [missing survival residual rows](survfit-missing-residuals.md).
+  metadata, which R loses while reinserting missing rows.
 - Wholly censored multistate curves return their initial-state probabilities
   with zero-column cumulative-hazard and transition matrices. R 3.8-12's
   `survfitAJ` errors with "subscript out of bounds" in `grabit1` when there
@@ -783,17 +499,16 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   whose intervals all end before `start.time`, the subject gets an empty curve
   (R stops in `apply(dt, 2, cumsum)`), and `id` names a newdata column (R
   evaluates it outside newdata: "object 'pid' not found").
+- `coxsurv.fit` Kalbfleisch–Prentice curves: after a terminal death in which the
+  full weighted risk set dies, R's risk-set subtraction can leave a negative
+  rounding residue before a fractional power and return NaN; the port bounds the
+  survival increment to [0, 1], giving survival zero.
 - Turnbull (interval-censored) curves: `cluster` raises "cluster is not
   supported for interval-censored data" (R hands the full cluster vector to the
   `survfitKM` fits of the pseudo-observations, which reads out of bounds). For
   exact, left- and right-censored rows `start.time` compares their time; R's
   rule compares the placeholder 1 in `y[, 2]` and drops them for any
   `start.time > 1`.
-- `survexp` with a coxph rate table and an individual method returns values
-  when `subset =` or the na.action removes rows (R errors), and a row whose Cox
-  response is missing is dropped with the others under `na.omit` (R returns NA
-  for it when no other row is removed). `na.exclude` restores removed rows as
-  NaN at positions relative to the selected subset.
 
 Turnbull curves follow R's EM (`survfitTurnbull.R`: Aitken acceleration every
 fifth step, stopping at max |change| < 5e-5). That rule is sensitive to
@@ -802,11 +517,45 @@ tolerance amplified: up to about 0.02 in survival at n = 500 and 0.006 at
 n = 2000, with different iteration counts. The fixtures use small data where
 this does not show.
 
+### Population calculations
+
+- **Scalar rate mappings**: stock `survexp` passes literal scalar rate entries
+  to its native kernel without expanding them for multiple rows, which produced
+  incorrect values and a crash. The port expands scalar entries to the row count
+  before integration.
+- **Repeated requested times**: rate-table `survexp` without a response retains
+  duplicate requested times. R 3.8.11 deduplicates the integration grid but
+  selects from it using indices in the original requested grid; repeated
+  earlier requests can select incorrect rows or produce "subscript out of
+  bounds" for grouped fits. Selection here always uses the fitted grid.
+- `survexp` with a coxph rate table and an individual method returns values
+  when `subset =` or the na.action removes rows (R errors), and a row whose Cox
+  response is missing is dropped with the others under `na.omit` (R returns NA
+  for it when no other row is removed). `na.exclude` restores removed rows as
+  NaN at positions relative to the selected subset.
+- **Cox rate models in the R bridge**: individual offsets enter inside the
+  exponential, and source rows stay aligned after subset and missing-value
+  handling, as in Python. Stratified conditional and Hakulinen cohorts work where
+  R 3.8-12 errors while indexing its hazard matrix. A singleton Ederer population
+  reports one person at risk instead of R's training-sample count. Baselines
+  without events return survival one at the requested times instead of failing
+  in interpolation. A null Cox model keeps the population row count when its
+  rate-data frame has no columns, where R drops those rows and errors before
+  prediction.
+- `pyears(expect = "pyears")` with a zero rate uses the limit of
+  `(1 - exp(-lambda t)) / lambda` at `lambda = 0`, which is `t`; R's C code
+  divides by zero.
+- A `pyears` formula without terms can return a data frame with person-years
+  and counts; R's no-term `data.frame = TRUE` branch fails while assembling it.
+- `summary_pyears` of a result without terms returns scalar tables (R's
+  `summary.pyears` fails while printing); with `totals=True` it raises where
+  R's `pytot` fails with "dim(X) must have a positive length".
+
 ### Data preparation
 
 - `survSplit`: a row with a missing endpoint is episode 2 as in R, keeps its
   status and gets `added = FALSE`; `survsplit.c` leaves its censor flag
-  uninitialised, so R's status and `added` there depend on memory contents.
+  uninitialized, so R's status and `added` there depend on memory contents.
 - `survcondense` on data not sorted by id and time: R's two special-case
   branches (a single merged block) index `Y` by sorted position without
   `index[]` and move the wrong start time. For `data.frame(id = c(2, 1, 1),
@@ -829,6 +578,67 @@ this does not show.
 - `Surv2` timeline data: a given `istate` must equal the derived current state
   at each interval's start row; R's check compares vectors of different
   lengths.
+- `neardate` with POSIXct or POSIXlt dates: R calls
+  `methods::as(value, class(other))` with the two-element class vector and fails
+  ("length(class2) == 1L is not TRUE"); passing only the first class also fails
+  for some conversions. The R facade uses `as.POSIXct`/`as.POSIXlt` and matches
+  the intended numeric epoch result.
+
+### Marginal means
+
+- `yates` on a Cox fit with `strata()`: R builds its population rows with
+  `model.matrix(Terms)`, which includes the strata column that the fit's design
+  leaves out, so Cmat is misaligned with the coefficients (with an aliased
+  coefficient R stops in `qr.resid`). The port uses the fit's own design.
+- SAS type III tests on a Cox model: R 3.8-12 leaves the baseline intercept in
+  the SGTT hypothesis matrix and can fail with "non-conformable arguments"; the
+  port removes it before testing.
+- `yates(predict = "survival")`: R's summary keeps the time-0 row of the curve,
+  so its `surv` has one row more than its time vector and every row sits one
+  time early, and it leaves `cumhaz` at the baseline's (it assigns
+  `-log(surv)` to a misspelled local). Here row i is the curve at `time[i]` and
+  `cumhaz` is `-log(surv)` per level. `yates_setup` summaries share this
+  correction.
+- `yates` with no estimable level, or with an `rmean` at or before the first
+  time: R 3.8-12 stops inside `gsolve` ("requires numeric/complex
+  matrix/vector arguments"); the port returns NA tests, or a test of 0 on 0 df
+  (the result R's branch computes). An empty-event survival simulation with no
+  estimable coefficients returns zero restricted means and standard errors; R
+  fails eigendecomposing a zero-by-zero covariance.
+- Reversing the requested factor order can apply the wrong factor levels in R,
+  and joint nonlinear global tests fail when R assigns several names to one test
+  row; the port keeps the requested order and names a joint global test
+  `global`. Numeric term selection includes the last fitted term, which R
+  rejects through an exclusive upper bound.
+- The R `yates` wrapper accepts a levels matrix for joint settings, empty
+  adjustment sets and matrix-valued SAS adjusters, and explicit populations keep
+  custom contrasts, where stock R's preparation fails.
+- When all observations share a single censored time, the `yates_setup` baseline
+  keeps its training sample count; R 3.8-12 removes it while filtering out
+  censored times.
+
+### Printing and graphics
+
+- Summary objects keep a conditional cutoff in the units of their scaled times.
+  R 3.8-12's report filtering compares scaled times with an unscaled cutoff and
+  can drop all valid rows. Requested times before a multi-state conditional start
+  are handled by the summary selector, where R can produce mismatched time and
+  probability lengths and fail while printing.
+- An entirely event-free summary raises a clear error instead of R's failed
+  `NULL`-to-matrix conversion.
+- An empty `Surv` prints `character(0)`; R 4.5.3 / survival 3.8-12 fails while
+  converting it.
+- Curve plots: R sets an internal log-axis flag for `fun = "log"` and
+  `"logpct"` without updating the plotting call; the port uses the requested log
+  probability axis without applying a second logarithm to log state
+  probabilities. R's multi-state point method can index a time vector with a
+  flattened event matrix; the port marks event times across states. Out-of-range
+  NA censor marks left by R after `xmax` are omitted.
+- Aalen plots: retaining only the first event can drop R's matrix dimensions, a
+  cutoff before that event can include it through `1:0` indexing, and robust
+  bands can misalign when an event occurs at zero. The port keeps matrix
+  dimensions, returns only the zero origin before the first event and removes a
+  duplicate zero origin from every array.
 
 ### Other routines
 
@@ -842,19 +652,6 @@ this does not show.
   `novisit <- rowSums(events[, -1]) == 0` assumes the first count column is 0,
   so when every subject visits at least one state it drops real states (ids 1
   and 2 each going a then b give only the "(any)" row).
-- `yates` on a Cox fit with `strata()`: R builds its population rows with
-  `model.matrix(Terms)`, which includes the strata column that the fit's design
-  leaves out, so Cmat is misaligned with the coefficients (with an aliased
-  coefficient R stops in `qr.resid`). The port uses the fit's own design.
-- `yates(predict = "survival")`: R's summary keeps the time-0 row of the curve,
-  so its `surv` has one row more than its time vector and every row sits one
-  time early, and it leaves `cumhaz` at the baseline's (it assigns
-  `-log(surv)` to a misspelt local). Here row i is the curve at `time[i]` and
-  `cumhaz` is `-log(surv)` per level.
-- `yates` with no estimable level, or with an `rmean` at or before the first
-  time: R 3.8-12 stops inside `gsolve` ("requires numeric/complex
-  matrix/vector arguments"); the port returns NA tests, or a test of 0 on 0 df
-  (the result R's branch computes).
 - `brier` on a stratified Cox fit returns scores; R 3.8-12 errors in
   `summary.survfit`. `brier(fit, newdata)` on the fit's own data equals
   `brier(fit)` (lung reversed, `~ age + strata(sex)`: 0.2078394407,
@@ -864,22 +661,13 @@ this does not show.
   changes when input rows are reordered. Native results match R on event-sorted
   input; the AFT/Aalen report fixtures retain both raw and aligned R outputs.
   Truncated or reweighted summaries also retain robust covariance, computed
-  from stored group influences with bounded temporary conversion memory.
+  from stored group influences.
 - `aareg` on a design with an unused factor level raises "the nmin threshold is
   too high; no Aalen model can be fit"; R 3.8-12 does not return (still running
   after 90 s on lung).
-- `pyears(expect = "pyears")` with a zero rate uses the limit of
-  `(1 - exp(-lambda t)) / lambda` at `lambda = 0`, which is `t`; R's C code
-  divides by zero.
-- Rate-table `survexp` without a response retains duplicate requested times.
-  R 3.8.11 deduplicates the integration grid but selects from it using indices
-  in the original requested grid. Repeated earlier requests can select
-  incorrect rows or produce "subscript out of bounds" for grouped fits.
-  Selection here always uses the fitted grid, including after a forward scan
-  replaces repeated full-grid searches; see [expected-survival grids](expected-survival-grids.md).
-- `summary_pyears` of a result without terms returns scalar tables (R's
-  `summary.pyears` fails while printing); with `totals=True` it raises where
-  R's `pytot` fails with "dim(X) must have a positive length".
+- Penalty searches: a df search with no upper point at an exact boundary returns
+  an error where R can return an unusable value, and the shared fitter avoids an
+  out-of-bounds access in that case.
 
 ## Other deliberate differences
 
@@ -893,15 +681,14 @@ this does not show.
   paths follow 3.8-12 as well.
   With `entry=True`, multistate reporting times include actual subject entries,
   transitions and final exits, omitting censored continuation boundaries.
-  The independent [entry-grid reference generator](../scripts/generate_aj_entry_reference.R)
-  checks 64 current-stock cases, including uncertainty and influence tensors.
 - `Surv` and `Surv2` retain the censoring factor's first level in `clabel`
   and format it as `:label`, following 3.8-12. Legacy objects without `clabel`
   keep the `+` marker. The old formatting fixture reconstructs that legacy
   metadata; the vector-operation fixtures check current labels against 3.8-12.
-- Transition tables in multi-state curves, Cox models and consistency checks
-  use the response's censoring level, e.g. "(censor)" or "(lost)", following
-  3.8-12. Numeric `survcheck` responses use "(censor)". Curve transformations
+- Transition tables in multi-state curves, Cox models and `print_survcheck`
+  output use the response's censoring level, e.g. "(censor)" or "(lost)",
+  following 3.8-12; printed `survcheck` tables of numeric responses use
+  "(censor)". The raw `survcheck` result keeps the column label "(censored)". Curve transformations
   and serialization preserve the label. Historical fixtures adapt only their
   fixed "(censored)" column name; all counts remain checked unchanged.
 - `rsurvreg(seed=s)` reproduces R's `set.seed(s)` stream (Mersenne-Twister,
@@ -911,20 +698,22 @@ this does not show.
 
 ### Values and numerics
 
-- (start, stop] Cox fits (`agfit4.c`): when R moves the centre after a tied
-  death was added at the same time, it leaves that death on the old centre;
-  here the deaths of a death time use its final centre. Rows with tied entry
+- (start, stop] Cox fits (`agfit4.c`): when R moves the center after a tied
+  death was added at the same time, it leaves that death on the old center;
+  here the deaths of a death time use its final center. Rows with tied entry
   times leave the risk set in stop-time order rather than data order, and
   Efron's j-th terms are formed as `sum - j/d * deaths`. Results agree to
-  rounding whenever the centre does not move mid death time.
-- `core.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
+  rounding whenever the center does not move mid death time.
+- `regression.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
   `agexact.fit` wrappers) follows `coxph()` rather than the bare fitters: it
-  centres the offset, so `agreg.fit`'s info rescale count differs for a large
+  centers the offset, so `agreg.fit`'s info rescale count differs for a large
   offset (0 instead of 5 for heart with offset -750; coefficients and loglik
   agree), and zero-event data get `coxph()`'s skeleton where R's `coxph.fit`
-  iterates to coefficient 0 with "Ran out of iterations".
+  iterates to coefficient 0 with "Ran out of iterations". The Python
+  `r.coxph_fit`, `r.agreg_fit` and `r.agexact_fit` keep raw offsets, as R's
+  bare fitters do.
 - A Cox fit's `offset` is the offset as given; R's `fit$offset` exists only for
-  `x = TRUE` and is the centred offset.
+  `x = TRUE` and is the centered offset.
 - Linear algebra: R's `solve()` estimates the 1-norm of the inverse with
   `dgecon` (a lower bound); the port computes it exactly, so a matrix right at
   the `eps` boundary that R accepts can be reported singular. The singular
@@ -932,15 +721,20 @@ this does not show.
   computationally singular" with six significant digits.
 - `signif` beyond |x| of about 1e306 (or below 1e-306) in the penalized survreg
   print can differ from R in the last bits.
-- The t family's `n.eff` evaluates `variance(sigma^2)` as R does and can be
-  negative (-111.527 on log lung time); only AIC-method psplines with
-  `dist = "t"` use it.
+- Ordered-factor polynomial contrasts use R's rank-limited QR construction.
+  Very high degree columns are ill conditioned and sensitive to floating-point
+  and BLAS differences, including their signs; exact cross-platform coefficient
+  parity is not guaranteed for those columns.
+- `aggregate_survfit` mean and sum use compensated arithmetic for ordinary values
+  and replay R's sequential extended-precision arithmetic for exceptional groups.
+  Ordinary results may differ from R in the final bits, and R platforms with
+  another long-double precision can also differ.
 
 ### Missing values and newdata
 
 - Fitting with `na.pass` cannot send an unknown event status to a numerical
-  routine. Cox, Aalen, curve, log-rank, survival-check and redistribution calls
-  raise `ValueError("missing values in the response")` for such rows. Use
+  routine. Cox, AFT, Aalen, curve, log-rank, survival-check and redistribution
+  calls raise `ValueError("missing values in the response")` for such rows. Use
   `na.omit` or `na.exclude` to apply the model frame's row-removal policy.
 - Native Cox fitting and prediction methods validate their inputs even when a
   Rust caller constructs or modifies public data fields directly. Row-aligned
@@ -956,33 +750,17 @@ this does not show.
   default of using the first stratum when none is supplied.
 - For ordinary Cox and AFT models under `na.pass` (predict's default), a missing
   covariate affects only the predictions that use it. Term predictions retain
-  unaffected contributions and standard errors; an unknown offset leaves the linear-predictor standard
-  error available. This includes ridge and P-spline terms. AFT location and
-  term predictions do not require a known scale stratum.
+  unaffected contributions and standard errors; an unknown offset leaves the
+  linear-predictor standard error available. This includes ridge and P-spline
+  terms. AFT location and term predictions do not require a known scale stratum.
   Expected-count predictions use follow-up times regardless of a missing
   event indicator. `na.omit` drops incomplete rows, `na.exclude` restores them
-  as all-NaN rows, and `na.fail` rejects them. The supplemental generator
-  `scripts/generate_partial_prediction_reference.R` checks these outputs.
+  as all-NaN rows, and `na.fail` rejects them.
 - A Cox expected-count prediction with an unknown stratum remains NaN here;
   R leaves its initial value at zero and reports survival 1 for that row.
-- AFT retains scale strata after subset or missing-row removal, including
-  zero covariance rows for empty groups. This matches R for empty interior
-  strata. Trailing empty strata work here where R can fail assigning scale
-  names or forming prediction/residual matrices. Penalized AFT uses observed
-  scales for effective sample size, avoiding R's singular initial inverse.
-  The [unused-scale reference](aft-unused-strata.md) records those errors and
-  the small R corrections used for comparison. For the redundant Cox model
-  `~ age + g + strata(g, na.group = TRUE)`, expected counts use the estimable
-  coefficients; R propagates its aliased coefficient's NA. That reference
-  checks expected counts against the equivalent model without `g`.
-- AFT leaves constant design columns unscaled, allowing nonbinary constants
-  and unused Helmert contrasts to reach the existing rank-aware solver.
-  The full fit retains the design, marks singular coefficients as NA, and
-  returns the identified fitted values and covariance. Stock R's automatic
-  zero-standard-deviation scaling can fail; initialized stock fits and an
-  explicit scaling correction provide the independent
-  [rank-deficient AFT reference](aft-rank-deficient-designs.md). New-data and
-  term predictions retain R's propagation of the singular coefficient's NA.
+- For the redundant Cox model `~ age + g + strata(g, na.group = TRUE)`, expected
+  counts use the estimable coefficients; R propagates its aliased coefficient's
+  NA.
 - A newdata row with an infinite covariate (from `log(0)` or `x/0`) raises
   "newdata contains non-finite value"; R predicts ±Inf.
 - A response made infinite by arithmetic (`Surv(time/z, status)` at `z = 0`)
@@ -1000,6 +778,10 @@ this does not show.
   timeline conversion (Python cannot tell an explicit "na.omit" from the
   default); R also applies a user-given na.action before it.
 - `survConcordance_fit` with a missing x or y raises; R returns NULL.
+- Python responses represent R's numeric NA and NaN by the same NaN, so
+  `unique_surv` and `duplicated_surv` treat them as a single missing value.
+  Empty responses remain empty under repetition, reversal, head and tail; R's
+  `1:nrow(x)` in those methods can instead produce an out-of-bounds error.
 
 ### Formulas and arguments
 
@@ -1007,25 +789,26 @@ this does not show.
   `I(age*1e-3)` "I(age * 0.001)", `pspline(age, df=4)` "pspline(age, df = 4)",
   and the `pspline(penalty = FALSE)` columns after the deparsed call). They
   agree when the formula is written with R's spacing.
+- Python callbacks and penalty constructors cannot recover R's unevaluated
+  argument expressions: `r.ridge(..., column_names=...)` supplies complete
+  coefficient labels, and callback splines are labeled from the variable name,
+  such as `ps(x)3`. Native penalties do not carry R's optional `varname`
+  replacement attribute.
 - In a comparison `T` and `F` are column names (R falls back to TRUE/FALSE when
   the data has no such column); a bare word in an rmap string is a label
   (`race = "white"`), where R's `rmap = list(race = white)` is a variable
   lookup.
 - An ordered comparison (`<`, `<=`, `>`, `>=`) with a plain string operand
-  raises when neither operand is a factor;
-  R orders strings by the locale's collation. Factor comparisons follow R's
-  ordered and unordered factor methods, including warnings and missing values;
-  see [typed formula expressions](typed-formula-expressions.md).
-- Ordered-factor polynomial contrasts use R's rank-limited QR construction.
-  Very high degree columns are sensitive to floating-point and BLAS differences;
-  exact cross-platform coefficient parity is not guaranteed for those columns.
-  See the [polynomial reference and numerical limits](typed-formula-expressions.md).
+  raises when neither operand is a factor; R orders strings by the locale's
+  collation. Factor comparisons follow R's ordered and unordered factor methods,
+  including warnings and missing values.
 - Formula string escapes decode valid UTF-8 text, including paired Unicode
   surrogate escapes. Non-UTF-8 byte strings and unpaired Unicode surrogate
-  escapes are explicitly refused; R can retain their raw bytes. The independent
-  [typed-expression reference](typed-formula-expressions.md) preserves those
-  stock byte values and warnings separately from the supported literal cases.
+  escapes are explicitly refused; R can retain their raw bytes.
 - `cut()` refuses an argument it does not know; R's `cut.default` swallows it.
+- Python `subset` is zero-based and accepts integer positions or a full-length
+  Boolean mask; negative and fractional positions are refused. The R bridge uses
+  R's indexing rules.
 - Last value carried forward in timeline data runs over the data columns the
   formula reads, not R's evaluated model-frame variables: `I(x + z)` carries
   each column forward on its own.
@@ -1048,6 +831,14 @@ this does not show.
 - `survreg(offset=)` (a column name or vector) and `survSplit(id=)` with a
   character id are Python extensions; R uses `offset()` in the formula and
   errors when survSplit must add an id to a subset.
+- The bare Cox fitters accept only the method labels `"efron"`, `"breslow"` and
+  `"exact"`; arbitrary R string labels are refused.
+- The bare AFT fitters use explicit callback distributions regardless of their
+  display name, also in the R bridge's `survreg.fit`; R's C fitter selects a
+  built-in density from the display name. Fractional stratum codes are refused
+  instead of being truncated.
+- `survpenal_fit` takes zero-based column indices in `pcols` and `assign` and
+  returns a zero-based `assign2`; R's are one-based, as are the R bridge's.
 - `concordancefit` keeps a keyword-only `names` for the columns of x, standing
   in for R's `colnames(x)`.
 - `survobrien` keeps plain string columns untransformed like factors (a Python
@@ -1062,6 +853,30 @@ this does not show.
 - anova refits of survreg fits use the rows of the original fit; R's `update()`
   re-evaluates the reduced formula on the full data, so dropping a term with
   missing values gains rows in R.
+- The native log-rank functions accept counting-process data; the formula
+  interface refuses it, as R's `survdiff` does.
+- `aggregate_survfit` callbacks must keep returning one numeric value when called
+  on curve values; R checks only the preliminary index calls and can then build an
+  incompatible curve shape. An R function name is resolved once when aggregation
+  begins; R can resolve it again for a later `apply` pass. Empty time or state
+  axes give shaped empty results, where R's `apply` probes callbacks with zeros
+  and can fail, and zero data columns and missing grouping values are rejected
+  before callbacks run.
+- Curve quantiles take a scalar `scale`; R's implicit recycling of several scale
+  values and complex scale arithmetic are not represented.
+- `yates_setup` refuses full matrices for survival prediction, because R's
+  `outer`/`cbind` recycling does not produce one row per predictor.
+- Direct Python `pyears` calls accept response vectors and the
+  `time`/`start`/`stop`/`event` keywords with rate tables; the R bridge's direct
+  vector form still requires formula calls for rate tables. Python direct `rmap`
+  vectors have no R expression-symbol names to add to retained models.
+- `match_ratetable` rejects duplicate required column names instead of selecting
+  one, and does not run arbitrary R rate-table summary callbacks or read R's
+  legacy matrix attributes; named columns and native tables supply that
+  information.
+- `tmerge` with mapping inputs reads only the referenced `data2` columns, so
+  unrelated columns may have other lengths; R's data-frame inputs always share a
+  length.
 
 ### Results and labels
 
@@ -1081,7 +896,9 @@ this does not show.
 - Character levels (covariates, strata, ids and cluster labels) are sorted by
   code point ("10" before "9", "B" before "a"); R's `as.factor` uses the
   locale's collation, which agrees for digits but not for letter case.
-  Numeric, logical and factor values sort as in R.
+  Numeric, logical and factor values sort as in R. `neardate` compares Python
+  character dates in Unicode code-point order; the R facade uses R's locale
+  collation.
 - `cch`'s `sc_ids` holds the id values themselves; R's rownames are their
   character form.
 - `survfit.coxph` curve names: ids that differ but print alike are kept apart
@@ -1099,29 +916,72 @@ this does not show.
 - A Turnbull fit reports `cumhaz` and `std.chaz` (R's object has them only after
   `survfit0`).
 - `aggregate_survfit` without `by` keeps a data axis of length 1 (the package
-  convention); R returns a time x state matrix. The `newdata` of multi-state
-  Cox curves holds the rows actually used; R stores the user's data frame.
+  convention); R returns a time x state matrix. Native and Python group labels
+  list observed levels only; R's bare factor `newdata` can include unused
+  declared levels, which the R bridge keeps. The `newdata` of multi-state Cox
+  curves holds the rows actually used; R stores the user's data frame.
 - Residuals on multi-state Cox curves raise TypeError; R returns Aalen-Johansen
   residuals of the data that ignore the Cox model.
+- Direct Cox curves (`coxsurv_fit`) name individual trajectories by their ids,
+  and unused factor levels, zero-column designs and empty trajectories have
+  explicit zero-size outputs where R drops dimensions.
 - `summary_pyears` returns the tables instead of printing them (R's print
   switches are not taken); for a `data_frame=True` result the restored table
   keeps every level the pyears call used.
+- Expected-survival results and summaries, and `pyears` results, do not store R
+  call expressions or manually attached `na.action` attributes.
+- Native calendar dates reject nonfinite day counts and dates outside the `i32`
+  year range; R can keep and print such numeric `Date` values.
 - `model_term_names(aareg)` returns the formula's term labels (R's
   `labels.aareg` returns NULL); `model_frame(survreg)` still needs
-  `model=TRUE`.
-- A `cox.zph` function transform is labelled by its name, or "user" without
+  `model=TRUE`. The port's `model_frame` output contains raw columns, without
+  R's evaluated-column schema and `terms` attribute.
+- A `cox.zph` function transform is labeled by its name, or "user" without
   one, not by R's deparsed expression.
 - The penalized Cox summary keeps a scalar `loglik` plus `null_loglik`;
   `anova.coxph.penal`, which R does not register, is not ported (anova of one
   penalized model follows R's reachable `anova.coxph`). Residuals of a null Cox
   model other than martingale and deviance raise "... residuals are not defined
   for a null model".
+- The typed `SurvpenalFit` returns `penalty` as `c(0, P)` for every fit (R: a
+  scalar for a sparse fit) and dense column means for sparse fits (R includes
+  the group-code column). Penalty histories keep their column schema even when
+  R omits names for an empty fixed-gamma history.
+- Concordance rank tables contain event rows without R's model-frame row labels,
+  and new-data stratum counts keep the fitted labels instead of R's integer codes.
+- `Surv` and `Surv2` reject arithmetic, comparisons and reductions as R does, and
+  Python additionally rejects NumPy ufuncs and implicit array conversion. Use
+  `left.equals(right)` for structural comparison; response objects are
+  unhashable and have no truth value.
+- Rate tables canonicalize their axis titles in `dimid`, without R's distinction
+  between unnamed axes and a separate `dimid` attribute.
+- R exposes `n.risk` only for Ederer Cox cohorts; the native and Python
+  expected-survival results also supply risk counts for the Hakulinen and
+  conditional methods.
+- Yates factorial and SAS populations keep compound strata as evaluated factors;
+  their labels are not parsed back into the original source columns.
+- Repeated stratum labels in selected multi-state Cox curves gain suffixes such
+  as `b`, `b.1`, so the Python dictionary keeps every selected time block.
+- Print functions return objects (`ModelPrint`, `SurvfitPrint`,
+  `SurvivalTablePrint`, `ResponsePrint`, `RateTablePrint`) instead of printing and
+  returning the fit invisibly. They omit R call expressions, which Python fits do
+  not store, strip trailing spaces and read no global print options. Curve and
+  expected-curve output does not reconstruct omission notices, and expected-curve
+  output omits R's rate-table prose.
 - `print_survreg_penal` prints the Call block as `survreg(formula = ...)`; R
   `dput()`s the whole call. Its `terms=TRUE` Wald rows keep R's p-value on 1 df
   while the DF column shows the term's df, as `summary_coxph_penal` does.
-- The typed `SurvpenalFit` returns `penalty` as `c(0, P)` for every fit (R: a
-  scalar for a sparse fit) and dense column means for sparse fits (R includes
-  the group-code column).
+  Arbitrary R `printfun` closures are not retained or executed; callback
+  penalties use built-in coefficient or sparse Wald rows.
+- `print_survConcordance` is an explicit function because R 3.8-12 contains
+  `print.survConcordance` but no longer registers it.
+- `plotting.cox_zph_plot_data` returns every selected nonsingular term and works
+  with standard errors disabled, unlike R's `plot = FALSE` branch.
+  `cumhaz=True` on expected-survival curves is an extension to R's graphics.
+  Cox survival results use the common curve renderer; R's obsolete
+  `survfit.coxph` class has no separate Python representation. Matplotlib
+  controls device layout, ticks, padding and fonts; base R graphics parameters
+  are not emulated.
 
 ### Messages
 
@@ -1129,6 +989,12 @@ this does not show.
   out-of-range `L`-suffix parser warnings (for example, `10.0L`, `1.5L` or
   `2147483648L`). The fixture records formula-parsing warnings separately;
   integer arithmetic itself emits R's overflow warning.
+- Formula domain warnings name the expression, such as `NaNs produced in
+  log(off)`, where R says `NaNs produced`. R's additional warning before AFT
+  `model.matrix` rejects a numeric replacement for an ordinary factor is not
+  reproduced.
+- Expected-survival summaries use R's averaged interpolation indices for tied
+  source times without emitting R's tie-collapse warning, as curve quantiles do.
 - A `match.arg` miss reads `'arg' should be one of "response", "link", ...` with
   ASCII quotes; R in a UTF-8 locale prints curly quotes.
 - tmerge's not-found message adds "in data2" to R's "object 'x' not found"; a
@@ -1138,12 +1004,23 @@ this does not show.
 - Residuals and pseudo values of a KM fit whose `start.time` empties a stratum
   refuse with survfitAJ's "start.time has removed all the observations from at
   least one curve" (R: "strata k not matched").
+- A Student-t bare AFT fit without `parms` raises a clear error; R's bare fitter
+  fails with an unhelpful length-zero error.
+- For an AFT `model.matrix` call on a frame without a `terms` attribute and
+  without raw `g`, with the formula `age + strata(g) + strata(g):flag`, R fails
+  with "number of variables != number of variable names"; the port reports the
+  absent `g`. A missing raw Cox strata variable likewise raises the port's own
+  missing-variable error.
+- `untangle_specials` reports a missing factor matrix when removing all terms
+  leaves a registered special; R errors.
+- `match_ratetable` on empty input returns empty positions without R's warnings
+  about extrema of empty vectors.
 
 ### R bridge (`r/survivalr`)
 
 - Residual and pseudo-value arrays preserve character dimension labels, but
   names attached to the dimension-label vectors themselves are dropped during
-  id conversion; see [missing survival residual rows](survfit-missing-residuals.md).
+  id conversion.
 - The bridge follows 3.8-12 response semantics. `Surv2` requires logical,
   numeric or factor statuses; missing binary statuses remain missing, and
   factor censor labels survive construction. `Surv` conversion preserves
@@ -1157,1050 +1034,207 @@ this does not show.
 - The `summary.survfitms` list of `survfit.coxphms` curves carries time, the
   counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
   R's n, n.id, p0, transitions or call.
-
-## Expected survival from prepared Cox baselines
-
-Cox expected-survival cohorts now aggregate baseline hazards and subject risks
-directly in Rust. Python's `survexp` prepares prediction rows once and calls
-`CoxPHFit.expected_survival` or its penalized-fit counterpart. It no longer
-constructs survival and cumulative-hazard matrices with one column per subject.
-The numerical kernel uses O(N + B + T × G) storage for N subjects, B baseline
-points, T requested times and G output groups, in addition to the fitted model
-and prediction design. The existing expanded-curve API remains available.
-
-Rust callers can supply `CoxExpectedBaseline` values to `survexp_cox_prepared`.
-The Python numeric entry point takes flattened baseline times/hazards and their
-lengths, subject risks, zero-based strata/groups, weights, optional follow-up and
-requested times. Typed inputs accept NumPy vectors without Python list conversion.
-All numerical work releases the GIL. `SurvExpResult.to_arrays()` returns independent
-writable snapshots with time-by-group survival and risk-count matrices.
-
-The kernel preserves weighted Ederer, Hakulinen and conditional calculations,
-including `exp(-H).powf(risk)` rounding/underflow and NaN propagation after a
-cohort's risk set becomes empty. Output uses the union of event times in the
-strata represented by the population, with constant interpolation at requested
-times. Repeated output times are retained. A stratum without events has survival
-one; an entirely event-free model can be evaluated at explicit times. This
-corrects the former expanded path losing the column count for empty curves.
-Weights must be finite and nonnegative, with positive total weight per group.
-
-R `survexp` formulas now support R and Python-backed Cox rate models through
-shared numerical kernels, without forwarding the call to `survival::survexp`.
-R owns formula evaluation, contrasts, factor levels and metadata. For R fits,
-the shared Cox baseline kernel reads the original response, weights and fitted
-risk scores; the prepared cohort kernel combines those baselines with new risks.
-For individual predictions, shared step lookup evaluates the fitted model's
-response, which may differ from the outer population formula's follow-up.
-Population rate tables also cross the boundary as whole numeric matrices and
-use bulk result snapshots.
-
-Formula environments, retained model/X/Y data, row names, subsets, `na.exclude`
-and mappings with non-syntactic names are preserved. Sparse frailty models reject
-new cohort curves as R does; individual predictions retain fitted frailty in the
-training risk sets and assign zero frailty to new rows. R exposes `n.risk` only
-for Ederer Cox cohorts; the native/Python result also supplies counts for the
-other cohort methods.
-
-The R bridge adopts the existing Python corrections for individual offsets
-(inside the exponential) and source-row alignment after subset/NA handling.
-Stratified conditional/Hakulinen cohorts now work where R 3.8-12 errors while
-indexing its hazard matrix; independent per-row R curves verify the reduction.
-A singleton Ederer population reports one person at risk, correcting R's
-training-sample count. Empty-event baselines return survival one at requested
-times instead of failing in interpolation. Null Cox models retain the population
-row count when their rate-data frame has no columns; R's expected-survival wrapper
-drops those rows and errors before prediction.
-
-Tests compare prepared and expanded curves across tie methods, counting
-responses, strata, offsets, weights and repeated times. Whole-result R checks
-cover formula metadata, remapping, penalized fits and disabled reference numerical
-functions. For exact counting fits, the R oracle repairs only two fitter metadata
-defects before comparison: its omitted `coxph` class and numeric method code.
-Ownership, malformed inputs, concurrent calls and GIL release are also checked.
-
-`scripts/benchmark_survexp.py` and `scripts/benchmark_survexp.R` time complete
-formula calls after checking results. Model fitting is excluded. Both scripts
-use 2,000 training observations and a separate 5,000-row population with four
-groups, at least three untimed calls per variant and seven alternating samples. Explicit garbage collection
-is outside measured calls; allocation and automatic collection are included.
-The Python comparison loads the prior facade from `88d8f565` with
-`--baseline-source`, using the same current fitted-model implementation for both
-paths. Its peak RSS comes from three fresh processes per variant, before the
-parent runs timed calls; it includes imports, model fitting and population setup,
-and measures the Ederer case. R and Python generate different datasets, so their
-timings are not a cross-language comparison.
-
-On an Intel Core Ultra 5 325 with Python 3.14.7 and a release extension:
-
-| Complete Python call | Previous median (range) | Prepared median (range) |
-| --- | ---: | ---: |
-| Ederer | 125.7 ms (71.5–131.0) | 42.7 ms (39.8–44.0) |
-| Hakulinen | 108.3 ms (83.7–137.3) | 28.6 ms (28.5–33.9) |
-| Conditional | 78.5 ms (75.6–136.8) | 10.3 ms (9.7–14.4) |
-
-The median improvements are 2.94×, 3.79× and 7.60×. Ederer peak process RSS
-was 58.1–58.4 MiB for the prepared path and 180.2–180.3 MiB for the previous
-path, about 68% lower. These process peaks include common setup, not just the
-numerical kernel's allocations.
-
-On the same machine with R 4.5.3 / survival 3.8-12:
-
-| Complete R call | Stock R median (range) | R/Rust median (range) |
-| --- | ---: | ---: |
-| Ederer | 233 ms (124–340) | 49 ms (44–52) |
-| Hakulinen | 660 ms (639–821) | 37 ms (37–42) |
-| Conditional | 527 ms (440–671) | 16 ms (16–17) |
-
-The median improvements are 4.76×, 17.84× and 32.94×. The broad reference
-ranges are retained here; these are local complete-call measurements, not
-general performance guarantees. R peak memory was not measured.
-
-## Person-years formula preparation
-
-R `pyears` formulas now use one native tabulation path for fixed categories,
-`tcut` terms and rate tables, including formula environments without a data
-argument. Formulas and the response are evaluated once in R; prepared category
-and matched rate-position matrices cross the boundary as NumPy arrays.
-Categorical codes and labels are prepared together. R rate-table conversion
-also supplies its flattened rates as a numeric array. This removes the former
-per-row nested lists, extra Python formula call for ordinary groups, and
-stock-R formula fallback.
-
-The fixed-category Rust path accumulates directly into a cell when no expected
-rate table is supplied. Other inputs retain the shared interval stepper.
-Category products are checked against addressable array storage before allocation,
-and supplied weights are borrowed during tabulation. In fixed categories,
-zero-time rows retain observed events without adding exposure or contributing
-observation counts.
-Python prepares category columns with NumPy instead of constructing a Python
-list for every input row; retained `x` values remain ordinary nested lists.
-
-Native `PyearsResult.to_arrays()` returns independent writable NumPy snapshots
-of the column-major cell tables, dimension lengths, observation count and
-off-table exposure. The optional event/expected tables are `None` when absent.
-`RateTable` construction accepts NumPy rate vectors through the same typed
-conversion used by numerical inputs and owns its copied rates.
-
-The R wrapper retains model-frame metadata, X/Y components, missing-data actions,
-unused factor levels, category classes and table labels. It corrects numeric
-categories being converted to strings in data-frame output, scalar dimensions
-for a one-cell table, and rate-table summary/event field ordering. A no-term
-formula can return a data frame with person-years and counts; R's no-term
-`data.frame=TRUE` branch fails while assembling that result.
-
-R's two-column numeric-response convention depends on the kernel: without a
-rate table the columns are time and event; with a rate table they are start
-and stop, without events. Both the R bridge and Python formulas support these
-conventions. Python accepts a row-major matrix column (`Y ~ group`) or a
-`cbind(...)` response, including named columns, arithmetic, nested bindings
-and scalar constants. A one-column matrix supplies follow-up without events.
-Numeric event counts remain numeric, including fractional counts and values
-greater than one; they are not recoded as `Surv` statuses. Numeric matrices with
-more than two columns are rejected. Zero-time
-right-censored events produce R's warning, and missing responses or invalid
-rate tables fail explicitly. Cox rate tables remain unsupported for `pyears`,
-as described below; there is no numerical fallback for them.
-
-Matrix rows pass through the shared subset and missing-data path. Missing cells
-in either column remove the whole row, and repeated subset rows retain aligned
-weights, rate-table positions and grouping values. NumPy inputs use array row
-selection and row-wise missingness checks; matrix columns reach Rust without
-per-row Python list conversion. List, strided, Fortran-order, read-only and
-object/nullable inputs are supported. Retained responses and matrix columns
-returned by `model_frame` are independent row-major lists.
-
-`scripts/generate_pyears_matrix_reference.R` records 36 R survival 3.8-12 cases
-covering scalar/grouped tables, time cuts, weights, event and expected-person-year
-rate-table calculations, repeated subsets and missing cells. Each runs through
-both Python matrix columns and `cbind` formulas. Independent checks cover numeric
-event totals, zero exposure, input ownership, arithmetic-created missing values
-and invalid shapes.
-
-`scripts/benchmark_pyears_matrix.py` compares equivalent complete calls with
-binary events, 100,000 input rows, weights and ten groups. Data and matrix
-construction are outside timing. Outputs are checked before three warmups and
-seven alternating samples; formula preparation, native tabulation and result
-conversion are included. Garbage collection is outside timing; peak memory is
-not measured.
-On an Intel Core Ultra 5 325 with Python 3.14.7 and NumPy 2.4.6:
-
-| Rows selected | `Surv` median (range) | `cbind` median (range) | Matrix median (range) |
-| --- | ---: | ---: | ---: |
-| All | 34.2 ms (31.3–37.1) | 19.3 ms (18.3–22.1) | 20.1 ms (18.1–22.0) |
-| Every second row, missing time every eleventh row | 24.6 ms (23.5–24.8) | 19.2 ms (18.5–19.8) | 19.6 ms (19.0–20.1) |
-
-These compare input representations in the current implementation, not a
-previous-release speedup. Numeric matrices avoid `Surv` status preparation;
-timings vary with machine load and allocation.
-
-Direct Python `pyears` calls also use the formula preparation path. A time
-vector, `Surv` object, numeric matrix, or the `time`/`start`/`stop`/`event`
-keywords can supply the response. These calls honor `data`, `ratetable`,
-`rmap`, `expect`, weights and retention flags; previously rate-table options
-were silently omitted. For example:
-
-```python
-result = r.pyears(time=[2, 4], ratetable=table, rmap={"age": [40, 50]},
-                  expect="pyears", scale=1)
-```
-
-The rate positions must use the supplied table's units. Direct keywords may
-name columns in `data`; generated response/group columns never overwrite
-sources used by rate mappings or weights. Factor groups preserve declared
-levels, and `TcutResult` groups retain their time boundaries. Missing follow-up
-and mapped values pass through the same subset/NA handling as formula inputs.
-With `start`/`stop` and a rate table, positions advance to the entry time before
-accumulation; without a rate table and without events, the response is the
-follow-up duration. Complete `Surv` or matrix responses cannot be combined with
-separate start/event values, and supplying follow-up more than once is an error.
-Formula strings also reject direct response/group keywords instead of ignoring them.
-The R bridge's direct vector extension still requires formula calls for rate
-tables; this extension belongs to the Python interface.
-
-The `direct` case in `scripts/benchmark_pyears.py --baseline-source ...` compares
-complete current calls with the `_pyears.py` implementation at `be46466d`, using
-the same current formula helpers and native kernel. On 100,000 NumPy time/event
-rows with ten groups, the median falls from 57.2 ms (55.9–58.2) to 22.3 ms
-(21.5–23.1), or 2.56×. The adapter keeps arrays intact and enters formula
-preparation once. Numerical equality is checked before two warmups and seven
-alternating samples. Input construction and garbage collection are excluded;
-peak memory is not measured. Formula cases remain within the measured variation.
-
-Tests compare whole R results, including retained data, transformed terms,
-formula environments, subsets, scalar cells, rate tables and numeric responses.
-A reference-disabled check verifies native tabulation. Independent checks compare
-fixed-category results with the general interval stepper, and cover array
-layouts, ownership, zero exposure and oversized category products. The R and
-Python benchmark scripts time complete formula calls after checking outputs;
-the Python script can load the previous `_pyears.py` with `--baseline-source`.
-Explicit garbage collection is outside measured calls; allocation and any
-automatic collection are included. Peak memory is not measured.
-
-On an Intel Core Ultra 5 325 with R 4.5.3 / survival 3.8-12 and Python 3.14.7,
-100,000 input rows, three warmups and seven alternating samples gave:
-
-| Complete R call | Stock R median (range) | R/Rust median (range) |
-| --- | ---: | ---: |
-| Fixed categories | 36 ms (30–37) | 40 ms (39–43) |
-| Counting response | 31 ms (29–34) | 39 ms (37–44) |
-| `tcut` categories | 44 ms (42–45) | 52 ms (51–55) |
-| US rate table | 294 ms (287–302) | 62 ms (61–64) |
-
-The US rate-table call is 4.74× faster. The other R calls are 11–26% slower
-than stock R; these measurements include the bridge and formula overhead.
-The fixed/counting tables have 20 cells, `tcut` has 40, and the rate table
-case has 10 output cells.
-
-On its separate 100,000-row dataset, complete Python calls with fixed
-categories took 32.6 ms (31.6–36.3), compared with 48.3 ms (46.5–49.2) using
-the previous facade from `02a20158`. With `tcut`, calls took 41.3 ms
-(40.7–42.4), compared with 55.9 ms (54.8–58.6). These are 1.48× and 1.35×
-improvements. Both Python paths use the current native kernel, so this
-comparison isolates the category-conversion change. Python and R generate
-different data and their timings are not a direct cross-language comparison.
-
-## Fine–Gray expansion
-
-`regression.finegray_expand` prepares a multi-state response without evaluating
-formulas. It accepts times, non-negative integer status codes (zero denotes
-censoring), a positive selected endpoint, and optional start times, strata,
-subject codes and weights. Counting histories require subject ids and contiguous
-intervals; a transition may appear only on a subject's last row. Near ties are
-resolved before these checks when `timefix=True` (the default). Stratum and
-subject codes may be arbitrary integers, including nonconsecutive levels.
-
-Rust callers use `regression::finegray_expand` with `FineGrayInput`. The kernel
-uses the shared Kaplan–Meier implementation for censoring and reversed entry
-curves, then the existing Fine–Gray interval kernel. Rows are grouped once by
-stratum; output follows ascending strata, original row order within each group,
-and then added interval order. The returned `FineGrayOutput.row` contains
-one-based source rows in the full input and `wt` includes supplied weights.
-The existing `finegray` kernel still accepts a caller-supplied censoring curve.
-Both results offer `to_arrays()` with independent writable NumPy snapshots.
-Native preparation accepts NumPy layouts and runs without the GIL.
-
-Python's formula interface retains formula evaluation and result assembly;
-subject checks, time grids, censoring/entry curves and all interval expansion
-now run in one native call. R evaluates its model frame once, retains arbitrary
-transformed and matrix-valued columns, and indexes that frame with the returned
-source rows. R formula environments work without a data argument. Neither R
-formula parsing nor numerical expansion delegates to stock `survival::finegray`.
-
-The existing R weight convention is preserved: censoring/entry fits are
-unweighted, and user weights multiply each output row using its source position
-*within the stratum*, indexing the full weight vector. Consequently a stratified
-result's `(weights)` column need not equal its initial `fgwt`. The corrected
-subject-first-row delayed-entry check and rejection of a zero censoring
-probability before a selected event remain as documented above. A selected
-endpoint with no events is rejected. Covariate missing values can be retained
-with `na.pass`; missing responses, strata or ids cannot be used.
-
-Sixty reproducible stock-R numerical cases cover right/counting responses,
-multiple intervals per subject, shuffled rows, negative times, delayed entry,
-strata, both endpoints and weights. The reference corrects only R's documented delayed-entry
-row index. Cases with non-finite R weights assert the explicit zero-probability
-error instead. Additional checks cover hand-computed censoring weights, malformed
-input, NumPy ownership/layouts, concurrency, GIL release and single formula
-evaluation. R tests exercise arbitrary transformations, matrix columns, column
-classes, missing-data actions, subsets and disabled reference functions.
-
-`scripts/benchmark_finegray.R` times complete R-facing calls after verifying
-results against stock R; `scripts/benchmark_finegray.py` measures complete
-Python formula calls on separate generated data. Its optional `--baseline-source`
-compares a previous repository `_finegray.py`, checking every output column
-before timing. For the measurements below that file came from commit `1560ea23`.
-Both scripts include preparation, conversion and output assembly, with three
-warmup calls, seven alternating measurements and explicit garbage collection
-outside measured calls. Allocation and automatic collection remain included;
-peak memory is not measured.
-
-With 5,000 input rows on an Intel Core Ultra 5 325, R 4.5.3 / survival 3.8-12
-and Python 3.14.7, complete R-facing calls measured:
-
-| Workload | Expanded rows | Stock R median (range) | R/Rust median (range) |
-| --- | ---: | ---: | ---: |
-| Right censored | 388,463 | 175 ms (164–272) | 161 ms (140–305) |
-| 100 strata | 11,217 | 67 ms (59–173) | 14 ms (11–31) |
-| Two intervals per subject | 142,723 | 34 ms (32–40) | 31 ms (29–46) |
-| Polynomial and factor columns | 388,463 | 173 ms (156–288) | 138 ms (134–225) |
-
-Median improvements are 1.09×, 4.79×, 1.10× and 1.25×. The broad ranges include
-outliers; ordinary and counting cases show modest improvements compared with
-the larger gain for many strata. The counting case has 2,500 subjects; the
-polynomial case retains a three-column matrix and a factor in its output.
-
-On its separate 5,000-row dataset, complete Python calls changed from
-139.2 ms (125.7–306.4) to 60.7 ms (54.9–136.1) for 399,370 expanded rows, and
-from 20.4 ms (18.9–23.7) to 4.17 ms (4.14–6.08) for 11,450 expanded rows in
-100 strata. These are 2.29× and 4.91× median improvements over the prior Python
-preparation. Python and R use different generated data, so these tables are
-not a direct cross-language comparison.
-
-## O'Brien risk-set expansion
-
-`survobrien` expands right-censored or counting-process observations into one
-block per event time, and applies the logit of each continuous variable's
-mid-rank percentile within that block. With strata, blocks follow the first
-appearance of distinct event-time/stratum pairs; without strata, they follow
-time order. Rows inside a block retain their input order. Counting intervals
-are open on the left and closed on the right. Tied covariates receive average
-ranks; missing covariates remain missing and do not enter the rank denominator.
-Infinite covariates participate in ranking, while interval times must be finite.
-
-The Rust implementation partitions observations by stratum, sorts each
-covariate once, and maintains ordered active rows while moving through event
-times. It writes directly to precomputed output slices instead of storing
-every risk set. For N input rows, P continuous columns and M expanded rows,
-the transformation takes O(P N log N + P M) work with O(P N + N) scratch
-storage, in addition to the returned columns. Sparse counting intervals and
-many small strata avoid scans of the full input at every event.
-
-Python's native `validation.survobrien` accepts NumPy vectors and a sequence of
-continuous columns, converts inputs once, and releases the GIL during expansion.
-Its existing list-valued result properties remain available. `block_offsets`
-contains the half-open slices of consecutive blocks, beginning at zero and
-ending at the expanded row count. `to_arrays()` returns independent, writable
-NumPy snapshots, including a list of transformed column arrays; changing or
-retaining a snapshot does not modify or retain the native result.
-
-Use `transform=False` to construct only the risk sets, with `continuous=[]`
-allowed. Rust callers have the corresponding `validation::survobrien_expand`;
-the ordinary `survobrien` function retains the default rank transformation.
-The Python formula interface uses this geometry-only path for a custom
-transformation and retrieves the source row list once, avoiding repeated
-copies of the full expansion inside the callback loop. Each callback receives
-one column of one risk set, after the initial ten-value shape check.
-
-The R `survivalr::survobrien` wrapper evaluates formulas in R and uses the shared
-kernel for every expansion. It no longer forwards unsupported formula shapes
-to stock R. This includes user-defined transformations, protected `I()` terms,
-factor/strata/cluster combinations, formula environments without a data argument,
-subsets, and custom transformations. The response is evaluated once; original
-row indices align protected and cluster columns after subset and missing-data
-removal. R column classes and names are retained. Character continuous terms
-follow R's rank ordering; Python continues treating plain strings as factors.
-As in R, a matrix-valued continuous term uses its first column. Interaction
-terms and unsupported survival response types are rejected.
-
-The documented stock-R corrections for strata selection and keeper columns
-also apply here. Cluster terms are removed by their fitted term numbers,
-and data with no events return an empty frame with the expected columns.
-Custom transforms must return one value per risk-set row. Native snapshots
-avoid per-element conversion when returning large expansions to R.
-
-Independent tests reconstruct risk sets and ranks by pairwise comparisons over
-80 randomized right/counting, stratified/unstratified cases. Additional checks
-cover signed zero, infinities, missing values, no events, owned NumPy results,
-concurrent calls, GIL release and custom callback batches. R tests compare
-general formulas and custom transforms against stock R, with explicit
-corrections for its documented strata/indexing defects, and disable the R
-reference to verify the native path.
-
-`scripts/benchmark_survobrien.R` compares complete R-facing calls with stock R,
-including formula preparation, numerical expansion, conversion and frame
-assembly. Only the documented strata typos are corrected in the reference.
-`scripts/benchmark_survobrien.py` measures complete Python formula calls with
-default and custom transforms. Both scripts verify results before timing,
-warm their paths and exclude explicit garbage collection. Returned expansion
-allocation and any garbage collection triggered inside a measured call are
-included. Neither script measures peak memory.
-
-With 2,000 input rows, two continuous columns, three warmup calls and seven
-alternating R measurements on an Intel Core Ultra 5 325 (R 4.5.3,
-survival 3.8-12, Python 3.14.7), the complete-call results were:
-
-| Workload | Expanded rows | Stock R median (range) | R/Rust median (range) |
-| --- | ---: | ---: | ---: |
-| Right censored | 674,400 | 282 ms (276–286) | 98 ms (92–103) |
-| 100 strata | 7,068 | 91 ms (89–93) | 6 ms (5–6) |
-| Counting intervals | 2,639 | 33 ms (32–34) | 3 ms (2–3) |
-| Custom centering transform | 674,400 | 143 ms (142–144) | 82 ms (81–83) |
-
-Each R case has 666 event blocks. These medians improved by 2.88×, 15.17×,
-11.00× and 1.74× respectively. The separate Python benchmark, with 2,000
-rows producing 665,809 rows in 667 blocks, measured 90.4 ms (87.8–92.1) for
-default ranks and 136.8 ms (135.4–137.5) for a NumPy centering callback across
-seven samples. Its generated data differ from the R benchmark, so these
-Python timings are not a direct comparison with the R table. Results depend
-on risk-set sizes, covariate counts, callback work and conversion costs.
-
-## SAS-style Yates tests
-
-`yates(method="sgtt")` computes SAS-style type III tests for selected
-main-effect variables in a treatment-coded model. It defaults to `population="sas"`
-and requires linear predictions. Marginal estimates and their covariance
-match the direct SAS-population calculation; the test uses the estimable
-hypotheses from the full indicator design. `YatesResult.sas`, `sas_names`,
-and `sas_row_names` expose that matrix and its labels.
-
-The Rust `validation::yates_sgtt` kernel takes a `YatesSgttInput` with the
-indicator design, term assignments and adjustments, fitted coefficients,
-and covariance. It reuses one LINPACK-style QR to solve for all design
-columns and one per adjustment block. Residual-only QR callers do not
-retain the triangular factor needed by coefficient solves.
-
-For a Cox model, the baseline intercept is removed before testing the
-fitted coefficients. R 3.8-12 leaves that extra dimension in the SGTT
-hypothesis matrix and can fail with "non-conformable arguments"; the port
-supports this case. The external `YatesModel` adapter uses treatment
-contrasts; arbitrary contrast matrices are not exposed by this adapter.
-
-Joint requests such as `term="a + b"` or `term="a:b"` compare the Cartesian
-product of both variables' levels, with the first variable varying fastest.
-A scalar or vector of one-based fitted term numbers also selects variables,
-including the variables of an interaction term.
-A `levels={"a": [...], "b": [...]}` mapping supplies per-variable values;
-omitted categorical variables use their fitted levels. Direct tests compare
-all combinations jointly, or pairwise when requested. SGTT returns one type
-III test per selected main-effect variable, in the requested order.
-
-Three R 3.8-12 defects are corrected here: reversing the requested factor order
-can apply the wrong factor levels in R, and joint nonlinear global tests
-fail when R assigns several names to a single test row. The port preserves
-the requested variable order and names a joint global test `global`. Numeric
-term selection includes the last fitted term, which R accidentally rejects
-by using an exclusive upper bound.
-
-`scripts/generate_yates_sgtt_reference.R` records linear-model estimates,
-covariances, SAS matrices, and tests for additive, interaction, unbalanced,
-weighted, missing-cell, and no-intercept models.
-`scripts/generate_yates_joint_reference.R` adds joint categorical and numeric
-requests, partial level mappings, population choices, and Cox risk predictions.
-
-The native factorial benchmark (nine indicator columns, four estimable
-coefficients, 15 samples) measured median times of 39 microseconds for 1,000
-rows, 0.59 milliseconds for 10,000, and 13.8 milliseconds for 100,000 on the
-development machine. Reproduce with
-`cargo bench --bench survival_benchmarks --offline -- yates_sgtt_bench --sample-count 15 --sample-size 1`.
-
-All Yates Python kernels release the GIL and accept NumPy arrays through the
-typed input converters. Nested matrices use `FloatRows`, which reads arrays
-directly into row buffers and keeps list inputs without a flatten/rebuild
-cycle. In `scripts/benchmark_yates_sgtt.py`, the 100,000-row NumPy call fell
-from 55.3 to 13.4 milliseconds (median of nine calls); list inputs measured
-18.3 milliseconds before and 17.7 after. Fortran and strided arrays measured
-13.2 and 14.2 milliseconds. These include Python argument conversion and
-result construction, unlike the native benchmark above.
-
-## Survival response vector operations
-
-`concat_surv`, `rep_surv`, `rev_surv`, `unique_surv`, `duplicated_surv`,
-`transpose_surv`, `levels_surv`, `head_surv`, and `tail_surv` provide R's
-row operations through `survival.r` and the package root. Concatenation
-requires matching censoring types and multistate levels. Row operations
-preserve normalized status codes, state levels, and the censoring label;
-they never recode a subset containing only status 2 as an ordinary 1/2
-event response.
-
-Repetition supports scalar or per-entry `times`, `each`, and `length_out`
-(`length.out`); the length takes precedence over times. Duplicate detection
-and uniqueness support `from_last` (`fromLast`) and compare complete rows,
-including missing values in matching columns. They use a hash set with
-expected linear scan time and storage proportional to distinct rows.
-Python responses represent R's numeric NA and NaN by the same NaN, so
-these are treated as a single missing value. Empty responses remain empty
-under repetition, reversal, head, and tail; R's `1:nrow(x)` in those methods
-can instead produce an out-of-bounds error.
-
-`as_character_surv` returns labels without extra right padding;
-`format_surv` pads them to a common width. Both retain the common numeric
-precision and leading padding of the time columns. `transpose_surv`
-returns a plain matrix with one row per response column, and `levels_surv`
-returns event-state names or `None` for an ordinary response.
-
-`Surv` and `Surv2` reject arithmetic, comparisons (including `==` and `!=`),
-logical operations and reductions with `TypeError("Invalid operation on a
-survival time")`, matching R's `Math`, `Ops` and `Summary` groups. NumPy
-ufuncs, high-level numeric operations and implicit array conversion are
-also rejected. Previously, NumPy could treat a response as one opaque scalar
-and return it unchanged from `sum` or `min`.
-
-Use `left.equals(right)` for an explicit structural comparison of response
-columns and metadata. Matching missing values compare equal. This replaces
-the former dataclass `==` behavior; response objects are now unhashable.
-`copy.copy`, `copy.deepcopy`, pickling, row methods, `len`, and
-survival-aware `median`/`quantile` remain available. For ordinary numeric work, extract `response.as_matrix()`
-or a specific time/status column before calling NumPy; `Surv2.as_matrix()`
-returns time and normalized status. Truth-value tests on a response are
-invalid: test `len(response)` or `response is None` explicitly.
-
-`scripts/generate_surv_operations_reference.R` records 38 rejected R
-operations across nine ordinary, interval, multistate, timeline and empty
-responses. Python tests cover those reference errors, NumPy coercion and
-dispatch paths, structural equality, retained metadata and serialization.
-
-`scripts/generate_surv_vector_reference.R` records 144 operations across
-right, left, counting-process, interval, and multistate responses, plus
-concatenations. Run `scripts/benchmark_surv_vectors.py` to measure duplicate
-detection and uniqueness on distinct and repeated rows.
-On Linux x86-64 with Python 3.14.7 (median of 11 calls, excluding response
-construction), duplicate detection took 0.22/2.42/30.25 ms for
-1,000/10,000/100,000 distinct rows. At 100,000 rows, uniqueness took
-35.61 ms for distinct rows and 26.59 ms when each row occurred ten times.
-
-## Population model components and summaries
-
-Native calendar conversion rejects nonfinite day counts and dates outside
-the `CalendarDate` range (years representable by `i32`). Calendar cutpoints,
-input dates, and derived birth dates receive the same checks; malformed
-table dimensions also reject zero lengths and size overflow. Rust
-`days_to_date` and `start_of_year` return `SurvivalResult`; Python raises
-`ValueError`. R can retain and print nonfinite or larger numeric `Date`
-values, which cannot be represented by the native calendar object.
-
-`pyears` and cohort `survexp` honor `model`, `x`, and `y`. `model=True`
-retains the evaluated formula columns, original source columns referenced by
-`rmap` expressions, and supplied weights. Factors retain their level order
-and unused levels, and `tcut` columns retain cutpoints and labels. Subsetting
-and missing-row removal apply consistently to every retained component.
-`model=True` takes precedence over `x` and `y`, as in R.
-
-With `model=False`, `pyears(x=True)` keeps a row-major matrix of one-based
-category codes and raw scaled `tcut` times; `survexp(x=True)` keeps a
-`StrataFactor` with zero-based codes, labels, and counts. Without grouping
-terms, either function retains a vector of ones. `pyears(y=True)` keeps the
-`Surv` response or a one- or two-column numeric matrix. `survexp(y=True)` keeps
-numeric follow-up times; without a response, a rate-table call uses the
-maximum requested time before output scaling, and a Cox-reference call
-keeps `None`.
-
-Both results support `model_formula` and `model_term_names`, plus
-`model_frame` when made with `model=True`. The latter returns plain columns
-and expands a `Surv` response into its time/status columns; `.model`
-preserves the richer column objects. The default flags retain no row data.
-Individual `survexp` methods return a plain vector and ignore the retention
-flags. With `na.exclude`, they restore excluded rows as NaN.
-
-`scripts/generate_population_retention_reference.R` records these components
-and numerical outputs against R, including repeated subset rows, missing
-values, expression mappings, factor order, and both rate-table and Cox
-references.
-
-`summary_survexp`, `summary_ratetable`, and `summary_tmerge` are available
-through `survival.r` and the `model_summary` generic.
-
-Expected-survival summaries return a `SurvExpSummary`: a vector for one
-curve or a time-by-curve matrix otherwise. The `strata` labels name columns,
-as on `SurvExpResult`. Requested times are sorted with duplicates retained;
-missing times and values outside the observed range are dropped. Survival
-uses the preceding observation (1 before the first), and risk counts use
-the next observation. Omitted times keep the original rows. Scalar `scale`
-divides the output times, including R's zero and nonfinite arithmetic.
-Repeated source times use R's averaged interpolation indices without its
-tie-collapse warning. R call expressions and manually attached `na.action`
-attributes are not represented in these Python result containers.
-
-Rust callers use `population::summary_survexp` with a `SurvExpResult`; the
-Python native entry point accepts its time vector and row-major matrices.
-The native selector validates source shapes and time order, sorts the
-requested times when necessary, then uses a single sweep. Its selection
-work is linear in source rows plus requested rows after sorting, with output
-copying proportional to the number of selected cells. The
-`expected_survival_summary_bench` group measures sparse and dense requests
-on two-curve inputs of 1,000–100,000 rows.
-On a local Linux x86-64 release build, the median of 15 samples at 100,000
-source rows was 0.309 ms for 25 requested times and 3.80 ms for 100,000
-requested times, excluding source-curve construction. Reproduce with
-`cargo bench --bench survival_benchmarks -- expected_survival_summary_bench --sample-count 15 --sample-size 1`.
-
-`summary_ratetable` returns a `RateTableSummary` containing the canonical
-attributes, a dimension table, and native summary text available through
-`str(result)`. Factor dimensions have levels; other dimensions have bounds
-in their native units, with calendar bounds formatted as ISO dates.
-`summary_tmerge` returns a column-oriented count table with one row per
-operation. These methods return structured data without printing. Expected
-curves and summaries, rate tables and their summaries, and the merged-data
-count table all support `as_data_frame`.
-
-The R bridge drops retained `tmerge` metadata on subsetting and follows normal
-data-frame dispatch, including single-index column selection and omitted row
-or column arguments.
-
-`scripts/generate_population_summary_reference.R` regenerates curve-selection
-edge cases, population-method examples, all three bundled rate-table
-summaries, and merged-data counts from R survival 3.8-12.
-
-## P-spline prediction
-
-`predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the
-existing Rust basis on new values, preserving the original boundaries,
-degree, number of terms, intercept and combined columns. Values beyond the
-boundaries use linear extrapolation. The result is a `PsplineResult` with
-`penalty=False`; its matrix is in `.basis`. Omitting new values returns the
-original object. The generic accepts either `newdata` or R's `newx` keyword.
-
-The shared penalty builder accumulates the three nonzero entries in each
-second-difference row directly, replacing a cubic dense multiplication.
-It still returns the same dense matrix, requiring quadratic storage and
-initialization. In a local release run with ten prediction rows, median
-times over nine calls fell from 0.110 to 0.020 ms at 10 terms, from 33.1 to
-0.154 ms at 100 terms, and from 764 to 0.751 ms at 300 terms. Basis and penalty
-values were identical. `scripts/bench_pspline_basis.py` measures the shared
-construction path with fixed prediction boundaries.
-
-`scripts/generate_pspline_prediction_reference.R` regenerates ten R survival
-3.8-12 cases covering degrees, extrapolation, missing rows, combined columns,
-intercepts and smoothing methods, including their penalty matrices.
-
-## Response quantiles
-
-`quantile` and `median` accept raw `Surv` responses and fitted KM, Turnbull,
-and Cox survival curves. `quantile_surv`, `median_surv`, and `median_survfit`
-are the explicit method names. Raw responses use the existing Rust curve
-fitters before inversion; they reject missing rows unless `na_rm=True` and
-refuse multiple-endpoint responses as R does. `median(Surv(...))` includes
-confidence bounds by default, while `median(survfit(...))` returns point
-estimates. Both preserve the curve-by-probability result layout of
-`quantile_survfit`.
-
-Both Python confidence-band interfaces accept owned numeric arrays and run the
-native transform without the interpreter lock. The R-style interface accepts
-scalar estimates and missing numeric containers. See
-[confidence-band inputs and validation](confidence-bands.md) for 720 independent
-stock-R references across all five transforms, endpoints and lower-band options.
-
-Curve quantiles refuse logical, character, categorical and missing
-probabilities as R does. Infinite tolerances retain R's undefined results and
-zero-probability origin rules; NaN tolerance remains invalid.
-Scalar scales retain R's zero, negative, infinite and missing-value arithmetic.
-The native binding copies numeric arrays in bulk and releases the interpreter
-lock during curve construction and inversion. Another 4,352 stock calls and
-complete-call measurements are described in [curve quantile boundaries](curve-quantiles.md).
-
-The R bridge preserves conditional Cox origins and stock vector, matrix and
-stratum-by-curve array layouts for quantiles and medians. It inverts each
-prediction column within each stratum rather than flattening the curves.
-Direct stock namespace comparisons cover absent confidence bands, repeated
-and empty probabilities, conditional starts and scalar scale boundaries.
-The bridge uses R's conditional coercion for `conf.int` when bands exist,
-retaining stock errors for invalid conditions. Absent bands bypass evaluation
-of that argument, including a promise that would otherwise error. Independent
-comparisons also retain R tolerance arithmetic, recycling, warnings and errors.
-
-The native quantile routine handles non-monotone confidence bands, duplicate
-levels, missing band entries, and tolerance-induced ties using R's sorting
-and index-averaging rules. With the default tolerance, an entirely censored
-curve returns an undefined quantile even at probability zero, matching R's
-terminal-flat rule. The common monotone path uses adjacent comparisons
-instead of a hash table and shares one interpolation buffer across the
-two tolerance shifts.
-
-`scripts/generate_surv_quantile_reference.R` regenerates the response,
-Cox/KM curve, and interpolation references from R survival 3.8-12.
-`scripts/bench_surv_quantiles.py` measures quantile evaluation with curve
-construction excluded, and can compare saved release libraries using
-`--extension`.
-
-Local release measurements on Linux x86-64 with Python 3.14.7 used the median
-of 101 calls. All 24 monotone benchmark combinations returned identical
-estimates and bounds before and after the change. Representative timings
-with confidence bounds enabled were:
-
-| Curve points | Probabilities | Repeated levels | Before (ms) | After (ms) |
-| ---: | ---: | :---: | ---: | ---: |
-| 1,000 | 3 | no | 0.043 | 0.019 |
-| 10,000 | 3 | no | 0.623 | 0.183 |
-| 100,000 | 3 | no | 7.550 | 2.072 |
-| 100,000 | 1,001 | no | 7.745 | 2.348 |
-| 1,000 | 1,001 | no | 0.118 | 0.123 |
-| 1,000 | 1,001 | yes | 0.090 | 0.101 |
-
-Across curves with and without repeated levels or confidence bounds,
-quartiles were 2.1–3.8 times faster. Dense grids on 10,000–100,000 points
-were 1.6–3.4 times faster. On 1,000-point curves, requesting 1,001
-probabilities was 4–16% slower (about 3–12 microseconds): the shared buffer
-trades additional arithmetic during searches for less allocation and copying.
-
-## Cox model reports
-
-`print_coxph` and `print_summary_coxph` expose R-style text and full-precision
-`ModelPrint` tables for ordinary, robust, null, penalized and multistate fits.
-Explicit penalized methods expose term grouping and label-length controls;
-expanded multistate summaries group shared transitions and retain confidence
-intervals. Reports reuse the existing native fit and summary calculations.
-See [Cox model reports](cox-model-reports.md) for defaults, numerical fields,
-reference checks and intentional differences.
-
-## AFT and Aalen model reports
-
-`print_survreg`, `print_summary_survreg`, `print_aareg` and
-`print_summary_aareg` provide formatted text and full-precision model tables.
-AFT summaries retain fixed/stratified scale metadata and optional correlations;
-Aalen fits retain omission records and their robust summaries preserve stored
-influence information across cutoffs and test-weight changes. Penalized AFT
-reports also support explicit width and data-frame conversion. See
-[AFT and Aalen reports](aft-aalen-reports.md) for R comparisons and memory measurements.
-
-## Diagnostic and test reports
-
-Case-cohort model/summary, conditional-logistic, proportional-hazards,
-concordance (current and legacy), and survival-difference reports return
-`ModelPrint` objects with full-precision tables. `as_data_frame` selects the
-report's `primary_table` and labels rows using `row_label`. Formula-based
-concordance and survival-difference results now retain omission records;
-case-cohort fits retain stratum labels. The printers reuse existing numerical
-results. See [diagnostic and test reports](diagnostic-test-reports.md) for
-formatting rules, R quirks and reference coverage.
-
-`print_pyears`, `print_survcheck` and `print_yates` provide population totals,
-transition/subject tables, problem counts and population marginal means with
-global, pairwise, trend or SAS tests. Person-years results retain built-in
-rate-table match summaries from the positions already used by the numerical
-fit. `YatesPrint` retains typed level columns and independent numeric tests;
-display padding does not become observations in `as_data_frame`. See
-[population and validation reports](population-validation-reports.md).
-
-`factor()` and `as.factor()` inside a survival response now preserve the
-categorical status and state labels. Previously the response parser stripped
-those wrappers without evaluating the conversion. Existing factor levels are
-retained by `as.factor` and unused levels dropped by `factor`, as in R.
-
-`match_ratetable(data, table)` exposes matched population positions,
-cutpoints and built-in summaries as a `RateTableMatch`. It validates unused
-categorical levels and uses the same native matcher as `pyears` and
-`survexp`; model-frame extra columns now preserve those levels. The matcher
-rejects duplicate exact labels and repeated table dimensions, and caches
-categorical lookups for large tables. See [rate-table matching](rate-table-matching.md).
-
-## Compact curve reports
-
-Raw responses and rate arrays have `print_surv`, `print_surv2` and
-`print_ratetable`. These reports retain full-precision data separately from
-labels and text, support explicit width and display limits, and expose
-independent `as_data_frame` columns. Rate-array formatting skips hidden
-slices. See [response and rate-table reports](response-ratetable-reports.md)
-for R truncation rules, named axes, Unicode and the empty-response difference.
-
-`print_survfit` and `print_survfitms` return R's compact curve tables and formatted
-text without expanding the full event-time summary. They support ordinary,
-Cox and multistate fits, count-column reduction, medians and confidence limits,
-restricted means, scaling and column-block wrapping. `SurvfitPrint.table` and
-`as_data_frame(report)` retain full precision; `str(report)` renders the report.
-See [survival reports](survival-reports.md) for defaults, R reference tests,
-allocation measurements and differences in output metadata.
-
-`print_summary_survfit` and `print_summary_survfitms` format detailed time rows,
-including grouped Cox predictions and state probabilities. `print_survexp` and
-`print_summary_survexp` format expected curves with a risk column per group.
-Their `SurvivalTablePrint` objects retain numeric tables and support
-`as_data_frame`. Summary objects retain complete strata levels, response type,
-and a conditional cutoff in the same units as their times. This corrects R's
-scaled-report cutoff bug; the port also reports a clear error for an entirely
-event-free summary instead of R's failed NULL-to-matrix conversion. The report
-guide documents layouts, metadata omissions and 58 detailed R reference cases.
-
-## Graphics
-
-`survival.plotting` provides optional Matplotlib rendering through the generic
-`plot`, `lines`, and `points` functions or explicit method names. It supports
-fitted survival and multistate curves, raw `Surv` plots, expected-survival
-overlays, Cox proportional-hazards diagnostics, and Aalen cumulative coefficients.
-Numerical plot data is available without Matplotlib. See
-[survival plotting](survival-plotting.md),
-[Cox diagnostics](cox-diagnostic-plotting.md), and [Aalen plotting](aalen-plotting.md)
-for arguments, deliberate graphics differences, and R coordinate checks.
-
-Direct `Surv2` graphics and raw `Surv` line/point overlays are refused with R's
-message. Fit these responses before drawing curves. Modern Cox survival results
-use the common curve renderer; R's obsolete `survfit.coxph` class has no separate
-Python representation. Matplotlib controls device layout, ticks, padding and fonts;
-the interface does not emulate base R graphics parameters.
-
-## Bare model fitters
-
-`coxph_fit`, `agreg_fit` and `agexact_fit` expose R's matrix interfaces with
-raw offsets, optional residuals, null-model components and iteration
-diagnostics. Their lightweight native result shares the full-model optimizer
-without retaining training data or calculating full-model diagnostics.
-See [bare Cox fitting](cox-low-level-fitting.md) for method selection,
-output shapes, performance measurements and R reference checks.
-
-`survreg_fit` exposes the bare AFT matrix interface, preserving estimated
-log-scales, initial-fit coefficients, score coordinates and R's naming
-conventions. Its lightweight native result shares the full solver without
-retaining training rows or callbacks. See [bare AFT fitting](aft-low-level-fitting.md)
-for prepared response codes, custom densities and R reference tests.
-The R `survreg.fit` bridge also uses this compact path, including vectorized
-R density callbacks. It preserves names and R warning conditions, honors
-explicit callback lists regardless of their display name, and passes matrices
-without building per-row R lists. The same document records complete R-call
-benchmarks against the previous bridge and stock survival.
-
-`survpenal_fit` exposes the corresponding compact penalized AFT interface,
-including ridge, spline, dense/sparse frailty and callback penalties.
-`print_survreg_penal` accepts this result and prints the sparse frailty
-branch. See [bare penalized AFT fitting](penalized-aft-low-level-fitting.md)
-for zero-based column assignments, result shapes and R reference checks.
-The R `survpenal.fit` bridge uses this shared fitter with the original R
-penalty callback contract, histories and printing functions. Built-in R
-constructors now use the [shared Rust controllers](penalty-controllers.md)
-for their smoothing searches and gamma likelihood corrections. Python's
-`CoxPenalty.controlled` exposes the same outer-search machinery for custom
-Cox and AFT penalties, with state owned by each fit.
-
-`survfitKM` fits a prepared factor and `Surv` with the common Rust curve
-engine. It preserves unused factor levels and returns numerical components
-without retaining a model frame. It does not omit missing rows or merge
-almost equal times. See [direct Kaplan–Meier fitting](km-low-level-fitting.md)
-for output shapes, R bridge behavior and measured performance.
-
-`survival.r` returns data objects and `as_data_frame` tables for most model
-and summary reports.
-Cox, AFT and Aalen model/summary reports, compact and detailed survival-curve
-reports, expected-survival reports, case-cohort, conditional-logistic,
-proportional-hazards, concordance, survival-difference reports and
-`print_survreg_penal` are available. `format_surv` formats a `Surv`, and
-`str(summary_ratetable(...))` exposes the native rate-table text. Raw response
-and rate-array reports are available through `print_surv`, `print_surv2` and
-`print_ratetable`. Dense and sparse frailty reports are available through
-`print_survreg_penal`.
-
-Direct Cox curves are available as `coxsurv_fit` and the legacy
-`survfitcoxph_fit`. Both use the shared Rust baseline, expansion and individual
-trajectory kernels; the R bridge now only converts their results. Results use
-read-only NumPy views and retain no original observations. See
-[direct Cox curves](cox-direct-curves.md) for prepared-input requirements,
-stratum indices, output layouts and the terminal-survival rounding guard.
-
-`attrassign` groups prepared model-matrix column codes by term in one pass;
-`untangle_specials` finds registered special variables and term positions in
-`TermMetadata`. These helpers preserve R's one-based indices and its single-term
-selection quirk. `model_term_names` includes strata labels for Cox and AFT models,
-matching R's fitted terms. See [term helpers](term-helpers.md) for metadata inputs,
-output conventions and column-grouping performance.
-
-`yates_setup` exposes Cox risk/survival prediction and external GLM inverse
-links. Prepared Cox evaluation and survival summaries share the native
-calculations used by `yates`; summaries correct R's extra time-zero row and
-stale cumulative hazard. R-fitted Cox models also use the shared Rust baseline
-and confidence-band kernels, with model preparation shared by `survexp`.
-Prepared R closures release the original fit. See [Yates setup](yates-setup.md) for accepted inputs,
-dispatch rules, empty baselines and performance measurements.
-
-The R `survivalr::yates` formula interface uses the same Rust means,
-estimability, simulation and type III kernels. R retains formula evaluation,
-fitted contrasts and result attributes, and supplies normal draws from its
-global RNG. Custom S3 setup methods support vector or matrix predictions and
-optional summaries. Cox risk/survival use the native prediction loop directly.
-The wrapper also accepts Python-backed Cox and AFT fits and handles joint
-level matrices, reversed variable order, matrix-valued SAS adjusters and
-empty adjustment sets. These cases correct stock-R preparation failures;
-explicit population designs also retain the fit's custom contrasts.
-
-## Native Cox prediction memory and performance
-
-Public Rust fitted-Cox predictions check stored row, covariate and covariance
-dimensions before shortcuts or cached-baseline access. Missing stored strata
-and unknown training stratum codes return input errors. These checks preserve
-fitted-value and derived-risk arithmetic; they validate dimensions and lookups
-without an added observation scan. External API regressions include cached and
-uncached predictions, 1,735 malformed calls and valid controls for every tested
-method.
-
-Expected-event predictions, survival at requested times, and cohort expected
-survival compute relative risks with one reusable centered row. Temporary
-covariate storage is O(p), replacing an O(n × p) centered copy; the owned
-input matrix, risk vector and result storage remain. Expected-event standard
-errors also center covariates as needed. Full survival curves retain their
-centered matrix because subsequent curve assembly uses it.
-
-The reproducible benchmark is
-[`bench_cox_prediction_inputs.py`](../benches/python/bench_cox_prediction_inputs.py).
-On Python 3.14.7 / NumPy 2.4.6 with a release build, 100,000 population rows,
-32 covariates, two strata and offsets gave these complete native Python-call
-times (milliseconds, median and range of seven samples after three warmups):
-
-| Input layout | Prediction | Before | After |
-| --- | --- | --- | --- |
-| C | Survival at four times | 28.546 (28.254–29.378) | 9.490 (9.390–9.647) |
-| C | Expected events | 28.901 (28.599–29.714) | 9.517 (9.382–10.027) |
-| C | Cohort expected survival | 106.443 (105.449–107.655) | 87.429 (87.051–87.772) |
-| Fortran | Survival at four times | 29.832 (29.470–30.557) | 11.867 (11.691–12.173) |
-| Fortran | Expected events | 29.783 (29.282–30.469) | 11.955 (11.663–12.187) |
-| Fortran | Cohort expected survival | 106.030 (105.636–107.015) | 87.821 (87.454–88.004) |
-
-The baseline is the native implementation used by #688. Each build and layout
-runs in a separate process; routine order alternates within each process.
-Timing includes buffer conversion, validation and result materialization,
-excluding fitting, input creation and baseline-cache warmup. Whole output arrays
-agree across builds at `rtol=5e-14, atol=1e-15`. These timings cover predictions
-without standard errors. With three covariates, C-layout medians were
-6.486→6.438 ms, 6.534→6.473 ms and 83.622→83.264 ms, respectively;
-the sample ranges overlap.
-
-Peak process RSS for the combined three- and 32-covariate runs fell from
-140.7 to 122.9 MiB for C inputs and 161.3 to 122.6 MiB for Fortran inputs.
-This includes the interpreter, NumPy, training/input buffers, caches and
-results; it is not an isolated measurement of temporary matrix allocation.
-
-```sh
-PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py \
-  --extension /tmp/previous-survival.so --output /tmp/cox-before
-PYTHONPATH=python .venv/bin/python benches/python/bench_cox_prediction_inputs.py \
-  --output /tmp/cox-after --compare /tmp/cox-before.npz
-# Add --order F to both commands for Fortran-layout inputs.
-```
-
-## Grouped model outputs
-
-KM/Aalen–Johansen residual and pseudo arrays restore observation rows removed
-by `na.exclude`, while collapsed outputs and long tables retain fitted rows.
-Omitted observation labels preserve their original positions. The 96 stock R
-references cover these policies with weights, histories, grouping and all
-three residual kinds; see
-[missing survival residual rows](survfit-missing-residuals.md).
-The R facade preserves character id dimension-label values while flattening
-names attached to the label vectors themselves.
-
-Grouped ordinary Cox predictions and Cox/AFT residuals preserve declared
-factor order, logical and missing groups, numeric NaN versus NA, and R output
-labels. A shared Rust sum combines prediction errors in quadrature. New-data
-collapse labels contribute to omission, exclusion and failure policies; saved
-cluster/id factor groups retain their order. Schoenfeld residuals ignore
-collapse, as in R. See [grouped model outputs](model-collapse.md) for the 710
-independent references, documented stock failures and complete-call timings.
-Grouped Cox calls now sum predictions inside the native call, allocating term
-output rows per group and restoring omitted-only groups afterward. Empty R
-term predictions retain their column count. Another 146 R cases check these
-paths; see [native grouped prediction performance](cox-grouped-prediction-performance.md).
-
-AFT prediction term selections follow R's positive, zero, negative, fractional,
-logical and missing matrix indices, retaining selected widths and errors.
-Cox keeps its stricter positive-index/name validation, including for vector
-predictions. R term column names follow fitted covariate assignments separately
-from the full formula's strata labels. The 656-call reference retains stock
-AFT strata-label displacement and penalized Cox survival errors alongside
-independent corrections; see [prediction term selections](prediction-term-selections.md).
-Ungrouped Cox and AFT prediction row labels now follow the numerical row mask,
-including repeated subsets, excluded rows, intentionally unnamed fits/errors,
-and scalar/multiple quantile scale labels. Another 1,680 independent R calls
-check complete values and metadata; see [prediction row labels](prediction-row-labels.md).
-Grouped labels are covered separately above.
-
-Unclassed double R data-frame columns, including NA and NaN, and complete
-integer columns cross the bridge in bulk as one-dimensional NumPy arrays,
-retaining single-row and empty shapes. Missing integers, categorical and
-classed columns retain their existing conversion. Lifetime and
-mixed-model checks pass, and complete public predictions on 20,000 numeric rows
-take 21–58 ms versus 47–87 ms in the predecessor; see
-[numeric data-frame conversion](r-numeric-data-columns.md) for stock R timings
-and the measured scope.
-
-Native Cox/AFT predictions also provide owned array snapshots. The R bridge
-uses them for bulk output conversion, retaining grouped and missing-row shapes,
-sparse frailty, term selections and prediction labels. Entirely omitted AFT
-quantiles retain their matrix width and stock absent/empty names. Both output
-paths check the existing prediction references; another 72 independent calls
-cover entirely omitted AFT outputs. See
-[prediction array snapshots](prediction-array-snapshots.md) for interface details,
-validation and complete-call timings.
-
-Cox new-data predictions/curves and formula-based AFT predictions also build
-owned float64 designs directly from numeric arrays. Factors, transforms and
-penalties retain their evaluators; interactions retain fitted column order and
-scalar multiplication order. Public Python matrices and results retain lists.
-The 123 R formula references run against both designs with list, NumPy and
-pandas columns. Complete 20,000-row calls take 7–10 ms versus 19–22 ms in the
-predecessor, and 7–11 ms versus 36–39 ms with interactions. See
-[numeric prediction designs](numeric-prediction-designs.md) for validation,
-stock R comparisons and measured scope.
-
-Cox and AFT predictions preserve R's NA versus numerical NaN distinction,
-including source values, formula domain errors, selected missing terms and
-excluded-row restoration. AFT drops single-row quantile dimensions before
-restoring excluded rows; frailty-only new-data predictions use the row count
-without evaluating missing frailty values. Another 4,704 independent references
-check complete outputs and missing kinds through list/array and live R paths.
-See [missing values and omitted prediction rows](prediction-missing-values.md)
-for recorded stock failures, stored-model compatibility and complete-call
-measurements with missing data.
-
-AFT quantile predictions pass the complete numeric probability vector to the
-distribution, preserving missing and out-of-range columns alongside valid
-columns. Custom quantile callbacks determine their own behavior for those
-values. Other prediction types ignore `p`, following R. Nullable list, NumPy,
-pandas and Polars query values also work in `dsurvreg`, `psurvreg` and
-`qsurvreg`. The current-stock generator
-`scripts/generate_aft_prediction_probability_reference.R` records 464 prediction
-and distribution-query cases across eight families and estimated, fixed and
-stratified scales. The R bridge preserves explicit empty probability requests,
-returning the same zero-column shape as `p=numeric(0)`. Stock Gaussian,
-lognormal and t predictions reject `p=NULL`, and estimated-scale empty predictions with
-`se.fit=TRUE` fail in stock R; the port returns empty fit and error matrices.
-Some stock fixed-scale predictions retain a nonempty error vector despite an
-empty fit; the independent empty-result checks also pin the corrected width.
-
-Logical covariates retain FALSE/TRUE factor coding, including constant levels
-and interaction widths. R model matrices preserve source row names and contrast
-declarations, and missing logical new-data rows survive input conversion as
-missing values. Expanded time-transform labels follow risk-set order. The 440
-stock fits provide 2,592 matrix references, checked with list, NumPy, nullable
-pandas and live R inputs. See [logical covariates and matrix metadata](logical-model-matrices.md)
-for validation, stored-fit limits and complete-call measurements.
-
-AFT model matrices omit standalone scale strata before evaluating new data,
-while strata interactions and ordinary uses of the same variables remain
-required. Missing or absent unused strata no longer omit rows or reject the
-frame; offsets continue to affect omission, and prediction retains its scale
-strata requirements. Another 216 stock fits provide 4,080 matrices and 456
-validation failures. See [AFT model-matrix inputs](aft-model-matrix-inputs.md)
-for validation, persistence, warning conventions and complete-call measurements.
-
-Fresh Cox and AFT matrices honor all four global R omission options. Python
-callers can select `na_action`; stored matrices retain their fitted row masks.
-Missing strata remain aligned under `na.pass`, ridge columns retain independent
-NA/NaN values, and nullable logical values support incomplete factor coding.
-Seventy-two stock fits provide 3,952 whole matrices and 368 validation failures.
-See [model-matrix missing-data rules](model-matrix-na-action.md) for validation,
-persistence, warning limits and complete-call measurements.
-
-Named R list vectors use the shared data-column adapter, preserving logical
-missing values, declared factor levels and numeric NA/NaN payloads. Numeric
-vectors transfer in bulk. Variable-free list/mapping frames produce zero rows;
-explicit data frames retain their row counts. Live list fit, matrix, prediction,
-curve, log-rank and concordance checks and 32 further stock list/frame cases
-are described in [R list data columns](r-list-data-columns.md), including
-known stock AFT term-label and null Cox prediction discrepancies.
+- `model.matrix` term assignments are integers; R's strata term-number
+  adjustment sometimes promotes this attribute to double.
+- Grouped Kaplan–Meier curves use bare group labels (`a`, `b`) where R uses
+  `g=a`, `g=b`, including in curve quantiles.
+- The R `coxsurv.fit` list form keeps R's quirk of naming individual
+  trajectories by the training stratum labels.
+- AFT distribution queries forward Python `RuntimeWarning` and `UserWarning` as
+  R warnings; other callback warning categories go to Python's warning hook.
+- `survivalr::yates` consumes R's global random stream and ignores
+  `options$seed`, while Python's `r.yates` uses a per-call seed. The R wrapper
+  does not support `trend`, stratified survival prediction, multi-state Cox
+  models or functions passed as `predict`.
+- Saved models embed Python pickle state tied to the installed package; they are
+  not a portable archival format, and R's serialization version 2 is refused.
+
+## R behavior reproduced deliberately
+
+The port reproduces these R behaviors on purpose. Some look surprising, but they
+are not port defects.
+
+Formulas and model frames:
+
+- Cox constructs the full model matrix before dropping the strata main effects of
+  a strata interaction, while AFT removes those main effects before assigning
+  contrasts; factor order and column labels follow each. Cox curves for these
+  models require `newdata`.
+- Each distinct `offset()` contributes once even if it appears in a removed term,
+  as in R's `terms()`. NaN created by arithmetic inside `strata()` forms a
+  distinct `NaN` level, following R's factor conversion.
+- A supplied evaluated model frame bypasses `model.frame`: missing rows remain
+  under every global action, supplied factor levels can differ from the fitted
+  levels, and offsets or unused variables do not remove rows. Because the stock
+  Cox standalone-strata branch misspells `contrasts.arg`, supplied frame contrasts
+  apply in that branch, while other Cox and AFT branches use the fitted contrasts.
+  (For fitted and new-data matrices the port corrects this typo; see
+  [Formulas and model matrices](#formulas-and-model-matrices).)
+- `model.matrix.survreg` renumbers assignments after removing strata columns, so
+  `attrassign` with the fitted term labels names a later column after a strata
+  term. With exactly one term, `untangle.specials` uses the summed factor code as
+  the endpoint of `seq(ff)`, so an interaction-only special with code 2 gives
+  indices `[1, 2]`.
+- Factor levels absent before `strata()` is evaluated are dropped. Several
+  separate `strata()` terms are recombined after row selection, keeping only
+  observed combinations, while a single `strata(a, b)` term keeps its combinations
+  from before selection.
+- Automatic frailty selection follows R's reevaluated constructor, so a sparse
+  term can become dense on small new data, while a fitted dense term that switches
+  to sparse codes fails because its factor contrasts no longer apply. Explicit
+  `na.action` arguments in `...` are ignored by new-data `model.matrix`, which
+  uses `options("na.action")`.
+- Variables removed by formula subtraction stay in the model frame and take part
+  in training-row omission, while Cox and AFT cluster extraction rebuilds the
+  formula and drops them. R's checks for multiple clusters and missing interaction
+  margins are kept.
+
+Predictions and residuals:
+
+- AFT quantiles drop single-row and single-column dimensions before restoring
+  excluded rows, so one retained row with three quantiles and three excluded rows
+  gives a vector of length six. Fixed-scale errors repeat the retained row's name.
+- R leaves some prediction names absent: an unstratified Cox stored linear
+  predictor without errors, the errors of training expected counts, new-data
+  expected counts, AFT stored response and link fits, and some untransformed
+  quantile errors.
+- An explicit `terms = NULL` selects no Cox term columns but all AFT columns.
+- New-data linear, risk and term predictions from frailty-only Cox fits do not
+  evaluate the frailty variable, so its missing values remove no rows.
+- Schoenfeld and scaled Schoenfeld residuals ignore `collapse`.
+- An aliased AFT coefficient makes new-data and term predictions that use it
+  missing. AFT prediction types other than quantiles ignore `p`.
+
+Low-level fitters:
+
+- `coxph.fit` and `agreg.fit` use Efron for `method = "efron"` and Breslow for
+  every other accepted label, including `"exact"`. `agexact.fit` always uses the exact
+  likelihood, requires unit weights, returns a one-column matrix of linear
+  predictors, labels its method `"coxph"` and has no class.
+- `survfitKM`'s old `type` argument overrides `stype` and `ctype`, including
+  otherwise invalid values; `time0` is accepted and unused; the unweighted
+  `counts` table appears according to R's relative comparison of weights with one.
+- `survreg.fit` uses the numeric columns of a `Surv` without recoding, so a
+  left-censored `Surv` is fitted with 0/1 status; `dist = "weibull"` is rejected
+  because its entry has no density; with `nstrat = 1` the stratum codes are
+  ignored; variance names are dropped when covariate rescaling is undone; the
+  score keeps the internal covariate scaling; `assign` is unused.
+- `survpenal.fit` and `r.survpenal_fit` leave `df2` unpopulated and return a
+  scalar penalty for sparse fits (the native result always has two elements).
+- The t family's `n.eff` evaluates `variance(sigma^2)` as R does and can be
+  negative (-111.527 on log lung time); only AIC-method psplines with
+  `dist = "t"` use it.
+- `coxsurv.fit` accepts and ignores `cluster`, `position` and `oldid`, and
+  `survfitcoxph.fit` ignores `vartype`.
+- `rsurvreg(n, ...)` draws as many uniforms as R's `runif` count rules give before
+  recycling location and scale, so `rsurvreg(2, mean=1:3)` draws two uniforms and
+  returns three values with a recycling warning. Distribution queries recycle
+  location and scale separately at each arithmetic stage, as R does.
+- `rep_surv` follows R's first-element warnings, nonfinite defaults, fractional
+  truncation and argument precedence.
+- Frailty penalties follow R's initial values: a gamma EM search ignores an `init`
+  vector longer than one value, Gaussian REML keeps a vector, and AIC searches
+  start from R's `c(0.1, 1)`. Ridge scaling uses the sample variance without
+  NumPy arithmetic warnings, as R's `var()` does for very large or subnormal
+  inputs.
+
+Curves:
+
+- Without `FUN`, ungrouped ordinary curves are aggregated with `rowMeans`, while
+  an explicit `"mean"` uses R's residual-refined mean. Aggregation callbacks first
+  receive each group's one-based prediction-row indices, and extra arguments are
+  ignored.
+- `survfit.matrix` defaults to the discrete method for both KM and Cox input; it
+  caps the diagonal departure probability at one without rescaling off-diagonal
+  increments, reuses the previous event count stepwise, and takes a state's risk
+  count from the last departing transition in column-major order.
+- Tied `ctype = 2` residual and pseudo-value diagnostics use R's approximation.
+- With the default tolerance, an entirely censored curve has an undefined quantile
+  even at probability zero (R's terminal-flat rule); infinite tolerances keep R's
+  undefined results and zero-probability origin rules.
+- Counting curves whose inserted `start.time` origin makes the times unsorted
+  refuse requested summaries. Ordinary KM quantiles keep the zero origin even when
+  fitting starts later. Multi-state quantiles and medians are refused.
+
+Printing and graphics:
+
+- `print_survfitms` marks the last column with an asterisk even when it is
+  `se(rmean)`; one-row strata blocks use the named-vector layout; several Cox
+  prediction curves have no confidence columns; `print_survexp(naprint=False)`
+  drops rows with at least the number of columns minus two missing cells.
+- A zero frailty variance gives R's NaN Wald test, in Cox and penalized AFT
+  summaries alike.
+- `print_coxph_null` ignores the precision argument and uses seven digits.
+  `print_summary_coxph_penal` ignores `signif_stars` and does not truncate
+  confidence-interval labels. Multi-state Cox output omits `se(coef)`.
+- `print_survreg` applies an explicit `digits` to the coefficient vector and
+  multiple named scales only. `print_aareg` and `print_summary_aareg` round to
+  three significant figures before seven-digit formatting, and the direct printer
+  keeps the fit's original test label in its footer after an override.
+- The case-cohort summary printer ignores `digits` and keeps R's literal
+  `x$method,` heading and single-coefficient row labels `[1,]` and `Value`.
+  Concordance counts are rounded to two decimals before seven-digit formatting.
+- Named `Surv` vectors align names and values to the right even with
+  `right=False`. Rate-table vectors print every entry when only one would be
+  omitted; zero-limit matrix displays keep row labels; named Unicode axis titles
+  use byte-counted padding.
+- Plotting a `Surv2` response, and line or point overlays of raw `Surv`
+  responses, are refused with R's message.
+- `lines_survexp` joins expected survival with straight lines. Confidence bars
+  from `conf_times` use the next fitted limit, while `mark_time` marks use the
+  preceding estimate. Zero values on a log probability axis are drawn at 80% of
+  the smallest positive value.
+- Aalen plot variances use squared influences or squared coefficient increments,
+  each squared individually at tied times, and output starts at zero. Cox
+  diagnostic plot knots use the event times and the prediction grid, so `nsmo`
+  can change the curve.
+
+Population, data preparation and marginal means:
+
+- `finegray` multiplies user weights by source position within the stratum,
+  indexing the full weight vector, so a stratified result's `(weights)` column
+  need not equal its initial `fgwt`.
+- Rate-table `survexp` keeps R's zero cohort survival and unit conditional
+  survival for an empty sparse group.
+- `model=True` takes precedence over `x` and `y` in `pyears` and `survexp`. Cox
+  rate models with a sparse frailty refuse new cohort curves; individual
+  predictions use zero frailty for new rows.
+- A matrix-valued continuous `survobrien` term uses its first column, and a custom
+  transformation is first probed with ten values before it is called once per
+  column of each risk set.
+- With a two-column numeric `pyears` response, the columns are time and event
+  without a rate table, and start and stop (without events) with one.
+- `yates` weights linear estimates for the data population but not nonlinear
+  averages, and omits model offsets. R's default `yates_setup` method reads `type`
+  while its Cox and GLM methods read `predict`; GLM `terms` and Cox
+  `expected`/`terms` keep R's explicit errors.
+
+## Reference differences retained deliberately
+
+The Python fixture suite (`python/tests/test_r_fixtures.py`) has **37 expected
+numerical differences**, with no missing-feature or API-error exemptions. None
+of the historical reference JSON files were changed. The differences are:
+
+| Checks | Fixture family | Reason |
+| ---: | --- | --- |
+| 7 | Aalen regression, veteran data | The reference continues through rank-deficient risk sets and contains missing coefficients and values around 10¹⁵. The port truncates at the last nonsingular risk set and returns finite estimates. |
+| 6 | Cox concordance | Exact linear-predictor ties depend on floating-point/BLAS rounding. The reference and this platform classify a few tied pairs differently. |
+| 1 | Exact counting-process Cox deviance residuals | The reference's unclassed fit dispatch returns martingale residuals for a deviance request. The port computes deviance residuals. |
+| 18 | Interval-censored AFT residual derivatives | The reference has opposite signs in some scale derivatives. The port's likelihood derivatives are checked against finite differences for every censoring type and distribution family. |
+| 4 | AFT prediction with a new-data offset | R's `predict.survreg` drops new-data offsets on the linear-predictor/response path; only its stratified quantile path extracts them. The port includes them in the linear predictor and transformed predictions. |
+| 1 | `survcondense` with no rows to merge | The reference produces zero rows through negative indexing of an empty index. The port preserves all input rows. |
+
+These cases remain explicit `xfail(strict=True)` entries (`KNOWN_FAILURES`), so
+a future change in behavior requires review. They are not counted as passing
+comparisons. The Rust fixture adapter also records cases it cannot construct;
+those harness limitations are separate from the Python tests of the same Rust
+engines.
+
+Two fixture transport details are handled by the adapters: CSV factor columns
+recover the recorded R levels, and the near-tie test recovers the generator's
+IEEE floating-point expressions before fitting. Output time comparisons allow
+only the JSON format's 15-significant-digit rounding. Counts and the number of
+distinct times remain checked separately.
 
 ## Reference limitations
 
@@ -2211,6 +1245,8 @@ multi-state fits; `predict.coxphms` types expected, survival and terms and
 Multistate Cox covariate paths also raise R's unsupported-path error. Offsets
 in formula lists raise an explicit error directing callers to the `offset`
 argument; stock R 3.8-12 fails with "termmatch failure 1" for those formulas.
+Stratified and multi-state `yates_setup` survival predictions are unsupported,
+as in R.
 
 `pyears(ratetable=cox_fit)` also remains explicitly unsupported. R 3.8-12
 recognizes the fit initially but then tries to coerce it to a numeric rate
@@ -2231,44 +1267,12 @@ PYTHONPATH=python .venv/bin/python scripts/generate_stubs.py --check
 
 The normal fixture run includes the documented expected differences. Add
 `--runxfail` to display their full discrepancies. R itself is needed to regenerate
-the reference data; see [the fixture workflow](../test/r/README.md).
-
-Local validation on October 9, 2026 passed 105,866 Python tests, with 48 skips
-and 37 documented expected failures. All 48 skips are cases where stock R
-could not compute a reference. Rust passed 1,495 library tests without Python,
-1,755 with all features, and 41 public API integration tests without Python.
-Formatting, strict Clippy, Python lint, typing across all 88 source files and
-generated interfaces were clean. The fixture and benchmark script suite also
-passed all 23 tests.
-
-A fresh R 4.5.3 source archive check with survival 3.8-12 reported
-`Status: OK` under `R CMD check --no-manual`. Its installed-package test suite
-passed 496,884 expectations, with no failures or skips and 24 existing
-factor-contrast warnings. This includes model persistence in a fresh process.
-The Python and R sources and installed native extension remained frozen
-throughout both complete suites.
-
-An earlier release-wheel isolation check passed 52,128 focused tests in 73
-files with `/tmp` as the working directory, including every CI numerical
-file. All 88 loaded package modules remained under the wheel environment.
-
-The independent large-time, iterator, weighted log-rank, aggregation callback,
-random-count, Cox curve selection, penalty constructor and AFT distribution
-query fixtures regenerate exactly with survival 3.8-12. Regenerated current-stock
-formula, missing-row, exact-risk, summary-count, entry-grid, compact-table,
-AFT probability, response-repetition, confidence-band, reusable-strata,
-response input, curve-quantile, factor/cluster, formula/population iterator,
-frailty model-matrix iterator, masked numeric matrix,
-infinite-KM and endpoint-frame references
-matched at the existing `rtol=1e-9`, `atol=1e-12` gate; additional AFT and
-ordered-contrast references
-use their separately documented numerical tolerances.
-
-For curve complexity, benchmark inputs and measured timings, see
-[survival curve performance](kaplan-meier-performance.md), including independent
-Aalen–Johansen uncertainty and grouped multistate table assembly. Fourteen
-stock-R uncertainty cases compare probabilities, hazards, counts, all three
-standard-error matrices and confidence limits through both Python APIs.
-Another sixteen cases retain repeated/reordered state selections by column
-position; their raw-matrix references work around stock `[.survfitms` leaving
-the censor-count matrix unsliced.
+the reference data; see [the fixture workflow](../test/r/README.md). Independent
+current-stock references are generated by the `scripts/generate_*_reference.R`
+scripts with R 4.5.3 and survival 3.8-12; each writes a JSON fixture under
+`python/tests/fixtures/` that the corresponding tests read. Where a reference
+records a stock R failure or defective output, it keeps the raw R result beside
+the corrected oracle. CI regenerates the current-stock references and compares
+them at `rtol=1e-9`, `atol=1e-12`; some AFT and ordered-contrast references use
+their own documented tolerances. The skipped Python tests are cases where stock R
+could not compute a reference.

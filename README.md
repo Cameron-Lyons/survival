@@ -33,11 +33,34 @@ A high-performance survival analysis library written in Rust, with a Python API 
 
 The R-style interface supports penalized Cox and AFT formulas, interval-censored
 AFT models, multi-state Cox models and their curves, multistate summaries and
-expected survival from Cox models. See [R compatibility](docs/r-compatibility.md)
-for examples, seeded Yates risk predictions, validation coverage, every known
-difference from R and the
+expected survival from Cox models. [R compatibility](docs/r-compatibility.md)
+lists every known difference from R, the validation coverage and the
 [limitations of R itself](docs/r-compatibility.md#reference-limitations).
 Release notes are in the [changelog](CHANGELOG.md).
+
+## Documentation
+
+- [Formula interface](docs/formula-interface.md): formulas, typed expressions,
+  strata, subsets, missing data, survival responses and model matrices
+- [Predictions and residuals](docs/prediction.md): prediction types, missing
+  values, term selections, row labels and grouped outputs
+- [Low-level fitting](docs/low-level-api.md): bare Cox, Kaplan–Meier, AFT and
+  penalized AFT fitters, penalty searches, AFT distributions and direct Cox curves
+- [Survival curves](docs/curves.md): summaries, quantiles, confidence bands,
+  selection, aggregation, transition matrices, residuals and log-rank tests
+- [Printing and graphics](docs/printing-and-graphics.md): model, curve and test
+  output and the Matplotlib plots
+- [Population calculations](docs/population.md): rate tables, `survexp` and
+  `pyears`
+- [Data preparation](docs/data-preparation.md): `tmerge`, `neardate`, `lvcf`,
+  `finegray` and `survobrien`
+- [Concordance](docs/concordance.md) and
+  [population marginal means](docs/yates.md)
+- [R bridge](docs/r-bridge.md): data conversion and model persistence in
+  `r/survivalr`
+- [R compatibility](docs/r-compatibility.md): every known difference from R
+- [Performance](docs/performance.md) and
+  [repository layout](docs/repo-layout.md)
 
 ## Installation
 
@@ -136,18 +159,16 @@ conversion. The numerical fit runs in Rust with the Python GIL released.
 
 Weighted log-rank tests reuse the test's time ordering for their KM weights,
 avoiding a separate survival-curve fit. Multistate point estimates omit unused
-influence workspaces when `se_fit=False`. See
-[weighted log-rank](docs/weighted-logrank-performance.md) and
-[Aalen-Johansen performance](docs/aalen-johansen-performance.md) for algorithms,
-reference coverage and measurements.
+influence workspaces when `se_fit=False`. See [performance](docs/performance.md)
+for the algorithms.
 
 Time-dependent `r.tmerge` updates also accept shared one-shot iterator inputs,
 including categorical events, and read only referenced update columns. See
-[time-dependent iterator inputs](docs/tmerge-iterable-inputs.md).
+[time-dependent data](docs/data-preparation.md#time-dependent-data).
 
 Cox and AFT matrix inputs also accept these array layouts. Lists and tuples
 of float rows fill a single Rust matrix allocation. See
-[matrix input conversion and benchmarks](docs/python-matrix-inputs.md).
+[matrix inputs](docs/low-level-api.md#matrix-and-vector-inputs).
 
 For right-censored curves with independent observations, robust standard errors
 use a linear sweep after sorting, including when fractional case weights select
@@ -156,28 +177,29 @@ explicit influence matrices use the general influence calculation. Run
 `PYTHONPATH=python python scripts/bench_survival_curves.py` against a release build
 to measure the Python calls, or
 `cargo bench --bench survival_benchmarks -- kaplan_meier` for the Rust kernels.
-See [the algorithm and benchmark notes](docs/kaplan-meier-performance.md) for
-the scope of the optimization and a local before/after comparison.
+See [performance](docs/performance.md#survival-curves) for the algorithm and its
+scope.
 
 Cox survival predictions and R-style Brier scores evaluate only the requested
 times, avoiding full survival-curve matrices for every subject. The Rust and
 Python `CoxPHFit.predict_survival_at` method exposes the same calculation;
 NumPy inputs and results avoid list conversions. See
-[Cox prediction performance](docs/cox-prediction-performance.md) for the API,
-algorithm and reproducible benchmarks.
+[Cox predictions at requested times](docs/prediction.md#cox-predictions-at-requested-times)
+for the API.
 
 Full Cox curves accumulate coefficient uncertainty with one vector per curve.
 Individual predictions find each interval's baseline times by binary search
-and group subject rows once. See [full-curve performance](docs/cox-curve-performance.md)
-for the scope, memory bounds and reproducible measurements.
+and group subject rows once. See [performance](docs/performance.md#cox-models)
+for the memory bounds.
 Prepared matrices and risks can use `r.coxsurv_fit` or `r.survfitcoxph_fit`
-directly; see [direct Cox curves](docs/cox-direct-curves.md) for inputs,
-read-only results and individual trajectories.
+directly; see [direct Cox curves](docs/low-level-api.md#direct-cox-curves) for
+inputs, read-only results and individual trajectories.
 Prepared formula metadata is supported by `r.attrassign` and
-`r.untangle_specials`; see [term helpers](docs/term-helpers.md) for column
-grouping and special-term indices.
+`r.untangle_specials`; see [term helpers](docs/formula-interface.md#term-metadata-helpers)
+for column grouping and special-term indices.
 `r.yates_setup` prepares reusable Cox risk/survival predictions and GLM inverse
-links; see [Yates setup](docs/yates-setup.md) for layouts and summary corrections.
+links; see [prepared predictions](docs/yates.md#prepared-predictions) for layouts
+and summary corrections.
 
 R-style entry points are intentionally available from the package root for users
 porting code from R's `survival` package:
@@ -251,20 +273,20 @@ counting-process results.
 Ordinary and multistate summaries accept R's `dosum` option to select
 cumulative or per-time counts, including Cox predictions. Dense ordinary
 summary queries sweep reporting times once; see
-[summary counts and benchmarks](docs/summary-counts.md).
+[summaries at requested times](docs/curves.md#summaries-at-requested-times).
 Independent right-censored competing-risk curves compute probability, hazard,
 and integrated-occupancy standard errors with a linear moment sweep.
 Grouped data-frame conversion preserves repeated state selections by column
-position. See [survival curve performance](docs/kaplan-meier-performance.md)
-for the algorithms, numerical fallbacks, and reproducible measurements.
+position. See [performance](docs/performance.md#survival-curves) for the
+algorithms and numerical fallbacks.
 Ordinary fitted curves support R-style influence residuals and pseudo-values for
 survival, cumulative hazard, and RMST, preserving case weights, subject IDs,
 grouping, estimator settings, and conditional start times. A native query kernel
 uses risk tables and event prefixes without building a full
 observation-by-event influence matrix. Grouped ordinary and multistate residuals
 prepare each curve's input rows in one pass, preserving original subject and
-cluster order. See [survival curve performance](docs/kaplan-meier-performance.md)
-for the complete-call benchmark. The fitted RMST path follows R's
+cluster order. See [residuals and pseudo-values](docs/curves.md#residuals-and-pseudo-values).
+The fitted RMST path follows R's
 infinitesimal jackknife; the direct time/status pseudo-value API retains its
 existing delete-one RMST calculation. Tied `ctype=2` diagnostics follow R's
 approximation and report the same limitation.
@@ -274,8 +296,8 @@ to produce model-based survival curves; a multi-state Cox fit gives R's
 Passing a square matrix of transition-specific KM or Cox curves to `survfit`
 also produces multistate curves, using `None` for absent transitions and
 `method="discrete"` or `"matexp"`. See
-[transition-curve matrices](docs/survfit-matrix.md) for examples, R compatibility
-details and benchmarks.
+[transition-curve matrices](docs/curves.md#curves-from-transition-matrices) for
+examples and R compatibility details.
 The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
 an `O(n log n)` Rust risk-set sweep for weighted, stratified, tied-event, and
 counting-process baselines, while retaining R-compatible curve and uncertainty
@@ -309,7 +331,7 @@ freedom, defaulting to half the number of columns in each ridge term;
 interaction is refused with R's "Penalty terms cannot be in an interaction".
 Python time-transform callbacks can return standalone `r.ridge()` or
 `r.frailty()` bases, retaining original scaling and factor labels. See
-[Cox time-transform penalties](docs/cox-time-transform-penalties.md) for the
+[time-transform terms](docs/formula-interface.md#time-transform-terms) for the
 constructor and `CoxPenaltyBasis` interfaces.
 `survreg` fits `ridge()` and `pspline()` terms through a port of R's
 `survpenal.fit`. The typed kernel is `survival.regression.coxpenal_fit` (R's
@@ -383,7 +405,8 @@ Custom AFT families can supply vectorized `density`, `init`, `quantile`,
 transform. Both fitters retain callbacks for predictions, residuals, robust
 variance, and Python pickle. Rust callers implement `regression::SurvregCallbacks`;
 Python callers pass a distribution dictionary or register it in
-`r.survreg_distributions`. See [AFT distribution callbacks](docs/survreg-density.md)
+`r.survreg_distributions`. See
+[AFT distribution callbacks](docs/low-level-api.md#aft-distributions-and-callbacks)
 for a complete example and the batch contract.
 
 For `survreg` fits, `predict(fit, newdata, type=...)` gives R's `"lp"`
@@ -435,11 +458,10 @@ confidence-interval, model-matrix/model-frame, and summary accessors for fitted
 Cox and `survreg` models.
 Grouped Cox predictions and Cox/AFT residuals preserve factor order and missing
 groups. Prediction errors combine in quadrature through a shared Rust kernel;
-the R interface retains group names. See [grouped model outputs](docs/model-collapse.md)
-for omission rules, reference differences and complete-call timings.
-Grouped predictions sum before leaving Rust, and term output storage follows
-the group count. See [native grouping performance](docs/cox-grouped-prediction-performance.md)
-for time and memory measurements.
+the R interface retains group names. Grouped predictions sum before leaving Rust,
+and term output storage follows the group count. See
+[grouped predictions and residuals](docs/prediction.md#grouped-predictions-and-residuals)
+for omission rules and the native interfaces.
 `predict(pspline(x), newx)` evaluates a spline basis using the original
 boundaries, degree, intercept and column combinations, with linear
 extrapolation outside the boundaries.
@@ -589,8 +611,8 @@ available with every result, while
 Joint calculations prepare each stratum's data and time weights once; each
 predictor keeps its own rank tree and tied-event ordering. Run
 `cargo bench --bench concordance_benchmarks` to measure the native paths.
-See [concordance performance](docs/concordance-performance.md) for the algorithm,
-variance correction and complete-call benchmark.
+See [concordance](docs/concordance.md) for fitted models, clusters and external
+linear models.
 
 By default, `timefix=True` groups near-tied times using R's `aeqSurv` tolerance;
 `timefix=False` preserves exact observed times. `ymin` clips exit times and
@@ -646,7 +668,7 @@ The formula API (`survival.r.pyears` and `survival.r.survexp`) supports
 `model=True` to retain evaluated input columns, or `x=True` and `y=True`
 to retain grouping and response components. `model=True` takes precedence.
 Use `model_frame`, `model_formula`, and `model_term_names` to inspect them;
-see [population model components](docs/r-compatibility.md#population-model-components-and-summaries)
+see [model components](docs/population.md#model-components-and-summaries)
 for the retained representations and missing-row behavior.
 
 ### Kaplan-Meier Survival Curves
@@ -936,7 +958,7 @@ The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 Rate-table expected survival selects dense requested-time grids with a forward
 scan, retaining duplicate requests and follow-up breakpoints. Expected cumulative
 hazards preserve missing survival probabilities. See
-[expected-survival grids](docs/expected-survival-grids.md) for checks and benchmarks.
+[expected survival](docs/population.md#expected-survival).
 
 ## Cox model reports
 
@@ -944,8 +966,8 @@ hazards preserve missing survival probabilities. See
 robust, penalized and multistate Cox fits. Use
 `r.print_summary_coxph(r.model_summary(fit))` for confidence intervals and
 model tests. Reports retain full-precision tables and statistics and support
-`as_data_frame`. See [Cox model reports](docs/cox-model-reports.md) for options
-and R compatibility.
+`as_data_frame`. See [Cox model output](docs/printing-and-graphics.md#cox-models)
+for options and R compatibility.
 
 ## AFT and Aalen model reports
 
@@ -953,8 +975,8 @@ and R compatibility.
 `r.print_summary_survreg` and `r.print_summary_aareg` for numerical summaries.
 AFT reports include scales and optional correlations; Aalen reports preserve
 robust uncertainty when changing event cutoffs or test weights. See
-[AFT and Aalen reports](docs/aft-aalen-reports.md) for options, R differences
-and influence-reduction memory measurements.
+[AFT and Aalen output](docs/printing-and-graphics.md#aft-and-aalen-models) for
+options.
 
 ## Diagnostic and test reports
 
@@ -962,44 +984,44 @@ and influence-reduction memory measurements.
 `r.print_concordance`, `r.print_survConcordance` and `r.print_survdiff`
 return formatted text and full-precision tables. Formula reports retain
 missing-row notices; stratified case-cohort and concordance tables retain
-their labels. See [diagnostic and test reports](docs/diagnostic-test-reports.md)
-for defaults, data-frame conversion and R comparisons.
+their labels. See [diagnostics and tests](docs/printing-and-graphics.md#diagnostics-and-tests)
+for defaults and data-frame conversion.
 
 `r.print_pyears`, `r.print_survcheck` and `r.print_yates` report population
 totals, transition consistency checks and marginal means with their tests.
 Person-years results retain match summaries for built-in population rate
-tables. See [population and validation reports](docs/population-validation-reports.md)
-for examples, metadata and reference comparisons.
+tables. See [population and validation](docs/printing-and-graphics.md#population-and-validation)
+for examples and metadata.
 
 `r.match_ratetable(data, table)` exposes population starting positions,
 cutpoints and built-in summaries. It validates categorical levels before
 population calculations and accepts date and duration columns. See
-[rate-table matching](docs/rate-table-matching.md) for units, validation and
-the shared Rust lookup implementation.
+[rate-table matching](docs/population.md#matching-data-to-a-rate-table) for units,
+validation and the Rust interface.
 
 ## Survival curve reports
 
 Ordinary Cox curves support `curves.subset(strata=..., data=..., drop=False)`
 with zero-based positions or row labels. The R bridge supports both selection
-margins; see [Cox curve selection](docs/r-compatibility.md#ordinary-cox-curve-selection).
+margins; see [selecting curves](docs/curves.md#selecting-curves).
 
 `r.aggregate_survfit(curves, by=groups, FUN="sum")` summarises prediction
 rows within each group. `FUN` also accepts a Python callback returning one
 numeric value from its NumPy input vector, such as `FUN=np.mean`.
 Rust callers can use `aggregate_survfit_with` with a closure. See
-[curve aggregation](docs/aggregate-survival-curves.md) for callback order,
-validation, arithmetic and timings.
+[curve aggregation](docs/curves.md#aggregating-curves) for callback order,
+validation and arithmetic.
 
 `r.print_survfit(fit)` returns a compact report of sample sizes, events and
 median survival. Add `rmean="common"` for restricted means. Multistate fits
 report time in each state through the same function or `r.print_survfitms`.
 Use `print(report)` for formatted text and `r.as_data_frame(report)` for
-full-precision columns. See [survival reports](docs/survival-reports.md) for
-cutoffs, units, formatting and allocation measurements.
+full-precision columns. See [survival curve output](docs/printing-and-graphics.md#survival-curves)
+for cutoffs, units and formatting.
 
 Ordinary compact tables stream restricted means and median searches without
 observation-sized temporary vectors. See
-[summary-table validation and timings](docs/survival-summary-tables.md).
+[compact tables](docs/curves.md#compact-tables-and-restricted-means).
 
 For detailed time rows, use `r.print_summary_survfit(r.summary_survfit(fit, times=[100, 300]))`.
 Expected curves and their summaries have `r.print_survexp` and
@@ -1009,7 +1031,7 @@ support `as_data_frame`.
 Raw responses have `r.print_surv` and `r.print_surv2`; population rate arrays
 have `r.print_ratetable`. Their reports preserve full-precision data while
 supporting R-style wrapping and explicit display limits. See
-[response and rate-table reports](docs/response-ratetable-reports.md).
+[responses and rate tables](docs/printing-and-graphics.md#responses-and-rate-tables).
 
 ## Survival curve plots
 
@@ -1023,8 +1045,8 @@ plot = plotting.plot_survfit(fit, conf_int=True, conf_style="band", mark_time=Tr
 plot.axes.figure.savefig("survival.svg")
 ```
 
-The [plotting guide](docs/survival-plotting.md) covers transformations, confidence
-bars, overlays, scaling, R compatibility and benchmarks. Numerical plot data
+The [graphics guide](docs/printing-and-graphics.md#graphics) covers
+transformations, confidence bars, overlays and scaling. Numerical plot data
 remain available without Matplotlib through `plotting.survfit_plot_data`.
 
 The generic `plotting.plot` also fits and plots raw `r.Surv` responses.
@@ -1035,11 +1057,13 @@ and Aalen methods below.
 For proportional-hazards diagnostics, use
 `plotting.plot_cox_zph(r.cox_zph(cox_fit))`. This draws natural-spline curves
 and two-standard-error bands over the scaled Schoenfeld residuals. Set
-`hr=True` for hazard ratios; see the [diagnostic plotting guide](docs/cox-diagnostic-plotting.md).
+`hr=True` for hazard ratios; see
+[Cox diagnostics](docs/printing-and-graphics.md#cox-proportional-hazards-diagnostics).
 
 For Aalen additive models, `plotting.plot_aareg(aalen_fit)` draws cumulative
 coefficient curves with ordinary or influence-based bands. Use
-`plotting.lines_aareg` for overlays; see the [Aalen plotting guide](docs/aalen-plotting.md).
+`plotting.lines_aareg` for overlays; see
+[Aalen coefficients](docs/printing-and-graphics.md#aalen-cumulative-coefficients).
 
 ## Scikit-learn estimators
 
@@ -1154,22 +1178,6 @@ PYTHONPATH=python python scripts/benchmark_multi_concordance.py
 PYTHONPATH=python python scripts/benchmark_survsplit.py
 ```
 
-Local release-build measurements for the preparation improvements:
-
-| Workload | Before | After |
-| --- | ---: | ---: |
-| Formula frame, 100,000 rows and 2 numeric array terms | 40.35 ms | 20.90 ms |
-| Formula frame, 100,000 rows and 16 numeric array terms | 242.94 ms | 90.86 ms |
-| Concordance counts, 20,000 rows and 8 predictors | 10.47 ms | 5.34 ms |
-| Interval splitting, 100,000 rows and 4,096 cuts after follow-up | 79.55 ms | 5.69 ms |
-
-These are medians of seven samples (nine for concordance) on Python 3.14.7.
-Formula comparisons alternate classifiers in one process; native comparisons
-use separate release builds. Fitting is excluded from formula preparation;
-the interval case uses `timefix=False` and creates no additional rows. See
-[concordance notes](docs/concordance-performance.md) for variance timings and
-single-predictor controls. These results describe the listed workloads.
-
 `benches/python/bench_vs_r.py` times the same synthetic data against R's
 `survival` at two separate layers: the `survival.r` formula calls against R's
 formula calls (what users pay, including model frames and the extras R
@@ -1181,6 +1189,9 @@ with the same layer in R; run it against a release build:
 ```sh
 PYTHONPATH=python python benches/python/bench_vs_r.py --sizes 1000,10000,100000
 ```
+
+See [performance](docs/performance.md) for the Rust benchmark groups and how the
+main kernels scale.
 
 Format and lint:
 ```sh
@@ -1197,7 +1208,7 @@ The codebase is organized with:
 - Package/type stubs in `python/survival/__init__.pyi`,
   `python/survival/_survival.pyi`, and `python/survival/sklearn_compat.pyi`
 - Runnable examples in `examples/`
-- Developer-facing layout notes in `docs/`
+- Topic guides and developer layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
 - Python binding tests in `python/tests/`
 - R reference fixtures in `test/r`
