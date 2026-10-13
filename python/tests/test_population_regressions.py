@@ -13,7 +13,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 population = survival.population
 datasets = survival.datasets
 
@@ -352,7 +352,7 @@ def test_time_differences_are_ages_in_days():
 
 
 def test_pyears_without_categories_takes_the_default_category_data():
-    result = population.pyears([1.0, 2.0], event=[1.0, 0.0])
+    result = survival.kernels.pyears([1.0, 2.0], event=[1.0, 0.0])
     assert result.pyears == approx([0.0082135523613963042])
     assert result.n == [2.0]
     assert result.event == [1.0]

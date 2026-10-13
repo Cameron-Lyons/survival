@@ -19,7 +19,7 @@ def test_complete_weighted_logrank_output(case):
     data = {key: list(value) for key, value in REFERENCE["data"].items()}
     if case["near"]:
         data["time"][1] += 5e-10
-    actual = survival.surv_analysis.survdiff(
+    actual = survival.kernels.survdiff(
         np.array(data["time"]),
         np.array(data["status"]),
         np.array(data["group"]),

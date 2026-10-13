@@ -10,7 +10,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 sa = survival.surv_analysis
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads((Path(__file__).parent / "fixtures/aj_variance_reference.json").read_text())
 MATRIX_FIELDS = [
     "n_risk",
@@ -35,7 +35,7 @@ def fit_case(case, api, influence):
         return sa.survfitaj(**source, **options)
     data = {
         "time": source["time"],
-        "event": r._r_factor(
+        "event": r._coerce._r_factor(
             [["censor", *source["states"]][code] for code in source["state"]],
             ["censor", *source["states"]],
         ),

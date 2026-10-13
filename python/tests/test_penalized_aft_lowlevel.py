@@ -257,7 +257,7 @@ def test_dense_penalty_after_sparse_term_matches_full_native_fit():
     kwargs = {"pcols": [[1], [2]], "pattr": penalties, "dist": "gaussian", "scale": 1.5}
     raw = r.survpenal_fit(x, y, **kwargs)
     data = regression.SurvregData(y[:, 0], y[:, 1].astype(np.int32), x)
-    full = regression.survpenal_fit(
+    full = survival.kernels.survpenal_fit(
         data, regression.SurvregDistribution("gaussian"), penalties, [[1], [2]], scale=1.5
     )
     np.testing.assert_allclose(raw.coefficients, full.coefficients)

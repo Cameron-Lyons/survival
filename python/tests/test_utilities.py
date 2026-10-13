@@ -15,24 +15,24 @@ data_prep = survival.data_prep
 
 
 def test_cluster_recodes_ids_in_order_of_appearance():
-    numeric = data_prep.cluster([2, 2, 1, 3])
+    numeric = survival.kernels.cluster([2, 2, 1, 3])
     assert isinstance(numeric, data_prep.ClusterResult)
     assert numeric.codes == [0, 0, 1, 2]
     assert numeric.levels == ["2", "1", "3"]
     assert numeric.sizes == [2, 1, 1]
 
-    strings = data_prep.cluster(["b", "a", "b"])
+    strings = survival.kernels.cluster(["b", "a", "b"])
     assert strings.codes == [0, 1, 0]
     assert strings.levels == ["b", "a"]
     assert strings.sizes == [2, 1]
 
-    floats = data_prep.cluster([2.5, 1.0, 2.5])
+    floats = survival.kernels.cluster([2.5, 1.0, 2.5])
     assert floats.codes == [0, 1, 0]
     assert floats.levels == ["2.5", "1"]
 
 
 def test_strata_labels_match_r():
-    numeric = data_prep.strata(
+    numeric = survival.kernels.strata(
         ["c(2, 1, 2)", "c(1, 2, 1)"], [["1", "2"], ["1", "2"]], [[1, 0, 1], [0, 1, 0]]
     )
     assert isinstance(numeric, data_prep.StrataResult)
@@ -40,50 +40,56 @@ def test_strata_labels_match_r():
     assert numeric.levels == ["c(2, 1, 2)=1, c(1, 2, 1)=2", "c(2, 1, 2)=2, c(1, 2, 1)=1"]
     assert numeric.counts == [1, 2]
 
-    short = data_prep.strata(
+    short = survival.kernels.strata(
         ["a", "b"], [["a", "b"], ["x", "y"]], [[1, 0, 1], [0, 1, 0]], shortlabel=True
     )
     assert short.codes == [1, 0, 1]
     assert short.levels == ["a, y", "b, x"]
     assert short.counts == [1, 2]
 
-    with_na = data_prep.strata(["v"], [["1", "2"]], [[0, None, 1, 0]], na_group=True)
+    with_na = survival.kernels.strata(["v"], [["1", "2"]], [[0, None, 1, 0]], na_group=True)
     assert with_na.codes == [0, 2, 1, 0]
     assert with_na.levels == ["v=1", "v=2", "v=NA"]
     assert with_na.counts == [2, 1, 1]
-    without_na = data_prep.strata(["v"], [["1", "2"]], [[0, None, 1, 0]])
+    without_na = survival.kernels.strata(["v"], [["1", "2"]], [[0, None, 1, 0]])
     assert without_na.codes == [0, None, 1, 0]
     assert without_na.levels == ["v=1", "v=2"]
 
     with pytest.raises(ValueError, match="length"):
-        data_prep.strata(["a", "b"], [["1"], ["1"]], [[0, 0], [0]])
+        survival.kernels.strata(["a", "b"], [["1"], ["1"]], [[0, 0], [0]])
 
 
 def test_neardate_matches_r():
     id1, y1 = [1, 1, 2, 3], [10.0, 20.0, 5.0, 7.0]
     id2, y2 = [1, 1, 2, 2, 4], [8.0, 15.0, 6.0, 1.0, 3.0]
 
-    assert data_prep.neardate(id1, y1, id2, y2) == [1, None, 2, None]
-    assert data_prep.neardate(id1, y1, id2, y2, best="prior") == [0, 1, 3, None]
+    assert survival.kernels.neardate(id1, y1, id2, y2) == [1, None, 2, None]
+    assert survival.kernels.neardate(id1, y1, id2, y2, best="prior") == [0, 1, 3, None]
 
     with pytest.raises(ValueError, match="best"):
-        data_prep.neardate(id1, y1, id2, y2, best="nearest")
+        survival.kernels.neardate(id1, y1, id2, y2, best="nearest")
 
 
 def test_lvcf_and_nostutter():
-    assert data_prep.lvcf([1, 1, 1, 2, 2], [False, True, False, True, False]) == [0, 0, 2, 3, 4]
-    assert data_prep.lvcf(
+    assert survival.kernels.lvcf([1, 1, 1, 2, 2], [False, True, False, True, False]) == [
+        0,
+        0,
+        2,
+        3,
+        4,
+    ]
+    assert survival.kernels.lvcf(
         [1, 1, 1, 2, 2], [False, True, False, True, False], time=[0.0, 1.0, 2.0, 0.0, 1.0]
     ) == [0, 0, 2, 3, 4]
 
-    assert data_prep.nostutter([1, 1, 1, 2, 2], ["a", "a", "b", "a", "a"], "censor") == [
+    assert survival.kernels.nostutter([1, 1, 1, 2, 2], ["a", "a", "b", "a", "a"], "censor") == [
         False,
         True,
         False,
         False,
         True,
     ]
-    assert data_prep.nostutter([1, 1, 1, 2, 2], [1, 1, 2, 1, 1], 0) == [
+    assert survival.kernels.nostutter([1, 1, 1, 2, 2], [1, 1, 2, 1, 1], 0) == [
         False,
         True,
         False,
@@ -128,7 +134,7 @@ def test_survsplit_matches_r():
 
 
 def test_survcondense_matches_r():
-    result = data_prep.survcondense(
+    result = survival.kernels.survcondense(
         [1, 1, 1, 2, 2], [0.0, 5.0, 10.0, 0.0, 3.0], [5.0, 10.0, 15.0, 3.0, 8.0], [0, 0, 1, 1, 1]
     )
     assert isinstance(result, data_prep.SurvcondenseResult)
@@ -136,27 +142,27 @@ def test_survcondense_matches_r():
     assert [result.start[i] for i in result.keep] == pytest.approx([0.0, 10.0, 0.0])
 
     with pytest.raises(ValueError, match="length"):
-        data_prep.survcondense([1, 1], [0.0], [5.0, 10.0], [0, 0])
+        survival.kernels.survcondense([1, 1], [0.0], [5.0, 10.0], [0, 0])
 
 
 def test_tcut_matches_r():
-    result = data_prep.tcut([1.0, 5.0, 12.0, 25.0], [0.0, 4.0, 10.0, 30.0])
+    result = survival.kernels.tcut([1.0, 5.0, 12.0, 25.0], [0.0, 4.0, 10.0, 30.0])
     assert isinstance(result, data_prep.TcutResult)
     assert result.values == pytest.approx([1.0, 5.0, 12.0, 25.0])
     assert result.cutpoints == pytest.approx([0.0, 4.0, 10.0, 30.0])
     assert result.labels == [" 0+ thru  4", " 4+ thru 10", "10+ thru 30"]
 
-    labelled = data_prep.tcut(
+    labelled = survival.kernels.tcut(
         [1.0, 5.0, 12.0, 25.0], [0.0, 4.0, 10.0, 30.0], labels=["a", "b", "c"]
     )
     assert labelled.labels == ["a", "b", "c"]
 
-    counted = data_prep.tcut([1.0, 5.0, 12.0, 25.0], [3.0])
+    counted = survival.kernels.tcut([1.0, 5.0, 12.0, 25.0], [3.0])
     assert counted.labels == ["Range 1", "Range 2", "Range 3"]
     assert counted.cutpoints == pytest.approx([0.76, 8.92, 17.08, 25.24])
 
     with pytest.raises(ValueError, match="labels"):
-        data_prep.tcut([1.0], [0.0, 4.0, 10.0], labels=["a"])
+        survival.kernels.tcut([1.0], [0.0, 4.0, 10.0], labels=["a"])
 
 
 def test_tmerge_step_matches_r_tmerge():
@@ -216,24 +222,24 @@ def test_tmerge_step_matches_r_tmerge():
 def test_rttright_matches_r():
     time, status = [1.0, 2.0, 2.0, 3.0, 4.0], [1, 0, 1, 0, 1]
 
-    result = data_prep.rttright(time, status)
+    result = survival.kernels.rttright(time, status)
     assert isinstance(result, data_prep.RttrightResult)
     assert [row[0] for row in result.weights] == pytest.approx([0.2, 0.0, 0.2, 0.0, 0.6])
     assert result.times == []
 
-    at_times = data_prep.rttright(time, status, times=[2.0, 3.0])
+    at_times = survival.kernels.rttright(time, status, times=[2.0, 3.0])
     assert at_times.times == pytest.approx([2.0, 3.0])
     assert [row[0] for row in at_times.weights] == pytest.approx([0.2, 0.2, 0.2, 0.2, 0.2])
     assert [row[1] for row in at_times.weights] == pytest.approx([0.2, 0.0, 0.2, 0.3, 0.3])
 
-    stratified = data_prep.rttright(time, status, strata=[0, 0, 1, 1, 1])
+    stratified = survival.kernels.rttright(time, status, strata=[0, 0, 1, 1, 1])
     assert [row[0] for row in stratified.weights] == pytest.approx([0.5, 0.0, 1 / 3, 0.0, 2 / 3])
 
-    raw = data_prep.rttright(time, status, strata=[0, 0, 1, 1, 1], renorm=False)
+    raw = survival.kernels.rttright(time, status, strata=[0, 0, 1, 1, 1], renorm=False)
     assert [row[0] for row in raw.weights] == pytest.approx([1.0, 0.0, 1.0, 0.0, 2.0])
 
     with pytest.raises(ValueError, match="length"):
-        data_prep.rttright(time, status[:-1])
+        survival.kernels.rttright(time, status[:-1])
 
 
 def test_surv2counting_and_totimeline():
@@ -259,7 +265,7 @@ def test_surv2counting_and_totimeline():
     with pytest.raises(ValueError, match="repeated"):
         data_prep.surv2counting([1, 1], [0.0, 1.0], [None, 1], repeated="sometimes")
 
-    timeline = data_prep.totimeline(
+    timeline = survival.kernels.totimeline(
         [1, 1, 2], [0.0, 3.0, 0.0], [3.0, 7.0, 5.0], [1, 2, 1], [0, 1, 0]
     )
     assert isinstance(timeline, data_prep.TotimelineResult)

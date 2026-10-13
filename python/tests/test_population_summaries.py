@@ -11,7 +11,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/population_summary_reference.json").read_text()
 )

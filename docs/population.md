@@ -8,7 +8,7 @@ Differences from R are listed in
 ## Rate tables
 
 `survival.population` ships R's exact `survexp.us`, `survexp.usr` and
-`survexp.mn` tables (`population.survexp_us()` and so on; `r.survexp_us()` in the
+`survexp.mn` tables (`kernels.survexp_us()` and so on; `r.survexp_us()` in the
 R-style interface). `RateTable` objects can also be built from attributes;
 construction accepts NumPy rate vectors and owns its copied rates.
 `RateTable.source` identifies a built-in table and survives native cloning;
@@ -80,7 +80,7 @@ Python `RateTable` objects. The binding releases the GIL.
 
 `survexp` computes cohort (Ederer, Hakulinen, conditional) and individual
 expected survival from a rate table or a fitted Cox model. The low-level
-`population.survexp(table, positions, times=...)` takes matched positions; the
+`kernels.survexp(table, positions, times=...)` takes matched positions; the
 formula interface is `r.survexp`.
 
 With a rate table, requested times are selected from the fitted grid with one

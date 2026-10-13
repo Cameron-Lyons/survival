@@ -51,21 +51,21 @@ def test_survfitkm_rejects_missing_and_invalid_inputs(kwargs, message):
     ("call", "message"),
     [
         (
-            lambda: survival.validation.logrank_test([1.0, float("inf")], [1, 0], [0, 1]),
+            lambda: survival.kernels.survdiff([1.0, float("inf")], [1, 0], [0, 1]),
             "time contains non-finite",
         ),
         (
-            lambda: survival.validation.logrank_test(
-                [1.0, 2.0], [1, 0], [0, 1], entry_times=[0.0, float("inf")]
+            lambda: survival.kernels.survdiff(
+                [1.0, 2.0], [1, 0], [0, 1], start=[0.0, float("inf")]
             ),
             "start contains non-finite",
         ),
         (
-            lambda: survival.validation.logrank_test([1.0, 2.0], [1, 0], [0, 1], rho=float("inf")),
+            lambda: survival.kernels.survdiff([1.0, 2.0], [1, 0], [0, 1], rho=float("inf")),
             "rho must be finite",
         ),
         (
-            lambda: survival.surv_analysis.survdiff([1.0, float("inf")], [1, 0], [1, 2]),
+            lambda: survival.kernels.survdiff([1.0, float("inf")], [1, 0], [1, 2]),
             "time contains non-finite",
         ),
     ],
@@ -79,15 +79,15 @@ def test_logrank_apis_reject_non_finite_inputs(call, message):
     ("call", "message"),
     [
         (
-            lambda: survival.validation.logrank_test([1.0, 2.0], [1], [0, 1]),
+            lambda: survival.kernels.survdiff([1.0, 2.0], [1], [0, 1]),
             "status length mismatch",
         ),
         (
-            lambda: survival.validation.logrank_test([1.0, 2.0], [1, 0], [0]),
+            lambda: survival.kernels.survdiff([1.0, 2.0], [1, 0], [0]),
             "group length mismatch",
         ),
         (
-            lambda: survival.surv_analysis.survdiff([1.0, 2.0], [1, 0], [1, 2], strata=[0]),
+            lambda: survival.kernels.survdiff([1.0, 2.0], [1, 0], [1, 2], strata=[0]),
             "strata length mismatch",
         ),
     ],
@@ -193,27 +193,27 @@ def test_expected_events_rejects_invalid_parameters(call, message):
     ("call", "message"),
     [
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1], [[0.1, 0.2]]),
+            lambda: survival.kernels.survobrien([1.0, 2.0], [1], [[0.1, 0.2]]),
             "status length mismatch",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1, 0], [[0.1]]),
+            lambda: survival.kernels.survobrien([1.0, 2.0], [1, 0], [[0.1]]),
             r"continuous\[0\] length mismatch",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1, 0], [[0.1, 0.2]], strata=[1]),
+            lambda: survival.kernels.survobrien([1.0, 2.0], [1, 0], [[0.1, 0.2]], strata=[1]),
             "strata length mismatch",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1, 2], [[0.1, 0.2]]),
+            lambda: survival.kernels.survobrien([1.0, 2.0], [1, 2], [[0.1, 0.2]]),
             "status must contain only 0/1 values",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, float("inf")], [1, 0], [[0.1, 0.2]]),
+            lambda: survival.kernels.survobrien([1.0, float("inf")], [1, 0], [[0.1, 0.2]]),
             "time contains non-finite",
         ),
         (
-            lambda: survival.validation.survobrien([1.0, 2.0], [1, 0], []),
+            lambda: survival.kernels.survobrien([1.0, 2.0], [1, 0], []),
             "No continuous variables to modify",
         ),
     ],
@@ -224,7 +224,7 @@ def test_survobrien_rejects_invalid_public_inputs(call, message):
 
 
 def test_survobrien_expands_one_risk_set_per_event_time():
-    expansion = survival.validation.survobrien(
+    expansion = survival.kernels.survobrien(
         [1.0, 1.0, 2.0, 3.0], [1, 1, 0, 0], [[10.0, 30.0, 20.0, 40.0]]
     )
 
@@ -237,21 +237,19 @@ def test_survobrien_expands_one_risk_set_per_event_time():
 
 
 def test_survdiff_all_censored_has_zero_degrees_of_freedom():
-    result = survival.surv_analysis.survdiff([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0], [1, 1, 2, 2])
+    result = survival.kernels.survdiff([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0], [1, 1, 2, 2])
 
     assert result.chisq == 0.0
     assert result.df == 0
     assert result.pvalue == 1.0
-    assert (
-        survival.validation.logrank_test([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0], [1, 1, 2, 2]).df == 0
-    )
+    assert survival.kernels.survdiff([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0], [1, 1, 2, 2]).df == 0
 
 
 def test_survdiff_rejects_invalid_codes():
     with pytest.raises(ValueError, match="status must contain only 0/1 values"):
-        survival.surv_analysis.survdiff([1.0, 2.0], [1, 2], [1, 2])
+        survival.kernels.survdiff([1.0, 2.0], [1, 2], [1, 2])
     with pytest.raises(ValueError, match="length mismatch"):
-        survival.surv_analysis.survdiff([1.0, 2.0], [1, 0], [1])
+        survival.kernels.survdiff([1.0, 2.0], [1, 0], [1])
 
 
 def test_agmart_length_mismatch():
@@ -265,19 +263,19 @@ def test_agmart_length_mismatch():
 
 def test_coxph_fit_validates_shapes_and_values():
     with pytest.raises(ValueError, match="status length mismatch"):
-        survival.regression.coxph_fit([1.0, 2.0], [1], [[1.0], [2.0]])
+        survival.kernels.coxph_fit([1.0, 2.0], [1], [[1.0], [2.0]])
     with pytest.raises(ValueError, match="x has 1 rows"):
-        survival.regression.coxph_fit([1.0, 2.0], [1, 0], [[1.0]])
+        survival.kernels.coxph_fit([1.0, 2.0], [1, 0], [[1.0]])
     with pytest.raises(ValueError, match="row 1 length mismatch"):
-        survival.regression.coxph_fit([1.0, 2.0], [1, 0], [[1.0, 2.0], [3.0]])
+        survival.kernels.coxph_fit([1.0, 2.0], [1, 0], [[1.0, 2.0], [3.0]])
     with pytest.raises(ValueError, match="time contains non-finite"):
-        survival.regression.coxph_fit([1.0, float("inf")], [1, 0], [[1.0], [2.0]])
+        survival.kernels.coxph_fit([1.0, float("inf")], [1, 0], [[1.0], [2.0]])
     with pytest.raises(ValueError, match="status must contain only 0/1 values"):
-        survival.regression.coxph_fit([1.0, 2.0], [1, 2], [[1.0], [2.0]])
+        survival.kernels.coxph_fit([1.0, 2.0], [1, 2], [[1.0], [2.0]])
 
 
 def test_coxph_fit_prediction_validates_covariates():
-    fit = survival.regression.coxph_fit(
+    fit = survival.kernels.coxph_fit(
         [1.0, 2.0, 3.0], [1, 0, 1], [[0.0, 1.0], [1.0, 0.0], [0.5, 0.5]]
     )
 

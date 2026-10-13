@@ -3,7 +3,8 @@
 The root package exposes three things, all loaded lazily on first access:
 
 * the domain modules (``survival.regression``, ``survival.surv_analysis``, ...), each binding
-  a documented subset of the Rust extension ``survival._survival``;
+  a documented subset of the Rust extension ``survival._survival``, and ``survival.kernels``,
+  which holds every core kernel, including those named like an R function;
 * the R-style API of :mod:`survival.r` under the R names (``Surv``, ``survfit``, ``coxph``,
   ...), listed in ``_R_EXPORTS``;
 * the scikit-learn compatible estimators of :mod:`survival.sklearn_compat`, listed in
@@ -25,6 +26,7 @@ _PUBLIC_MODULES = {
     "datasets": ".datasets",
     "interpretability": ".interpretability",
     "interval": ".interval",
+    "kernels": ".kernels",
     "joint": ".joint",
     "missing": ".missing",
     "ml": ".ml",
@@ -38,8 +40,6 @@ _PUBLIC_MODULES = {
     "regression": ".regression",
     "relative": ".relative",
     "reliability_tools": ".reliability_tools",
-    "residuals": ".residuals",
-    "r_api": ".r_api",
     "sklearn_compat": ".sklearn_compat",
     "spatial": ".spatial",
     "surv_analysis": ".surv_analysis",
@@ -148,6 +148,7 @@ _R_EXPORTS = [
     "pspline",
     "pseudo",
     "predict",
+    "residuals",
     "psurvreg",
     "qsurvreg",
     "quantile",

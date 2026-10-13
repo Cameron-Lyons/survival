@@ -1,9 +1,7 @@
 use super::survfit_confint::{ConfType, survfit_confint};
 use super::survfitkm::{HazardType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use crate::error::SurvivalResult;
-use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::validation::validate_length;
-use pyo3::prelude::*;
 
 #[doc = " Nelson-Aalen estimate at the distinct event times."]
 #[doc = ""]
@@ -11,25 +9,16 @@ use pyo3::prelude::*;
 #[doc = " `variance` (`std.chaz^2`, the Poisson variance `sum d / n^2`) use the"]
 #[doc = " case weights when given."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
 pub struct NelsonAalenResult {
-    #[pyo3(get)]
     pub time: Vec<f64>,
-    #[pyo3(get)]
     pub cumulative_hazard: Vec<f64>,
-    #[pyo3(get)]
     pub variance: Vec<f64>,
-    #[pyo3(get)]
     pub ci_lower: Vec<f64>,
-    #[pyo3(get)]
     pub ci_upper: Vec<f64>,
-    #[pyo3(get)]
     pub n_risk: Vec<usize>,
-    #[pyo3(get)]
     pub n_events: Vec<usize>,
 }
 
-#[pymethods]
 impl NelsonAalenResult {
     #[doc = " `exp(-cumulative_hazard)`, the Fleming-Harrington survival estimate."]
     pub fn survival(&self) -> Vec<f64> {
@@ -105,19 +94,6 @@ pub fn nelson_aalen(
         n_risk: rows.iter().map(|&i| n_risk_all[i]).collect(),
         n_events: rows.iter().map(|&i| n_event_all[i]).collect(),
     })
-}
-
-#[doc = " Python binding of [`nelson_aalen`]."]
-#[pyfunction(name = "nelson_aalen")]
-#[pyo3(signature = (time, status, weights=None, confidence_level=0.95))]
-pub fn nelson_aalen_py(
-    py: Python<'_>,
-    time: FloatVec,
-    status: IntVec,
-    weights: Option<FloatVec>,
-    confidence_level: f64,
-) -> PyResult<NelsonAalenResult> {
-    Ok(py.detach(|| nelson_aalen(&time, &status, weights.as_deref(), confidence_level))?)
 }
 
 #[cfg(test)]

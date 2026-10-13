@@ -11,7 +11,7 @@ import pytest
 
 from .helpers import setup_survival_import
 
-r = setup_survival_import().r_api
+r = setup_survival_import().r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/cox_survfit_subset_reference.json").read_text()
 )
@@ -47,7 +47,7 @@ def _source(name):
 def _selected(case):
     source = _source(case["source"])
     if case["curves"] is not None:
-        return r._subset_cox_survfit(source, curves=case["curves"], drop=case["drop"])
+        return r._survfit._subset_cox_survfit(source, curves=case["curves"], drop=case["drop"])
     return source.subset(strata=case["strata"], data=case["data"], drop=case["drop"])
 
 

@@ -55,7 +55,7 @@ from .r_fixture_support import (
 )
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 
 KNOWN_FAILURES: dict[str, str] = {

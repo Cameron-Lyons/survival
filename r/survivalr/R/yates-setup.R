@@ -1,5 +1,5 @@
 .yates_survival_setup <- function(baseline, rmean) {
-  prediction <- .validation_attr("YatesPrediction")(
+  prediction <- .kernels_attr("YatesPrediction")(
     time = as.list(as.numeric(baseline$time)),
     cumhaz = as.list(as.numeric(baseline$cumhaz)), rmean = rmean
   )
@@ -14,7 +14,7 @@
     if (!is.matrix(surv) || ncol(surv) != length(baseline$time) + 2L) {
       stop("surv columns must contain restricted mean, time zero, and baseline times", call. = FALSE)
     }
-    curves <- .validation_attr("yates_survival_summary")(surv, var, baseline$conf.int)
+    curves <- .kernels_attr("yates_survival_summary")(surv, var, baseline$conf.int)
     for (name in c("surv", "cumhaz", "std_err", "lower", "upper")) {
       value <- .as_numeric_matrix(.result_field(curves, name))
       if (!length(baseline$time)) value <- matrix(numeric(), 0L, nrow(surv))

@@ -165,7 +165,7 @@ def test_raw_offsets_and_full_model_agree_on_fitted_quantities():
     case = REFERENCE["cases"][0]
     offsets = np.linspace(1, 2, len(case["time"]))
     raw = r.coxph_fit(case["x"], response(case), offset=offsets)
-    full = survival.regression.coxph_fit(
+    full = survival.kernels.coxph_fit(
         case["time"], case["event"], case["x"], offset=offsets, nocenter=[]
     )
     np.testing.assert_allclose(raw.coefficients, full.coefficients, atol=1e-10)

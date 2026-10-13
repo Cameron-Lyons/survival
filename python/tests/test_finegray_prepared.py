@@ -93,7 +93,7 @@ def test_prepared_rejects_malformed_inputs(updates, message):
 
 def test_formula_rejects_missing_subject_ids():
     with pytest.raises(ValueError, match="id must not contain missing"):
-        survival.r_api.finegray(
+        survival.r.finegray(
             "Surv(start, time, status, type='mstate') ~ x",
             {"start": [0, 0, 0], "time": [1, 2, 3], "status": [0, 1, 2], "x": [1, 2, 3]},
             id=[1, None, 3],
@@ -101,7 +101,7 @@ def test_formula_rejects_missing_subject_ids():
 
 
 def test_formula_output_names_replace_matching_covariates():
-    result = survival.r_api.finegray(
+    result = survival.r.finegray(
         "Surv(time, status, type='mstate') ~ fgstart",
         {"time": [1, 2, 3], "status": [0, 1, 2], "fgstart": [8, 9, 10]},
     )

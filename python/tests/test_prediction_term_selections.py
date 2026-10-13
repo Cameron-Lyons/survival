@@ -15,7 +15,7 @@ from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
-bridge = importlib.import_module("survival.r_api")
+bridge = importlib.import_module("survival.pybridge")
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/prediction_term_selection_reference.json").read_text()
 )

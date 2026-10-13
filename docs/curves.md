@@ -24,8 +24,8 @@ no robust-variance workspace is allocated. A fitted Cox model with optional
 `newdata` gives model-based curves, and a multi-state Cox model gives R's
 `survfit.coxphms` state-probability curves.
 
-`surv_analysis.survfitkm` and `surv_analysis.nelson_aalen` are the native
-right-censored and counting-process kernels; they accept NumPy arrays, pandas or
+`surv_analysis.survfitkm` is the native right-censored and counting-process
+kernel (`ctype=1` gives the Nelson–Aalen hazard); it accepts NumPy arrays, pandas or
 Polars columns and sequences, require binary status (integral floats are
 converted with a check) and release the GIL.
 
@@ -89,7 +89,7 @@ Rust callers use
 where `dosum: Option<bool>` selects accumulation, lookup or the ordinary default,
 and `summary_survfit_aj_with_counts(fit, times, censored, extend, dosum)` or
 `surv_analysis::{summary_survfit_aj, survmean_aj}` for multi-state curves. The
-native Python `surv_analysis.summary_survfit(..., dosum=None)` and
+native Python `kernels.summary_survfit(..., dosum=None)` and
 `SurvfitAJResult.summary(..., dosum=True)` accept NumPy time vectors and release
 the GIL.
 
@@ -155,16 +155,16 @@ evaluated with R's conditional rules; when they are absent, it is not evaluated.
 
 ## Confidence bands
 
-`surv_analysis.survfit_confint` (Rust `surv_analysis::survfit_confint`) computes
+`kernels.survfit_confint` (Rust `surv_analysis::survfit_confint`) computes
 confidence limits for a vector of survival estimates. The R-style
-`r_api.survfit_confint` also accepts scalar estimates, recycles a single standard
+`survival.r.survfit_confint` also accepts scalar estimates, recycles a single standard
 error or lower-band error, and keeps missing values in list, NumPy, nullable
 pandas, Polars and masked inputs:
 
 ```python
-from survival import r_api
+from survival import r
 
-bands = r_api.survfit_confint(
+bands = r.survfit_confint(
     [0.8, None, 0.3], [0.1, 0.2, 0.15], conf_type="log-log"
 )
 ```
@@ -362,8 +362,7 @@ NumPy vectors and release the GIL.
 
 ## Log-rank tests
 
-`r.survdiff`, `surv_analysis.survdiff` and `validation.logrank_test` (Rust
-`surv_analysis::survdiff`) compute the G-rho family. `rho=0` is the log-rank test;
+`r.survdiff` and `kernels.survdiff` (Rust `surv_analysis::survdiff`) compute the G-rho family. `rho=0` is the log-rank test;
 nonzero `rho` weights events by the left-continuous Kaplan–Meier survival of
 their stratum, `S(t-)^rho`. The native functions also accept counting-process
 data, with the forward KM risk count at `t` equal to the number of starts below

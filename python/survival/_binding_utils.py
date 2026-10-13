@@ -1,6 +1,18 @@
 from . import _survival as _core
 from ._binding_manifest import BINDING_NAMES, ML_BINDING_NAMES
 
+INTERNAL_BINDINGS = frozenset(
+    {
+        "CoxMartInput",
+        "agscore3",
+        "cox_callback",
+        "coxmart",
+        "coxscore2",
+        "lrt_test",
+        "schoenfeld_residuals_counting",
+        "score_test",
+    }
+)
 _ML_SENTINELS = ("DeepSurv", "survival_forest", "GradientBoostSurvival")
 _ML_AVAILABLE = any(hasattr(_core, name) for name in _ML_SENTINELS)
 _OPTIONAL_MISSING_BINDING_FEATURES = {} if _ML_AVAILABLE else dict.fromkeys(ML_BINDING_NAMES, "ml")

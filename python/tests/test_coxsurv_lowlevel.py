@@ -190,6 +190,6 @@ def test_invalid_prepared_inputs_are_rejected(change, message):
 
 def test_dotted_keyword_and_public_exports():
     assert r.coxsurv_fit(**simple(), **{"se.fit": False}).std_err is None
-    assert survival.r_api.coxsurv_fit is r.coxsurv_fit
+    assert survival.r.coxsurv_fit is r.coxsurv_fit
     with pytest.raises(TypeError, match="unexpected keyword"):
         r.coxsurv_fit(**simple(), extra=True)

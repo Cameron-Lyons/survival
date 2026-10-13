@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from survival import r, surv_analysis
+from survival import kernels, r
 
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures" / "survfit_matrix_reference.json").read_text()
@@ -57,7 +57,7 @@ def test_matrix_curves_match_r(case, fitted_curves):
 def _chain():
     curves = []
     for hazard in (0.2, 0.3):
-        engine = surv_analysis.SurvfitKMResult.from_stacked(
+        engine = kernels.SurvfitKMResult.from_stacked(
             [1.0, 2.0],
             [10.0, 8.0],
             [1.0, 1.0],
@@ -164,7 +164,7 @@ def test_matrix_exponential_preserves_tiny_transition_rates():
     for i, j in [(0, 1), (1, 2)]:
         c = matrix[i][j]
         hazards = np.array(c.cumhaz) * 1e-20
-        engine = surv_analysis.SurvfitKMResult.from_stacked(
+        engine = kernels.SurvfitKMResult.from_stacked(
             c.time, c.n_risk, c.n_event, c.surv, c.n, cumhaz=hazards
         )
         matrix[i][j] = dataclasses.replace(c, engine=engine)

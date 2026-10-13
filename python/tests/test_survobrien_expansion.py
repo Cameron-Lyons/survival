@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose, assert_array_equal
-from survival import r, validation
+from survival import kernels, r
 
 
 def _reference(time, status, columns, start=None, strata=None):
@@ -53,7 +53,7 @@ def test_sweeps_match_independent_risk_sets_and_pairwise_ranks(seed, counting, s
     strata = rng.choice([-7, 2, 19], n).astype(np.int32) if stratified else None
     columns = rng.choice([np.nan, -np.inf, -2, -0.0, 0.0, 1.0, 3.0, np.inf], (3, n))
     expected = _reference(time, status, columns, start, strata)
-    result = validation.survobrien(time, status, columns, start=start, strata=strata)
+    result = kernels.survobrien(time, status, columns, start=start, strata=strata)
     assert result.row == expected[0]
     assert result.strata == expected[1]
     assert result.status == expected[2]
@@ -79,7 +79,7 @@ def test_numpy_inputs_and_owned_output_snapshots(layout):
     elif layout == "float32":
         values = values.astype(np.float32)
     original = np.array(values, copy=True)
-    result = validation.survobrien(time, status, values)
+    result = kernels.survobrien(time, status, values)
     arrays = result.to_arrays()
     assert_array_equal(values, original)
     for name in ("row", "time", "status", "strata", "event_times", "block_offsets"):
@@ -97,11 +97,11 @@ def test_numpy_inputs_and_owned_output_snapshots(layout):
 
 
 def test_geometry_only_needs_no_continuous_columns():
-    result = validation.survobrien([2, 1, 3], [1, 1, 0], [], transform=False)
+    result = kernels.survobrien([2, 1, 3], [1, 1, 0], [], transform=False)
     assert result.row == [0, 1, 2, 0, 2]
     assert result.block_offsets == [0, 3, 5]
     assert result.transformed == []
-    empty = validation.survobrien([2, 1, 3], [0, 0, 0], [[1, 2, 3]])
+    empty = kernels.survobrien([2, 1, 3], [0, 0, 0], [[1, 2, 3]])
     assert empty.row == []
     assert empty.event_times == []
     assert empty.block_offsets == [0]
@@ -109,9 +109,7 @@ def test_geometry_only_needs_no_continuous_columns():
 
 
 def test_signed_zero_is_one_event_and_one_rank_tie():
-    result = validation.survobrien(
-        [-0.0, 0.0, 1.0], [1, 1, 0], [[-0.0, 0.0, 1.0]], strata=[1, 1, 1]
-    )
+    result = kernels.survobrien([-0.0, 0.0, 1.0], [1, 1, 0], [[-0.0, 0.0, 1.0]], strata=[1, 1, 1])
     assert result.event_times == [-0.0]
     assert result.status == [1, 1, 0]
     assert result.transformed[0][0] == result.transformed[0][1]
@@ -157,7 +155,7 @@ def test_concurrent_expansions_keep_independent_active_sets():
     values = np.sin(time)[None, :]
 
     def run(seed):
-        return validation.survobrien(time, status, values + seed).transformed
+        return kernels.survobrien(time, status, values + seed).transformed
 
     expected = run(0)
     with ThreadPoolExecutor(4) as pool:
@@ -176,7 +174,7 @@ def test_concurrent_expansions_keep_independent_active_sets():
 )
 def test_invalid_geometry_is_rejected(arguments, message):
     with pytest.raises(ValueError, match=message):
-        validation.survobrien(*arguments)
+        kernels.survobrien(*arguments)
 
 
 def test_formula_na_pass_keeps_missing_continuous_values():

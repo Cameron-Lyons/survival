@@ -117,7 +117,7 @@ def test_dispatch_options_and_default_warnings(fits):
     assert r.yates_setup(unknown, type="link") is None
     with pytest.warns(UserWarning, match="no yates_setup method exists"):
         assert r.yates_setup(unknown, type="risk") is None
-    assert survival.r_api.yates_setup is r.yates_setup
+    assert survival.r.yates_setup is r.yates_setup
 
 
 def test_setup_does_not_keep_fit_and_supports_pickle():

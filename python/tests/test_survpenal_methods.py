@@ -485,7 +485,7 @@ def test_print_guards_and_surface(lung, f_ps):
         r.print_survreg_penal(r.survreg(S + "age", lung))
     for name in ("print_survreg_penal", "SurvregPenalPrint"):
         assert name in r.__all__
-        assert getattr(survival.r_api, name) is getattr(r, name)
+        assert getattr(survival.r, name) is getattr(r, name)
 
 
 def test_signif_rounds_halfway_cases_like_r():

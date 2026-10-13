@@ -24,7 +24,7 @@ def data():
 
 
 def test_concordancefit_matches_r_default(data):
-    fit = core.concordancefit(*data)
+    fit = survival.kernels.concordancefit(*data)
 
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
@@ -38,7 +38,7 @@ def test_concordancefit_matches_r_default(data):
 
 
 def test_concordancefit_without_standard_errors_only_counts(data):
-    fit = core.concordancefit(*data, std_err=False)
+    fit = survival.kernels.concordancefit(*data, std_err=False)
 
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
@@ -47,7 +47,7 @@ def test_concordancefit_without_standard_errors_only_counts(data):
 
 
 def test_concordancefit_case_weights_match_r(data):
-    fit = core.concordancefit(*data, weights=core.Weights(W))
+    fit = survival.kernels.concordancefit(*data, weights=core.Weights(W))
 
     assert fit.concordance == pytest.approx([0.64615384615384619])
     assert _counts(fit) == pytest.approx((19.0, 9.5, 4.0, 2.0, 0.0))
@@ -89,7 +89,7 @@ def test_concordancefit_case_weights_match_r(data):
     ],
 )
 def test_concordancefit_time_weights_match_r(data, timewt, concordance, counts, var, cvar):
-    fit = core.concordancefit(*data, timewt=timewt)
+    fit = survival.kernels.concordancefit(*data, timewt=timewt)
 
     assert fit.concordance == pytest.approx([concordance])
     assert _counts(fit) == pytest.approx(counts)
@@ -98,7 +98,7 @@ def test_concordancefit_time_weights_match_r(data, timewt, concordance, counts, 
 
 
 def test_concordancefit_ymax_truncates_pairs(data):
-    fit = core.concordancefit(*data, ymax=3.0)
+    fit = survival.kernels.concordancefit(*data, ymax=3.0)
 
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((7.0, 7.0, 3.0, 0.0, 0.0))
@@ -107,7 +107,7 @@ def test_concordancefit_ymax_truncates_pairs(data):
 
 
 def test_concordancefit_strata_keeps_per_stratum_counts(data):
-    fit = core.concordancefit(*data, strata=[1, 1, 1, 1, 2, 2, 2, 2])
+    fit = survival.kernels.concordancefit(*data, strata=[1, 1, 1, 1, 2, 2, 2, 2])
 
     assert fit.concordance == pytest.approx([0.61111111111111116])
     assert fit.count_strata == [1, 2]
@@ -118,7 +118,7 @@ def test_concordancefit_strata_keeps_per_stratum_counts(data):
 
 
 def test_concordancefit_cluster_uses_grouped_jackknife_variance(data):
-    fit = core.concordancefit(*data, cluster=[1, 1, 2, 2, 3, 3, 4, 4])
+    fit = survival.kernels.concordancefit(*data, cluster=[1, 1, 2, 2, 3, 3, 4, 4])
 
     assert fit.concordance == pytest.approx([0.5])
     assert _counts(fit) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
@@ -127,7 +127,7 @@ def test_concordancefit_cluster_uses_grouped_jackknife_variance(data):
 
 
 def test_concordancefit_influence_and_ranks_match_r(data):
-    with_dfbeta = core.concordancefit(*data, influence=1)
+    with_dfbeta = survival.kernels.concordancefit(*data, influence=1)
     assert [row[0] for row in with_dfbeta.dfbeta] == pytest.approx(
         [
             0.0,
@@ -141,14 +141,14 @@ def test_concordancefit_influence_and_ranks_match_r(data):
         ]
     )
 
-    with_influence = core.concordancefit(*data, influence=2)
+    with_influence = survival.kernels.concordancefit(*data, influence=2)
     assert with_influence.dfbeta is None
     influence = with_influence.influence[0]
     assert len(influence) == 8
     assert influence[0] == pytest.approx([3.0, 3.0, 1.0, 0.0, 0.0])
     assert influence[6] == pytest.approx([0.0, 5.0, 0.0, 0.0, 0.0])
 
-    with_ranks = core.concordancefit(*data, ranks=True)
+    with_ranks = survival.kernels.concordancefit(*data, ranks=True)
     ranks = with_ranks.ranks[0]
     assert ranks.time == pytest.approx([1.0, 2.0, 3.0, 4.0, 4.0, 6.0])
     assert ranks.rank == pytest.approx([0.0, 0.42857142857142855, -0.6, -0.25, 0.25, 0.0])
@@ -160,12 +160,12 @@ def test_concordancefit_timefix_groups_near_tied_event_times():
     near = core.SurvivalData([1.0, 1.0 + 4e-9, 2.0, 3.0], [1, 1, 1, 0])
     x = core.CovariateMatrix([0.9, 0.1, 0.5, 0.2], 4, 1)
 
-    fixed = core.concordancefit(near, x)
+    fixed = survival.kernels.concordancefit(near, x)
     assert fixed.concordance == pytest.approx([0.4])
     assert _counts(fixed) == pytest.approx((2.0, 3.0, 0.0, 1.0, 0.0))
     assert fixed.var[0] == pytest.approx([0.0864])
 
-    raw = core.concordancefit(near, x, timefix=False)
+    raw = survival.kernels.concordancefit(near, x, timefix=False)
     assert raw.concordance == pytest.approx([1 / 3])
     assert _counts(raw) == pytest.approx((2.0, 4.0, 0.0, 0.0, 0.0))
 
@@ -174,7 +174,7 @@ def test_concordancefit_several_predictors_share_one_variance_matrix(data):
     survival_data, _ = data
     x = core.CovariateMatrix([value for a, b in zip(X, W, strict=True) for value in (a, b)], 8, 2)
 
-    fit = core.concordancefit(survival_data, x)
+    fit = survival.kernels.concordancefit(survival_data, x)
 
     assert fit.concordance == pytest.approx([0.5, 0.38095238095238093])
     assert _counts(fit, 0) == pytest.approx((9.0, 9.0, 3.0, 1.0, 0.0))
@@ -216,10 +216,10 @@ def test_concordancefit_validates_inputs(data):
     survival_data, x = data
 
     with pytest.raises(ValueError, match="timewt must be one of"):
-        core.concordancefit(survival_data, x, timewt="bogus")
+        survival.kernels.concordancefit(survival_data, x, timewt="bogus")
     with pytest.raises(ValueError, match="length mismatch"):
-        core.concordancefit(survival_data, x, weights=core.Weights([1.0, 2.0]))
+        survival.kernels.concordancefit(survival_data, x, weights=core.Weights([1.0, 2.0]))
     with pytest.raises(ValueError, match="length mismatch"):
-        core.concordancefit(survival_data, x, strata=[0, 1])
+        survival.kernels.concordancefit(survival_data, x, strata=[0, 1])
     with pytest.raises(ValueError, match="length mismatch"):
-        core.concordancefit(survival_data, core.CovariateMatrix(X + [0.3], 9, 1))
+        survival.kernels.concordancefit(survival_data, core.CovariateMatrix(X + [0.3], 9, 1))

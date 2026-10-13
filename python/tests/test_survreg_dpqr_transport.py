@@ -11,7 +11,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 core = survival._survival
-r = survival.r_api
+r = survival.r
 
 
 def definition(**overrides):

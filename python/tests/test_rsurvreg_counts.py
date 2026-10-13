@@ -12,7 +12,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures" / "rsurvreg_count_reference.json").read_text()
 )
@@ -55,9 +55,9 @@ def count_input(name):
         "matrix": np.array([[1, 3], [2, 4]]),
         "matrix1": np.array([[2.5]]),
         "matrix0": np.empty((0, 3)),
-        "factor": r._r_factor(["3"], ["3", "5"]),
-        "factor_missing": r._r_factor([None], ["3", "5"]),
-        "factor_vector": r._r_factor(["5", "3", None], ["3", "5"]),
+        "factor": r._coerce._r_factor(["3"], ["3", "5"]),
+        "factor_missing": r._coerce._r_factor([None], ["3", "5"]),
+        "factor_vector": r._coerce._r_factor(["5", "3", None], ["3", "5"]),
         "complex": 3 + 2j,
         "complex_fraction": 2.5 + 0j,
         "complex_vector": [1 + 1j, 2 + 1j],

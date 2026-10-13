@@ -15,7 +15,7 @@ def _fit(method="efron", stratified=False, counting=False):
     status = (np.arange(n) % 3 != 0).astype(np.int32)
     x = rng.normal(size=(n, 2))
     strata = np.where(np.arange(n) % 2 == 0, 17, -3) if stratified else None
-    return survival.regression.coxph_fit(
+    return survival.kernels.coxph_fit(
         time,
         status,
         x,
@@ -89,7 +89,7 @@ def test_requested_times_handle_null_models_and_no_events(events):
     time = np.arange(1.0, 9.0)
     status = (np.arange(8) % 3 != 0).astype(np.int32) if events else np.zeros(8, dtype=np.int32)
     x = np.empty((8, 0))
-    fit = survival.regression.coxph_fit(time, status, x)
+    fit = survival.kernels.coxph_fit(time, status, x)
     times = [0.0, 3.0, 10.0]
     np.testing.assert_allclose(
         fit.predict_survival_at(times), _full_curve_predictions(fit, times, newdata=x)

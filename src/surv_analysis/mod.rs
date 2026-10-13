@@ -40,7 +40,7 @@ pub use multi_state::{
     MarkovMSMResult, MultiStateConfig, MultiStateResult, TransitionIntensityResult,
     estimate_transition_intensities, fit_markov_msm, fit_multi_state_model,
 };
-pub use nelson_aalen::{NelsonAalenResult, nelson_aalen, nelson_aalen_py};
+pub use nelson_aalen::{NelsonAalenResult, nelson_aalen};
 pub use pseudo::{
     PseudoResidualType, SurvfitAJResid, SurvfitResid, pseudo, pseudo_aj, pseudo_aj_py, pseudo_py,
     survfitresid, survfitresid_aj, survfitresid_aj_py, survfitresid_py,

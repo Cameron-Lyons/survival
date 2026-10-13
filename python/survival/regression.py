@@ -1,11 +1,13 @@
-"""Regression models: Cox (``coxph_fit`` -> ``CoxPHFit``), parametric AFT (``survreg_fit`` ->
-``SurvregFit``), Aalen additive, case-cohort, Fine-Gray, cure, penalised and joint models."""
+"""Regression models: Cox (``CoxPHFit``), parametric AFT (``SurvregFit``), Aalen additive,
+case-cohort, Fine-Gray, cure, penalised and joint models; their fitters named like R
+functions (``coxph_fit``, ``survreg_fit``, ...) are in ``survival.kernels``."""
 
 from ._binding_utils import bind_names
 
 __all__ = bind_names(
     globals(),
     [
+        "CoxRegressionInput",
         "AaregFitResult",
         "aareg_fit",
         "LinkFunctionParams",
@@ -13,7 +15,6 @@ __all__ = bind_names(
         "cch_borgan_fit",
         "cch_fit",
         "CoxPHFit",
-        "coxph_fit",
         "CoxphFitResult",
         "coxph_fit_raw",
         "coxphms_fit",
@@ -31,16 +32,12 @@ __all__ = bind_names(
         "SchoenfeldResiduals",
         "CoxZph",
         "CoxZphTest",
-        "cox_zph",
         "CoxZphSmooth",
         "cox_zph_smooth",
         "CoxphWtest",
-        "coxph_wtest",
         "AgexactFit",
         "CoxphDetail",
-        "coxph_detail",
         "FineGrayOutput",
-        "finegray",
         "finegray_expand",
         "CompetingRisksCIF",
         "FineGrayResult",
@@ -54,18 +51,10 @@ __all__ = bind_names(
         "SurvregPredictType",
         "SurvregResidType",
         "SurvregFit",
-        "survreg_fit",
-        "SurvregFitResult",
         "survreg_fit_raw",
         "SurvpenalFit",
-        "survpenal_fit",
-        "SurvpenalFitResult",
         "survpenal_fit_raw",
         "survreg_dtest",
-        "dsurvreg",
-        "psurvreg",
-        "qsurvreg",
-        "rsurvreg",
         "FlexibleParametricResult",
         "HazardSplineResult",
         "RestrictedCubicSplineResult",

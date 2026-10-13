@@ -253,9 +253,12 @@ def test_every_registered_binding_is_bound_by_exactly_one_domain_module():
         if name not in manifest
         for module in modules
     ]
+    internal = importlib.import_module("survival._binding_utils").INTERNAL_BINDINGS
     unbound = [
-        ("python/survival/_binding_manifest.py", name) for name in sorted(manifest - set(owners))
+        ("python/survival/_binding_manifest.py", name)
+        for name in sorted(manifest - set(owners) - internal)
     ]
+    assert not internal & set(owners), sorted(internal & set(owners))
     duplicated = [
         (", ".join(modules), name) for name, modules in sorted(owners.items()) if len(modules) > 1
     ]
@@ -291,9 +294,14 @@ def test_domain_modules_expose_exactly_their_bindings():
     core = importlib.import_module("survival._survival")
     ml_names = set(_feature_bindings()["ml"]) if not _has_ml_bindings(core) else set()
     direct = _bind_names_literals()
-    for module_name, names in _binding_names_by_module().items():
+    by_module = _binding_names_by_module()
+    for module_name, names in by_module.items():
         module = importlib.import_module(f"survival.{module_name}")
         expected = names - ml_names
+        if module_name == "kernels":
+            shared = set().union(*(by_module[name] for name in module._DOMAIN_MODULES))
+            assert set(module.__all__) == expected | (shared - ml_names), module_name
+            continue
         assert set(module.__all__) == expected, module_name
         wrappers = getattr(module, "_PYTHON_WRAPPERS", frozenset())
         for name in expected:
@@ -505,7 +513,7 @@ def test_root_exports_resolve_to_their_home_modules():
         assert getattr(survival, name) is getattr(sklearn_compat, name), name
     for name in lists["_PUBLIC_MODULES"]:
         assert getattr(survival, name) is sys.modules[f"survival.{name}"], name
-    assert survival.neardate is not survival.data_prep.neardate
+    assert survival.neardate is not survival.kernels.neardate
     assert survival.is_surv(survival.Surv([1.0])) is True
     assert survival.is_surv([1.0]) is False
 
@@ -620,7 +628,7 @@ def test_readme_python_examples_reference_public_symbols():
 def _readme_low_level_blocks() -> list[tuple[int, str]]:
     """README blocks that use only the domain modules (the R-style facade has its own tests)."""
     lists = _root_export_lists()
-    module_names = set(lists["_PUBLIC_MODULES"]) - {"r", "r_api"}
+    module_names = set(lists["_PUBLIC_MODULES"]) - {"r"}
     blocks = []
     for index, block in enumerate(_readme_python_blocks(), start=1):
         tree = ast.parse(block)
@@ -690,7 +698,7 @@ def test_package_root_lazy_loads_domain_modules():
 
     assert sys.modules["survival.regression"] is regression
     assert "regression" in vars(survival)
-    assert regression.coxph_fit is sys.modules["survival._survival"].coxph_fit
+    assert regression.coxphms_fit is sys.modules["survival._survival"].coxphms_fit
 
     assert survival._survival is sys.modules["survival._survival"]
     assert "_survival" in vars(survival)
@@ -708,7 +716,7 @@ def test_package_root_lazy_loads_r_exports():
     assert "survival.r" in sys.modules
     assert "r" in vars(survival)
     assert "Surv" in vars(survival)
-    assert survival.r_api.Surv is survival.Surv
+    assert survival.r.Surv is survival.Surv
 
 
 def test_package_root_version_matches_project_metadata():

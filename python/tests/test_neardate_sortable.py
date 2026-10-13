@@ -11,7 +11,7 @@ import pytest
 
 from .helpers import setup_survival_import
 
-r = setup_survival_import().r_api
+r = setup_survival_import().r
 
 
 @pytest.mark.parametrize(

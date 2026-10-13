@@ -135,24 +135,25 @@ See [the example](examples/rust_package_layout.rs) and
 
 ## Python Package Layout
 
-Prefer domain modules in new code:
+Array-level work uses the native kernels in `survival.kernels` (or the domain
+modules that group them):
 
 ```python
-from survival import datasets, regression, surv_analysis, validation
+from survival import datasets, kernels, surv_analysis
 
 lung = datasets.load_lung()
 time = [float(t) for t in lung["time"]]
 status = [int(s) - 1 for s in lung["status"]]  # R codes status as 1/2
 x = [[float(a), float(s)] for a, s in zip(lung["age"], lung["sex"], strict=True)]
 
-cox = regression.coxph_fit(time, status, x)  # R: coxph(Surv(time, status) ~ age + sex)
+cox = kernels.coxph_fit(time, status, x)  # R: coxph(Surv(time, status) ~ age + sex)
 km = surv_analysis.survfitkm(time, status)  # R: survfit(Surv(time, status) ~ 1)
 table = surv_analysis.survmean(km)  # R: summary(fit)$table
-test = validation.logrank_test(time, status, [int(s) for s in lung["sex"]])
-print(cox.coefficients, table.median, test.p_value)
+test = kernels.survdiff(time, status, [int(s) for s in lung["sex"]])
+print(cox.coefficients, table.median, test.pvalue)
 ```
 
-`surv_analysis.survfitkm` and `surv_analysis.nelson_aalen` accept NumPy arrays,
+`surv_analysis.survfitkm` accepts NumPy arrays,
 including strided arrays, pandas/polars columns, and Python sequences. Status
 values must be binary; integral floating-point arrays are accepted with checked
 conversion. The numerical fit runs in Rust with the Python GIL released.
@@ -484,16 +485,15 @@ Common result objects can be converted to column-oriented tables with
 times; rate-table summaries describe dimensions and date ranges, while
 merged-data summaries report where updates fell relative to each interval.
 The `survival.residuals` name remains the residual diagnostics module; the
-R-style residual generic is available as `survival.r_api.residuals(...)` for
-fitted Cox and `survreg` models (`survival.r_api` re-exports the `survival.r`
-package, which holds the implementation split by concern).
+R-style residual generic is `survival.r.residuals(...)` for fitted Cox and
+`survreg` models.
 For AFT models, `type="matrix"` returns six analytic diagnostic columns in R's
 order (`g`, `dg`, `ddg`, `ds`, `dds`, `dsg`), including its interval-censoring
 conventions. Working residuals use the location score divided by negative
 curvature; tail probabilities are evaluated directly to avoid cancellation.
 
 Algorithm bindings are not re-exported from the package root: import them from
-their domain module (`survival.regression.coxph_fit`, not `survival.coxph_fit`).
+`survival.kernels` (`survival.kernels.coxph_fit`, not `survival.coxph_fit`).
 The R-style names and the domain modules are resolved lazily instead of being
 copied into the package namespace at import time.
 
@@ -505,14 +505,13 @@ module until the extension is built with `--features extension-module,ml`.
 Common modules:
 - `survival.datasets`: built-in example and benchmark datasets
 - `survival.data_prep`: time splitting and data transformation helpers
-- `survival.core`: typed inputs (`SurvivalData`, `CovariateMatrix`, ...), `concordancefit`,
-  spline bases and the Cox residual kernels
+- `survival.kernels`: every core kernel, including those named like an R function
+  (`coxph_fit`, `survdiff`, `pyears`, `concordancefit`, ...)
+- `survival.core`: typed inputs (`SurvivalData`, `CovariateMatrix`, ...) and spline bases
 - `survival.regression`: Cox, AFT, competing-risks, cure, and recurrent-event models
-- `survival.surv_analysis`: Kaplan-Meier, Nelson-Aalen, multistate, and log-rank helpers
+- `survival.surv_analysis`: Kaplan-Meier, Aalen-Johansen and multi-state curves
 - `survival.validation`: metrics, calibration, conformal, RMST, and statistical tests
-- `survival.residuals`: the `coxmart`/`agmart` kernels; model residuals live on `CoxPHFit`
-  and `SurvregFit`
-- `survival.population`: rate tables, `match_ratetable`, `pyears` and `survexp`
+- `survival.population`: rate tables
 - `survival.monitoring`: drift and monitoring utilities
 - `survival.ml`: neural, tree, and modern ML-oriented survival models
 - `survival.reliability_tools`: reliability utilities; the top-level
@@ -571,7 +570,7 @@ algebra are implemented in Rust.
 ### P-spline and natural spline bases
 
 ```python
-from survival import core
+from survival import core, kernels
 
 x = [0.1 * i for i in range(100)]
 # The B-spline basis of R's pspline(x, nterm = 10, degree = 3); the
@@ -580,21 +579,21 @@ basis = core.pspline_basis(x, 10, 3, (0.0, 10.0))
 print(len(basis.basis[0]), basis.knots[:4])
 
 # R's nsk(): a natural spline whose coefficients are the values at the knots.
-spline = core.nsk(x, df=4)
+spline = kernels.nsk(x, df=4)
 print(spline.n_cols, spline.knots, spline.boundary_knots)
 ```
 
 ### Concordance
 
 ```python
-from survival import core
+from survival import core, kernels
 
 time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
 status = [1, 1, 0, 1, 1, 1, 0, 1]
 risk = [0.5, 0.2, 0.5, 0.9, 0.2, 0.7, 0.1, 0.9]
 
 # R's concordance(Surv(time, status) ~ risk, reverse = TRUE, influence = 1)
-fit = core.concordancefit(
+fit = kernels.concordancefit(
     core.SurvivalData(time, status),
     core.CovariateMatrix(risk, len(risk), 1),
     reverse=True,
@@ -641,15 +640,15 @@ result = survival.pyears(response, group=attained, scale=1)
 ```
 
 ```python
-from survival import population
+from survival import kernels
 
 # Low-level API: R's pyears() data side with the survexp.us rate table.
-us = population.survexp_us()
+us = kernels.survexp_us()
 # match.ratetable: age in days, sex as a 1-based factor code, year as days since 1970-01-01
-positions = population.match_ratetable(
+positions = kernels.match_ratetable(
     us, ["age", "sex", "year"], [[18262.5, 21915.0], [1.0, 2.0], [10957.0, 12949.0]]
 ).r
-result = population.pyears(
+result = kernels.pyears(
     [365.25, 1826.25],  # follow-up per subject
     event=[1.0, 0.0],
     factors=[1],  # one factor term (sex) ...
@@ -663,7 +662,7 @@ result = population.pyears(
 print(result.pyears, result.event, result.expected)
 
 # R's survexp(): expected survival of the same two subjects (Ederer method)
-expected = population.survexp(us, positions, times=[365.25, 1826.25])
+expected = kernels.survexp(us, positions, times=[365.25, 1826.25])
 print(expected.method, expected.surv)
 ```
 
@@ -677,7 +676,7 @@ for the retained representations and missing-row behavior.
 ### Kaplan-Meier Survival Curves
 
 ```python
-from survival import surv_analysis
+from survival import kernels, surv_analysis
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
@@ -698,9 +697,9 @@ print(f"Standard errors: {result.std_err}")
 print(f"Number at risk: {result.n_risk}")
 
 # R: summary(fit, times = ...), summary(fit)$table and quantile(fit)
-at_times = surv_analysis.summary_survfit(result, times=[2.5, 5.0])
+at_times = kernels.summary_survfit(result, times=[2.5, 5.0])
 table = surv_analysis.survmean(result)
-quantiles = surv_analysis.quantile_survfit(result, probs=[0.25, 0.5, 0.75])
+quantiles = kernels.quantile_survfit(result, probs=[0.25, 0.5, 0.75])
 print(at_times.surv, table.median, quantiles.quantile)
 ```
 
@@ -732,7 +731,7 @@ The checked six-vector interval splitter remains available for lower-level
 workflows:
 
 ```python
-from survival import regression
+from survival import kernels
 
 # Example competing risks data
 tstart = [0.0, 0.0, 0.0, 0.0]
@@ -742,7 +741,7 @@ cprob = [0.1, 0.2, 0.3, 0.4]  # Cumulative probabilities
 extend = [True, True, False, False]  # Whether to extend intervals
 keep = [True, True, True, True]      # Which cut points to keep
 
-result = regression.finegray(
+result = kernels.finegray(
     tstart=tstart,
     tstop=tstop,
     ctime=ctime,
@@ -760,7 +759,7 @@ print(f"Weights: {result.wt}")
 ### Parametric Survival Regression (Accelerated Failure Time Models)
 
 ```python
-from survival import regression
+from survival import kernels, regression
 
 # Example survival data
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
@@ -769,7 +768,7 @@ covariates = [[1.0, x] for x in [0.5, 0.2, 0.9, 0.1, 0.7, 0.3, 0.8, 0.4]]  # int
 
 # R: survreg(Surv(time, status) ~ x, dist = "weibull")
 data = regression.SurvregData(time, status, covariates)  # also time2=, weights=, strata=, cluster=
-fit = regression.survreg_fit(
+fit = kernels.survreg_fit(
     data,
     regression.SurvregDistribution("weibull"),  # R names: weibull, lognormal, loglogistic, ...
     control=regression.SurvregControl(iter_max=30, rel_tolerance=1e-9),
@@ -815,7 +814,7 @@ that rounds to zero. Complete explicit starts remain available for these cases.
 ### Cox Proportional Hazards Model
 
 ```python
-from survival import regression
+from survival import kernels
 
 event_times = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0]
 status = [1, 1, 1, 0, 1, 1, 0, 1, 0, 1]  # 1 = event, 0 = censored
@@ -824,7 +823,7 @@ x2 = [0.2, 0.16, 0.62, -0.07, 0.95, 0.61, 0.49, 0.68, 1.24, 0.97]
 covariates = [[a, b] for a, b in zip(x1, x2, strict=True)]
 
 # R: coxph(Surv(time, status) ~ x1 + x2, ties = "efron")
-fit = regression.coxph_fit(event_times, status, covariates, method="efron", iter_max=20)
+fit = kernels.coxph_fit(event_times, status, covariates, method="efron", iter_max=20)
 
 print(f"Coefficients: {fit.coefficients}")  # NaN marks an aliased column, as R's NA
 print(f"Variance: {fit.var}")
@@ -845,38 +844,27 @@ print(f"Survival curves: {curve.surv}")  # one column per newdata row
 # R: residuals(fit, type = ...) and cox.zph(fit)
 print(fit.martingale_residuals())
 print(fit.dfbeta())
-zph = regression.cox_zph(fit)
+zph = kernels.cox_zph(fit)
 print([(test.chisq, test.p) for test in zph.table], zph.global_test.p)
 ```
 
 ### Cox Martingale Residuals
 
 ```python
-from survival import core, residuals
+from survival import datasets, r
 
-# Example survival data
-time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-status = [1, 1, 0, 1, 0, 1, 1, 0]  # 1 = event, 0 = censored
-score = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]  # exp(linear predictor)
+lung = datasets.load_lung()
+fit = r.coxph("Surv(time, status) ~ age + sex", lung)
 
-# R's coxmart.c kernel: martingale residuals for given risk scores
-martingale_residuals = residuals.coxmart(
-    core.CoxMartInput(
-        core.SurvivalData(time, status),
-        score,
-        core.Weights.unit(len(time)),  # case weights
-        [0] * len(time),  # strata
-    ),
-    ties="efron",  # or "breslow"
-)
-
-print(f"Martingale residuals: {martingale_residuals}")
+# R: residuals(fit, type = "martingale")
+martingale_residuals = r.residuals(fit, type="martingale")
+print(martingale_residuals[:5])
 ```
 
 ### Survival Difference Tests (Log-Rank Test)
 
 ```python
-from survival import surv_analysis
+from survival import kernels
 
 # Example: Compare survival between two groups
 time = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
@@ -884,7 +872,7 @@ status = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
 group = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]  # Group 1 and Group 2
 
 # R: survdiff(Surv(time, status) ~ group, rho = 0)
-result = surv_analysis.survdiff(
+result = kernels.survdiff(
     time,
     status,
     group,
@@ -1085,9 +1073,10 @@ The public Python surface is broad and evolves quickly. For the most accurate,
 version-matched signatures, use the checked-in type stubs:
 
 `import survival` exposes the domain modules, the R-style entry points and the
-scikit-learn estimators; every Rust binding is reachable through exactly one
-domain module (`survival.regression.coxph_fit`, `survival.surv_analysis.survfitkm`,
-...) and nothing else is re-exported from the package root.
+scikit-learn estimators; every core kernel is in `survival.kernels`
+(`survival.kernels.coxph_fit`, `survival.kernels.survfitkm`, ...), the domain
+modules group the kernels that are not named like an R function, and nothing
+else is re-exported from the package root.
 
 - [`python/survival/__init__.pyi`](python/survival/__init__.pyi): package-level
   typed surface, including the new domain modules.
@@ -1230,7 +1219,7 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 
 - Native extendr bindings are currently disabled. The experimental
   `r/survivalr` package provides an R facade through reticulate and the Python
-  `survival.r_api` module.
+  `survival.r` module.
 - Python 3.11+ and Rust 1.95+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 

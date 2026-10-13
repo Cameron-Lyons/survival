@@ -9,7 +9,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 r_coerce = importlib.import_module("survival.r._coerce")
 r_data_prep = importlib.import_module("survival.r._data_prep")
 
@@ -279,11 +279,11 @@ def test_tmerge_cumevent_with_a_missing_increment_like_r():
 
 def test_ids_convert_from_python_and_numpy_scalars():
     ids = [np.int64(3), 3.0, np.float32(1.5), 1.5, "a", np.str_("a"), True, 1, 2**70]
-    result = survival.data_prep.cluster(ids)
+    result = survival.kernels.cluster(ids)
     assert list(result.codes) == [0, 0, 1, 1, 2, 2, 3, 3, 4]
     assert list(result.sizes) == [2, 2, 2, 2, 1]
     with pytest.raises(TypeError, match="an id must be an int, float or str, not NoneType"):
-        survival.data_prep.cluster([1, None])
+        survival.kernels.cluster([1, None])
 
 
 def _rtt_right():

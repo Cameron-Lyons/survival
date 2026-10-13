@@ -13,7 +13,7 @@ from .helpers import setup_survival_import
 from .r_api_support import _toy_data
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 r_coerce = importlib.import_module("survival.r._coerce")
 
 

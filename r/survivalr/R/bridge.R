@@ -3,7 +3,16 @@
 
   function() {
     if (is.null(module)) {
-      module <<- reticulate::import("survival.r_api", convert = TRUE)
+      survival <- reticulate::import("survival", convert = TRUE)
+      version <- as.character(reticulate::py_get_attr(survival, "__version__"))
+      major <- suppressWarnings(as.integer(strsplit(version, ".", fixed = TRUE)[[1L]][[1L]]))
+      if (is.na(major) || major < 3L) {
+        stop(
+          "survivalr needs the Python survival package 3.0 or later; found ", version,
+          call. = FALSE
+        )
+      }
+      module <<- reticulate::import("survival.r", convert = TRUE)
     }
     module
   }
@@ -14,52 +23,27 @@ if (getRversion() >= "2.15.1") {
 }
 
 .python_attr <- function(name) {
+  if (startsWith(name, "_")) {
+    .survival_python_module()
+    return(.pybridge_attr(name))
+  }
   reticulate::py_get_attr(.survival_python_module(), name)
 }
 
-.survival_data_prep_module <- local({
+.survival_kernels_module <- local({
   module <- NULL
 
   function() {
     if (is.null(module)) {
-      module <<- reticulate::import("survival.data_prep", convert = TRUE)
+      .survival_python_module()
+      module <<- reticulate::import("survival.kernels", convert = TRUE)
     }
     module
   }
 })
 
-.data_prep_attr <- function(name) {
-  reticulate::py_get_attr(.survival_data_prep_module(), name)
-}
-
-.survival_core_module <- local({
-  module <- NULL
-
-  function() {
-    if (is.null(module)) {
-      module <<- reticulate::import("survival.core", convert = TRUE)
-    }
-    module
-  }
-})
-
-.core_attr <- function(name) {
-  reticulate::py_get_attr(.survival_core_module(), name)
-}
-
-.survival_population_module <- local({
-  module <- NULL
-
-  function() {
-    if (is.null(module)) {
-      module <<- reticulate::import("survival.population", convert = TRUE)
-    }
-    module
-  }
-})
-
-.population_attr <- function(name) {
-  reticulate::py_get_attr(.survival_population_module(), name)
+.kernels_attr <- function(name) {
+  reticulate::py_get_attr(.survival_kernels_module(), name)
 }
 
 .survival_pybridge_module <- local({
@@ -76,59 +60,6 @@ if (getRversion() >= "2.15.1") {
 .pybridge_attr <- function(name) {
   reticulate::py_get_attr(.survival_pybridge_module(), name)
 }
-
-.survival_regression_module <- local({
-  module <- NULL
-
-  function() {
-    if (is.null(module)) {
-      module <<- reticulate::import("survival.regression", convert = TRUE)
-    }
-    module
-  }
-})
-
-.regression_attr <- function(name) {
-  reticulate::py_get_attr(.survival_regression_module(), name)
-}
-
-.survival_analysis_module <- local({
-  module <- NULL
-
-  function() {
-    if (is.null(module)) {
-      module <<- reticulate::import("survival.surv_analysis", convert = TRUE)
-    }
-    module
-  }
-})
-
-.survival_analysis_attr <- function(name) {
-  reticulate::py_get_attr(.survival_analysis_module(), name)
-}
-
-.survival_residuals_module <- local({
-  module <- NULL
-
-  function() {
-    if (is.null(module)) {
-      module <<- reticulate::import("survival.residuals", convert = TRUE)
-    }
-    module
-  }
-})
-
-.residuals_attr <- function(name) {
-  reticulate::py_get_attr(.survival_residuals_module(), name)
-}
-
-.validation_attr <- local({
-  module <- NULL
-  function(name) {
-    if (is.null(module)) module <<- reticulate::import("survival.validation", convert = TRUE)
-    reticulate::py_get_attr(module, name)
-  }
-})
 
 .compact_null <- function(values) {
   values[!vapply(values, is.null, logical(1))]
@@ -1726,7 +1657,7 @@ attrassign <- function(object, tt) {
 }
 
 .call_data_prep <- function(name, ...) {
-  do.call(.data_prep_attr(name), lapply(.compact_null(list(...)), .restore_python))
+  do.call(.kernels_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .call_pybridge <- function(name, ...) {
@@ -1734,15 +1665,15 @@ attrassign <- function(object, tt) {
 }
 
 .call_regression <- function(name, ...) {
-  do.call(.regression_attr(name), lapply(.compact_null(list(...)), .restore_python))
+  do.call(.kernels_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .call_survival_analysis <- function(name, ...) {
-  do.call(.survival_analysis_attr(name), lapply(.compact_null(list(...)), .restore_python))
+  do.call(.kernels_attr(name), lapply(.compact_null(list(...)), .restore_python))
 }
 
 .core_nsk_basis <- function(x, df, knots, intercept, boundary_knots) {
-  constructor <- .core_attr("NaturalSplineKnot")
+  constructor <- .kernels_attr("NaturalSplineKnot")
   boundary_knots <- do.call(reticulate::tuple, as.list(as.numeric(boundary_knots)))
   spline <- do.call(
     constructor,
@@ -3411,7 +3342,7 @@ blog <- function(edge = 0.05) {
     as.integer(atts$type)
   }
   dimid <- if (is.null(atts$dimid)) names(atts$dimnames) else atts$dimid
-  .population_attr("RateTable")(
+  .kernels_attr("RateTable")(
     dims = as.list(as.integer(atts$dim)),
     dimid = as.list(dimid),
     dimnames = unname(lapply(atts$dimnames, function(labels) as.list(as.character(labels)))),
@@ -5358,7 +5289,7 @@ survfitcoxph.fit <- function(y, x, wt, x2, risk, newrisk, strata, se.fit,
     value
   }
   list(
-    penalty = .regression_attr("CoxPenalty")$controlled(
+    penalty = .kernels_attr("CoxPenalty")$controlled(
       penalty, controller, diag = isTRUE(attribute$diag), sparse = sparse,
       needs_df = any(requested %in% c("df", "trH"))
     ),
@@ -6838,7 +6769,7 @@ is.na.Surv2 <- function(x) {
     return(adjusted)
   }
 
-  result <- .data_prep_attr("aeq_surv")(finite_values, NULL, tolerance)
+  result <- .kernels_attr("aeq_surv")(finite_values, NULL, tolerance)
   adjusted_values <- as.numeric(result$time)
   for (index in seq_along(finite_positions)) {
     position <- finite_positions[[index]]
@@ -7015,7 +6946,7 @@ coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
   }
 
   fit <- do.call(
-    .regression_attr("coxph_fit"),
+    .kernels_attr("coxph_fit"),
     .compact_null(list(
       time = time,
       status = status,
@@ -7207,7 +7138,7 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   }
 
   agfit <- do.call(
-    .regression_attr("agexact"),
+    .kernels_attr("agexact"),
     .compact_null(list(
       start = as.double(start),
       stop = as.double(stop_time),
@@ -7265,15 +7196,15 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   )
 
   if (isTRUE(resid)) {
-    counting <- .core_attr("CountingProcessData")(
+    counting <- .kernels_attr("CountingProcessData")(
       as.double(start), as.double(stop_time), as.integer(event)
     )
-    residual_input <- .core_attr("AndersenGillInput")(
+    residual_input <- .kernels_attr("AndersenGillInput")(
       counting,
       as.list(risk_score),
       strata = if (has_strata) as.list(as.integer(strata_codes)) else NULL
     )
-    martingale <- .as_numeric_vector(.residuals_attr("agmart")(residual_input, "breslow"))
+    martingale <- .as_numeric_vector(.kernels_attr("agmart")(residual_input, "breslow"))
     names(martingale) <- rownames
     out$residuals <- martingale
     out <- out[c(

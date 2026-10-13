@@ -44,7 +44,7 @@ def test_current_r_curve_labels(case):
     for converted in (r.survfit0(curve), pickle.loads(pickle.dumps(curve))):
         assert converted.clabel == case["label"]
         compare_table(converted.transitions, case["curve"]["transitions"])
-    for part in survival.r_api._survfit_strata_curves(curve).values():
+    for part in survival.pybridge._survfit_strata_curves(curve).values():
         assert part.clabel == case["label"]
         assert part.transitions.colnames[-1] == f"({case['label']})"
 

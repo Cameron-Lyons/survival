@@ -14,7 +14,7 @@ surv_analysis = survival.surv_analysis
 
 
 def _clogit(case, x, stratum):
-    return regression.coxph_fit(
+    return survival.kernels.coxph_fit(
         [1.0] * len(case), case, [[v] for v in x], strata=stratum, method="exact"
     )
 

@@ -12,7 +12,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 sa = survival.surv_analysis
 from survival.r._types import (
     CoxSurvfitMultiStateResult,
@@ -130,7 +130,7 @@ def test_callback_and_named_summary_match_stock_r(case, interface, container):
 
     def aggregate():
         if interface == "native":
-            return sa.aggregate_survfit(
+            return survival.kernels.aggregate_survfit(
                 **fields, by=_by(case["by"], True), fun=summary, **(case["dots"] or {})
             )
         return r.aggregate_survfit(
@@ -275,7 +275,7 @@ def test_callback_accepts_one_real_numeric_value(scalar, interface):
     fields = REFERENCE["inputs"]["ordinary"]
     surv = _array(fields["surv"])
     if interface == "native":
-        actual = sa.aggregate_survfit(surv=surv, fun=lambda values: scalar)
+        actual = survival.kernels.aggregate_survfit(surv=surv, fun=lambda values: scalar)
     else:
         actual = r.aggregate_survfit(SimpleNamespace(surv=surv), FUN=lambda values: scalar)
     np.testing.assert_array_equal(actual.surv, np.full((3, 1), np.asarray(scalar).item()))
@@ -302,7 +302,7 @@ def test_callback_rejects_non_real_or_non_scalar_values(invalid, interface):
 
     def aggregate():
         if interface == "native":
-            return sa.aggregate_survfit(surv=surv, fun=lambda values: invalid)
+            return survival.kernels.aggregate_survfit(surv=surv, fun=lambda values: invalid)
         return r.aggregate_survfit(SimpleNamespace(surv=surv), FUN=lambda values: invalid)
 
     with pytest.raises(ValueError, match="FUN must return a single value summary"):
@@ -322,7 +322,7 @@ def test_callback_exceptions_propagate_and_stop_at_the_failing_group(interface):
 
     def aggregate():
         if interface == "native":
-            return sa.aggregate_survfit(
+            return survival.kernels.aggregate_survfit(
                 surv=surv, by=[sa.GroupingFactor([1, 0, 1, 0], ["a", "b"])], fun=summary
             )
         return r.aggregate_survfit(SimpleNamespace(surv=surv), by=["b", "a", "b", "a"], FUN=summary)
@@ -346,7 +346,7 @@ def test_callback_vectors_are_independent_of_source_and_previous_calls(interface
         return result
 
     if interface == "native":
-        actual = sa.aggregate_survfit(surv=surv, fun=summary)
+        actual = survival.kernels.aggregate_survfit(surv=surv, fun=summary)
     else:
         actual = r.aggregate_survfit(SimpleNamespace(surv=surv), FUN=summary)
     np.testing.assert_array_equal(surv, original)
@@ -369,7 +369,7 @@ def test_callback_keeps_the_scalar_contract_after_validation(interface):
 
     def aggregate():
         if interface == "native":
-            return sa.aggregate_survfit(surv=surv, fun=summary)
+            return survival.kernels.aggregate_survfit(surv=surv, fun=summary)
         return r.aggregate_survfit(SimpleNamespace(surv=surv), FUN=summary)
 
     with pytest.raises(ValueError, match="FUN must return a single value summary"):
@@ -410,7 +410,9 @@ def test_empty_data_axis_fails_before_invoking_callback(margin, shape, interface
 
     def aggregate():
         if interface == "native":
-            return sa.aggregate_survfit(**{margin: values}, fun=_callback("sum", calls))
+            return survival.kernels.aggregate_survfit(
+                **{margin: values}, fun=_callback("sum", calls)
+            )
         return r.aggregate_survfit(SimpleNamespace(**{margin: values}), FUN=_callback("sum", calls))
 
     with pytest.raises(ValueError, match="data.*margin"):
@@ -423,7 +425,7 @@ def test_empty_data_axis_fails_before_invoking_callback(margin, shape, interface
 def test_builtin_and_numpy_callable_summaries(summary, interface):
     surv = _array(REFERENCE["inputs"]["ordinary"]["surv"])
     if interface == "native":
-        result = sa.aggregate_survfit(surv=surv, fun=summary)
+        result = survival.kernels.aggregate_survfit(surv=surv, fun=summary)
     else:
         result = r.aggregate_survfit(SimpleNamespace(surv=surv), FUN=summary)
     np.testing.assert_allclose(result.surv, [[summary(row)] for row in surv], rtol=1e-14)
@@ -471,7 +473,7 @@ def test_empty_multistate_curve_keeps_the_probability_array_shape(axis):
 def test_omitted_summary_uses_stock_default_row_means(case, interface):
     fields = {name: _array(spec) for name, spec in REFERENCE["inputs"][case["input"]].items()}
     if interface == "native":
-        result = sa.aggregate_survfit(**fields, by=_by(case["by"], True))
+        result = survival.kernels.aggregate_survfit(**fields, by=_by(case["by"], True))
     else:
         result = r.aggregate_survfit(SimpleNamespace(**fields), by=_by(case["by"]))
     _assert_result(result, case["expected"])
@@ -520,7 +522,7 @@ def test_default_survival_mean_differs_from_explicit_mean_and_pstate_mean(
         else {"fun" if interface == "native" else "FUN": None if case["default"] else "mean"}
     )
     if interface == "native":
-        result = sa.aggregate_survfit(**fields, by=_by(case["by"], True), **options)
+        result = survival.kernels.aggregate_survfit(**fields, by=_by(case["by"], True), **options)
     else:
         result = r.aggregate_survfit(SimpleNamespace(**fields), by=_by(case["by"]), **options)
     assert REFERENCE["metadata"]["long_double_mantissa"] == 64

@@ -8,7 +8,7 @@ from .helpers import setup_survival_import
 from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 TOY = {
     "time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -108,7 +108,7 @@ def test_survcheck_reports_problem_rows_of_the_original_data():
 
 
 def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
-    codes = r._survcheck_codes(
+    codes = r._misc._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
         time2=[1, 2, 1, 3, 4],
@@ -120,7 +120,7 @@ def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
     assert (codes.overlap_rows, codes.gap_rows, codes.teleport_rows) == ([], [], [])
     assert codes.n_transitions == 4
 
-    no_istate = r._survcheck_codes(
+    no_istate = r._misc._survcheck_codes(
         id=[1, 1, 2, 2, 3],
         time1=[0, 1, 0, 2, 0],
         time2=[1, 2, 1, 3, 4],
@@ -128,7 +128,7 @@ def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
     )
     assert no_istate.current_states == [0, 1, 0, 1, 0]
     assert no_istate.n_transitions == 4
-    overlap = r._survcheck_codes(id=[1, 1], time1=[0, 0.5], time2=[1, 2], status=[0, 1])
+    overlap = r._misc._survcheck_codes(id=[1, 1], time1=[0, 0.5], time2=[1, 2], status=[0, 1])
     assert overlap.overlap_rows == [1]
 
     with pytest.raises(ValueError, match="a formula argument is required"):

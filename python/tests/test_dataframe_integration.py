@@ -61,53 +61,56 @@ def test_survfitkm_polars():
 
 
 def test_logrank_list():
-    result_list = survival.validation.logrank_test(time_data, status_data, group_data)
-    assert hasattr(result_list, "statistic")
-    assert hasattr(result_list, "p_value")
+    result_list = survival.kernels.survdiff(time_data, status_data, group_data)
+    assert hasattr(result_list, "chisq")
+    assert hasattr(result_list, "pvalue")
 
 
 def test_logrank_numpy():
     time_np = np.array(time_data)
     status_np = np.array(status_data, dtype=np.int32)
     group_np = np.array(group_data, dtype=np.int32)
-    result_np = survival.validation.logrank_test(time_np, status_np, group_np)
-    assert hasattr(result_np, "statistic")
+    result_np = survival.kernels.survdiff(time_np, status_np, group_np)
+    assert hasattr(result_np, "chisq")
 
-    result_list = survival.validation.logrank_test(time_data, status_data, group_data)
-    assert result_list.statistic == pytest.approx(result_np.statistic, abs=1e-10)
-    assert result_list.p_value == pytest.approx(result_np.p_value, abs=1e-10)
+    result_list = survival.kernels.survdiff(time_data, status_data, group_data)
+    assert result_list.chisq == pytest.approx(result_np.chisq, abs=1e-10)
+    assert result_list.pvalue == pytest.approx(result_np.pvalue, abs=1e-10)
 
 
 def test_logrank_numpy_int64():
     time_np = np.array(time_data)
     status_np64 = np.array(status_data, dtype=np.int64)
     group_np64 = np.array(group_data, dtype=np.int64)
-    result_np64 = survival.validation.logrank_test(time_np, status_np64, group_np64)
+    result_np64 = survival.kernels.survdiff(time_np, status_np64, group_np64)
 
-    result_list = survival.validation.logrank_test(time_data, status_data, group_data)
-    assert result_list.statistic == pytest.approx(result_np64.statistic, abs=1e-10)
+    result_list = survival.kernels.survdiff(time_data, status_data, group_data)
+    assert result_list.chisq == pytest.approx(result_np64.chisq, abs=1e-10)
 
 
 @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")
 def test_logrank_pandas():
-    result_list = survival.validation.logrank_test(time_data, status_data, group_data)
+    result_list = survival.kernels.survdiff(time_data, status_data, group_data)
     df = pd.DataFrame({"time": time_data, "status": status_data, "group": group_data})
-    result_pd = survival.validation.logrank_test(df["time"], df["status"], df["group"])
-    assert result_list.statistic == pytest.approx(result_pd.statistic, abs=1e-10)
+    result_pd = survival.kernels.survdiff(df["time"], df["status"], df["group"])
+    assert result_list.chisq == pytest.approx(result_pd.chisq, abs=1e-10)
 
 
 @pytest.mark.skipif(not HAS_POLARS, reason="polars not installed")
 def test_logrank_polars():
-    result_list = survival.validation.logrank_test(time_data, status_data, group_data)
+    result_list = survival.kernels.survdiff(time_data, status_data, group_data)
     df = pl.DataFrame({"time": time_data, "status": status_data, "group": group_data})
-    result_pl = survival.validation.logrank_test(df["time"], df["status"], df["group"])
-    assert result_list.statistic == pytest.approx(result_pl.statistic, abs=1e-10)
+    result_pl = survival.kernels.survdiff(df["time"], df["status"], df["group"])
+    assert result_list.chisq == pytest.approx(result_pl.chisq, abs=1e-10)
 
 
-def test_nelson_aalen_list():
-    result = survival.surv_analysis.nelson_aalen(time_data, status_data)
-    assert result.time == pytest.approx([1.0, 2.0, 4.0, 6.0, 7.0])
-    assert result.cumulative_hazard == pytest.approx(
+def _event_cumhaz(result):
+    return [h for h, d in zip(result.cumhaz, result.n_event, strict=True) if d > 0]
+
+
+def test_nelson_aalen_hazard_list():
+    result = survival.surv_analysis.survfitkm(time_data, status_data, stype=2, ctype=1)
+    assert _event_cumhaz(result) == pytest.approx(
         [
             1 / 8,
             1 / 8 + 1 / 7,
@@ -118,12 +121,12 @@ def test_nelson_aalen_list():
     )
 
 
-def test_nelson_aalen_numpy():
-    result = survival.surv_analysis.nelson_aalen(time_data, status_data)
-    result_np = survival.surv_analysis.nelson_aalen(
-        np.array(time_data), np.array(status_data, dtype=np.int32)
+def test_nelson_aalen_hazard_numpy():
+    result = survival.surv_analysis.survfitkm(time_data, status_data, stype=2, ctype=1)
+    result_np = survival.surv_analysis.survfitkm(
+        np.array(time_data), np.array(status_data, dtype=np.int32), stype=2, ctype=1
     )
-    assert result_np.cumulative_hazard == pytest.approx(result.cumulative_hazard)
+    assert _event_cumhaz(result_np) == pytest.approx(_event_cumhaz(result))
 
 
 def test_survmean_restricted_mean():

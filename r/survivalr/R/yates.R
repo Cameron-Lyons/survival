@@ -199,7 +199,7 @@
   keep <- match(selection$parts, colnames(factors))
   if (anyNA(keep)) stop("sgtt requires fitted main-effect terms", call. = FALSE)
   tests <- Map(function(i, name) reticulate::tuple(as.integer(i), name), keep, selection$parts)
-  result <- .validation_attr("yates_sgtt")(
+  result <- .kernels_attr("yates_sgtt")(
     x, as.list(as.integer(xassign)), adjustments, as.list(unname(beta)), covariance,
     as.list(as.integer(assign)), tests, sigma2 = sigma2, include_intercept = !cox
   )
@@ -231,7 +231,7 @@
       arguments$rmean <- builtin$rmean
       arguments$conf_int <- builtin$baseline$conf.int
     }
-    return(do.call(.validation_attr(paste0("yates_", builtin$kind)), arguments))
+    return(do.call(.kernels_attr(paste0("yates_", builtin$kind)), arguments))
   }
   if (is.function(setup)) {
     predfun <- setup
@@ -254,7 +254,7 @@
     if (is.null(dim(value))) value <- matrix(value, ncol = 1L)
     value
   }
-  do.call(.validation_attr("yates_predict"), arguments)
+  do.call(.kernels_attr("yates_predict"), arguments)
 }
 
 yates <- function(fit, term, population = c("data", "factorial", "sas"),
@@ -304,7 +304,7 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
   if (anyNA(columns)) stop("population design does not match fitted coefficients", call. = FALSE)
   matrices <- lapply(matrices, function(x) x[, columns, drop = FALSE])
   estimable <- if (all(kept)) rep(TRUE, length(matrices)) else {
-    .validation_attr("yates_estimable")(
+    .kernels_attr("yates_estimable")(
       if (cox) lapply(matrices, function(x) cbind(1, x)) else matrices,
       xold, intercept = cox
     )
@@ -321,10 +321,10 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
         if (!is.null(id)) weights <- 1 / as.numeric(table(id)[as.character(id)])
       }
     }
-    cmat <- .as_numeric_matrix(.validation_attr("yates_population_means")(
+    cmat <- .as_numeric_matrix(.kernels_attr("yates_population_means")(
       matrices, if (is.null(weights)) NULL else as.list(unname(weights))
     ))
-    result <- .validation_attr("yates")(
+    result <- .kernels_attr("yates")(
       cmat, as.list(unname(beta[kept])), covariance, offset = -sum(means * beta[kept]),
       sigma2 = sigma2, estimable = as.list(unname(estimable)), test = test
     )

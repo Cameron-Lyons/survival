@@ -147,7 +147,7 @@ only on a subject's last row; near ties are resolved first when `timefix=True`.
 Strata and subject codes may be arbitrary integers. Output follows ascending
 strata, original row order within each stratum, then added intervals;
 `FineGrayOutput.row` holds one-based source rows and `wt` includes supplied
-weights. The six-vector `regression.finegray` kernel still takes a caller-supplied
+weights. The six-vector `kernels.finegray` kernel still takes a caller-supplied
 censoring curve. Both results provide `to_arrays()`, and native preparation runs
 without the GIL.
 
@@ -164,7 +164,7 @@ must be finite. Factor keeper columns are kept untransformed; Python treats plai
 string columns as factors. Data without events return an empty frame with the
 expected columns.
 
-`validation.survobrien` accepts NumPy vectors and a sequence of continuous columns
+`kernels.survobrien` accepts NumPy vectors and a sequence of continuous columns
 and releases the GIL. `block_offsets` holds the half-open slices of consecutive
 blocks, and `to_arrays()` returns independent writable arrays. `transform=False`
 builds only the risk sets (`continuous=[]` allowed); Rust callers have

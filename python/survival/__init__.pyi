@@ -8,6 +8,7 @@ from . import datasets as datasets
 from . import interpretability as interpretability
 from . import interval as interval
 from . import joint as joint
+from . import kernels as kernels
 from . import missing as missing
 from . import ml as ml
 from . import monitoring as monitoring
@@ -16,12 +17,10 @@ from . import population as population
 from . import pybridge as pybridge
 from . import qol as qol
 from . import r as r
-from . import r_api as r_api
 from . import recurrent as recurrent
 from . import regression as regression
 from . import relative as relative
 from . import reliability_tools as reliability_tools
-from . import residuals as residuals
 from . import sklearn_compat as sklearn_compat
 from . import spatial as spatial
 from . import surv_analysis as surv_analysis
@@ -310,6 +309,9 @@ from .r import (
 )
 from .r import (
     rep_surv as rep_surv,
+)
+from .r import (
+    residuals as residuals,
 )
 from .r import (
     rev_surv as rev_surv,

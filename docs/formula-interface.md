@@ -1,7 +1,7 @@
 # Formula interface
 
-`survival.r` is the R-style interface to the package; `survival.r_api` re-exports
-it, and the R bridge package `survivalr` drives it through reticulate. Formula
+`survival.r` is the R-style interface to the package, and the R bridge package
+`survivalr` drives it through reticulate. Formula
 strings are parsed by a restricted parser: formula options are read as literals,
 and Python or R code is never evaluated. This page describes formulas, survival
 responses, model frames and model matrices. Predictions are described in
@@ -427,8 +427,8 @@ An empty stratum provides no information about its scale: its scale keeps the
 starting estimate and its zero variance marks a singularity. Predictions for that
 stratum are supported for compatibility but are not identified. Explicit starting
 values include every retained scale position. Penalized fits compute the effective
-sample size from the observed scales only. The typed `regression.survreg_fit` and
-`regression.survpenal_fit` accept an optional final `nstrat`; Rust provides
+sample size from the observed scales only. The typed `kernels.survreg_fit` and
+`kernels.survpenal_fit` accept an optional final `nstrat`; Rust provides
 `survreg_fit_with_nstrata` and `SurvpenalFit::fit_with_nstrata`. Counts below the
 largest observed code or too large for a covariance matrix are rejected before any
 callback runs.

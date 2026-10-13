@@ -15,9 +15,9 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
-_survfit_strata_curves = r._survfit_strata_curves
-_subset_survfit_multistate = r._subset_survfit_multistate
+r = survival.r
+_survfit_strata_curves = r._models._survfit_strata_curves
+_subset_survfit_multistate = r._models._subset_survfit_multistate
 
 
 def _close(actual, expected, rel=1e-10):
@@ -41,14 +41,14 @@ def _two_groups():
 
 def _three_states():
     events = ["censor", "a", "b", "a", "b", "censor", "a", "b"]
-    return {**_two_groups(), "e": r._r_factor(events, ["censor", "a", "b"])}
+    return {**_two_groups(), "e": r._coerce._r_factor(events, ["censor", "a", "b"])}
 
 
 def _labelled():
     return {
         "time": [1, 2, 3, 4, 5, 6],
         "status": [1, 0, 1, 1, 0, 1],
-        "e": r._r_factor(["censor", "a", "b", "a", "censor", "b"], ["censor", "a", "b"]),
+        "e": r._coerce._r_factor(["censor", "a", "b", "a", "censor", "b"], ["censor", "a", "b"]),
         "cl": ["z", "z", "q", "q", "m", "m"],
         "id": [101, 102, 203, 204, 305, 309],
         "g": [1, 2, 1, 2, 1, 2],
@@ -240,7 +240,7 @@ def test_aj_influence_rows_are_numbered_as_in_r():
 
 
 def test_an_id_on_two_clusters_warns():
-    events = r._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"])
+    events = r._coerce._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"])
     data = {
         "id": [1, 1, 2, 2, 3, 3],
         "cl": ["x", "y", "x", "x", "y", "y"],
@@ -280,7 +280,7 @@ def test_survfit_warnings_point_at_the_caller(formula, kwargs, message):
         "t1": [0, 1, 0, 3, 0, 5],
         "t2": [1, 2, 3, 4, 5, 6],
         "e": [1, 0, 1, 1, 0, 1],
-        "st": r._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"]),
+        "st": r._coerce._r_factor(["cens", "a", "cens", "b", "cens", "a"], ["cens", "a", "b"]),
         "o": [0.5] * 6,
     }
     with warnings.catch_warnings(record=True) as caught:

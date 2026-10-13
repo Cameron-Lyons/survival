@@ -1,11 +1,8 @@
-use crate::data_types::{FloatVec, IntVec};
 use crate::error::SurvivalResult;
 use crate::surv_analysis::{SurvdiffData, survdiff};
-use pyo3::prelude::*;
 
 #[doc = " Result of [`logrank_test`]: R's `survdiff` components."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
 pub struct LogRankResult {
     #[doc = " The distinct group labels, sorted; observed/expected follow this order."]
     pub groups: Vec<i32>,
@@ -52,31 +49,6 @@ fn fit_logrank(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<L
         p_value: result.pvalue,
         rho,
     })
-}
-
-#[doc = " Python entry point: `logrank_test(time, status, group, rho=0.0,"]
-#[doc = " strata=None, entry_times=None, timefix=True)`."]
-#[pyfunction(name = "logrank_test")]
-#[pyo3(signature = (time, status, group, rho=0.0, strata=None, entry_times=None, timefix=true))]
-#[allow(clippy::too_many_arguments)]
-pub fn logrank_test_py(
-    py: Python<'_>,
-    time: FloatVec,
-    status: IntVec,
-    group: IntVec,
-    rho: f64,
-    strata: Option<IntVec>,
-    entry_times: Option<FloatVec>,
-    timefix: bool,
-) -> PyResult<LogRankResult> {
-    let data = SurvdiffData::try_new(
-        entry_times.map(FloatVec::into_inner),
-        time.into_inner(),
-        status.into_inner(),
-        group.into_inner(),
-        strata.map(IntVec::into_inner),
-    )?;
-    Ok(py.detach(|| fit_logrank(&data, rho, timefix))?)
 }
 
 #[cfg(test)]

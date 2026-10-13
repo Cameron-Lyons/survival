@@ -17,7 +17,7 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/grouped_multistate_frame_reference.json").read_text()
 )
@@ -27,17 +27,17 @@ REFERENCE = json.loads(
 def source_fit(se_fit, initial_row):
     data = dict(REFERENCE["data"])
     for name, levels in REFERENCE["levels"].items():
-        data[name] = r._r_factor(data[name], levels)
+        data[name] = r._coerce._r_factor(data[name], levels)
     fit = r.survfit("Surv(time,event) ~ group", data, weights="weight", se_fit=se_fit)
     return r.survfit0(fit) if initial_row else fit
 
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["name"])
 def test_grouped_state_columns_match_stock_selected_matrices(case):
-    selected = r._subset_survfit_multistate(
+    selected = r._models._subset_survfit_multistate(
         source_fit(case["se_fit"], case["initial_row"]), case["selection"]
     )
-    curves = r._survfit_strata_curves(selected)
+    curves = r._models._survfit_strata_curves(selected)
     assert list(curves) == [group["label"] for group in case["groups"]]
     for group in case["groups"]:
         curve = curves[group["label"]]
@@ -67,7 +67,7 @@ def test_grouped_state_columns_match_stock_selected_matrices(case):
 
 
 def test_grouped_state_tables_reject_incompatible_columns():
-    curves = r._survfit_strata_curves(source_fit(True, False))
+    curves = r._models._survfit_strata_curves(source_fit(True, False))
     first = next(iter(curves))
     bad = {
         **curves,

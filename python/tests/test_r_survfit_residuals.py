@@ -11,7 +11,7 @@ from .helpers import setup_survival_import
 from .r_api_support import _toy_data
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 
 
 def _close(actual, expected, rel=1e-8):
@@ -97,7 +97,9 @@ def test_residuals_survfit_collapse_without_weights_matches_r():
         "id": [1, 1, 2, 2, 3, 3, 4],
         "t1": [0, 2, 0, 1, 0, 3, 0],
         "t2": [2, 5, 1, 4, 3, 6, 4],
-        "ev": r._r_factor(["b", "a", "b", "censor", "b", "censor", "a"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(
+            ["b", "a", "b", "censor", "b", "censor", "a"], ["censor", "a", "b"]
+        ),
     }
     multi = r.survfit_residuals(
         r.survfit("Surv(t1, t2, ev) ~ 1", states, id="id"), times=[2, 4], collapse=True
@@ -146,7 +148,7 @@ def test_residuals_survfit_multistate_reports_states_and_transitions():
     data = {
         "id": [1, 2, 3, 4, 5, 6],
         "time": [1, 2, 3, 4, 5, 6],
-        "ev": r._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
     }
     fit = r.survfit("Surv(time, ev) ~ 1", data, id="id")
     result = r.survfit_residuals(fit, times=[2, 4])
@@ -199,7 +201,7 @@ def test_pseudo_multistate_has_subject_state_time_layout():
     data = {
         "id": [1, 2, 3, 4, 5, 6],
         "time": [1, 2, 3, 4, 5, 6],
-        "ev": r._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
     }
     fit = r.survfit("Surv(time, ev) ~ 1", data)
     values = r.pseudo(fit, times=[2, 4])
@@ -221,7 +223,7 @@ def _mgus2_competing_risks(n=60):
         progressed = mgus2["pstat"][row] != 0
         etime.append(mgus2["ptime"][row] if progressed else mgus2["futime"][row])
         event.append(labels[1] if progressed else labels[2 * int(mgus2["death"][row])])
-    return {"etime": etime, "event": r._r_factor(event, labels)}
+    return {"etime": etime, "event": r._coerce._r_factor(event, labels)}
 
 
 def test_residuals_and_pseudo_of_a_start_time_fit_match_r():

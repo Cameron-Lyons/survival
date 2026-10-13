@@ -15,7 +15,7 @@ from .helpers import setup_survival_import
 from .test_gil_release import _assert_detaches
 
 survival = setup_survival_import()
-r = survival.r_api
+r = survival.r
 core = survival._survival
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/curve_quantile_boundary_reference.json").read_text()

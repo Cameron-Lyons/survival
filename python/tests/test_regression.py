@@ -26,7 +26,7 @@ _AFT_DESIGN = [[1.0, value] for value in _AFT_X]
 
 
 def _tied_fit(**kwargs):
-    return regression.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X, **kwargs)
+    return survival.kernels.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X, **kwargs)
 
 
 def test_coxph_fit_efron_matches_r():
@@ -242,7 +242,7 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
     weights = [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0, 1.0, 2.0, 1.0]
     offset = [0.1, 0.0, 0.2, 0.0, 0.0, 0.1, 0.0, 0.3, 0.0, 0.0]
 
-    fit = regression.coxph_fit(
+    fit = survival.kernels.coxph_fit(
         stop, status, x, entry=start, strata=strata, weights=weights, offset=offset
     )
     assert fit.coefficients == pytest.approx([-0.78302485927205856])
@@ -259,13 +259,13 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
         [0.55023859220750193, -0.57974372141854302, 0.74846876019198305]
     )
 
-    clustered = regression.coxph_fit(stop, status, x, entry=start, cluster=strata)
+    clustered = survival.kernels.coxph_fit(stop, status, x, entry=start, cluster=strata)
     assert clustered.coefficients == pytest.approx([0.48868151624787642])
     assert clustered.var[0] == pytest.approx([0.018306739858682395])
     assert clustered.naive_var[0] == pytest.approx([0.6478055354496437])
     assert clustered.rscore == pytest.approx(1.2162778262460221)
 
-    exact = regression.coxph_fit(stop, status, x, entry=start, method="exact")
+    exact = survival.kernels.coxph_fit(stop, status, x, entry=start, method="exact")
     assert exact.coefficients == pytest.approx([0.56988220267373335])
     assert exact.var[0] == pytest.approx([0.70878875738958225])
     assert exact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
@@ -279,16 +279,16 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
 
 def test_coxph_fit_validates_inputs():
     with pytest.raises(ValueError, match="status length mismatch"):
-        regression.coxph_fit(_TIED_TIME, _TIED_STATUS[:-1], _TIED_X)
+        survival.kernels.coxph_fit(_TIED_TIME, _TIED_STATUS[:-1], _TIED_X)
     with pytest.raises(ValueError, match="ties must be"):
         _tied_fit(method="bogus")
     with pytest.raises(ValueError, match="x has 9 rows"):
-        regression.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X[:-1])
+        survival.kernels.coxph_fit(_TIED_TIME, _TIED_STATUS, _TIED_X[:-1])
 
 
 def test_coxph_detail_matches_r():
     fit = _tied_fit()
-    detail = regression.coxph_detail(fit)
+    detail = survival.kernels.coxph_detail(fit)
 
     assert isinstance(detail, regression.CoxphDetail)
     assert detail.time == pytest.approx([1.0, 2.0, 4.0, 6.0, 8.0])
@@ -318,14 +318,14 @@ def test_coxph_detail_matches_r():
     assert detail.strata is None
     assert detail.riskmat is None
 
-    with_riskmat = regression.coxph_detail(fit, riskmat=True)
+    with_riskmat = survival.kernels.coxph_detail(fit, riskmat=True)
     assert len(with_riskmat.riskmat) == 10
     assert sum(with_riskmat.riskmat[0]) == 1
 
 
 def test_cox_zph_matches_r():
     fit = _tied_fit()
-    zph = regression.cox_zph(fit)
+    zph = survival.kernels.cox_zph(fit)
 
     assert isinstance(zph, regression.CoxZph)
     assert zph.transform == "km"
@@ -345,7 +345,7 @@ def test_cox_zph_matches_r():
     assert zph.y[0] == pytest.approx([-10.10813719067957273, 7.51931450020224101])
     assert zph.strata is None
 
-    identity = regression.cox_zph(fit, transform="identity", terms=False, global_test=False)
+    identity = survival.kernels.cox_zph(fit, transform="identity", terms=False, global_test=False)
     assert identity.transform == "identity"
     assert [row.chisq for row in identity.table] == pytest.approx(
         [0.20965874456275058, 0.11082021786863967]
@@ -358,7 +358,7 @@ def test_cox_zph_matches_r():
 
 def test_coxph_wtest_matches_r():
     fit = _tied_fit()
-    result = regression.coxph_wtest(fit.var, [fit.coefficients])
+    result = survival.kernels.coxph_wtest(fit.var, [fit.coefficients])
 
     assert isinstance(result, regression.CoxphWtest)
     assert result.test == pytest.approx([3.284067646975064])
@@ -368,13 +368,13 @@ def test_coxph_wtest_matches_r():
     )
 
     breslow = _tied_fit(method="breslow")
-    assert regression.coxph_wtest(breslow.var, [breslow.coefficients]).test == pytest.approx(
+    assert survival.kernels.coxph_wtest(breslow.var, [breslow.coefficients]).test == pytest.approx(
         [3.2051239607042534]
     )
 
 
 def _aft_fit(distribution="weibull", **data_kwargs):
-    return regression.survreg_fit(
+    return survival.kernels.survreg_fit(
         regression.SurvregData(_AFT_TIME, _AFT_STATUS, _AFT_DESIGN, **data_kwargs),
         regression.SurvregDistribution(distribution),
     )
@@ -463,7 +463,7 @@ def test_survreg_fit_residuals_match_r():
 
     def column(residual_type):
         result = fit.residuals(residual_type=residual_type)
-        assert isinstance(result, survival.residuals.SurvregResiduals)
+        assert isinstance(result, survival.kernels.SurvregResiduals)
         assert result.residual_type == getattr(
             regression.SurvregResidType, residual_type.capitalize()
         )
@@ -512,7 +512,7 @@ def test_survreg_fit_residuals_match_r():
 
 
 def test_survreg_fit_interval_strata_weights_and_cluster_match_r():
-    fit = regression.survreg_fit(
+    fit = survival.kernels.survreg_fit(
         regression.SurvregData(
             [1.0, 2.0, 3.0, 4.0, 5.0, 3.0, 7.0, 2.0],
             [3, 1, 2, 3, 1, 0, 1, 3],
@@ -559,24 +559,24 @@ def test_survreg_distribution_helpers_match_r():
     with pytest.raises(ValueError, match="'arg' should be one of \"extreme\""):
         regression.SurvregDistribution("normal")
 
-    assert regression.dsurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
+    assert survival.kernels.dsurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
         [0.094738019355815842, 0.163187748073130218, 0.143403690391142008]
     )
-    assert regression.psurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
+    assert survival.kernels.psurvreg([1.0, 2.0, 5.0], [1.5], [0.5]) == pytest.approx(
         [0.048568007099546562, 0.180571615166323918, 0.711965988172734487]
     )
-    assert regression.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5]) == pytest.approx(
+    assert survival.kernels.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5]) == pytest.approx(
         [1.4547242101138491, 3.7312509012850112, 6.8006365807998757]
     )
-    assert regression.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5], distribution="lognormal") == (
+    assert survival.kernels.qsurvreg([0.1, 0.5, 0.9], [1.5], [0.5], distribution="lognormal") == (
         pytest.approx([2.3613281052886124, 4.4816890703380645, 8.5060339044805140])
     )
-    assert regression.dsurvreg([1.0, 2.0], [1.5], [0.5], distribution="t", parms=[4]) == (
+    assert survival.kernels.dsurvreg([1.0, 2.0], [1.5], [0.5], distribution="t", parms=[4]) == (
         pytest.approx([0.42932505167995955, 0.42932505167995955])
     )
-    draws = regression.rsurvreg(5, [1.5], [0.5], seed=7)
+    draws = survival.kernels.rsurvreg(5, [1.5], [0.5], seed=7)
     assert len(draws) == 5
-    assert draws == regression.rsurvreg(5, [1.5], [0.5], seed=7)
+    assert draws == survival.kernels.rsurvreg(5, [1.5], [0.5], seed=7)
 
 
 def test_survreg_fit_validates_inputs():
@@ -585,7 +585,7 @@ def test_survreg_fit_validates_inputs():
     with pytest.raises(ValueError, match="status length mismatch"):
         regression.SurvregData(_AFT_TIME, _AFT_STATUS[:-1], _AFT_DESIGN)
     control = regression.SurvregControl(iter_max=1)
-    limited = regression.survreg_fit(
+    limited = survival.kernels.survreg_fit(
         regression.SurvregData(_AFT_TIME, _AFT_STATUS, _AFT_DESIGN),
         regression.SurvregDistribution("weibull"),
         control=control,

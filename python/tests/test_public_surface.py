@@ -6,6 +6,7 @@ return must be exported.  ``typing_smoke.py`` checks the same surface with mypy.
 reference values were computed with R 4.5.3 and survival 3.8-12.
 """
 
+import importlib
 import inspect
 import math
 import typing
@@ -68,11 +69,13 @@ def _public_functions():
             yield name, value
 
 
-def test_every_exported_name_resolves_and_r_api_reexports_it():
+def test_every_exported_name_resolves_and_r_api_is_gone():
     assert len(set(r.__all__)) == len(r.__all__)
     for name in r.__all__:
-        assert getattr(r, name) is getattr(survival.r_api, name), name
-    assert survival.r_api.__all__ == r.__all__
+        assert getattr(r, name) is not None, name
+    assert not hasattr(survival, "r_api")
+    with pytest.raises(ImportError):
+        importlib.import_module("survival.r_api")
 
 
 def test_inline_annotations_are_the_typed_surface():

@@ -34,8 +34,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_hazard_spline, m)?)?;
     m.add_function(wrap_pyfunction!(brier_py, m)?)?;
     m.add_function(wrap_pyfunction!(survobrien_py, m)?)?;
-    m.add_function(wrap_pyfunction!(nelson_aalen_py, m)?)?;
-    m.add_function(wrap_pyfunction!(logrank_test_py, m)?)?;
     m.add_function(wrap_pyfunction!(survmean_curves_py, m)?)?;
     m.add_function(wrap_pyfunction!(quantile_survfit_curves_py, m)?)?;
     m.add_function(wrap_pyfunction!(rmst_comparison_py, m)?)?;
@@ -133,8 +131,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         SurvDiffResult,
         SurvObrienExpansion,
         BrierResult,
-        NelsonAalenResult,
-        LogRankResult,
         SurvfitSummaryRow,
         SurvfitCurveQuantiles,
         RmstGroupResult,

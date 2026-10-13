@@ -179,18 +179,17 @@ exactly one module):
 - `datasets`, `data_prep` (0-based row indices everywhere), `core` (the typed
   inputs `SurvivalData`/`CountingProcessData`/`CovariateMatrix`/`Weights`,
   `concordancefit`, the spline bases and the Cox residual kernels)
-- `regression` (`coxph_fit` -> `CoxPHFit`, `survreg_fit` -> `SurvregFit`,
-  `cox_zph`, `coxph_detail`, `cch_fit`, ...), `surv_analysis` (`survfitkm`,
-  `survfitaj`, `survdiff`, summaries and pseudo values), `validation`,
-  `residuals` (`coxmart`/`agmart`; model residuals are methods of the fits)
-- `population` (`RateTable`, `match_ratetable`, `pyears`, `survexp`),
-  `pybridge` (`cox_callback`), `interval` (`turnbull`), `monitoring`, `ml`
+- `kernels`: every core kernel, including those named like an R function
+  (`coxph_fit`, `survreg_fit`, `survdiff`, `pyears`, `survexp`, `agmart`, ...)
+- `regression` (`CoxPHFit`, `SurvregFit`, `cch_fit`, ...), `surv_analysis`
+  (`survfitkm`, `survfitaj`, multi-state models), `validation`, `population`
+  (`RateTable`), `pybridge` (the R bridge's hooks), `interval` (`turnbull`),
+  `monitoring`, `ml`
 - `bayesian`, `causal`, `joint`, `interpretability`, `spatial`, and related domains
-- `r_api`: R-style formula façade for `Surv`, `survfit`, `survdiff`, `coxph`,
-  `clogit`, `survreg`, Cox `predict`, and residual dispatch. The implementation
-  lives in the `survival.r` package and `r_api` is a thin re-export of its
-  public surface (plus the private helpers the R bridge reaches through
-  `python_attr`), so `survival.r_api` stays the stable import path.
+- `r`: the R-style API (`Surv`, `survfit`, `survdiff`, `coxph`, `clogit`,
+  `survreg`, their generics and R's other exports); the package root re-exports
+  R's exported functions. The internals the R bridge calls are attributes of
+  `pybridge`.
 - `plotting`: optional Matplotlib rendering of fitted survival curves;
   `_plot_data` prepares typed NumPy curve coordinates without importing the renderer.
   `_cox_plot_data` prepares Cox diagnostic curves using the Rust smoother.
@@ -258,7 +257,7 @@ Preferred usage is module-oriented:
 from survival import datasets, regression, validation
 
 lung = datasets.load_lung()
-fit = regression.survreg_fit(...)
+fit = kernels.survreg_fit(...)
 rmst = validation.rmst(...)
 ```
 
@@ -283,10 +282,10 @@ familiar R-style entry points:
   `extractAIC`, `formula`, `terms`, `model.matrix`, `model.frame`, `summary`,
   `fitted`, `predict`, `residuals`, `weights`, and `anova` on bridged model objects
 - `as.data.frame` methods for bridged `Surv` responses and common result objects backed by
-  `survival.r_api.as_data_frame`
+  `survival.r.as_data_frame`
 - `summary` and `print` methods for common tabular result objects
 
-This bridge uses `reticulate` to call `survival.r_api` and should remain a thin
+This bridge uses `reticulate` to call `survival.r` and should remain a thin
 facade until native R/extendr bindings are introduced.
 
 ## Test layout

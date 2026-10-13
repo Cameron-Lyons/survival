@@ -12,7 +12,7 @@ from .helpers import setup_survival_import
 
 survival = setup_survival_import()
 core = survival._survival
-r = survival.r_api
+r = survival.r
 NA_REAL = np.array([0x7FF80000000007A2], dtype=np.uint64).view(np.float64)[0]
 FIXTURES = Path(__file__).parent / "fixtures"
 REFERENCE = json.loads((FIXTURES / "survreg_dpqr_reference.json").read_text())
