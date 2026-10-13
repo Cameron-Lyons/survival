@@ -241,7 +241,7 @@ class CchModel:
     fit: _core.CchFitResult
     formula: str
     design: _FormulaDesign
-    coef_names: tuple[str, ...]
+    coefficient_names: tuple[str, ...]
     y: Surv
     id: tuple[Any, ...]
     subcoh: tuple[int, ...]
@@ -250,6 +250,12 @@ class CchModel:
     subcohort_size: tuple[int, ...]
     sc_ids: tuple[Any, ...] | None
     stratum_names: tuple[str, ...] | None = None
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if "coef_names" in state:
+            state = {**state, "coefficient_names": state["coef_names"]}
+            del state["coef_names"]
+        self.__dict__.update(state)
 
     @property
     def coefficients(self) -> list[float]:

@@ -65,7 +65,7 @@ def strata_fit(ovarian):
 
 def test_coxph_matches_r_components(fit):
     assert isinstance(fit, r._coxph.CoxphModel)
-    assert fit.coef_names == ("age", "rx")
+    assert fit.coefficient_names == ("age", "rx")
     assert fit.assign == {"age": (0,), "rx": (1,)}
     assert fit.coefficients == approx([0.147326595469114, -0.803973012665114])
     assert fit.var == approx(
@@ -220,18 +220,18 @@ def test_coxph_strata_cluster_and_id(ovarian, cgd, strata_fit):
 
 def test_coxph_formula_terms(ovarian):
     factor = r.coxph("Surv(futime, fustat) ~ age + factor(rx)", ovarian)
-    assert factor.coef_names == ("age", "factor(rx)2")
+    assert factor.coefficient_names == ("age", "factor(rx)2")
     assert factor.assign == {"age": (0,), "factor(rx)": (1,)}
     assert factor.coefficients == approx([0.147326595469114, -0.803973012665114])
     interaction = r.coxph("Surv(futime, fustat) ~ age * rx", ovarian)
-    assert interaction.coef_names == ("age", "rx", "age:rx")
+    assert interaction.coefficient_names == ("age", "rx", "age:rx")
     assert interaction.coefficients == approx(
         [-0.0122019497753204, -9.50426487155975, 0.146448733767626]
     )
     log = r.coxph("Surv(futime, fustat) ~ log(age) + rx", ovarian)
     assert log.coefficients == approx([8.12981930807953, -0.905203236611623])
     null = r.coxph("Surv(futime, fustat) ~ 1", ovarian)
-    assert null.coef_names == ()
+    assert null.coefficient_names == ()
     assert null.loglik == approx([-34.9849403711626])
     assert (null.n, null.nevent) == (26, 12)
     assert null.score is None
@@ -256,7 +256,7 @@ def test_coxph_formula_terms(ovarian):
         r.coxph("Surv(time, status) ~ trt", mstate)
     multistate = r.coxph("Surv(time, status) ~ trt", mstate, id="id")
     assert isinstance(multistate, r.CoxphmsModel)
-    assert multistate.coef_names == ("trt_1:2", "trt_1:3")
+    assert multistate.coefficient_names == ("trt_1:2", "trt_1:3")
     assert multistate.coefficients == approx([-0.346573590279973, 0.0])
     assert multistate.loglik == approx([-4.969813299576, -4.94080100438703])
 
@@ -268,7 +268,7 @@ def test_coxph_time_transform(ovarian):
         tt=lambda x, t, riskset, weights: [xi * math.log(ti) for xi, ti in zip(x, t, strict=True)],
     )
     assert custom.tt
-    assert custom.coef_names == ("age", "tt(age)")
+    assert custom.coefficient_names == ("age", "tt(age)")
     assert custom.coefficients == approx([0.672048069354324, -0.0912792487479385])
     assert (custom.n, custom.nevent) == (26, 12)
     default = r.coxph("Surv(futime, fustat) ~ age + tt(age)", ovarian)

@@ -216,7 +216,7 @@ def test_pandas_factor_levels_survive_row_removal():
     assert curves.n == [12, 10]
     assert curves.strata_names == ["x=Nonmaintained", "x=Maintained"]
     fit = r.coxph("Surv(time, status) ~ x", frame, na_action="omit")
-    assert list(fit.coef_names) == ["xMaintained"]
+    assert list(fit.coefficient_names) == ["xMaintained"]
     assert fit.coefficients == pytest.approx([-0.876828103972665], rel=1e-9)
 
 

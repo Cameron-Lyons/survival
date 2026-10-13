@@ -929,7 +929,7 @@ def fit_multistate(
         formula=frame.formula,
         design=frame.design,
         terms=frame.terms,
-        coef_names=tuple(_coef_names(cmap, cmap_rows, labels, tmap.phbaseline)),
+        coefficient_names=tuple(_coef_names(cmap, cmap_rows, labels, tmap.phbaseline)),
         assign=dict(frame.assign),
         y=y,
         strata_levels=tuple(frame.strata_levels),
@@ -1171,7 +1171,7 @@ def residuals_coxphms(
         weighted_value = otype in {"dfbeta", "dfbetas"}
     engine = fit.fit
     rindex = fit.rmap[:, 0] - 1
-    colnames = list(fit.coef_names)
+    colnames = list(fit.coefficient_names)
 
     if otype in {"schoenfeld", "scaledsch"}:
         result = (
@@ -1247,7 +1247,7 @@ def _zph_assign(fit: CoxphmsModel) -> list[tuple[str, list[int]]]:
                 seen.add(coef)
                 groups.setdefault(f"{labels[row]}_{transition}", []).append(coef - 1)
     ph = sorted({int(coef) for coef in cmap[nx:].ravel() if coef > 0})
-    return [*groups.items(), *((fit.coef_names[coef - 1], [coef - 1]) for coef in ph)]
+    return [*groups.items(), *((fit.coefficient_names[coef - 1], [coef - 1]) for coef in ph)]
 
 
 def _stacked_strata_labels(codes: Sequence[int]) -> list[str]:

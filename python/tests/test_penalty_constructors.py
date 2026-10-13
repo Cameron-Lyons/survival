@@ -183,7 +183,7 @@ def test_complete_constructor_tt_fits_and_shared_formula_path_match_stock(case):
     fit = fit_case(case)
     expected = case["expected"]
     assert expected["error"] is None
-    assert list(fit.coef_names) == expected["coefficient_names"]
+    assert list(fit.coefficient_names) == expected["coefficient_names"]
     close(fit.coefficients, expected["coef"])
     close(fit.var, expected["variance"])
     close(fit.var2, expected["var2"])

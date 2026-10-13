@@ -213,7 +213,7 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
 @coef_names.register(CoxphModel | CchModel)
 def _coef_names_cox(fit: CoxphModel | CchModel, *, complete: Any | None = None) -> list[str]:
     include = _normalize_bool_option_with_default(complete, "complete", True)
-    names = list(fit.coef_names)
+    names = list(fit.coefficient_names)
     if include:
         return names
     return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]

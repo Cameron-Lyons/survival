@@ -428,3 +428,20 @@ def test_frailty_alone_keeps_both_logliks(kidney):
     assert fit.loglik == approx([-187.90276158886371, -178.9868644661964368])
     assert r.aic(fit) == approx(373.0773583671000893)
     assert r.extract_aic(fit) == approx([7.5518147173535981, 373.0773583671000893])
+
+
+def test_penalized_components_are_term_keyed_and_null_without_a_penalty(lung, lung_inst):
+    spline = _fit("pspline(age, df=3) + sex", lung)
+    assert set(spline.pterms) == {"pspline(age, df=3)", "sex"}
+    assert list(spline.pterms.values()) == [1, 0]
+    assert list(spline.assign2) == list(spline.pterms)
+    assert spline.assign2["sex"] == [10]
+    assert list(spline.history) == ["pspline(age, df=3)"]
+    assert {"pterms", "assign2", "history", "var2", "penalty"} <= set(dir(spline))
+    frail = _fit("age + frailty(inst)", lung_inst)
+    assert frail.pterms == {"age": 0, "frailty(inst)": 2}
+    assert list(frail.history) == ["frailty(inst)"]
+    plain = _fit("age + sex", lung)
+    for name in ("df", "var2", "frail", "fvar", "history", "penalty", "pterms", "assign2"):
+        assert getattr(plain, name) is None
+    assert plain.coefficient_names == ("age", "sex")

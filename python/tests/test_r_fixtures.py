@@ -1247,12 +1247,14 @@ class CoxphPenalizedHandler(TopicHandler):
             assert_exact(fit.iter, expected["iter"], path="iter")
         elif aspect == "var2":
             assert_matrix_close(fit.var2, expected[aspect], rtol=RTOL_VAR, path=aspect)
-        elif aspect in ("df", "frail", "fvar", "penalty", "pterms"):
+        elif aspect in ("df", "frail", "fvar", "penalty"):
             assert_close(getattr(fit, aspect), expected[aspect], rtol=RTOL_VAR, path=aspect)
+        elif aspect == "pterms":
+            assert_close(list(fit.pterms.values()), expected[aspect], rtol=RTOL_VAR, path=aspect)
         elif aspect == "history":
             entries = list(expected[aspect].values())
             assert_exact(len(fit.history), len(entries), path="history.length")
-            for actual, exp in zip(fit.history, entries, strict=True):
+            for actual, exp in zip(fit.history.values(), entries, strict=True):
                 assert_close([actual.theta], exp["theta"], rtol=RTOL_VAR, path="history.theta")
                 assert_exact(actual.done, exp["done"], path="history.done")
                 if exp.get("history") is not None:

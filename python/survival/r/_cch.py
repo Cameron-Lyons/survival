@@ -207,7 +207,7 @@ def cch(
         fit=fit,
         formula=formula,
         design=frame.design,
-        coef_names=tuple(frame.names),
+        coefficient_names=tuple(frame.names),
         y=y,
         id=tuple(id_values),
         subcoh=tuple(subcohort),
@@ -224,7 +224,7 @@ def summary_cch(fit: CchModel) -> dict[str, Any]:
 
     rows = []
     variance = fit.var
-    for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
+    for idx, (name, coef) in enumerate(zip(fit.coefficient_names, fit.coefficients, strict=True)):
         se = math.sqrt(variance[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
         cdf = _core.psurvreg([z], [0.0], [1.0], "gaussian")[0]
@@ -237,7 +237,7 @@ def summary_cch(fit: CchModel) -> dict[str, Any]:
         "subcohort_size": list(fit.subcohort_size),
         "stratified": fit.stratified,
         "stratum_names": list(fit.stratum_names) if fit.stratum_names is not None else None,
-        "coefficient_names": list(fit.coef_names),
+        "coefficient_names": list(fit.coefficient_names),
         "coefficient_columns": ["Value", "SE", "Z", "p"],
         "coefficients": rows,
     }
