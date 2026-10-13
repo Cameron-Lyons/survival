@@ -135,14 +135,31 @@ def _neardate_calendar_key(value: Any) -> int:
     return (value.toordinal() - _NEARDATE_EPOCH.toordinal()) * 86_400 * 10**18
 
 
-def _neardate_date_vectors(y1: Any, y2: Any) -> tuple[list[float], list[float]]:
+def _neardate_integer_ids(values: Any) -> np.ndarray | None:
+    """An integer id column as an int64 array, which has no missing values."""
+
+    if not isinstance(values, np.ndarray):
+        dtype = getattr(values, "dtype", None)
+        if not isinstance(dtype, np.dtype) or dtype.kind not in "iu":
+            return None
+        values = np.asarray(values)
+    if values.ndim != 1 or values.dtype.kind not in "iu" or np.ma.isMaskedArray(values):
+        return None
+    if values.dtype.kind == "u" and values.size and values.max() > np.iinfo(np.int64).max:
+        return None
+    return values.astype(np.int64, copy=False)
+
+
+def _neardate_date_vectors(
+    y1: Any, y2: Any
+) -> tuple[list[float] | np.ndarray, list[float] | np.ndarray]:
     """R ranks the union of sortable dates; numeric dates can use their values directly."""
 
     if _categories(y1) is not None or _categories(y2) is not None:
         raise ValueError("y1 and y2 must be sortable")
     array1, array2 = _numeric_ndarray(y1), _numeric_ndarray(y2)
     if array1 is not None and array2 is not None:
-        return array1.astype(float, copy=False).tolist(), array2.astype(float, copy=False).tolist()
+        return array1.astype(float, copy=False), array2.astype(float, copy=False)
 
     vectors = [
         [None if np.ma.is_masked(value) else value for value in values]
@@ -181,6 +198,40 @@ def _neardate_date_vectors(y1: Any, y2: Any) -> tuple[list[float], list[float]]:
     return result[0], result[1]
 
 
+def _check_nomatch(nomatch: Any, rows: int) -> None:
+    if (
+        isinstance(nomatch, int | np.integer)
+        and not isinstance(nomatch, bool)
+        and 0 <= nomatch < rows
+    ):
+        raise ValueError(
+            f"nomatch={nomatch} is a row of id2: rows are zero-based, so R's nomatch=0 "
+            "is ambiguous here; use None or -1"
+        )
+
+
+def _neardate_integers(
+    id1: np.ndarray, id2: np.ndarray, y1: Any, y2: Any, best: str, nomatch: int | None
+) -> list[int | None]:
+    """``neardate`` for integer ids, which cannot be missing: the arrays go to the
+    kernel without per-element label handling."""
+
+    y1_values, y2_values = _neardate_date_vectors(y1, y2)
+    if len(id1) != len(y1_values):
+        raise ValueError("id1 and y1 have different lengths")
+    if len(id2) != len(y2_values):
+        raise ValueError("id2 and y2 have different lengths")
+    _check_nomatch(nomatch, len(id2))
+    y2_array = np.asarray(y2_values, dtype=np.float64)
+    keep2 = ~np.isnan(y2_array)
+    if keep2.all():
+        matched = _core.neardate(id1, y1_values, id2, y2_array, best)
+        return matched if nomatch is None else [nomatch if m is None else m for m in matched]
+    rows2 = np.flatnonzero(keep2).tolist()
+    matched = _core.neardate(id1, y1_values, id2[keep2], y2_array[keep2], best)
+    return [nomatch if m is None else rows2[m] for m in matched]
+
+
 def neardate(
     id1: Any,
     id2: Any,
@@ -199,6 +250,9 @@ def neardate(
     """
 
     best_value = _match_string_arg(best, "best", ("after", "prior"), "best must be after or prior")
+    integer1, integer2 = _neardate_integer_ids(id1), _neardate_integer_ids(id2)
+    if integer1 is not None and integer2 is not None:
+        return _neardate_integers(integer1, integer2, y1, y2, best_value, nomatch)
     id1_values = _materialize_labels(id1, "id1")
     id2_values = _materialize_labels(id2, "id2")
     y1_values, y2_values = _neardate_date_vectors(y1, y2)
@@ -206,15 +260,7 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
-    if (
-        isinstance(nomatch, int | np.integer)
-        and not isinstance(nomatch, bool)
-        and 0 <= nomatch < len(id2_values)
-    ):
-        raise ValueError(
-            f"nomatch={nomatch} is a row of id2: rows are zero-based, so R's nomatch=0 "
-            "is ambiguous here; use None or -1"
-        )
+    _check_nomatch(nomatch, len(id2_values))
     missing1 = _missing_flags(id1_values)
     id1_labels = [
         "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
@@ -223,13 +269,14 @@ def neardate(
         "\x00NA" if missing else value
         for value, missing in zip(id2_values, _missing_flags(id2_values), strict=True)
     ]
-    keep2 = ~np.isnan(np.asarray(y2_values, dtype=np.float64))
+    y2_array = np.asarray(y2_values, dtype=np.float64)
+    keep2 = ~np.isnan(y2_array)
     complete = bool(keep2.all())
     matched = _core.neardate(
         id1_labels,
         y1_values,
         id2_labels if complete else list(compress(id2_labels, keep2.tolist())),
-        y2_values if complete else list(compress(y2_values, keep2.tolist())),
+        y2_array if complete else y2_array[keep2],
         best_value,
     )
     rows2 = None if complete else np.flatnonzero(keep2).tolist()

@@ -21,6 +21,11 @@ change with its replacement.
   (including `survexp_us()`) pickle and copy.
 - `coef`, `vcov`, `concat_surv` and `model_summary` have precise return types.
 
+### Performance
+
+- `neardate` with integer id arrays passes them to the kernel without per-element
+  conversion: 100,000 rows take 9 ms instead of 34 ms (R: 10 ms).
+
 ### Fixed
 
 - `neardate(nomatch=)` refuses a value that is also a zero-based row of `id2`
