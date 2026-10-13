@@ -498,13 +498,13 @@ def test_signif_rounds_halfway_cases_like_r():
 
 
 def _summary_row(summary: dict[str, Any], name: str) -> list[float]:
-    row = next(row for row in summary["coefficients"] if row["name"] == name)
-    return [row["coef"], row["se"], row["z"], row["p"]]
+    row = next(row for row in summary["table"] if row["name"] == name)
+    return [row["Value"], row["Std. Error"], row["z"], row["p"]]
 
 
 def test_summary(f_ps, f_strata, f_fixed, lung):
     summary = r.model_summary(f_ps)
-    assert summary["coefficient_names"] == [
+    assert [row["name"] for row in summary["table"]] == [
         "(Intercept)",
         *[f"ps(age){k}" for k in range(3, 13)],
         "sex",
@@ -530,13 +530,13 @@ def test_summary(f_ps, f_strata, f_fixed, lung):
     assert summary["chi_df"] == approx(2.49352777012269)
 
     summary = r.model_summary(f_fixed)
-    assert summary["coefficient_names"] == ["(Intercept)", "ridge(age)", "ridge(sex)"]
+    assert [row["name"] for row in summary["table"]] == ["(Intercept)", "ridge(age)", "ridge(sex)"]
     assert summary["chi_df"] == approx(1.97961128683534)
 
     robust = r.model_summary(r.survreg(S + "ridge(age, sex, theta = 1)", lung, robust=True))
-    row = robust["coefficients"][1]
+    row = robust["table"][1]
     assert row["name"] == "ridge(age)"
-    assert [row["coef"], row["se"], row["naive_se"], row["z"], row["p"]] == approx(
+    assert [row["Value"], row["Std. Err"], row["(Naive SE)"], row["z"], row["p"]] == approx(
         [
             -0.0122117247372104,
             0.00733358364618504,
@@ -555,47 +555,49 @@ def test_summary_chi_df_of_an_unpenalized_fit_is_an_integer(lung):
 
 def test_anova_refits_with_the_penalties(f_ps, f_ridge):
     table = r.anova(f_ps)
-    assert table.terms == ["NULL", "pspline(age, df = 3)", "sex"]
-    assert table.df == approx([NAN, 2.50673672260825, 1.04360471002443])
-    assert table.deviance == approx([NAN, 6.44467099754411, 9.66895005501328])
-    assert table.resid_df == approx([226, 223.493263277392, 222.449658567367])
-    assert table.loglik == approx([2307.70237617881, 2301.25770518127, 2291.58875512625])
-    assert table.p == approx([NAN, 0.0631136167765497, 0.00202937617340942])
+    assert table.row_names == ["NULL", "pspline(age, df = 3)", "sex"]
+    assert table["Df"] == approx([NAN, 2.50673672260825, 1.04360471002443])
+    assert table["Deviance"] == approx([NAN, 6.44467099754411, 9.66895005501328])
+    assert table["Resid. Df"] == approx([226, 223.493263277392, 222.449658567367])
+    assert table.neg2loglik == approx([2307.70237617881, 2301.25770518127, 2291.58875512625])
+    assert table["Pr(>Chi)"] == approx([NAN, 0.0631136167765497, 0.00202937617340942])
 
     table = r.anova(f_ridge)
-    assert table.df == approx([NAN, 1.98802260978292])
-    assert table.resid_df == approx([226, 224.011977390217])
-    assert table.loglik == approx([2307.70237617881, 2294.10904048832])
-    assert table.p == approx([NAN, 0.00110003907510154])
+    assert table["Df"] == approx([NAN, 1.98802260978292])
+    assert table["Resid. Df"] == approx([226, 224.011977390217])
+    assert table.neg2loglik == approx([2307.70237617881, 2294.10904048832])
+    assert table["Pr(>Chi)"] == approx([NAN, 0.00110003907510154])
 
 
 def test_anova_refits_drop_strata_and_reindex_the_penalties(f_strata, lung):
     table = r.anova(f_strata)
-    assert table.terms == ["NULL", "pspline(age, df = 3)", "strata(sex)"]
-    assert table.df == approx([NAN, 2.50673672260825, 0.98679104751443])
-    assert table.resid_df == approx([226, 223.493263277392, 222.506472229877])
-    assert table.loglik == approx([2307.70237617881, 2301.25770518127, 2298.91364432996])
-    assert table.p == approx([NAN, 0.0631136167765497, 0.123617122185947])
+    assert table.row_names == ["NULL", "pspline(age, df = 3)", "strata(sex)"]
+    assert table["Df"] == approx([NAN, 2.50673672260825, 0.98679104751443])
+    assert table["Resid. Df"] == approx([226, 223.493263277392, 222.506472229877])
+    assert table.neg2loglik == approx([2307.70237617881, 2301.25770518127, 2298.91364432996])
+    assert table["Pr(>Chi)"] == approx([NAN, 0.0631136167765497, 0.123617122185947])
 
     fit = r.survreg(S + "sex + pspline(age, df = 3) + ridge(agec2, w, theta = 1)", lung, scale=1)
     table = r.anova(fit)
     assert table.heading[2] == "Scale fixed at 1"
-    assert table.df == approx([NAN, 1, 2.59867774832577, 0.260198191649209])
-    assert table.resid_df == approx([227, 226, 223.401322251674, 223.141124060025])
-    assert table.loglik == approx(
+    assert table["Df"] == approx([NAN, 1, 2.59867774832577, 0.260198191649209])
+    assert table["Resid. Df"] == approx([227, 226, 223.401322251674, 223.141124060025])
+    assert table.neg2loglik == approx(
         [2324.67635157493, 2315.19911923822, 2310.02207362889, 2308.98276734856]
     )
-    assert table.p == approx([NAN, 0.00208037581710402, 0.121876528676235, 0.0741683048985101])
+    assert table["Pr(>Chi)"] == approx(
+        [NAN, 0.00208037581710402, 0.121876528676235, 0.0741683048985101]
+    )
 
 
 def test_anova_list(lung, f_ps):
     table = r.anova(r.survreg(S + "sex", lung), f_ps)
-    assert table.resid_df == approx([225, 222.449658567367])
-    assert table.loglik == approx([2297.30312936469, 2291.58875512625])
-    assert table.test_labels == ["", "+pspline(age, df = 3)"]
-    assert table.df == approx([NAN, 2.55034143263268])
-    assert table.deviance == approx([NAN, 5.71437423843645])
-    assert table.p == approx([NAN, 0.0918407374421038])
+    assert table["Resid. Df"] == approx([225, 222.449658567367])
+    assert table.neg2loglik == approx([2297.30312936469, 2291.58875512625])
+    assert table["Test"] == ["", "+pspline(age, df = 3)"]
+    assert table["Df"] == approx([NAN, 2.55034143263268])
+    assert table["Deviance"] == approx([NAN, 5.71437423843645])
+    assert table["Pr(>Chi)"] == approx([NAN, 0.0918407374421038])
 
 
 def test_loglik_uses_the_fractional_df(f_ps, lung):

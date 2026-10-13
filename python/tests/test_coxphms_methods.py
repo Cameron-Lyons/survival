@@ -650,7 +650,7 @@ def test_residuals_match_the_single_transition_fits(my_na, fna):
     mart = np.array(r.residuals(fna).values)
     assert mart[rows, 0] == pytest.approx(r.residuals(fit12), rel=1e-6, abs=1e-9)
     dfbeta = np.array(r.residuals(fna, type="dfbeta").values)
-    columns = [fna.coef_names.index(name) for name in ("trtB_1:2", "flt3B_1:2", "flt3C_1:2")]
+    columns = [fna.coefficient_names.index(name) for name in ("trtB_1:2", "flt3B_1:2", "flt3C_1:2")]
     assert dfbeta[np.ix_(rows, columns)] == pytest.approx(
         np.array(r.residuals(fit12, type="dfbeta")), rel=1e-6, abs=1e-9
     )
@@ -660,7 +660,7 @@ def test_schoenfeld_residuals(mg, fa1, fm, fst):
     sch = r.residuals(fa1, type="schoenfeld")
     assert isinstance(sch, r.CoxphmsSchoenfeldResiduals)
     assert len(sch.values) == 975
-    assert sch.colnames == list(fa1.coef_names)
+    assert sch.colnames == list(fa1.coefficient_names)
     assert sch.time[:5] == [2, 2, 4, 5, 6]
     assert sch.values[:3] == [
         approx([4.73159381623526, -0.533363894227398, 0, 0]),
@@ -916,7 +916,7 @@ def test_model_generics(mg, my_na, fa1, fna, fnax, fw):
     assert r.bic(fa1) == approx(12342.9766693448)
     assert r.extract_aic(fa1) == approx([4, 12323.4469194608])
     intervals = r.confint(fa1)
-    assert [entry["name"] for entry in intervals] == list(fa1.coef_names)
+    assert [entry["name"] for entry in intervals] == list(fa1.coefficient_names)
     assert [entry["lower"] for entry in intervals] == approx(
         [-4.30777306767074e-05, -0.396142588849633, 0.057345009502822, 0.26256465445591]
     )

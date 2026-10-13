@@ -85,7 +85,7 @@ def test_numeric_fits_and_public_methods_match_row_lists(
         )
     assert actual_warnings == reference_warnings
     assert pickle.dumps(actual.fit) == pickle.dumps(reference.fit)
-    assert actual.coef_names == reference.coef_names
+    assert actual.coefficient_names == reference.coefficient_names
     assert actual.assign == reference.assign
     assert actual.strata_levels == reference.strata_levels
     assert actual.na_action == reference.na_action

@@ -444,7 +444,7 @@ def test_an_rmap_expression_that_cannot_be_read_is_an_error():
 )
 def test_coxph_transforms_of_expressions_match_r(rhs, names, coefficients, n):
     fit = r.coxph(f"Surv(time, status) ~ {rhs}", datasets.load_lung())
-    assert list(fit.coef_names) == names
+    assert list(fit.coefficient_names) == names
     assert fit.coefficients == approx(coefficients, rel=1e-9)
     assert fit.n == n
 
@@ -470,7 +470,7 @@ def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
         ("I(sex == TRUE)", ["I(sex == TRUE)TRUE"], [0.53102353761950649]),
     ]:
         fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
-        assert list(fit.coef_names) == names
+        assert list(fit.coefficient_names) == names
         assert fit.coefficients == approx(coefficients, rel=1e-9)
     curves = r.survfit("Surv(time, status) ~ I(f == 2)", data)
     assert list(curves.strata) == ["I(f == 2)=FALSE", "I(f == 2)=TRUE"]
@@ -513,7 +513,7 @@ def test_as_numeric_of_a_factor_inside_an_expression_is_its_codes():
         ("I(as.numeric(e) == 2)", ["I(as.numeric(e) == 2)TRUE"], -0.037615768663394278, 227),
     ]:
         fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
-        assert list(fit.coef_names) == names
+        assert list(fit.coefficient_names) == names
         assert fit.coefficients == approx([coefficient], rel=1e-9)
         assert fit.n == n
 
@@ -536,7 +536,7 @@ def test_logical_terms_in_the_other_formula_functions():
     assert table.pyears == [30530, 39063]
     labelled = {**lung, "fac": ["m" if sex == 1 else "f" for sex in lung["sex"]]}
     fit = r.coxph('Surv(time, status) ~ I(fac == "m") + age', labelled)
-    assert list(fit.coef_names) == ['I(fac == "m")TRUE', "age"]
+    assert list(fit.coefficient_names) == ['I(fac == "m")TRUE', "age"]
     assert fit.coefficients == approx([0.51321851710838429, 0.017045331845411283], rel=1e-9)
     fit = r.coxph("Surv(time, status) ~ I(sex == 2) + log(age + 1)", lung)
     assert r.predict(fit, newdata={"sex": [1, 2], "age": [50, 70]}) == approx(

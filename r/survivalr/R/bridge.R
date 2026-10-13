@@ -650,55 +650,23 @@ attrassign <- function(object, tt) {
     as.numeric(value)[[1L]]
   }
   row_values <- function(row) {
-    coefficient <- row_numeric(row, "coef")
-    if (is_survreg) {
-      statistic <- row_numeric(row, "z")
-      values <- c(
-        coefficient,
-        if (robust) {
-          row_numeric(row, "robust_se", fallback_name = "se")
-        } else {
-          row_numeric(row, "se")
-        }
-      )
-      if (robust) {
-        values <- c(values, row_numeric(row, "naive_se", fallback_name = "se"))
-      }
-      result <- c(values, statistic, row_numeric(row, "p"))
-      if (is.na(coefficient)) {
+    if (is_survreg || penalized) {
+      result <- vapply(columns, function(column) row_numeric(row, column), numeric(1))
+      if (is_survreg && is.na(result[[1L]])) {
         result[is.na(result)] <- NA_real_
       }
-      return(result)
+      return(unname(result))
     }
 
-    if (penalized) {
-      return(c(
-        coefficient,
-        row_numeric(row, "se"),
-        row_numeric(row, "se2"),
-        row_numeric(row, "chisq"),
-        row_numeric(row, "df"),
-        row_numeric(row, "p")
-      ))
-    }
-
-    coefficient <- coefficient * cox_scale
-    active_se <- row_numeric(
-      row,
-      if (robust) "robust_se" else "se",
-      fallback_name = "se"
-    ) * cox_scale
+    coefficient <- row_numeric(row, "coef") * cox_scale
+    active_se <- row_numeric(row, if (robust) "robust se" else "se(coef)") * cox_scale
     statistic <- coefficient / active_se
     values <- c(
       coefficient,
       exp(coefficient)
     )
     if (robust) {
-      values <- c(
-        values,
-        row_numeric(row, "naive_se", fallback_name = "se"),
-        active_se
-      )
+      values <- c(values, row_numeric(row, "se(coef)"), active_se)
     } else {
       values <- c(values, active_se)
     }
@@ -743,7 +711,15 @@ attrassign <- function(object, tt) {
   values
 }
 
+.as_model_summary_list <- function(result) {
+  if (inherits(result, "python.builtin.object") && reticulate::py_has_attr(result, "keys")) {
+    return(reticulate::py_to_r(reticulate::import_builtins()$dict(result)))
+  }
+  result
+}
+
 .as_coxph_penal_summary <- function(result, conf.int) {
+  result <- .as_model_summary_list(result)
   coefficients <- .as_coefficient_table(result$coefficients, penalized = TRUE)
   coefficients[is.nan(coefficients)] <- NA_real_
   out <- list(
@@ -751,7 +727,7 @@ attrassign <- function(object, tt) {
     na.action = result$na_action,
     n = as.integer(result$n),
     nevent = as.numeric(result$nevent),
-    loglik = c(as.numeric(result$null_loglik), as.numeric(result$loglik)),
+    loglik = .as_numeric_vector(result$loglik),
     iter = as.integer(.as_numeric_vector(result$iter)),
     df = .as_numeric_vector(result$df),
     coefficients = coefficients,
@@ -761,7 +737,7 @@ attrassign <- function(object, tt) {
   if (length(rows) > 0L) {
     out$conf.int <- matrix(
       unlist(lapply(rows, function(row) {
-        as.numeric(c(row[["exp(coef)"]], row[["exp(-coef)"]], row$lower, row$upper))
+        as.numeric(unlist(row[setdiff(names(row), "name")], use.names = FALSE))
       }), use.names = FALSE),
       ncol = 4L,
       byrow = TRUE,
@@ -9124,7 +9100,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
     ))
   }
   result <- .call_r_api("model_summary", object)
-  if (inherits(result, "python.builtin.object") && !reticulate::py_has_attr(result, "model_type")) {
+  if (inherits(result, "python.builtin.object") && !reticulate::py_has_attr(result, "keys")) {
     fields <- list(
       loglik = .as_numeric_vector(.result_field(object, "loglik")),
       n = as.integer(.result_field(object, "n")),
@@ -9134,11 +9110,13 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
     class(fields) <- c("summary.survival_py_model", "list")
     return(fields)
   }
-  model_type <- as.character(result$model_type)[[1L]]
+  result <- .as_model_summary_list(result)
+  model_type <- if (inherits(object, "survival_py_survreg")) "survreg" else "coxph"
+  result$model_type <- model_type
   robust_key <- if (identical(model_type, "survreg")) "robust" else "used_robust"
   robust <- isTRUE(as.logical(result[[robust_key]]))
   coefficient_table <- .as_coefficient_table(
-    result$coefficients,
+    if (identical(model_type, "survreg")) result$table else result$coefficients,
     model_type = model_type,
     robust = robust,
     scale = scale
@@ -9148,8 +9126,8 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
       warning("This model has zero rank --- no summary is provided", call. = FALSE)
       return(invisible(object))
     }
-    location_coefficients <- result$location_coefficients
-    location_names <- result$location_coefficient_names
+    location_coefficients <- result$coefficients
+    location_names <- names(location_coefficients)
     if (is.null(location_coefficients) || is.null(location_names)) {
       location_coefficients <- coef(object)
       location_names <- names(location_coefficients)
@@ -9163,11 +9141,7 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
     result$coefficients <- location_coefficients
     result$table <- coefficient_table
 
-    scales <- result$scales
-    if (is.null(scales)) {
-      scales <- result$scale
-    }
-    scales <- .as_numeric_vector(scales)
+    scales <- .as_numeric_vector(result$scale)
     if (length(scales) > 1L) {
       scale_rows <- seq.int(length(location_coefficients) + 1L, nrow(coefficient_table))
       if (length(scale_rows) != length(scales)) {
@@ -9188,12 +9162,13 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
       result$used.robust <- robust
       result$conf.int <- if (conf.int) .as_cox_confint_table(coefficient_table, conf.int)
 
-      null_loglik <- as.numeric(result$null_loglik)[[1L]]
-      full_loglik <- as.numeric(result$loglik)[[1L]]
+      loglik <- .as_numeric_vector(result$loglik)
+      null_loglik <- loglik[[1L]]
+      full_loglik <- loglik[[2L]]
       result$loglik <- c(null_loglik, full_loglik)
       result$nevent <- as.numeric(result$nevent)[[1L]]
 
-      df <- as.numeric(result$df)[[1L]]
+      df <- as.numeric(result$logtest$df)[[1L]]
       likelihood_test <- -2 * (null_loglik - full_loglik)
       result$logtest <- .cox_summary_test(likelihood_test, df)
       result$sctest <- .cox_summary_test(result$sctest$test, df)
@@ -10205,6 +10180,9 @@ as.data.frame.survival_py_coxph_detail <- function(x, row.names = NULL, optional
 }
 
 as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALSE, ...) {
+  if (is.null(row.names)) {
+    row.names <- as.character(unlist(.result_field(x, "row_names"), use.names = FALSE))
+  }
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
 

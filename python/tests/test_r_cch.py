@@ -48,7 +48,7 @@ def test_prentice_matches_r(ccoh_data):
         cohort_size=4028,
     )
     assert isinstance(fit, r.CchModel)
-    assert fit.coef_names == ("stageII", "stageIII", "stageIV", "histolUH", "age")
+    assert fit.coefficient_names == ("stageII", "stageIII", "stageIV", "histolUH", "age")
     assert fit.coefficients == approx(
         [
             0.734570842045653,
@@ -77,12 +77,11 @@ def test_prentice_matches_r(ccoh_data):
     assert len(fit.id) == 1154
     assert sum(fit.subcoh) == 668
     assert r.coef(fit) == fit.coefficients
-    assert r.coef_names(fit) == list(fit.coef_names)
+    assert r.coef_names(fit) == list(fit.coefficient_names)
     assert r.vcov(fit) == fit.var
     summary = r.model_summary(fit)
-    assert summary["coefficient_columns"] == ["Value", "SE", "Z", "p"]
     row = summary["coefficients"][0]
-    assert [row[k] for k in ("coef", "se", "z", "p")] == approx(
+    assert [row[k] for k in ("Value", "SE", "Z", "p")] == approx(
         [0.734570842045653, 0.168496197244282, 4.35956926066816, 1.30318703686072e-05], rel=1e-6
     )
     assert summary["coefficients"][3]["p"] == 0.0

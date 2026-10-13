@@ -1995,10 +1995,10 @@ def test_a_frailty_column_name_is_not_a_frailty_term(lung):
 def test_anova(lung):
     fit = _survreg("Surv(time, status) ~ pspline(age, df = 3) + sex", lung)
     table = r.anova(_survreg("Surv(time, status) ~ sex", lung), fit)
-    assert table.df == approx([NAN, 2.55034143263268])
-    assert table.resid_df == approx([225.0, 222.449658567367])
-    assert table.deviance == approx([NAN, 5.71437423843645])
-    assert table.p == approx([NAN, 0.0918407374421038])
+    assert table["Df"] == approx([NAN, 2.55034143263268])
+    assert table["Resid. Df"] == approx([225.0, 222.449658567367])
+    assert table["Deviance"] == approx([NAN, 5.71437423843645])
+    assert table["Pr(>Chi)"] == approx([NAN, 0.0918407374421038])
 
 
 @pytest.mark.parametrize(

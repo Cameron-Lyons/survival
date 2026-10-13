@@ -148,7 +148,7 @@ def test_legacy_expanded_matrix_labels_restore_without_transform_callbacks(case,
 def test_transformed_fit_and_expanded_methods_match_r(case):
     fit = fit_case(case)
     assert fit.tt
-    assert list(fit.coef_names) == case["names"]
+    assert list(fit.coefficient_names) == case["names"]
     assert fit.assign == {name: tuple(cols) for name, cols in case["assign"].items()}
     assert (fit.n, fit.nevent) == (case["n"], case["nevent"])
     close(fit.coefficients, case["coefficients"])
@@ -174,7 +174,7 @@ def test_transformed_models_retain_shapes_after_pickle_and_init(name):
     case = next(c for c in REFERENCE["cases"] if c["name"] == name)
     fit = fit_case(case)
     restored = pickle.loads(pickle.dumps(fit))
-    assert restored.coef_names == fit.coef_names
+    assert restored.coefficient_names == fit.coefficient_names
     close(r.model_matrix(restored), fit.x)
     close(r.coxph_detail(restored).score, r.coxph_detail(fit).score)
     close(
@@ -207,7 +207,7 @@ def test_matrix_return_layouts_keep_columns(layout):
     fit = r.coxph(
         case["formula"], data_for(case), tt=callback, robust=False, eps=1e-10, iter_max=50
     )
-    assert list(fit.coef_names) == case["names"]
+    assert list(fit.coefficient_names) == case["names"]
     close(fit.coefficients, case["coefficients"])
     close(fit.x, case["x"])
 

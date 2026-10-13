@@ -104,6 +104,7 @@ from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
+    AnovaResult,
     BasehazResult,
     CoxPenaltyBasis,
     CoxphDetailResult,
@@ -114,6 +115,8 @@ from ._types import (
     NaAction,
     PredictResult,
     PsplineResult,
+    SummaryCoxphPenalResult,
+    SummaryCoxphResult,
     TermsPrediction,
     _CategoricalDesignTerm,
     _CovariateTerm,
@@ -141,7 +144,7 @@ class CoxphModel:
 
     The numeric components (``coefficients``, ``var``, ``loglik``, ``residuals``,
     ...) are read through from :class:`survival._survival.CoxPHFit`; ``formula``,
-    ``design``, ``assign``, ``coef_names``, ``y``, ``strata_levels`` and ``id`` are
+    ``design``, ``assign``, ``coefficient_names``, ``y``, ``strata_levels`` and ``id`` are
     what ``predict``/``survfit``/``residuals`` need to rebuild the model frame, and
     ``na_action`` (``fit$na.action``) the rows the ``na.action`` removed.
     """
@@ -150,7 +153,7 @@ class CoxphModel:
     formula: str
     design: _FormulaDesign = field(repr=False)
     terms: _FormulaTerms = field(repr=False)
-    coef_names: tuple[str, ...]
+    coefficient_names: tuple[str, ...]
     assign: dict[str, tuple[int, ...]] = field(repr=False)
     y: Surv = field(repr=False)
     strata_levels: tuple[str, ...]
@@ -172,29 +175,71 @@ class CoxphModel:
     _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
     _matrix_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
-    def __getattr__(self, name: str) -> Any:
-        if name == "history" and self.penalized is not None:
-            terms = [
-                term
-                for _, term in _model_terms(self)
-                if isinstance(term, _PenaltyDesignTerm) and term.penalized
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if "coef_names" in state:
+            state = {**state, "coefficient_names": state["coef_names"]}
+            del state["coef_names"]
+        self.__dict__.update(state)
+
+    @property
+    def df(self) -> list[float] | None:
+        """``fit$df`` of a penalized fit: the degrees of freedom of every term."""
+        return None if self.penalized is None else list(self.penalized.df)
+
+    @property
+    def var2(self) -> list[list[float]] | None:
+        """``fit$var2`` of a penalized fit: the sandwich ``H^-1 I H^-1``."""
+        return None if self.penalized is None else self.penalized.var2
+
+    @property
+    def frail(self) -> list[float] | None:
+        """``fit$frail``: the coefficients of a sparse frailty term."""
+        return None if self.penalized is None else self.penalized.frail
+
+    @property
+    def fvar(self) -> list[float] | None:
+        """``fit$fvar``: the variances of the sparse frailty coefficients."""
+        return None if self.penalized is None else self.penalized.fvar
+
+    @property
+    def penalty(self) -> list[float] | None:
+        """``fit$penalty`` of a penalized fit: ``c(0, P)``."""
+        return None if self.penalized is None else list(self.penalized.penalty)
+
+    @property
+    def pterms(self) -> dict[str, int] | None:
+        """``fit$pterms``: 0 for an ordinary term, 1 for a penalized one, 2 for a sparse
+        frailty, by term."""
+        if self.penalized is None:
+            return None
+        return dict(zip(_term_labels(self), self.penalized.pterms, strict=True))
+
+    @property
+    def assign2(self) -> dict[str, list[int]] | None:
+        """``fit$assign2``: the 0-based coefficients of every term."""
+        if self.penalized is None:
+            return None
+        return dict(zip(_term_labels(self), self.penalized.assign2, strict=True))
+
+    @property
+    def history(self) -> dict[str, Any] | None:
+        """``fit$history``: the ``PenaltyHistory`` of every penalized term, by term."""
+        if self.penalized is None:
+            return None
+        pterms = self.penalized.pterms
+        labels = [label for label, kind in zip(_term_labels(self), pterms, strict=True) if kind]
+        histories = list(self.penalized.history)
+        terms = [
+            term
+            for _, term in _model_terms(self)
+            if isinstance(term, _PenaltyDesignTerm) and term.penalized
+        ]
+        if any(term.controller_history is not None for term in terms):
+            histories = [
+                term.controller_history() if term.controller_history is not None else history
+                for term, history in zip(terms, histories, strict=True)
             ]
-            if any(term.controller_history is not None for term in terms):
-                return [
-                    term.controller_history() if term.controller_history is not None else history
-                    for term, history in zip(terms, self.penalized.history, strict=True)
-                ]
-        if self.penalized is not None and name in {
-            "df",
-            "var2",
-            "frail",
-            "fvar",
-            "history",
-            "penalty",
-            "pterms",
-        }:
-            return getattr(self.penalized, name)
-        raise AttributeError(name)
+        return dict(zip(labels, histories, strict=True))
 
     @property
     def coefficients(self) -> list[float]:
@@ -232,11 +277,11 @@ class CoxphModel:
         a penalized fit without coefficients, a frailty alone, keeps both)."""
 
         values = list(self.fit.loglik)
-        return values if self.coef_names or self.penalized is not None else values[:1]
+        return values if self.coefficient_names or self.penalized is not None else values[:1]
 
     @property
     def score(self) -> float | None:
-        return float(self.fit.score) if self.coef_names else None
+        return float(self.fit.score) if self.coefficient_names else None
 
     @property
     def rscore(self) -> float | None:
@@ -244,7 +289,7 @@ class CoxphModel:
 
     @property
     def wald_test(self) -> float | None:
-        if not self.coef_names:
+        if not self.coefficient_names:
             return None
         return float(self.fit.wald_test)
 
@@ -252,7 +297,7 @@ class CoxphModel:
     def iter(self) -> int | list[int] | None:
         if self.penalized is not None:
             return list(self.penalized.iter)
-        if not self.coef_names:
+        if not self.coefficient_names:
             return None
         return int(self.fit.iter)
 
@@ -278,7 +323,7 @@ class CoxphModel:
 
     @property
     def nvar(self) -> int:
-        return len(self.coef_names)
+        return len(self.coefficient_names)
 
     @property
     def x(self) -> list[list[float]]:
@@ -316,7 +361,7 @@ class CoxphModel:
 
     def summary(
         self, conf_int: float = 0.95, scale: float = 1.0, terms: bool = False
-    ) -> dict[str, Any]:
+    ) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel:
         return summary_coxph(self, conf_int=conf_int, scale=scale, terms=terms)
 
 
@@ -982,7 +1027,7 @@ def _coxph_fit_frame(
         formula=frame.formula,
         design=design,
         terms=frame.terms,
-        coef_names=tuple(names),
+        coefficient_names=tuple(names),
         assign=dict(assign),
         y=data.y,
         strata_levels=tuple(str(i + 1) for i in range(max(data.strata or [-1]) + 1))
@@ -1350,30 +1395,31 @@ def clogit(
 
 def _coefficient_table(
     fit: CoxphModel, scale: float
-) -> tuple[list[str], list[dict[str, float | str]]]:
+) -> tuple[list[str], list[dict[str, float | str]], list[float]]:
+    """summary.coxph's coefficient rows under R's column names, and the standard errors
+    the tests use (the robust ones of a robust fit).  As in R, ``se(coef)`` of a robust
+    fit is the unscaled naive standard error."""
+
     beta = [value * scale for value in fit.coefficients]
     var = fit.var
     naive = fit.naive_var
     se = [_r_sqrt(var[idx][idx]) * scale for idx in range(len(beta))]
     rows: list[dict[str, float | str]] = []
-    for idx, (name, value) in enumerate(zip(fit.coef_names, beta, strict=True)):
+    for idx, (name, value) in enumerate(zip(fit.coefficient_names, beta, strict=True)):
         z = value / se[idx] if se[idx] > 0.0 else math.nan
-        row: dict[str, float | str] = {
-            "name": name,
-            "coef": value,
-            "exp_coef": _r_exp(value),
-            "se": se[idx],
-            "z": z,
-            "p": _core.pchisq(z * z, 1.0, lower_tail=False),
-        }
-        if naive is not None:
-            row["naive_se"] = _r_sqrt(naive[idx][idx])
-            row["robust_se"] = se[idx]
+        row: dict[str, float | str] = {"name": name, "coef": value, "exp(coef)": _r_exp(value)}
+        if naive is None:
+            row["se(coef)"] = se[idx]
+        else:
+            row["se(coef)"] = _r_sqrt(naive[idx][idx])
+            row["robust se"] = se[idx]
+        row["z"] = z
+        row["Pr(>|z|)"] = _core.pchisq(z * z, 1.0, lower_tail=False)
         rows.append(row)
     columns = ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
     if naive is not None:
         columns.insert(3, "robust se")
-    return columns, rows
+    return columns, rows, se
 
 
 def _conf_int_rows(
@@ -1384,13 +1430,14 @@ def _conf_int_rows(
 
     level = _normalize_conf_level(conf_int, "conf_int")
     z = NormalDist().inv_cdf((1.0 + level) / 2.0)
+    suffix = _r_format_number(round(100 * level, 2), 15)
     return [
         {
             "name": name,
             "exp(coef)": _r_exp(b),
             "exp(-coef)": _r_exp(-b),
-            "lower": _r_exp(b - z * error),
-            "upper": _r_exp(b + z * error),
+            f"lower .{suffix}": _r_exp(b - z * error),
+            f"upper .{suffix}": _r_exp(b + z * error),
         }
         for name, b, error in zip(names, beta, se, strict=True)
     ]
@@ -1398,10 +1445,10 @@ def _conf_int_rows(
 
 def summary_coxph(
     fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
-) -> Any:
-    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
-    model, as R returns the object unchanged); a penalized fit dispatches to
-    :func:`summary_coxph_penal`, the only method that reads ``terms``."""
+) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel:
+    """R's ``summary.coxph`` (the fit itself for a null model, as R returns the object
+    unchanged); a penalized fit dispatches to :func:`summary_coxph_penal`, the only
+    method that reads ``terms``."""
 
     if fit.penalized is not None:
         return summary_coxph_penal(fit, conf_int=conf_int, scale=scale, terms=terms)
@@ -1413,65 +1460,62 @@ def summary_coxph(
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
-    columns, rows = _coefficient_table(fit, scale_value)
-    result: dict[str, Any] = {
-        "model_type": "coxph",
-        "n": fit.n,
-        "nevent": fit.nevent,
-        "na_action": fit.na_action,
-        "loglik": loglik[1],
-        "null_loglik": loglik[0],
-        "df": df,
-        "coefficient_names": list(fit.coef_names),
-        "coefficient_columns": columns,
-        "coefficients": rows,
-        "logtest": {
+    columns, rows, se = _coefficient_table(fit, scale_value)
+    from ._coxphms import CoxphmsModel
+
+    wald = fit.wald_test
+    return SummaryCoxphResult(
+        n=fit.n,
+        nevent=fit.nevent,
+        na_action=fit.na_action,
+        loglik=list(loglik),
+        coefficients=rows,
+        conf_int=_conf_int_rows(
+            fit.coefficient_names, [value * scale_value for value in beta], se, conf_int
+        )
+        if conf_int
+        else None,
+        logtest={
             "test": logtest,
             "df": df,
             "pvalue": _core.pchisq(logtest, df, lower_tail=False),
         },
-        "sctest": {"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
-        "rsq": {
+        sctest={"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
+        rsq={
             "rsq": 1.0 - math.exp(-logtest / fit.n),
             "maxrsq": 1.0 - math.exp(2.0 * loglik[0] / fit.n),
         },
-        "used_robust": fit.robust,
-        "method": fit.method,
-        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
-    }
-    if conf_int:
-        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
-        result["conf_int"] = _conf_int_rows(
-            fit.coef_names,
-            [value * scale_value for value in beta],
-            [float(row["se"]) for row in rows],
-            conf_int,
-        )
-    from ._coxphms import CoxphmsModel
-
-    if isinstance(fit, CoxphmsModel):
-        result["cmap"] = fit.cmap
-        result["states"] = list(fit.states)
-    wald = fit.wald_test
-    if wald is not None:
-        result["waldtest"] = {
-            "test": round(wald, 2),
-            "df": df,
-            "pvalue": _core.pchisq(wald, df, lower_tail=False),
-        }
-    if fit.rscore is not None:
-        result["robscore"] = {
+        waldtest=None
+        if wald is None
+        else {"test": round(wald, 2), "df": df, "pvalue": _core.pchisq(wald, df, lower_tail=False)},
+        robscore=None
+        if fit.rscore is None
+        else {
             "test": fit.rscore,
             "df": df,
             "pvalue": _core.pchisq(fit.rscore, df, lower_tail=False),
-        }
-    return result
+        },
+        used_robust=fit.robust,
+        concordance={"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+        columns=columns,
+        method=fit.method,
+        cmap=fit.cmap if isinstance(fit, CoxphmsModel) else None,
+        states=list(fit.states) if isinstance(fit, CoxphmsModel) else None,
+    )
 
 
 def _penal_row(
     name: str, coef: float, se: float, se2: float, chisq: float, df: float, p: float
 ) -> dict[str, Any]:
-    return {"name": name, "coef": coef, "se": se, "se2": se2, "chisq": chisq, "df": df, "p": p}
+    return {
+        "name": name,
+        "coef": coef,
+        "se(coef)": se,
+        "se2": se2,
+        "Chisq": chisq,
+        "DF": df,
+        "p": p,
+    }
 
 
 def _wald_row(name: str, coef: float, var: float, var2: float) -> dict[str, Any]:
@@ -1594,8 +1638,8 @@ def summary_coxph_penal(
     terms: Any = False,
     *,
     _print_digits: int = 7,
-) -> dict[str, Any]:
-    """R's ``summary.coxph.penal`` as a dict keyed like the R list.
+) -> SummaryCoxphPenalResult:
+    """R's ``summary.coxph.penal``.
 
     ``coefficients`` has one row per term with columns ``coef``, ``se(coef)``,
     ``se2`` (from the sandwich variance ``var2``), ``Chisq``, ``DF`` and ``p``: a
@@ -1613,7 +1657,7 @@ def summary_coxph_penal(
     beta = fit.coefficients
     if not beta and penalized.frail is None:
         raise ValueError("Penalized summary function can't be used for a null model")
-    var, var2 = fit.var, fit.var2
+    var, var2 = fit.var, penalized.var2
     histories = {history.term: history for history in penalized.history}
     rows: list[dict[str, Any]] = []
     print2: list[str] = []
@@ -1678,39 +1722,37 @@ def summary_coxph_penal(
             rows.append(_penal_row(label, math.nan, math.nan, math.nan, test, df, p))
         else:
             rows.extend(
-                _wald_row(fit.coef_names[col], beta[col], var[col][col], var2[col][col])
+                _wald_row(fit.coefficient_names[col], beta[col], var[col][col], var2[col][col])
                 for col in columns
             )
     logtest = -2.0 * (fit.loglik[0] - fit.loglik[1])
     df_total = _coxph_df(fit)
-    result: dict[str, Any] = {
-        "model_type": "coxph.penal",
-        "n": fit.n,
-        "nevent": fit.nevent,
-        "na_action": fit.na_action,
-        "loglik": fit.loglik[1],
-        "null_loglik": fit.loglik[0],
-        "iter": fit.iter,
-        "df": list(penalized.df),
-        "coefficient_columns": ["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
-        "coefficients": rows,
-        "print2": print2,
-        "logtest": {
-            "test": logtest,
-            "df": df_total,
-            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
-        },
-        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
-    }
-    if conf_int and beta:
-        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
-        result["conf_int"] = _conf_int_rows(
-            fit.coef_names,
+    return SummaryCoxphPenalResult(
+        n=fit.n,
+        nevent=fit.nevent,
+        na_action=fit.na_action,
+        loglik=list(fit.loglik),
+        iter=list(penalized.iter),
+        df=list(penalized.df),
+        coefficients=rows,
+        conf_int=_conf_int_rows(
+            fit.coefficient_names,
             [value * scale_value for value in beta],
             [_r_sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
             conf_int,
         )
-    return result
+        if conf_int and beta
+        else None,
+        print2=print2,
+        logtest={
+            "test": logtest,
+            "df": df_total,
+            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
+        },
+        concordance={"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+        columns=["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
+        method=fit.method,
+    )
 
 
 def _wtest_b(b: Any) -> tuple[list[list[float | None]], bool]:
@@ -2263,7 +2305,7 @@ def _schoenfeld_result(fit: CoxphModel, residuals: Any) -> CoxSchoenfeldResidual
         values=_drop_single_column(residuals.residuals, fit.nvar),
         time=residuals.time,
         strata=strata,
-        colnames=list(fit.coef_names),
+        colnames=list(fit.coefficient_names),
     )
 
 
@@ -2311,7 +2353,11 @@ def residuals_coxph(
     weighted_value = _normalize_optional_bool_option(weighted, "weighted")
     if weighted_value is None:
         weighted_value = otype in {"dfbeta", "dfbetas"}
-    if not fit.coef_names and fit.penalized is None and otype not in {"martingale", "deviance"}:
+    if (
+        not fit.coefficient_names
+        and fit.penalized is None
+        and otype not in {"martingale", "deviance"}
+    ):
         raise ValueError(f"'{otype}' residuals are not defined for a null model")
     if fit.method == "exact" and otype in {"score", "schoenfeld", "scaledsch", "dfbeta", "dfbetas"}:
         raise ValueError(f"{otype} residuals are not available for the exact method")
@@ -2762,7 +2808,7 @@ def cox_zph(
     if not isinstance(fit, CoxphModel):
         raise TypeError("argument must be the result of a coxph fit")
     multistate = isinstance(fit, CoxphmsModel)
-    if not fit.coef_names:
+    if not fit.coefficient_names:
         raise ValueError("there are no score residuals for a Null model")
     if fit.tt:
         raise ValueError("function not defined for models with tt() terms")
@@ -2782,7 +2828,7 @@ def cox_zph(
     use_terms = _normalize_bool_option(terms, "terms")
     groups: list[tuple[str, Sequence[int]]]
     if not use_terms:
-        groups = [(name, [col]) for col, name in enumerate(fit.coef_names)]
+        groups = [(name, [col]) for col, name in enumerate(fit.coefficient_names)]
     elif isinstance(fit, CoxphmsModel):
         groups = list(_zph_assign(fit))
     else:
@@ -2911,12 +2957,22 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxphD
     )
 
 
-def _anova_test_name(test: Any) -> str | None:
-    if test is None or test is False:
-        return None
-    if isinstance(test, str) and test.strip().lower() in {"chisq", "chi"}:
-        return "Chisq"
-    raise ValueError("test must be 'Chisq' or None")
+def _cox_anova_result(native: Any, row_names: list[str], heading: list[str]) -> AnovaResult:
+    rows = list(native.rows)
+    columns: dict[str, list[Any]] = {
+        "loglik": [float(row.loglik) for row in rows],
+        "Chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
+        "Df": [math.nan if row.df is None else float(row.df) for row in rows],
+    }
+    if native.test is not None:
+        columns["Pr(>|Chi|)"] = [
+            math.nan if row.p_value is None else float(row.p_value) for row in rows
+        ]
+    return AnovaResult(columns, row_names, heading)
+
+
+def _cox_response(fit: CoxphModel) -> str:
+    return fit.formula.split("~", 1)[0].strip()
 
 
 def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[float]]]]:
@@ -2926,7 +2982,7 @@ def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[fl
 
     x = fit.x
     blocks = [
-        ([fit.coef_names[col] for col in cols], [[row[col] for row in x] for col in cols])
+        ([fit.coefficient_names[col] for col in cols], [[row[col] for row in x] for col in cols])
         for cols in fit.assign.values()
     ]
     position = _sparse_term(fit)
@@ -2965,7 +3021,7 @@ def _nested_frame(fit: CoxphModel, names: list[str], columns: list[list[float]])
     )
 
 
-def _anova_single(fit: CoxphModel, test: str | None) -> Any:
+def _anova_single(fit: CoxphModel, test: Any) -> AnovaResult:
     """anova.coxph for one model.  As in R, where anova.coxph.penal is not registered,
     the leading terms of a penalized model are refitted unpenalized and the full model
     counts ``sum(fit$df)``, so a step's Df can be fractional or negative."""
@@ -2999,10 +3055,19 @@ def _anova_single(fit: CoxphModel, test: str | None) -> Any:
     if blocks:
         logliks.append(fit.loglik[1])
         dfs.append(_coxph_df(fit))
-    return _core.anova_coxph(logliks, dfs, ["NULL", *_term_labels(fit)], sequential=True, test=test)
+    names = ["NULL", *_term_labels(fit)]
+    native = _core.anova_coxph(
+        logliks, dfs, names, sequential=True, test="Chisq" if test == "Chisq" else None
+    )
+    heading = [
+        "Analysis of Deviance Table",
+        f" Cox model: response is {_cox_response(fit)}",
+        "Terms added sequentially (first to last)",
+    ]
+    return _cox_anova_result(native, names[: len(logliks)], heading)
 
 
-def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
+def _anova_list(fits: Sequence[CoxphModel], test: Any) -> AnovaResult:
     if any(fit.rscore is not None for fit in fits):
         raise ValueError("Can't do anova tables with robust variances")
     if any(fit.method != fits[0].method for fit in fits):
@@ -3024,12 +3089,29 @@ def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
         return _anova_single(fits[0], test)
     logliks = [fit.loglik[-1] for fit in fits]
     dfs = [_coxph_df(fit) for fit in fits]
-    return _core.anova_coxph(logliks, dfs, None, sequential=False, test=test)
+    with_test = test is not None and test is not False
+    native = _core.anova_coxph(
+        logliks, dfs, None, sequential=False, test="Chisq" if with_test else None
+    )
+    numbers = [str(i) for i in range(1, len(fits) + 1)]
+    width = max(len(number) for number in numbers)
+    heading = [
+        "Analysis of Deviance Table",
+        f" Cox model: response is  {_cox_response(fits[0])}",
+        *(
+            f" Model {number.rjust(width)}: ~ {fit.formula.split('~', 1)[1].strip()}"
+            for number, fit in zip(numbers, fits, strict=True)
+        ),
+    ]
+    return _cox_anova_result(native, numbers, heading)
 
 
-def anova(*fits: Any, test: Any = "Chisq") -> Any:
+def anova(*fits: Any, test: Any = "Chisq") -> AnovaResult:
     """R's ``anova.coxph``: sequential terms of one model, or a list of nested
-    models (survreg fits go to ``anova_survreg``)."""
+    models (survreg fits go to ``anova_survreg``).
+
+    As in R, one model gets p-values for ``test="Chisq"`` only and a list of models for
+    any ``test`` but None."""
 
     if len(fits) == 1 and isinstance(fits[0], list | tuple):
         fits = tuple(fits[0])
@@ -3047,7 +3129,6 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
         return anova_survreg(*fits, test=test)
     if any(not isinstance(fit, CoxphModel) for fit in fits):
         raise TypeError("All arguments must be Cox models")
-    test_name = _anova_test_name(test)
     if len(fits) == 1:
-        return _anova_single(fits[0], test_name)
-    return _anova_list(list(fits), test_name)
+        return _anova_single(fits[0], test)
+    return _anova_list(list(fits), test)

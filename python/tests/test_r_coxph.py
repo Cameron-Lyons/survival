@@ -65,7 +65,7 @@ def strata_fit(ovarian):
 
 def test_coxph_matches_r_components(fit):
     assert isinstance(fit, r._coxph.CoxphModel)
-    assert fit.coef_names == ("age", "rx")
+    assert fit.coefficient_names == ("age", "rx")
     assert fit.assign == {"age": (0,), "rx": (1,)}
     assert fit.coefficients == approx([0.147326595469114, -0.803973012665114])
     assert fit.var == approx(
@@ -220,18 +220,18 @@ def test_coxph_strata_cluster_and_id(ovarian, cgd, strata_fit):
 
 def test_coxph_formula_terms(ovarian):
     factor = r.coxph("Surv(futime, fustat) ~ age + factor(rx)", ovarian)
-    assert factor.coef_names == ("age", "factor(rx)2")
+    assert factor.coefficient_names == ("age", "factor(rx)2")
     assert factor.assign == {"age": (0,), "factor(rx)": (1,)}
     assert factor.coefficients == approx([0.147326595469114, -0.803973012665114])
     interaction = r.coxph("Surv(futime, fustat) ~ age * rx", ovarian)
-    assert interaction.coef_names == ("age", "rx", "age:rx")
+    assert interaction.coefficient_names == ("age", "rx", "age:rx")
     assert interaction.coefficients == approx(
         [-0.0122019497753204, -9.50426487155975, 0.146448733767626]
     )
     log = r.coxph("Surv(futime, fustat) ~ log(age) + rx", ovarian)
     assert log.coefficients == approx([8.12981930807953, -0.905203236611623])
     null = r.coxph("Surv(futime, fustat) ~ 1", ovarian)
-    assert null.coef_names == ()
+    assert null.coefficient_names == ()
     assert null.loglik == approx([-34.9849403711626])
     assert (null.n, null.nevent) == (26, 12)
     assert null.score is None
@@ -256,7 +256,7 @@ def test_coxph_formula_terms(ovarian):
         r.coxph("Surv(time, status) ~ trt", mstate)
     multistate = r.coxph("Surv(time, status) ~ trt", mstate, id="id")
     assert isinstance(multistate, r.CoxphmsModel)
-    assert multistate.coef_names == ("trt_1:2", "trt_1:3")
+    assert multistate.coefficient_names == ("trt_1:2", "trt_1:3")
     assert multistate.coefficients == approx([-0.346573590279973, 0.0])
     assert multistate.loglik == approx([-4.969813299576, -4.94080100438703])
 
@@ -268,7 +268,7 @@ def test_coxph_time_transform(ovarian):
         tt=lambda x, t, riskset, weights: [xi * math.log(ti) for xi, ti in zip(x, t, strict=True)],
     )
     assert custom.tt
-    assert custom.coef_names == ("age", "tt(age)")
+    assert custom.coefficient_names == ("age", "tt(age)")
     assert custom.coefficients == approx([0.672048069354324, -0.0912792487479385])
     assert (custom.n, custom.nevent) == (26, 12)
     default = r.coxph("Surv(futime, fustat) ~ age + tt(age)", ovarian)
@@ -321,9 +321,9 @@ def test_clogit_matches_r():
 def test_summary_coxph_matches_r(fit):
     summary = r.model_summary(fit)
     rows = summary["coefficients"]
-    assert summary["coefficient_columns"] == ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
+    assert summary.columns == ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
     assert [row["name"] for row in rows] == ["age", "rx"]
-    assert [rows[0][k] for k in ("coef", "exp_coef", "se", "z", "p")] == approx(
+    assert [rows[0][k] for k in summary.columns] == approx(
         [
             0.147326595469114,
             1.15873233797022,
@@ -333,7 +333,7 @@ def test_summary_coxph_matches_r(fit):
         ],
         rel=1e-6,
     )
-    assert [rows[1][k] for k in ("coef", "exp_coef", "se", "z", "p")] == approx(
+    assert [rows[1][k] for k in summary.columns] == approx(
         [
             -0.803973012665114,
             0.447547316050731,
@@ -344,7 +344,7 @@ def test_summary_coxph_matches_r(fit):
         rel=1e-6,
     )
     conf = summary["conf_int"][0]
-    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
+    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95")] == approx(
         [1.15873233797022, 0.863012075551224, 1.05852882579423, 1.26842141502431], rel=1e-6
     )
     assert summary["logtest"] == approx(
@@ -359,7 +359,7 @@ def test_summary_coxph_matches_r(fit):
     assert summary["concordance"] == approx(
         {"C": 0.798165137614679, "se(C)": 0.0763261991426006}, rel=1e-6
     )
-    assert (summary["n"], summary["nevent"], summary["df"], summary["used_robust"]) == (
+    assert (summary["n"], summary["nevent"], summary["logtest"]["df"], summary["used_robust"]) == (
         26,
         12,
         2,
@@ -732,23 +732,25 @@ def test_coxph_detail_matches_r(fit):
 
 def test_anova_matches_r(fit, ovarian):
     table = r.anova(fit)
-    assert [row.name for row in table.rows] == ["NULL", "age", "rx"]
-    assert [row.loglik for row in table.rows] == approx(
-        [-34.9849403711626, -27.8381472910825, -27.0418988630084]
-    )
-    assert [row.chisq for row in table.rows][1:] == approx(
-        [14.2935861601602, 1.59249685614817], rel=1e-6
-    )
-    assert [row.df for row in table.rows] == [None, 1, 1]
-    assert [row.p_value for row in table.rows][1:] == approx(
-        [0.000156396864322538, 0.206969765174687], rel=1e-6
-    )
+    assert isinstance(table, r.AnovaResult)
+    assert table.row_names == ["NULL", "age", "rx"]
+    assert table.loglik == approx([-34.9849403711626, -27.8381472910825, -27.0418988630084])
+    assert table["Chisq"][1:] == approx([14.2935861601602, 1.59249685614817], rel=1e-6)
+    assert math.isnan(table["Df"][0])
+    assert table["Df"][1:] == [1.0, 1.0]
+    assert table["Pr(>|Chi|)"][1:] == approx([0.000156396864322538, 0.206969765174687], rel=1e-6)
+    assert table.heading[1] == " Cox model: response is Surv(futime, fustat)"
+    assert "Pr(>|Chi|)" in repr(table)
     nested = r.anova(r.coxph("Surv(futime, fustat) ~ age", ovarian), fit)
-    assert [row.loglik for row in nested.rows] == approx([-27.8381472910825, -27.0418988630084])
-    assert [row.chisq for row in nested.rows][1:] == approx([1.59249685614817], rel=1e-6)
-    assert r.anova(fit, test=None).rows[1].p_value is None
+    assert nested.row_names == ["1", "2"]
+    assert nested.loglik == approx([-27.8381472910825, -27.0418988630084])
+    assert nested["Chisq"][1:] == approx([1.59249685614817], rel=1e-6)
+    assert nested.heading[2:] == [" Model 1: ~ age", " Model 2: ~ age + rx"]
+    assert "Pr(>|Chi|)" not in r.anova(fit, test=None)
+    assert "Pr(>|Chi|)" not in r.anova(fit, test="none")
+    assert "Pr(>|Chi|)" in r.anova(r.coxph("Surv(futime, fustat) ~ age", ovarian), fit, test="F")
     frame = r.as_data_frame(table)
-    assert list(frame) == ["model", "loglik", "Chisq", "Df", "Pr(>|Chi|)"]
+    assert list(frame) == ["loglik", "Chisq", "Df", "Pr(>|Chi|)"]
     with pytest.raises(ValueError, match="robust variances"):
         r.anova(r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, robust=True))
     with pytest.raises(ValueError, match="same ties option"):

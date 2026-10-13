@@ -12,7 +12,6 @@ implementation modules (the package ships ``py.typed``).
 from __future__ import annotations
 
 from .._factor import Factor
-from .._survival import AnovaCoxphResult
 from ._aareg import aareg, summary_aareg
 from ._aareg_print import print_aareg, print_summary_aareg
 from ._array_print import print_ratetable, print_surv, print_surv2
@@ -176,7 +175,6 @@ from ._survfit_residuals import pseudo, residuals_survfit
 from ._survpenal_lowlevel import SurvpenalFitResult, survpenal_fit
 from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
 from ._survreg import (
-    SurvregAnovaResult,
     SurvregModel,
     dsurvreg,
     psurvreg,
@@ -204,6 +202,7 @@ from ._test_print import (
 )
 from ._types import (
     AaregModel,
+    AnovaResult,
     BasehazResult,
     BrierResult,
     CchModel,
@@ -230,9 +229,14 @@ from ._types import (
     ResponsePrint,
     StatefigResult,
     StrataFactor,
+    SummaryAaregResult,
+    SummaryCchResult,
+    SummaryCoxphPenalResult,
+    SummaryCoxphResult,
     SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
+    SummarySurvregResult,
     SurvcheckProblem,
     SurvcheckResult,
     SurvConcordanceResult,
@@ -298,7 +302,7 @@ __all__ = [
     "Surv",
     "Surv2",
     "AaregModel",
-    "AnovaCoxphResult",
+    "AnovaResult",
     "BrierResult",
     "CchModel",
     "ClogitModel",
@@ -330,7 +334,12 @@ __all__ = [
     "StatefigResult",
     "StrataFactor",
     "SummarySurvfitCoxmsResult",
+    "SummaryAaregResult",
+    "SummaryCchResult",
+    "SummaryCoxphPenalResult",
+    "SummaryCoxphResult",
     "SummarySurvfitResult",
+    "SummarySurvregResult",
     "SurvcheckProblem",
     "SurvcheckResult",
     "SurvConcordanceResult",
@@ -344,7 +353,6 @@ __all__ = [
     "QuantileSurvfitResult",
     "ResidualsSurvfitResult",
     "SurvfitResult",
-    "SurvregAnovaResult",
     "SurvregModel",
     "SurvregPenalPrint",
     "TmergeFrame",

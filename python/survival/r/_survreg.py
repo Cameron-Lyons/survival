@@ -94,8 +94,10 @@ from ._formula import (
 from ._surv import Surv, _complete_codes, _survreg_response_arrays
 from ._survpenal import fit_penalized, penalty_terms
 from ._types import (
+    AnovaResult,
     NaAction,
     PredictResult,
+    SummarySurvregResult,
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
@@ -309,40 +311,6 @@ class SurvregModel:
     def distribution(self) -> _core.SurvregDistribution:
         """The ``SurvregDistribution`` ``dist`` resolved to (``survreg.distributions[[dist]]``)."""
         return self.fit.distribution
-
-
-@dataclass(frozen=True)
-class SurvregAnovaResult:
-    """R's ``anova.survreg``/``anova.survreglist`` table (an ``anova`` data frame)."""
-
-    terms: list[str]
-    df: list[float]
-    deviance: list[float]
-    resid_df: list[float]
-    loglik: list[float]
-    p: list[float] | None
-    heading: list[str]
-    test_labels: list[str] | None = None
-
-    def frame(self) -> dict[str, list[Any]]:
-        """The table as columns, with R's column names."""
-
-        columns: dict[str, list[Any]] = {}
-        if self.test_labels is None:
-            columns["Df"] = self.df
-            columns["Deviance"] = self.deviance
-            columns["Resid. Df"] = self.resid_df
-            columns["-2*LL"] = self.loglik
-        else:
-            columns["Terms"] = self.terms
-            columns["Resid. Df"] = self.resid_df
-            columns["-2*LL"] = self.loglik
-            columns["Test"] = self.test_labels
-            columns["Df"] = self.df
-            columns["Deviance"] = self.deviance
-        if self.p is not None:
-            columns["Pr(>Chi)"] = self.p
-        return columns
 
 
 def _match_arg(value: Any, name: str, choices: Sequence[str]) -> str:
@@ -1378,7 +1346,7 @@ def _chisq_p_values(deviance: list[float], df: list[float]) -> list[float]:
     return p_values
 
 
-def _anova_single(fit: SurvregModel, with_test: bool) -> SurvregAnovaResult:
+def _anova_single(fit: SurvregModel, with_test: bool) -> AnovaResult:
     model = fit.fit
     labels = list(fit.term_labels)
     loglik = [0.0] * (len(labels) + 1)
@@ -1399,15 +1367,15 @@ def _anova_single(fit: SurvregModel, with_test: bool) -> SurvregAnovaResult:
         else "Scale estimated",
         "Terms added sequentially (first to last)",
     ]
-    return SurvregAnovaResult(
-        terms=["NULL", *labels],
-        df=df,
-        deviance=deviance,
-        resid_df=resid_df,
-        loglik=loglik,
-        p=_chisq_p_values(deviance, df) if with_test else None,
-        heading=heading,
-    )
+    columns: dict[str, list[Any]] = {
+        "Df": df,
+        "Deviance": deviance,
+        "Resid. Df": resid_df,
+        "-2*LL": loglik,
+    }
+    if with_test:
+        columns["Pr(>Chi)"] = _chisq_p_values(deviance, df)
+    return AnovaResult(columns, ["NULL", *labels], heading)
 
 
 def _diff_term(previous: Sequence[str], current: Sequence[str], position: int) -> str:
@@ -1424,7 +1392,7 @@ def _diff_term(previous: Sequence[str], current: Sequence[str], position: int) -
     return f"{position - 1} vs. {position}"
 
 
-def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> SurvregAnovaResult:
+def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> AnovaResult:
     responses = [fit.formula.partition("~")[0].strip() if fit.formula else "" for fit in fits]
     keep = [response == responses[0] for response in responses]
     if not all(keep):
@@ -1442,19 +1410,24 @@ def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> SurvregAnovaRe
     tests = [""] + [_diff_term(labels[i - 1], labels[i], i + 1) for i in range(1, len(fits))]
     df = [math.nan] + [resid_df[i - 1] - resid_df[i] for i in range(1, len(fits))]
     deviance = [math.nan] + [loglik[i - 1] - loglik[i] for i in range(1, len(fits))]
-    return SurvregAnovaResult(
-        terms=[fit.formula.partition("~")[2].strip() if fit.formula else "" for fit in fits],
-        df=df,
-        deviance=deviance,
-        resid_df=resid_df,
-        loglik=loglik,
-        p=_chisq_p_values(deviance, df) if with_test else None,
-        heading=["Analysis of Deviance Table", f"Response: {responses[0]}"],
-        test_labels=tests,
+    columns: dict[str, list[Any]] = {
+        "Terms": [fit.formula.partition("~")[2].strip() if fit.formula else "" for fit in fits],
+        "Resid. Df": resid_df,
+        "-2*LL": loglik,
+        "Test": tests,
+        "Df": df,
+        "Deviance": deviance,
+    }
+    if with_test:
+        columns["Pr(>Chi)"] = _chisq_p_values(deviance, df)
+    return AnovaResult(
+        columns,
+        [str(i) for i in range(1, len(fits) + 1)],
+        ["Analysis of Deviance Table", f"Response: {responses[0]}"],
     )
 
 
-def anova_survreg(*fits: Any, test: str = "Chisq") -> SurvregAnovaResult:
+def anova_survreg(*fits: Any, test: str = "Chisq") -> AnovaResult:
     """R's ``anova.survreg`` (one fit: terms added sequentially) and ``anova.survreglist``."""
 
     if len(fits) == 1 and isinstance(fits[0], list | tuple):
@@ -1793,11 +1766,11 @@ def model_matrix_survreg(
     return result
 
 
-def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[str, Any]:
+def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> SummarySurvregResult:
     """``summary.survreg``: the coefficient table, the pieces of the fit R copies
     (``loglik`` as (intercept-only, full), ``var``, ``scale``, ...) and, with
     ``correlation``, the correlation matrix of the coefficients that are not ``NA``
-    (its rows follow theirs in ``coefficient_names``)."""
+    (its rows follow theirs in ``table``)."""
 
     model = fit.fit
     coefficients = [float(value) for value in model.coefficients]
@@ -1822,16 +1795,14 @@ def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[s
             statistic = math.nan
         else:
             statistic = math.copysign(math.inf, value)
-        row: dict[str, float | str] = {
-            "name": names[idx],
-            "coef": value,
-            "se": standard_error,
-            "naive_se": naive_standard_error,
-            "z": statistic,
-            "p": _normal_two_sided_p_value(statistic),
-        }
+        row: dict[str, float | str] = {"name": names[idx], "Value": value}
         if robust:
-            row["robust_se"] = standard_error
+            row["Std. Err"] = standard_error
+            row["(Naive SE)"] = naive_standard_error
+        else:
+            row["Std. Error"] = standard_error
+        row["z"] = statistic
+        row["p"] = _normal_two_sided_p_value(statistic)
         rows.append(row)
 
     correl = None
@@ -1841,19 +1812,29 @@ def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[s
             [variance[i][j] / (standard_errors[i] * standard_errors[j]) for j in keep] for i in keep
         ]
 
-    result: dict[str, Any] = {
-        "model_type": "survreg",
-        "coefficients": rows,
-        "coefficient_names": names,
-        "var": variance,
-        "correlation": correl,
-        "df": fit.df,
-        "n": fit.n,
-        "robust": robust,
-        "na_action": fit.na_action,
-    }
-    result.update(survreg_summary(fit))
-    return result
+    pieces = survreg_summary(fit)
+    location = _location_names(fit)
+    scales = list(model.scale)
+    return SummarySurvregResult(
+        coefficients=dict(zip(location, fit.coefficients, strict=True)),
+        table=rows,
+        var=variance,
+        df=fit.df,
+        loglik=pieces["loglik"],
+        iter=pieces["iter"],
+        idf=pieces["idf"],
+        scale=scales[0] if len(scales) == 1 else dict(zip(fit.strata_levels, scales, strict=True)),
+        parms=pieces["parms"],
+        n=fit.n,
+        chi=pieces["chi"],
+        robust=robust,
+        fixed_scale=pieces["fixed_scale"],
+        distribution=pieces["distribution"],
+        chi_df=pieces["chi_df"],
+        na_action=fit.na_action,
+        correlation=correl,
+        distribution_parameters=pieces.get("distribution_parameters"),
+    )
 
 
 __getattr__ = _renamed_classes(

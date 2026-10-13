@@ -123,7 +123,7 @@ def test_frailty_groups_are_the_levels_before_subset():
     kidney = _kidney(6)
     subset = [value != 3 for value in kidney["id"]]
     fit = _coxph("Surv(time, status) ~ age + frailty(id, theta = 0.5)", kidney, subset=subset)
-    assert fit.coef_names == ("age",)
+    assert fit.coefficient_names == ("age",)
     assert fit.coefficients == approx([-0.00597873632701662])
     assert fit.frail == approx(
         [
@@ -139,7 +139,7 @@ def test_frailty_groups_are_the_levels_before_subset():
     fit = _coxph(
         "Surv(time, status) ~ age + frailty(id, theta = 0.5, sparse = FALSE)", kidney, subset=subset
     )
-    assert fit.coef_names == tuple(["age"] + [f"gamma:{level}" for level in range(1, 7)])
+    assert fit.coefficient_names == tuple(["age"] + [f"gamma:{level}" for level in range(1, 7)])
     assert fit.coefficients == approx(
         [
             -0.00597794726709674,
@@ -185,7 +185,7 @@ def test_frailty_groups_are_the_levels_before_subset():
 )
 def test_dense_frailty_names_carry_the_distribution(term, prefix, coefficients):
     fit = _coxph(f"Surv(time, status) ~ age + {term}", _kidney(5))
-    assert fit.coef_names == tuple(["age"] + [f"{prefix}:{level}" for level in range(1, 6)])
+    assert fit.coefficient_names == tuple(["age"] + [f"{prefix}:{level}" for level in range(1, 6)])
     if coefficients is not None:
         assert fit.coefficients == approx(coefficients)
 
@@ -198,7 +198,7 @@ def test_frailty_distribution_is_matched_as_pmatch_does(dist):
 
 def test_pspline_with_intercept_numbers_the_columns_from_one(lung):
     fit = _coxph("Surv(time, status) ~ pspline(age, df = 3, intercept = TRUE)", lung)
-    assert fit.coef_names == tuple(f"ps(age){j}" for j in range(1, 12))
+    assert fit.coefficient_names == tuple(f"ps(age){j}" for j in range(1, 12))
     assert fit.coefficients[:10] == approx(
         [
             -2.36381855487005,
@@ -220,7 +220,7 @@ def test_pspline_combine_sums_basis_columns(lung):
     fit = _coxph(
         "Surv(time, status) ~ pspline(age, df = 4, combine = c(1,1,2,2,3,3,4,4,5,5,6,6))", lung
     )
-    assert fit.coef_names == tuple(f"ps(age){j}" for j in range(3, 9))
+    assert fit.coefficient_names == tuple(f"ps(age){j}" for j in range(3, 9))
     assert fit.coefficients == approx(
         [
             0.742931340577409,
@@ -264,7 +264,7 @@ def test_pspline_scalar_boundary_knots_are_one_value(lung):
 def test_pspline_without_penalty_is_an_ordinary_matrix_term(lung):
     fit = _coxph("Surv(time, status) ~ pspline(age, df = 4, penalty = FALSE) + sex", lung)
     assert fit.penalized is None
-    assert fit.coef_names == (
+    assert fit.coefficient_names == (
         *(f"pspline(age, df = 4, penalty = FALSE){j}" for j in range(1, 13)),
         "sex",
     )
@@ -275,14 +275,14 @@ def test_pspline_without_penalty_is_an_ordinary_matrix_term(lung):
     )
     assert _coxph(
         "Surv(time, status) ~ pspline(age, df = 4, penalty = TRUE)", lung
-    ).coef_names == tuple(f"ps(age){j}" for j in range(3, 15))
+    ).coefficient_names == tuple(f"ps(age){j}" for j in range(3, 15))
 
 
 def test_pspline_without_penalty_can_be_in_an_interaction(lung):
     fit = _coxph(
         "Surv(time, status) ~ sex + pspline(age, df = 2, nterm = 3, penalty = FALSE):sex", lung
     )
-    assert fit.coef_names == (
+    assert fit.coefficient_names == (
         "sex",
         *(f"sex:pspline(age, df = 2, nterm = 3, penalty = FALSE){j}" for j in range(1, 6)),
     )

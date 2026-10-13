@@ -38,9 +38,9 @@ def test_summary_of_a_monotone_likelihood_has_an_infinite_limit(separated_fit):
     summary = r.model_summary(separated_fit)
     x, z = summary["conf_int"]
     assert x["exp(coef)"] == pytest.approx(4786492362.04304, rel=1e-4)
-    assert x["lower"] == 0.0
-    assert math.isinf(x["upper"])
-    assert [z["exp(coef)"], z["lower"], z["upper"]] == pytest.approx(
+    assert x["lower .95"] == 0.0
+    assert math.isinf(x["upper .95"])
+    assert [z["exp(coef)"], z["lower .95"], z["upper .95"]] == pytest.approx(
         [0.719655829906486, 0.196483911211995, 2.63586219514738], rel=1e-5
     )
     assert "Inf" in str(r.print_summary_coxph(summary))

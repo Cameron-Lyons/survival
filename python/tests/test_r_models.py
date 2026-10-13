@@ -66,8 +66,8 @@ def test_confint_and_summary(fit):
     with pytest.raises(ValueError, match="unknown coefficient name"):
         r.confint(fit, "sex")
     summary = r.model_summary(fit)
-    assert summary["model_type"] == "coxph"
-    assert summary["coefficient_names"] == ["age", "factor(rx)2"]
+    assert isinstance(summary, r.SummaryCoxphResult)
+    assert [row["name"] for row in summary["coefficients"]] == ["age", "factor(rx)2"]
 
 
 def test_model_frame_matrix_and_terms(ovarian, fit):
@@ -119,7 +119,8 @@ def test_as_data_frame_shapes(ovarian, fit):
     detail = r.as_data_frame(r.coxph_detail(fit))
     assert list(detail) == ["time", "nevent", "nrisk", "hazard", "varhaz", "cumhaz", "wtrisk"]
     anova = r.as_data_frame(r.anova(fit))
-    assert anova["model"] == ["NULL", "age", "factor(rx)"]
+    assert list(anova) == ["loglik", "Chisq", "Df", "Pr(>|Chi|)"]
+    assert r.anova(fit).row_names == ["NULL", "age", "factor(rx)"]
     assert math.isnan(anova["Chisq"][0])
     concordance = r.as_data_frame(r.concordance(fit))
     assert list(concordance) == [
@@ -154,3 +155,23 @@ def test_generics_dispatch_to_survreg_or_fail_clearly():
         r.predict(object(), type="lp")
     with pytest.raises(TypeError, match="requires fitted coxph or survreg models"):
         r.anova(object())
+
+
+def test_model_summaries_are_read_only_mappings_with_r_names(fit):
+    summary = r.model_summary(fit)
+    assert summary["conf.int"] is summary.conf_int
+    assert "waldtest" in summary
+    assert "robscore" not in summary
+    assert summary.robscore is None
+    assert dict(summary)["n"] == summary.n
+    assert list(summary.conf_int[0]) == [
+        "name",
+        "exp(coef)",
+        "exp(-coef)",
+        "lower .95",
+        "upper .95",
+    ]
+    with pytest.raises(TypeError):
+        summary["n"] = 1
+    with pytest.raises(KeyError):
+        summary["robscore"]

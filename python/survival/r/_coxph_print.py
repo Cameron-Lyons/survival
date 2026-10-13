@@ -19,40 +19,27 @@ from ._print import (
     print_options,
 )
 from ._survpenal_print import _naprint, _signif
-from ._types import ModelPrint, NamedMatrix
+from ._types import ModelPrint, NamedMatrix, SummaryCoxphPenalResult, SummaryCoxphResult
 
 
 def _table(summary: Mapping[str, Any], *, direct: bool = False) -> NamedMatrix:
     rows = summary["coefficients"]
-    penal = summary["model_type"] == "coxph.penal"
-    robust = "robust se" in summary["coefficient_columns"]
-    keys = (
-        ["coef", "se", "se2", "chisq", "df", "p"]
-        if penal
-        else ["coef", "exp_coef", "naive_se", "robust_se", "z", "p"]
-        if robust
-        else ["coef", "exp_coef", "se", "z", "p"]
-    )
-    columns = list(summary["coefficient_columns"])
+    columns = list(summary["columns"])
+    values = [[float(row[column]) for column in columns] for row in rows]
     if direct:
         columns[-1] = "p"
-    return NamedMatrix(
-        [row["name"] for row in rows], columns, [[float(row[key]) for key in keys] for row in rows]
-    )
+    return NamedMatrix([row["name"] for row in rows], columns, values)
 
 
 def _tables(summary: Mapping[str, Any]) -> dict[str, NamedMatrix]:
     tables = {"coefficients": _table(summary)}
     if summary.get("conf_int"):
-        level = "." + _r_format_number(round(100 * float(summary.get("conf_level", 0.95)), 2), 7)
         rows = summary["conf_int"]
+        columns = [key for key in rows[0] if key != "name"]
         tables["conf_int"] = NamedMatrix(
             [row["name"] for row in rows],
-            ["exp(coef)", "exp(-coef)", f"lower {level}", f"upper {level}"],
-            [
-                [float(row[key]) for key in ("exp(coef)", "exp(-coef)", "lower", "upper")]
-                for row in rows
-            ],
+            columns,
+            [[float(row[column]) for column in columns] for row in rows],
         )
     return tables
 
@@ -65,16 +52,15 @@ def _report(
         "nevent",
         "n_id",
         "loglik",
-        "null_loglik",
         "iter",
         "df",
+        "method",
         "logtest",
         "waldtest",
         "sctest",
         "robscore",
         "concordance",
         "used_robust",
-        "conf_level",
     )
     return ModelPrint(
         tables,
@@ -169,19 +155,17 @@ def print_coxph(
     if not x.coefficients:
         return print_coxph_null(x, digits=digits, width=width)
     _, digits, width = print_options(1, digits, width, 4)
-    columns, rows = _coefficient_table(x, 1)
+    columns, rows, _ = _coefficient_table(x, 1)
     df = sum(not math.isnan(value) for value in x.coefficients)
     statistic = 2 * (x.loglik[1] - x.loglik[0])
     summary: dict[str, Any] = {
-        "model_type": "coxph",
-        "coefficient_columns": columns,
+        "columns": columns,
         "coefficients": rows,
         "n": x.n,
         "nevent": x.nevent,
         "na_action": x.na_action,
         "df": df,
-        "loglik": x.loglik[1],
-        "null_loglik": x.loglik[0],
+        "loglik": list(x.loglik),
         "logtest": {
             "test": statistic,
             "df": df,
@@ -239,7 +223,7 @@ def print_coxph_null(x: CoxphModel, digits: Any = None, *, width: Any = 80) -> M
 
 
 def print_summary_coxph(
-    x: Mapping[str, Any] | CoxphModel,
+    x: SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel,
     digits: Any = None,
     signif_stars: Any = True,
     expand: Any = False,
@@ -253,11 +237,11 @@ def print_summary_coxph(
     """
     if isinstance(x, CoxphModel) and not x.coefficients and x.penalized is None:
         return print_coxph_null(x, digits=digits, width=width)
-    if not isinstance(x, Mapping) or x.get("model_type") not in {"coxph", "coxph.penal"}:
+    if not isinstance(x, SummaryCoxphResult | SummaryCoxphPenalResult):
         raise TypeError("print_summary_coxph requires a Cox model summary")
     stars = _normalize_bool_option(signif_stars, "signif_stars")
     expanded = _normalize_bool_option(expand, "expand")
-    if x["model_type"] == "coxph.penal":
+    if isinstance(x, SummaryCoxphPenalResult):
         return print_summary_coxph_penal(x, digits=digits, signif_stars=stars, width=width)
     _, digits, width = print_options(1, digits, width, 4)
     tables = _tables(x)
@@ -350,7 +334,7 @@ def print_coxph_penal(
 
 
 def print_summary_coxph_penal(
-    x: Mapping[str, Any],
+    x: SummaryCoxphPenalResult,
     digits: Any = None,
     signif_stars: Any = True,
     maxlabel: Any = 25,
@@ -358,7 +342,7 @@ def print_summary_coxph_penal(
     width: Any = 80,
 ) -> ModelPrint:
     """Render a penalized Cox summary. R accepts but ignores ``signif_stars``."""
-    if not isinstance(x, Mapping) or x.get("model_type") != "coxph.penal":
+    if not isinstance(x, SummaryCoxphPenalResult):
         raise TypeError("print_summary_coxph_penal requires a penalized Cox summary")
     _normalize_bool_option(signif_stars, "signif_stars")
     maxlabel = _maxlabel(maxlabel)

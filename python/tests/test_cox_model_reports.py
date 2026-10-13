@@ -26,41 +26,49 @@ def matrix(source):
 
 def summary_input(case):
     source = case["input"]
-    result = {key: value for key, value in source.items() if value != {}}
-    result.pop("omit", None)
-    result["na_action"] = source["omit"] or None
-    table = matrix(source["coefficients"])
-    penal = source["model_type"] == "coxph.penal"
-    robust = "robust se" in table.colnames
-    keys = (
-        ["coef", "se", "se2", "chisq", "df", "p"]
-        if penal
-        else ["coef", "exp_coef", "naive_se", "robust_se", "z", "p"]
-        if robust
-        else ["coef", "exp_coef", "se", "z", "p"]
-    )
-    result["coefficient_columns"] = table.colnames
-    result["coefficients"] = [
-        dict(name=name, **dict(zip(keys, row, strict=True)))
-        for name, row in zip(table.rownames, table.values, strict=True)
-    ]
-    if source["conf_int"]:
-        table = matrix(source["conf_int"])
-        result["conf_int"] = [
-            dict(
-                name=name,
-                **dict(zip(["exp(coef)", "exp(-coef)", "lower", "upper"], row, strict=True)),
-            )
+
+    def rows_of(table):
+        return [
+            dict(name=name, **dict(zip(table.colnames, row, strict=True)))
             for name, row in zip(table.rownames, table.values, strict=True)
         ]
-    for name in ("logtest", "waldtest", "sctest", "robscore"):
-        if source[name]:
-            result[name] = dict(zip(["test", "df", "pvalue"], source[name], strict=True))
-    if source["concordance"]:
-        result["concordance"] = dict(zip(["C", "se(C)"], source["concordance"], strict=True))
-    if source["cmap"]:
-        result["cmap"] = matrix(source["cmap"])
-    return result
+
+    def test(name):
+        values = source[name]
+        return dict(zip(["test", "df", "pvalue"], values, strict=True)) if values else None
+
+    coefficients = matrix(source["coefficients"])
+    conf_int = rows_of(matrix(source["conf_int"])) if source["conf_int"] else None
+    common = {
+        "n": source["n"],
+        "nevent": source["nevent"],
+        "na_action": source["omit"] or None,
+        "loglik": [source["null_loglik"], source["loglik"]],
+        "coefficients": rows_of(coefficients),
+        "conf_int": conf_int,
+        "logtest": test("logtest"),
+        "waldtest": test("waldtest"),
+        "concordance": dict(zip(["C", "se(C)"], source["concordance"], strict=True)),
+        "columns": coefficients.colnames,
+        "method": "efron",
+    }
+    if source["model_type"] == "coxph.penal":
+        return r.SummaryCoxphPenalResult(
+            iter=source["iter"], df=source["df"], print2=source["print2"], **common
+        )
+    n, null = source["n"], source["null_loglik"]
+    return r.SummaryCoxphResult(
+        sctest=test("sctest"),
+        robscore=test("robscore"),
+        rsq={
+            "rsq": 1 - np.exp(-source["logtest"][0] / n),
+            "maxrsq": 1 - np.exp(2 * null / n),
+        },
+        used_robust=bool(source["used_robust"]),
+        cmap=matrix(source["cmap"]) if source["cmap"] else None,
+        states=source["states"] or None,
+        **common,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -100,7 +108,7 @@ def test_summary_text_from_r_snapshot(case, capsys):
     x = summary_input(case)
     report = (
         r.print_summary_coxph_penal(x, width=case["width"], **options(case["arguments"]))
-        if x["model_type"] == "coxph.penal"
+        if isinstance(x, r.SummaryCoxphPenalResult)
         else r.print_summary_coxph(x, width=case["width"], **options(case["arguments"]))
     )
     assert report.lines == case["lines"]

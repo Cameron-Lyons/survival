@@ -21,7 +21,7 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._fit import _model_frame
-from ._types import AaregModel
+from ._types import AaregModel, SummaryAaregResult
 
 _TESTS = ("aalen", "variance", "nrisk")
 
@@ -184,7 +184,7 @@ def summary_aareg(
     maxtime: Any | None = None,
     test: Any | None = None,
     scale: Any = 1.0,
-) -> dict[str, Any]:
+) -> SummaryAaregResult:
     """R's ``summary.aareg``: the slope of each coefficient curve, the test statistic
     per covariate and the overall chi-square (which excludes the intercept)."""
 
@@ -225,7 +225,6 @@ def summary_aareg(
         test_var2 = fit.robust_test_variance
     variance = test_var if test_var2 is None else test_var2
     se = [math.sqrt(variance[k][k]) for k in range(nvar)]
-    columns = ["slope", "coef", "se(coef)", "z", "p"]
     rows = []
     for k, name in enumerate(fit.coefficient_names):
         z = test_stat[k] / se[k]
@@ -233,30 +232,26 @@ def summary_aareg(
             "name": name,
             "slope": slope[k],
             "coef": test_stat[k] / scales[k],
-            "se": math.sqrt(test_var[k][k]) / scales[k],
-            "z": z,
-            "p": 2.0 * _pnorm_lower(-abs(z)),
+            "se(coef)": math.sqrt(test_var[k][k]) / scales[k],
         }
         if test_var2 is not None:
-            row["robust_se"] = se[k] / scales[k]
+            row["robust se"] = se[k] / scales[k]
+        row["z"] = z
+        row["p"] = 2.0 * _pnorm_lower(-abs(z))
         rows.append(row)
-    if test_var2 is not None:
-        columns = ["slope", "coef", "se(coef)", "robust se", "z", "p"]
     sub_var = [[variance[j][k] for k in range(1, nvar)] for j in range(1, nvar)]
     chisq = _core.coxph_wtest(sub_var, [test_stat[1:]]).test[0] if nvar > 1 else math.nan
-    return {
-        "model_type": "aareg",
-        "table": rows,
-        "columns": columns,
-        "test": test_name,
-        "test_statistic": test_stat,
-        "test_var": test_var,
-        "test_var2": test_var2,
-        "chisq": chisq,
-        "df": nvar - 1,
-        "p": _core.pchisq(chisq, nvar - 1.0, lower_tail=False),
-        "n": [fit.n[0], len(set(times)), fit.n[2]],
-    }
+    return SummaryAaregResult(
+        table=rows,
+        test=test_name,
+        test_statistic=test_stat,
+        test_var=test_var,
+        test_var2=test_var2,
+        chisq=chisq,
+        n=[fit.n[0], len(set(times)), fit.n[2]],
+        df=nvar - 1,
+        p=_core.pchisq(chisq, nvar - 1.0, lower_tail=False),
+    )
 
 
 def _pnorm_lower(z: float) -> float:

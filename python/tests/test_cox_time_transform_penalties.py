@@ -112,7 +112,7 @@ def test_native_penalty_results_match_r_fit_summary_and_residuals(case):
     fit = fit_case(case)
     compare = partial(close, atol=5e-7) if case["information_reference"] else close
     expected_names = [name.replace("x * log(t)", "x") for name in case["coefficient_names"]]
-    assert list(fit.coef_names) == expected_names
+    assert list(fit.coefficient_names) == expected_names
     compare(fit.coefficients, case["coefficients"])
     compare(fit.var, case["variance"])
     compare(fit.loglik, case["loglik"])
@@ -130,14 +130,14 @@ def test_native_penalty_results_match_r_fit_summary_and_residuals(case):
     compare(residuals, case["martingale"])
     if fit.penalized is not None:
         compare(fit.df, case["df"])
-        assert list(fit.pterms) == case["pterms"]
+        assert list(fit.pterms.values()) == case["pterms"]
         if case["sparse"]:
             compare(fit.frail, case["frail"])
             compare(fit.fvar, case["fvar"])
         summary = r.model_summary(fit)
         compare(
             [
-                [row[k] for k in ("coef", "se", "se2", "chisq", "df", "p")]
+                [row[k] for k in ("coef", "se(coef)", "se2", "Chisq", "DF", "p")]
                 for row in summary["coefficients"]
             ],
             case["summary"],
@@ -163,7 +163,7 @@ def test_penalty_models_preserve_group_values_and_summary_after_pickle(name):
     case = next(c for c in REFERENCE["cases"] if c["name"] == name)
     fit = fit_case(case)
     restored = pickle.loads(pickle.dumps(fit))
-    assert restored.coef_names == fit.coef_names
+    assert restored.coefficient_names == fit.coefficient_names
     close(r.model_matrix(restored)["data"], r.model_matrix(fit)["data"])
     close(r.residuals(restored), r.residuals(fit))
     assert r.model_summary(restored)["print2"] == r.model_summary(fit)["print2"]
@@ -209,7 +209,7 @@ def test_public_penalty_column_names_are_full_labels_and_validate_width():
         )
 
     fit = r.coxph("Surv(futime,fustat) ~ x + tt(rx)", data, tt=callback)
-    assert fit.coef_names == ("x", "log term", "root term")
+    assert fit.coefficient_names == ("x", "log term", "root term")
     assert r.model_matrix(fit)["columns"] == ["x", "tt(rx)1", "tt(rx)2"]
     with pytest.raises(ValueError, match="an evaluated matrix is required"):
         r.model_matrix(fit, {"x": [1.0], "rx": [2.0]})
@@ -252,8 +252,8 @@ def test_sparse_callback_without_formatter_has_a_group_wald_summary():
     row = r.model_summary(fit)["coefficients"][-1]
     assert row["name"] == "tt(rx)"
     assert math.isnan(row["coef"])
-    close(row["chisq"], sum(b * b / v for b, v in zip(fit.frail, fit.fvar, strict=True)))
-    close(row["df"], fit.df[-1])
+    close(row["Chisq"], sum(b * b / v for b, v in zip(fit.frail, fit.fvar, strict=True)))
+    close(row["DF"], fit.df[-1])
 
 
 def test_boolean_penalty_basis_keeps_its_numeric_penalty():
@@ -268,7 +268,7 @@ def test_boolean_penalty_basis_keeps_its_numeric_penalty():
         tt=lambda x, *args: r.CoxPenaltyBasis((np.asarray(x) > 1).astype(float), value),
     )
     assert fit.penalized is not None
-    assert fit.coef_names == ("x", "tt(rx)")
+    assert fit.coefficient_names == ("x", "tt(rx)")
     close(fit.coefficients, expected.coefficients)
     close(fit.var, expected.var)
 

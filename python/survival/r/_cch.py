@@ -20,7 +20,7 @@ from ._coerce import (
 from ._fit import _model_frame, _r_levels
 from ._formula import _column_source
 from ._surv import _complete_codes, _strata
-from ._types import CchModel
+from ._types import CchModel, SummaryCchResult
 
 _METHODS = {
     "prentice": "Prentice",
@@ -207,7 +207,7 @@ def cch(
         fit=fit,
         formula=formula,
         design=frame.design,
-        coef_names=tuple(frame.names),
+        coefficient_names=tuple(frame.names),
         y=y,
         id=tuple(id_values),
         subcoh=tuple(subcohort),
@@ -219,25 +219,22 @@ def cch(
     )
 
 
-def summary_cch(fit: CchModel) -> dict[str, Any]:
+def summary_cch(fit: CchModel) -> SummaryCchResult:
     """R's ``summary.cch``: ``Value``/``SE``/``Z``/``p`` per coefficient."""
 
     rows = []
     variance = fit.var
-    for idx, (name, coef) in enumerate(zip(fit.coef_names, fit.coefficients, strict=True)):
+    for idx, (name, coef) in enumerate(zip(fit.coefficient_names, fit.coefficients, strict=True)):
         se = math.sqrt(variance[idx][idx])
         z = abs(coef / se) if se > 0.0 else math.nan
         cdf = _core.psurvreg([z], [0.0], [1.0], "gaussian")[0]
         p = 2.0 * (1.0 - cdf)
-        rows.append({"name": name, "coef": coef, "se": se, "z": z, "p": p})
-    return {
-        "model_type": "cch",
-        "method": fit.method,
-        "cohort_size": list(fit.cohort_size),
-        "subcohort_size": list(fit.subcohort_size),
-        "stratified": fit.stratified,
-        "stratum_names": list(fit.stratum_names) if fit.stratum_names is not None else None,
-        "coefficient_names": list(fit.coef_names),
-        "coefficient_columns": ["Value", "SE", "Z", "p"],
-        "coefficients": rows,
-    }
+        rows.append({"name": name, "Value": coef, "SE": se, "Z": z, "p": p})
+    return SummaryCchResult(
+        method=fit.method,
+        cohort_size=list(fit.cohort_size),
+        subcohort_size=list(fit.subcohort_size),
+        coefficients=rows,
+        stratified=fit.stratified,
+        stratum_names=list(fit.stratum_names) if fit.stratum_names is not None else None,
+    )

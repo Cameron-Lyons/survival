@@ -280,8 +280,8 @@ def test_summary_has_the_loglik_pair_and_var(weibull):
     assert summary["loglik"] == approx([-1153.8511880894062, -1147.0544314319495], rel=1e-12)
     assert summary["chi"] == approx(13.593513314913253)
     assert_matrix(summary["var"], WEIBULL_VAR)
-    assert summary["correlation"] is None
-    assert r.model_summary(weibull, correlation=False)["correlation"] is None
+    assert summary.correlation is None
+    assert r.model_summary(weibull, correlation=False).correlation is None
     with pytest.raises(TypeError, match="correlation must be True or False"):
         r.model_summary(weibull, correlation="yes")
 
@@ -320,7 +320,7 @@ def test_summary_correlation(weibull, lung):
     stratified = r.model_summary(
         r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung), correlation=True
     )
-    assert stratified["coefficient_names"] == ["(Intercept)", "age", "sex=1", "sex=2"]
+    assert [row["name"] for row in stratified["table"]] == ["(Intercept)", "age", "sex=1", "sex=2"]
     assert_matrix(
         stratified["correlation"],
         [
@@ -396,7 +396,13 @@ def test_summary_correlation(weibull, lung):
 
 def test_summary_correlation_leaves_out_an_aliased_coefficient(aliased):
     summary = r.model_summary(aliased, correlation=True)
-    assert summary["coefficient_names"] == ["(Intercept)", "age", "age2", "sex", "Log(scale)"]
+    assert [row["name"] for row in summary["table"]] == [
+        "(Intercept)",
+        "age",
+        "age2",
+        "sex",
+        "Log(scale)",
+    ]
     assert len(summary["var"]) == 5
     assert_matrix(
         summary["correlation"],
@@ -418,8 +424,8 @@ def test_anova_p_values_are_pchisq(lung):
     veteran = survival.datasets.load_veteran()
     fit = r.survreg("Surv(time, status) ~ karno + celltype + age", data=veteran)
     table = r.anova(fit)
-    assert table.df == approx([math.nan, 1.0, 3.0, 1.0])
-    assert table.p == approx(
+    assert table["Df"] == approx([math.nan, 1.0, 3.0, 1.0])
+    assert table["Pr(>Chi)"] == approx(
         [
             math.nan,
             3.1038630560756744e-11,
@@ -432,12 +438,12 @@ def test_anova_p_values_are_pchisq(lung):
     f2 = r.survreg("Surv(time, status) ~ age + sex", data=lung)
     f3 = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="lognormal")
     table = r.anova(f1, f2, f3)
-    assert table.df == approx([math.nan, 1.0, 0.0])
-    assert table.deviance == approx([math.nan, 9.6788413665326516, -23.3914223240822139])
-    assert table.p == approx([math.nan, 0.0018640213902380439, math.nan])
+    assert table["Df"] == approx([math.nan, 1.0, 0.0])
+    assert table["Deviance"] == approx([math.nan, 9.6788413665326516, -23.3914223240822139])
+    assert table["Pr(>Chi)"] == approx([math.nan, 0.0018640213902380439, math.nan])
     reversed_table = r.anova(f2, f1)
-    assert reversed_table.df == approx([math.nan, -1.0])
-    assert reversed_table.p == approx([math.nan, 0.0018640213902380439])
+    assert reversed_table["Df"] == approx([math.nan, -1.0])
+    assert reversed_table["Pr(>Chi)"] == approx([math.nan, 0.0018640213902380439])
 
 
 def test_chisq_p_values_follow_stat_anova():

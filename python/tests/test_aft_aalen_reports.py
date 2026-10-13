@@ -31,37 +31,46 @@ def options(arguments):
 
 def summary_input(case):
     source = case["input"]
-    result = {key: value for key, value in source.items() if value != {}}
     table = matrix(source["table"])
+    rows = [
+        dict(name=name, **dict(zip(table.colnames, row, strict=True)))
+        for name, row in zip(table.rownames, table.values, strict=True)
+    ]
     if source["model_type"] == "aareg":
-        keys = (
-            ["slope", "coef", "se"]
-            + (["robust_se"] if "robust se" in table.colnames else [])
-            + ["z", "p"]
+        return r.SummaryAaregResult(
+            table=rows,
+            test=source["test"],
+            test_statistic=source["test_statistic"],
+            test_var=source["test_var"],
+            test_var2=source["test_var2"] or None,
+            chisq=source["chisq"],
+            n=source["n"],
+            df=source["df"],
+            p=source["p"],
         )
-        result["columns"] = table.colnames
-        result["table"] = [
-            dict(name=name, **dict(zip(keys, row, strict=True)))
-            for name, row in zip(table.rownames, table.values, strict=True)
-        ]
-        result["test_var2"] = source["test_var2"] or None
-    else:
-        keys = (
-            ["coef", "se", "naive_se", "z", "p"] if source["robust"] else ["coef", "se", "z", "p"]
-        )
-        result["coefficients"] = [
-            dict(name=name, **dict(zip(keys, row, strict=True)))
-            for name, row in zip(table.rownames, table.values, strict=True)
-        ]
-        result["coefficient_names"] = table.rownames
-        result["location_coefficients"] = np.asarray(
-            source["location_coefficients"], dtype=float
-        ).tolist()
-        result["na_action"] = r.NaAction(tuple(source["omit"]), "omit") if source["omit"] else None
-        result["correlation"] = (
-            matrix(source["correlation"]).values if source["correlation"] else None
-        )
-    return result
+    location = np.asarray(source["location_coefficients"], dtype=float).tolist()
+    scales = source["scales"]
+    return r.SummarySurvregResult(
+        coefficients=dict(zip(table.rownames, location, strict=False)),
+        table=rows,
+        var=source["var"],
+        df=source["df"],
+        loglik=source["loglik"],
+        iter=source["iter"],
+        idf=source["idf"],
+        scale=dict(zip(source["scale_names"], scales, strict=True))
+        if source["scale_names"]
+        else scales[0],
+        parms=source["parms"],
+        n=source["n"],
+        chi=source["chi"],
+        robust=source["robust"],
+        fixed_scale=source["fixed_scale"],
+        distribution=source["parms"].split(" distribution")[0],
+        chi_df=source["chi_df"],
+        na_action=r.NaAction(tuple(source["omit"]), "omit") if source["omit"] else None,
+        correlation=matrix(source["correlation"]).values if source["correlation"] else None,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -103,7 +112,7 @@ def test_native_model_report_matches_r(case, fits, capsys):
 )
 def test_summary_snapshot_matches_r(case):
     value = summary_input(case)
-    function = getattr(r, "print_summary_" + value["model_type"])
+    function = getattr(r, "print_summary_" + case["input"]["model_type"])
     report = function(value, width=case["width"], **options(case["arguments"]))
     assert report.lines == case["lines"]
     np.testing.assert_array_equal(
@@ -120,7 +129,7 @@ def test_reweighted_robust_covariance_matches_r(name, fits):
     expected = case["input"]
     kwargs = options(case["summary_arguments"])
     actual = r.model_summary(fit, **kwargs)
-    assert "robust se" in actual["columns"]
+    assert "robust se" in actual["table"][0]
     np.testing.assert_allclose(actual["test_var2"], expected["test_var2"], rtol=3e-10, atol=1e-11)
     assert actual["chisq"] == pytest.approx(expected["chisq"], rel=3e-10)
     array_fit = dataclasses.replace(fit, dfbeta=np.asarray(fit.dfbeta))
@@ -166,9 +175,9 @@ def test_aliased_correlation_labels_and_legacy_summary_metadata(fits):
     report = r.print_summary_survreg(summary)
     assert report.tables["correlation"].rownames == ["(Intercept)", "age", "sex", "Log(scale)"]
     summary = r.model_summary(fits("stratified"))
-    expected = r.print_summary_survreg(summary)
-    del summary["fixed_scale"], summary["scale_names"]
-    assert r.print_summary_survreg(summary).lines == expected.lines
+    assert summary.scale == {"sex=1": summary.scale["sex=1"], "sex=2": summary.scale["sex=2"]}
+    with pytest.raises(TypeError):
+        del summary["fixed_scale"]
 
 
 @pytest.mark.parametrize(

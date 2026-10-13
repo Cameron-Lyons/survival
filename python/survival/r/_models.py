@@ -97,7 +97,6 @@ from ._survfit_print import SurvfitPrint
 from ._survfit_residuals import residuals_survfit
 from ._survpenal_print import SurvregPenalPrint
 from ._survreg import (
-    SurvregAnovaResult,
     SurvregModel,
     _prediction_term_labels,
     coef_names_survreg,
@@ -112,6 +111,7 @@ from ._survreg import (
 )
 from ._types import (
     AaregModel,
+    AnovaResult,
     BasehazResult,
     CchModel,
     ConcordanceResult,
@@ -124,6 +124,7 @@ from ._types import (
     QuantileSurvfitResult,
     RatetablePrint,
     ResponsePrint,
+    SummaryCchResult,
     SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
@@ -213,7 +214,7 @@ def coef_names(fit: Any, *, complete: Any | None = None) -> list[str]:
 @coef_names.register(CoxphModel | CchModel)
 def _coef_names_cox(fit: CoxphModel | CchModel, *, complete: Any | None = None) -> list[str]:
     include = _normalize_bool_option_with_default(complete, "complete", True)
-    names = list(fit.coef_names)
+    names = list(fit.coefficient_names)
     if include:
         return names
     return [name for name, b in zip(names, fit.coefficients, strict=True) if not math.isnan(b)]
@@ -822,7 +823,7 @@ model_summary.register(TmergeFrame, summary_tmerge)
 
 
 @model_summary.register(CchModel)
-def _model_summary_cch(fit: CchModel, **kwargs: Any) -> dict[str, Any]:
+def _model_summary_cch(fit: CchModel, **kwargs: Any) -> SummaryCchResult:
     return summary_cch(fit)
 
 
@@ -1417,17 +1418,6 @@ def _coxph_detail_frame(result: CoxphDetailResult) -> dict[str, list[Any]]:
     return frame
 
 
-def _anova_frame(result: _core.AnovaCoxphResult) -> dict[str, list[Any]]:
-    rows = list(result.rows)
-    return {
-        "model": [str(row.name) for row in rows],
-        "loglik": [float(row.loglik) for row in rows],
-        "Chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
-        "Df": [math.nan if row.df is None else int(row.df) for row in rows],
-        "Pr(>|Chi|)": [math.nan if row.p_value is None else float(row.p_value) for row in rows],
-    }
-
-
 def _concordance_frame(result: ConcordanceResult) -> dict[str, list[Any]]:
     rows = result.count if isinstance(result.count, list) else [result.count]
     names = result.names or [f"X{idx + 1}" for idx in range(len(rows))]
@@ -1496,7 +1486,6 @@ as_data_frame.register(PyearsResult, _pyears_result_frame)
 as_data_frame.register(SurvexpResult | SummarySurvexpResult, _survexp_frame)
 as_data_frame.register(_core.FineGrayOutput, _finegray_frame)
 as_data_frame.register(SurvdiffResult, _survdiff_frame)
-as_data_frame.register(_core.AnovaCoxphResult, _anova_frame)
 
 
 @as_data_frame.register(SurvfitPrint)
@@ -1583,8 +1572,8 @@ def _ratetable_frame(result: Any) -> dict[str, list[Any]]:
     return _ratetable_summary_frame(summary_ratetable(result))
 
 
-@as_data_frame.register(SurvregAnovaResult)
-def _survreg_anova_frame(result: SurvregAnovaResult) -> dict[str, list[Any]]:
+@as_data_frame.register(AnovaResult)
+def _anova_frame(result: AnovaResult) -> dict[str, list[Any]]:
     return result.frame()
 
 

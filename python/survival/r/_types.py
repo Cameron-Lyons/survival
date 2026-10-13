@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from operator import index
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -241,7 +241,7 @@ class CchModel:
     fit: _core.CchFitResult
     formula: str
     design: _FormulaDesign
-    coef_names: tuple[str, ...]
+    coefficient_names: tuple[str, ...]
     y: Surv
     id: tuple[Any, ...]
     subcoh: tuple[int, ...]
@@ -250,6 +250,12 @@ class CchModel:
     subcohort_size: tuple[int, ...]
     sc_ids: tuple[Any, ...] | None
     stratum_names: tuple[str, ...] | None = None
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        if "coef_names" in state:
+            state = {**state, "coefficient_names": state["coef_names"]}
+            del state["coef_names"]
+        self.__dict__.update(state)
 
     @property
     def coefficients(self) -> list[float]:
@@ -457,6 +463,210 @@ class SurvConcordanceResult:
     n: int
     std_err: float
     na_action: NaAction | None = None
+
+
+def _anova_cell(value: Any) -> str:
+    if isinstance(value, float):
+        return "" if math.isnan(value) else f"{value:.5g}"
+    return str(value)
+
+
+@dataclass(frozen=True, repr=False)
+class AnovaResult:
+    """R's ``anova`` table of Cox and parametric survival models (an ``anova`` data frame).
+
+    ``columns`` holds the table under R's column names, in R's order: ``loglik``,
+    ``Chisq``, ``Df`` and ``Pr(>|Chi|)`` for coxph; ``Df``, ``Deviance``, ``Resid. Df``,
+    ``-2*LL`` and ``Pr(>Chi)`` for survreg, with ``Terms`` and ``Test`` for a list of
+    models.  The p-value column is absent without a test, and NaN stands for R's NA.
+    ``row_names`` are the table's row names and ``heading`` the lines R prints above it.
+    ``result["Chisq"]`` is a column.
+    """
+
+    columns: dict[str, list[Any]]
+    row_names: list[str]
+    heading: list[str]
+
+    def __getitem__(self, column: str) -> list[Any]:
+        return self.columns[column]
+
+    def __contains__(self, column: object) -> bool:
+        return column in self.columns
+
+    def frame(self) -> dict[str, list[Any]]:
+        """The table as columns, with R's column names."""
+
+        return {name: list(values) for name, values in self.columns.items()}
+
+    @property
+    def loglik(self) -> list[float] | None:
+        """The log-likelihoods of a Cox table."""
+
+        return self.columns.get("loglik")
+
+    @property
+    def neg2loglik(self) -> list[float] | None:
+        """The ``-2*LL`` column of a survreg table."""
+
+        return self.columns.get("-2*LL")
+
+    def __repr__(self) -> str:
+        header = ["", *self.columns]
+        body = [
+            [name, *(_anova_cell(values[i]) for values in self.columns.values())]
+            for i, name in enumerate(self.row_names)
+        ]
+        widths = [max(len(row[j]) for row in [header, *body]) for j in range(len(header))]
+        lines = [
+            " ".join(
+                cell.ljust(widths[j]) if j == 0 else cell.rjust(widths[j])
+                for j, cell in enumerate(row)
+            ).rstrip()
+            for row in [header, *body]
+        ]
+        return "\n".join([*self.heading, "", *lines])
+
+
+class _ModelSummary(Mapping[str, Any]):
+    """Read-only ``summary["component"]`` access to a model summary's fields.
+
+    The keys are the field names; R's dotted spelling (``"conf.int"``) is accepted too.
+    A component R leaves out (``NULL``) is None as an attribute and absent as a key.
+    """
+
+    __slots__ = ()
+
+    def __getitem__(self, key: str) -> Any:
+        name = key.replace(".", "_")
+        if name in self.__dataclass_fields__:  # type: ignore[attr-defined]
+            value = getattr(self, name)
+            if value is not None:
+                return value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (
+            name
+            for name in self.__dataclass_fields__  # type: ignore[attr-defined]
+            if getattr(self, name) is not None
+        )
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+@dataclass(frozen=True)
+class SummaryCoxphResult(_ModelSummary):
+    """R's ``summary.coxph``.
+
+    ``coefficients`` has one row per coefficient with R's columns ``coef``,
+    ``exp(coef)``, ``se(coef)``, ``robust se`` (robust fits), ``z`` and ``Pr(>|z|)``;
+    ``conf_int`` has ``exp(coef)``, ``exp(-coef)`` and the limits named for the level
+    (``lower .95``, ``upper .95``).  ``loglik`` is the null and final log-likelihood.
+    """
+
+    n: int
+    nevent: float
+    loglik: list[float]
+    coefficients: list[dict[str, Any]]
+    logtest: dict[str, float]
+    sctest: dict[str, float]
+    rsq: dict[str, float]
+    used_robust: bool
+    concordance: dict[str, float]
+    columns: list[str]
+    method: str
+    na_action: NaAction | None = None
+    conf_int: list[dict[str, Any]] | None = None
+    waldtest: dict[str, float] | None = None
+    robscore: dict[str, float] | None = None
+    cmap: Any | None = None
+    states: list[str] | None = None
+
+
+@dataclass(frozen=True)
+class SummaryCoxphPenalResult(_ModelSummary):
+    """R's ``summary.coxph.penal``: one row per term with R's columns ``coef``,
+    ``se(coef)``, ``se2``, ``Chisq``, ``DF`` and ``p``, the penalty reports in
+    ``print2`` and the other components of :class:`SummaryCoxphResult`."""
+
+    n: int
+    nevent: float
+    loglik: list[float]
+    iter: list[int]
+    df: list[float]
+    coefficients: list[dict[str, Any]]
+    logtest: dict[str, float]
+    concordance: dict[str, float]
+    columns: list[str]
+    method: str
+    na_action: NaAction | None = None
+    conf_int: list[dict[str, Any]] | None = None
+    print2: list[str] | None = None
+    waldtest: dict[str, float] | None = None
+
+
+@dataclass(frozen=True)
+class SummarySurvregResult(_ModelSummary):
+    """R's ``summary.survreg``.
+
+    ``coefficients`` is R's named coefficient vector, as a dict from name to value;
+    ``table`` has one row per coefficient and log-scale with R's columns ``Value``,
+    ``Std. Error``, ``z`` and ``p`` (``Std. Err`` and ``(Naive SE)`` for a robust fit).
+    ``scale`` is the scale, or a dict of the scale of each stratum, and ``parms`` the
+    distribution line R prints.  ``fixed_scale``, ``distribution``,
+    ``distribution_parameters`` and ``chi_df`` are what the printed summary shows.
+    """
+
+    coefficients: dict[str, float]
+    table: list[dict[str, Any]]
+    var: list[list[float]]
+    df: Any
+    loglik: list[float]
+    iter: Any
+    idf: int
+    scale: float | dict[str, float]
+    parms: str
+    n: int
+    chi: float
+    robust: bool
+    fixed_scale: bool
+    distribution: str
+    chi_df: float
+    na_action: NaAction | None = None
+    correlation: list[list[float]] | None = None
+    distribution_parameters: list[float] | None = None
+
+
+@dataclass(frozen=True)
+class SummaryAaregResult(_ModelSummary):
+    """R's ``summary.aareg``: ``table`` has one row per coefficient with R's columns
+    ``slope``, ``coef``, ``se(coef)``, ``robust se`` (with a robust variance), ``z`` and
+    ``p``; ``chisq`` is the test of the covariates (the intercept excluded) on ``df``
+    degrees of freedom, with p-value ``p``."""
+
+    table: list[dict[str, Any]]
+    test: str
+    test_statistic: list[float]
+    test_var: list[list[float]]
+    chisq: float
+    n: list[int]
+    df: int
+    p: float
+    test_var2: list[list[float]] | None = None
+
+
+@dataclass(frozen=True)
+class SummaryCchResult(_ModelSummary):
+    """R's ``summary.cch``: ``coefficients`` has one row per coefficient with R's
+    columns ``Value``, ``SE``, ``Z`` and ``p``."""
+
+    method: str
+    cohort_size: list[int]
+    subcohort_size: list[int]
+    coefficients: list[dict[str, Any]]
+    stratified: bool
+    stratum_names: list[str] | None = None
 
 
 class TermsPrediction(list):

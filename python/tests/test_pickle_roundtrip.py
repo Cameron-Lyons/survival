@@ -325,14 +325,10 @@ def test_concordance_round_trip(cox_fits, how):
 @pytest.mark.parametrize("how", COPIES)
 def test_other_native_results_round_trip(lung, mgus2_states, how):
     anova = COPIES[how](r.anova(r.coxph("Surv(time, status) ~ age + sex", lung)))
-    assert [row.name for row in anova.rows] == ["NULL", "age", "sex"]
-    assert [row.loglik for row in anova.rows] == approx(
-        [-749.909801390395, -747.789352207734, -742.848245783770]
-    )
-    assert [row.chisq for row in anova.rows[1:]] == approx([4.24089836532130, 9.88221284792735])
-    assert [row.p_value for row in anova.rows[1:]] == approx(
-        [0.03946128102607811, 0.00166884120417826]
-    )
+    assert anova.row_names == ["NULL", "age", "sex"]
+    assert anova.loglik == approx([-749.909801390395, -747.789352207734, -742.848245783770])
+    assert anova["Chisq"][1:] == approx([4.24089836532130, 9.88221284792735])
+    assert anova["Pr(>|Chi|)"][1:] == approx([0.03946128102607811, 0.00166884120417826])
     yates = r.yates(r.coxph("Surv(time, status) ~ age + factor(ph.ecog)", lung), "ph.ecog")
     (test,) = COPIES[how](yates).test
     assert (test.name, test.df) == ("global", 3)

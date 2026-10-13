@@ -133,7 +133,7 @@ def lung():
 @pytest.mark.parametrize(("rhs", "names", "coefficients", "n"), COXPH_CASES)
 def test_coxph_terms_match_r(lung, rhs, names, coefficients, n):
     fit = r.coxph(f"Surv(time, status) ~ {rhs}", lung)
-    assert list(fit.coef_names) == names
+    assert list(fit.coefficient_names) == names
     assert fit.n == n
     for actual, expected in zip(r.coef(fit), coefficients, strict=True):
         if math.isnan(expected):

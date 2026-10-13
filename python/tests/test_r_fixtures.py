@@ -771,27 +771,16 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
     elif aspect == "summary.coefficients":
         rows = summary["coefficients"]
         r_cols = expected["colnames"]
-        keys = {
-            "coef": ("coef", RTOL_COEF),
-            "exp(coef)": ("exp_coef", RTOL_COEF),
-            "se(coef)": ("naive_se" if "robust se" in r_cols else "se", RTOL_VAR),
-            "robust se": ("robust_se", RTOL_VAR),
-            "z": ("z", RTOL_VAR),
-            "Pr(>|z|)": ("p", RTOL_VAR),
-            "Value": ("coef", RTOL_COEF),
-            "SE": ("se", RTOL_VAR),
-            "Z": ("z", RTOL_VAR),
-            "p": ("p", RTOL_VAR),
-        }
+        coefficient_columns = {"coef", "exp(coef)", "Value"}
         if expected["rownames"]:
             assert_exact(
                 [row["name"] for row in rows], expected["rownames"], path="coefficients.rows"
             )
         for row, r_row in zip(rows, expected["values"], strict=True):
             for col_name, value in zip(r_cols, r_row, strict=True):
-                key, rtol = keys[col_name]
+                rtol = RTOL_COEF if col_name in coefficient_columns else RTOL_VAR
                 assert_close(
-                    row[key], value, rtol=rtol, path=f"coefficients[{row['name']}].{col_name}"
+                    row[col_name], value, rtol=rtol, path=f"coefficients[{row['name']}].{col_name}"
                 )
     elif aspect == "summary.conf_int":
         rows = summary["conf_int"]
@@ -800,14 +789,9 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
             row = next((item for item in rows if item["name"] == name), None)
             if row is None:
                 raise FixtureMismatchError(f"conf_int has no row {name!r}")
-            for col_name, key in (
-                ("exp(coef)", "exp(coef)"),
-                ("exp(-coef)", "exp(-coef)"),
-                ("lower .95", "lower"),
-                ("upper .95", "upper"),
-            ):
+            for col_name in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95"):
                 assert_close(
-                    row[key],
+                    row[col_name],
                     exp_row[r_cols.index(col_name)],
                     rtol=RTOL_VAR,
                     path=f"conf_int[{name}].{col_name}",
@@ -975,20 +959,11 @@ class CoxphHandler(TopicHandler):
 
 
 def _check_anova(result: Any, expected: Mapping[str, Any], nested: bool = False) -> None:
-    rows = list(result.rows)
-    assert_close(
-        [row.loglik for row in rows], expected["loglik"], rtol=RTOL_COEF, path="anova.loglik"
-    )
-    assert_close(
-        [row.chisq for row in rows][1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq"
-    )
-    assert_close(
-        [row.p_value for row in rows][1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p"
-    )
+    assert_close(result.loglik, expected["loglik"], rtol=RTOL_COEF, path="anova.loglik")
+    assert_close(result["Chisq"][1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq")
+    assert_close(result["Pr(>|Chi|)"][1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p")
     if not nested:
-        assert_exact(
-            [row.df for row in rows][1:], [int(v) for v in expected["df"][1:]], path="anova.df"
-        )
+        assert_exact(result["Df"][1:], [int(v) for v in expected["df"][1:]], path="anova.df")
 
 
 def _check_cox_residual(fit: Any, kind: str, expected: Any) -> None:
@@ -1247,12 +1222,14 @@ class CoxphPenalizedHandler(TopicHandler):
             assert_exact(fit.iter, expected["iter"], path="iter")
         elif aspect == "var2":
             assert_matrix_close(fit.var2, expected[aspect], rtol=RTOL_VAR, path=aspect)
-        elif aspect in ("df", "frail", "fvar", "penalty", "pterms"):
+        elif aspect in ("df", "frail", "fvar", "penalty"):
             assert_close(getattr(fit, aspect), expected[aspect], rtol=RTOL_VAR, path=aspect)
+        elif aspect == "pterms":
+            assert_close(list(fit.pterms.values()), expected[aspect], rtol=RTOL_VAR, path=aspect)
         elif aspect == "history":
             entries = list(expected[aspect].values())
             assert_exact(len(fit.history), len(entries), path="history.length")
-            for actual, exp in zip(fit.history, entries, strict=True):
+            for actual, exp in zip(fit.history.values(), entries, strict=True):
                 assert_close([actual.theta], exp["theta"], rtol=RTOL_VAR, path="history.theta")
                 assert_exact(actual.done, exp["done"], path="history.done")
                 if exp.get("history") is not None:
@@ -1416,17 +1393,17 @@ class SurvregHandler(TopicHandler):
         elif aspect == "summary":
             exp = _expect(case, "summary")
             summary = r.model_summary(fit)
-            rows = _attr(summary, "coefficients")
+            rows = summary["table"]
             cols = exp["table"]["colnames"]
             for row, values in zip(rows, exp["table"]["values"], strict=True):
                 assert_close(
-                    row["coef"],
+                    row["Value"],
                     values[cols.index("Value")],
                     rtol=RTOL_COEF,
                     path=f"summary[{row['name']}].value",
                 )
                 assert_close(
-                    row["se"],
+                    row["Std. Error"],
                     values[cols.index("Std. Error")],
                     rtol=RTOL_VAR,
                     path=f"summary[{row['name']}].se",
@@ -1440,10 +1417,17 @@ class SurvregHandler(TopicHandler):
         elif aspect == "anova":
             exp = _expect(case, "anova")
             result = r.anova(fit)
-            assert_exact(list(_attr(result, "terms")), exp["terms"], path="anova.terms")
-            for key in ("loglik", "resid_df", "df", "deviance", "p"):
+            assert_exact(result.row_names, exp["terms"], path="anova.terms")
+            columns = {
+                "loglik": "-2*LL",
+                "resid_df": "Resid. Df",
+                "df": "Df",
+                "deviance": "Deviance",
+                "p": "Pr(>Chi)",
+            }
+            for key, column in columns.items():
                 assert_close(
-                    as_float_list(_attr(result, key)),
+                    as_float_list(result[column]),
                     exp[key],
                     rtol=RTOL_VAR if key == "p" else RTOL_COEF,
                     path=f"anova.{key}",
@@ -1585,14 +1569,6 @@ class AaregHandler(TopicHandler):
             summary = r.model_summary(fit)
             assert_close(summary["chisq"], exp["chisq"][0][0], rtol=RTOL_VAR, path="chisq")
             table = exp["table"]
-            columns = {
-                "slope": "slope",
-                "coef": "coef",
-                "se(coef)": "se",
-                "robust se": "robust_se",
-                "z": "z",
-                "p": "p",
-            }
             assert_exact(
                 [row["name"] for row in summary["table"]],
                 table["rownames"],
@@ -1601,7 +1577,7 @@ class AaregHandler(TopicHandler):
             for row, values in zip(summary["table"], table["values"], strict=True):
                 for name, value in zip(table["colnames"], values, strict=True):
                     assert_close(
-                        row[columns[name]],
+                        row[name],
                         value,
                         rtol=RTOL_VAR,
                         path=f"summary[{row['name']}].{name}",
@@ -2135,9 +2111,9 @@ class ValidationExtraHandler(TopicHandler):
         elif case["name"] == "anova_lung_model_list":
             fits = [r.coxph(formula, case_data(self.topic, case)) for formula in case["formulas"]]
             result = r.anova(*fits)
-            field = {"p": "p_value"}.get(aspect, aspect)
+            column = {"p": "Pr(>|Chi|)", "chisq": "Chisq", "df": "Df"}.get(aspect, aspect)
             assert_close(
-                as_float_list([getattr(row, field) for row in result.rows]),
+                as_float_list(result[column]),
                 case["expected"][aspect],
                 rtol=RTOL_VAR,
                 path=aspect,

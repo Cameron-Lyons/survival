@@ -3,29 +3,25 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
 from typing import Any
 
 from ._aareg import summary_aareg
 from ._coerce import _r_format_number
 from ._print import format_pvalues, numeric_matrix_lines, print_options
 from ._survpenal_print import _naprint, _signif
-from ._types import AaregModel, ModelPrint, NamedMatrix
+from ._types import AaregModel, ModelPrint, NamedMatrix, SummaryAaregResult
 
 
 def _report(
-    x: Mapping[str, Any], digits: int, width: int, *, test_label: str | None = None
+    x: SummaryAaregResult, digits: int, width: int, *, test_label: str | None = None
 ) -> ModelPrint:
-    rows = x["table"]
-    keys = (
-        ["slope", "coef", "se"]
-        + (["robust_se"] if "robust se" in x["columns"] else [])
-        + ["z", "p"]
-    )
+    rows = x.table
+    columns = ["slope", "coef", "se(coef)", *(["robust se"] if x.test_var2 is not None else [])]
+    columns += ["z", "p"]
     table = NamedMatrix(
         [row["name"] for row in rows],
-        list(x["columns"]),
-        [[float(row[key]) for key in keys] for row in rows],
+        columns,
+        [[float(row[column]) for column in columns] for row in rows],
     )
     display = NamedMatrix(
         table.rownames,
@@ -40,7 +36,7 @@ def _report(
         f"test weights={x['test'] if test_label is None else test_label}",
     ]
     statistics = {
-        key: copy.deepcopy(x[key])
+        key: copy.deepcopy(getattr(x, key))
         for key in ("n", "test", "test_statistic", "test_var", "test_var2", "chisq", "df", "p")
     }
     return ModelPrint({"coefficients": table}, statistics, digits, lines)
@@ -79,9 +75,9 @@ def print_aareg(
     )
 
 
-def print_summary_aareg(x: Mapping[str, Any], *, width: Any = 80) -> ModelPrint:
+def print_summary_aareg(x: SummaryAaregResult, *, width: Any = 80) -> ModelPrint:
     """Return ``print.summary.aareg`` with full-precision coefficients and tests."""
-    if not isinstance(x, Mapping) or x.get("model_type") != "aareg":
+    if not isinstance(x, SummaryAaregResult):
         raise TypeError("print_summary_aareg requires an Aalen model summary")
     _, digits, width = print_options(1, None, width, 7)
     return _report(x, digits, width)

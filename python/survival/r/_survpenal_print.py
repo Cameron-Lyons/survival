@@ -26,7 +26,7 @@ from ._survreg import SurvregModel, survreg_df
 from ._types import NaAction, _PenaltyDesignTerm
 
 _COLUMNS = ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
-_ROW_KEYS = ("coef", "se", "se2", "chisq", "df", "p")
+_ROW_KEYS = ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
 _WIDTH = 80
 
 

@@ -174,7 +174,7 @@ def test_competing_risks_fit(mg_fit):
     fit = mg_fit
     assert isinstance(fit, r.CoxphmsModel)
     assert isinstance(fit, r.CoxphModel)
-    assert fit.coef_names == ("age_1:2", "sexM_1:2", "age_1:3", "sexM_1:3")
+    assert fit.coefficient_names == ("age_1:2", "sexM_1:2", "age_1:3", "sexM_1:3")
     assert fit.coefficients == approx(
         [0.0130377951641942, -0.0251369568806912, 0.0645438014943818, 0.391576147058642]
     )
@@ -296,7 +296,7 @@ def test_strata_terms(mg):
 
 def test_counting_process_illness_death(my):
     fit = r.coxph("Surv(tstart, tstop, event) ~ trt + sex", my, id="id")
-    assert fit.coef_names == (
+    assert fit.coefficient_names == (
         "trtB_1:2",
         "sexm_1:2",
         "trtB_1:3",
@@ -362,7 +362,7 @@ def test_multistate_equals_separate_fits(my):
 
 def test_formula_list_adds_a_covariate(mg):
     fit = r.coxph(["Surv(etime, event) ~ age + sex", "1:3 ~ mspike"], mg, id="id")
-    assert fit.coef_names == ("age_1:2", "sexM_1:2", "age_1:3", "sexM_1:3", "mspike")
+    assert fit.coefficient_names == ("age_1:2", "sexM_1:2", "age_1:3", "sexM_1:3", "mspike")
     assert fit.coefficients == approx(
         [
             0.0130377951641943,
@@ -386,7 +386,7 @@ def test_formula_list_adds_a_covariate(mg):
 
 def test_formula_list_removes_and_shares(mg):
     drop = r.coxph(["Surv(etime, event) ~ age + sex", "1:2 ~ -sex"], mg, id="id")
-    assert drop.coef_names == ("age_1:2", "age_1:3", "sexM")
+    assert drop.coefficient_names == ("age_1:2", "age_1:3", "sexM")
     assert drop.coefficients == approx([0.0131634349599458, 0.0645438014943813, 0.391576147058641])
     assert drop.cmap.values == [[1, 2], [0, 3]]
     for lines in (
@@ -396,14 +396,14 @@ def test_formula_list_removes_and_shares(mg):
         same = r.coxph(lines, mg, id="id")
         assert same.coefficients == approx(drop.coefficients)
     named = r.coxph(["Surv(etime, event) ~ age", '"(s0)":"death" ~ mspike'], mg, id="id")
-    assert named.coef_names == ("age_1:2", "age_1:3", "mspike")
+    assert named.coefficient_names == ("age_1:2", "age_1:3", "mspike")
     assert named.coefficients == approx(
         [0.0131634349599433, 0.0622968316126558, -0.0575988771445161]
     )
 
 
 def test_common_coefficient(common_fit):
-    assert common_fit.coef_names == ("age_1:2", "sexM", "age_1:3")
+    assert common_fit.coefficient_names == ("age_1:2", "sexM", "age_1:3")
     assert common_fit.coefficients == approx(
         [0.0148709083844237, 0.341853933163757, 0.0642069047190597]
     )
@@ -412,7 +412,7 @@ def test_common_coefficient(common_fit):
 
 def test_shared_baselines(mg, shared_fit):
     fit = shared_fit
-    assert fit.coef_names == ("age_1:2", "age_1:3", "ph(1:3/1:2)")
+    assert fit.coefficient_names == ("age_1:2", "age_1:3", "ph(1:3/1:2)")
     assert fit.coefficients == approx([0.0106778897372408, 0.0624086063114782, -1.66314799096339])
     assert fit.iter == 5
     assert fit.loglik == approx([-7026.90746408329, -6523.30271517694])
@@ -426,7 +426,7 @@ def test_shared_baselines(mg, shared_fit):
     assert common.smap.values == [[1, 1]]
     assert common.share is None
     both = r.coxph(["Surv(etime, event) ~ age", "1:2 + 1:3 ~ age / common + shared"], mg, id="id")
-    assert both.coef_names == ("age", "ph(1:3/1:2)")
+    assert both.coefficient_names == ("age", "ph(1:3/1:2)")
     assert both.coefficients == approx([0.055274884598812, 2.01200026088354])
     assert both.cmap.values == [[1, 1], [0, 2]]
     assert both.share.scale == approx([1.0, 7.47826086955954])
@@ -441,7 +441,7 @@ def test_formula_list_missing_values(my_na):
     fit = r.coxph(lines, my_na, id="id", model=True)
     assert fit.na_action == r.NaAction((423, 425, 428), "omit")
     assert (fit.n, fit.n_id, fit.nevent) == (1006, 645, 680)
-    assert fit.coef_names == (
+    assert fit.coefficient_names == (
         "trtB_1:2",
         "flt3B_1:2",
         "flt3C_1:2",
@@ -532,7 +532,7 @@ def test_statedata_and_state_expressions(my):
         id="id",
         statedata=statedata,
     )
-    assert fit.coef_names == ("trtB_1:2", "trtB_1:3", "sexm", "trtB_2:3")
+    assert fit.coefficient_names == ("trtB_1:2", "trtB_1:3", "sexm", "trtB_2:3")
     assert fit.coefficients == approx(
         [-0.141385262465604, -0.391675484853137, 0.015635169227796, -0.26181530792858]
     )
@@ -542,7 +542,7 @@ def test_statedata_and_state_expressions(my):
         id="id",
         statedata=pd.DataFrame(statedata),
     )
-    assert fit.coef_names == ("trtB_1:2", "sexm", "trtB_1:3", "trtB_2:3")
+    assert fit.coefficient_names == ("trtB_1:2", "sexm", "trtB_1:3", "trtB_2:3")
     assert fit.coefficients == approx(
         [-0.138994059753283, -0.0312506555700437, -0.390325247666303, -0.26181530792858]
     )
@@ -562,7 +562,7 @@ def test_formula_list_term_rules(my):
     def fit(*lines, **kwargs):
         return r.coxph(["Surv(tstart, tstop, event) ~ trt", *lines], my, id="id", **kwargs)
 
-    assert fit("1:3 ~ sex", "2:3 ~ sex + flt3").coef_names == (
+    assert fit("1:3 ~ sex", "2:3 ~ sex + flt3").coefficient_names == (
         "trtB_1:2",
         "trtB_1:3",
         "sexm_1:3",
@@ -572,13 +572,13 @@ def test_formula_list_term_rules(my):
         "flt3C",
     )
     removed = fit("1:3 ~ sex", "1:3 ~ -trt")
-    assert removed.coef_names == ("trtB_1:2", "sexm", "trtB_2:3")
+    assert removed.coefficient_names == ("trtB_1:2", "sexm", "trtB_2:3")
     assert removed.coefficients == approx(
         [-0.141385262465604, -0.0181581630364868, -0.26181530792858]
     )
     assert removed.cmap.values == [[1, 0, 3], [0, 2, 0]]
     interaction = r.coxph(["Surv(tstart, tstop, event) ~ trt + sex", "1:3 ~ trt:sex"], my, id="id")
-    assert interaction.coef_names == (
+    assert interaction.coefficient_names == (
         "trtB_1:2",
         "sexm_1:2",
         "trtB_1:3",
@@ -588,10 +588,10 @@ def test_formula_list_term_rules(my):
         "sexm_2:3",
     )
     star = r.coxph("Surv(tstart, tstop, event) ~ trt * sex", my, id="id")
-    assert star.coef_names[:3] == ("trtB_1:2", "sexm_1:2", "trtB:sexm_1:2")
-    assert len(star.coef_names) == 9
+    assert star.coefficient_names[:3] == ("trtB_1:2", "sexm_1:2", "trtB:sexm_1:2")
+    assert len(star.coefficient_names) == 9
     common = fit("1:2 + 2:3 ~ sex / common")
-    assert common.coef_names == ("trtB_1:2", "sexm", "trtB_1:3", "trtB_2:3")
+    assert common.coefficient_names == ("trtB_1:2", "sexm", "trtB_1:3", "trtB_2:3")
     assert common.coefficients == approx(
         [-0.145217472998936, 0.0498730854428101, -0.390325247666303, -0.268190887854923]
     )
@@ -603,7 +603,7 @@ def test_formula_list_term_rules(my):
         [-0.141385262465602, -0.63047196454286, -0.0413423916301038]
     )
     shared = fit("1:3 + 2:3 ~ 1 / shared")
-    assert shared.coef_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(2:3/1:3)")
+    assert shared.coefficient_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(2:3/1:3)")
     assert shared.coefficients == approx(
         [-0.141385262465602, -0.395520629630838, -0.257694445123988, 0.504255641217598]
     )
@@ -645,7 +645,7 @@ def test_lung_shared_hazards_equal_a_factor(lms):
         ties="breslow",
     )
     assert fit.states == ("ph0", "ph1", "ph2", "death")
-    assert fit.coef_names == ("age", "sex", "ph(2:4/1:4)", "ph(3:4/1:4)")
+    assert fit.coefficient_names == ("age", "sex", "ph(2:4/1:4)", "ph(3:4/1:4)")
     expected = [0.0107529784064812, -0.544905922709152, 0.409485168736856, 0.900698400667153]
     assert fit.coefficients == approx(expected)
     single = r.coxph("Surv(time, status) ~ age + sex + factor(ph.ecog)", lms, ties="breslow")
@@ -670,7 +670,7 @@ def test_hand_checkable_data():
 
     init = [math.log(k) for k in range(1, 7)]
     fit = r.coxph("Surv(t1, t2, state) ~ x", _mtest(), id="id", iter_max=0, init=init)
-    assert fit.coef_names == ("x_1:2", "x_3:2", "x_1:3", "x_2:3", "x_1:4", "x_2:4")
+    assert fit.coefficient_names == ("x_1:2", "x_3:2", "x_1:3", "x_2:3", "x_1:4", "x_2:4")
     assert fit.coefficients == approx(init)
     assert fit.loglik == approx([-6.05600306824555, -6.05600306824555])
     assert fit.iter == 0
@@ -806,7 +806,7 @@ def test_missing_istate_in_a_formula_list(my):
     fit = r.coxph(
         ["Surv(tstart, tstop, event) ~ trt", "1:2 ~ flt3"], data, id="id", istate="current"
     )
-    assert fit.coef_names == ("trtB_1:2", "flt3B", "flt3C", "trtB_1:3", "trtB_2:3")
+    assert fit.coefficient_names == ("trtB_1:2", "flt3B", "flt3C", "trtB_1:3", "trtB_2:3")
     assert fit.coefficients == approx(
         [
             -0.147108585105755,
@@ -844,7 +844,7 @@ def test_first_level_drop_resets_the_counts(mg):
 
 def test_cluster_term_keeps_the_list(mg):
     fit = r.coxph(["Surv(etime, event) ~ age + cluster(grp)", "1:3 ~ mspike"], mg, id="id")
-    assert fit.coef_names == ("age_1:2", "age_1:3", "mspike")
+    assert fit.coefficient_names == ("age_1:2", "age_1:3", "mspike")
     assert fit.coefficients == approx([0.0131634349599433, 0.0622968316126558, -0.0575988771445161])
     assert diag(fit.var) == approx(
         [4.86279463410178e-05, 1.83869342150771e-05, 0.00395728868609266], rel=1e-6
@@ -857,7 +857,7 @@ def test_cluster_term_keeps_the_list(mg):
 
 def test_cluster_term_in_a_single_formula(mg, my):
     fit = r.coxph("Surv(etime, event) ~ age + cluster(grp)", mg, id="id")
-    assert fit.coef_names == ("age_1:2", "age_1:3")
+    assert fit.coefficient_names == ("age_1:2", "age_1:3")
     assert fit.coefficients == approx([0.0131634349599425, 0.0618940325295464])
     assert fit.loglik == approx([-6351.08896303735, -6173.70118451254])
     assert diag(fit.var) == approx([4.86279463410306e-05, 1.88448878195120e-05], rel=1e-6)
@@ -887,7 +887,7 @@ def test_blocks_follow_their_first_transition(my):
     )
     assert fit.smap.values == [[1, 1, 2], [0, 0, 1]]
     assert fit.cmap.values == [[1, 2, 3], [0, 4, 0]]
-    assert fit.coef_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(1:3/1:2)")
+    assert fit.coefficient_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(1:3/1:2)")
     assert fit.coefficients == approx(
         [-0.149331230493399, -0.369393115117944, -0.302763061567023, -0.847297860386046]
     )
@@ -901,7 +901,7 @@ def test_blocks_follow_their_first_transition(my):
     )
     assert noncontiguous.smap.values == [[1, 2, 1]]
     assert noncontiguous.cmap.values == [[1, 2, 3], [0, 0, 4]]
-    assert noncontiguous.coef_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(2:3/1:2)")
+    assert noncontiguous.coefficient_names == ("trtB_1:2", "trtB_1:3", "trtB_2:3", "ph(2:3/1:2)")
     assert noncontiguous.coefficients == approx(
         [-0.157965320755042, -0.390325247666303, -0.209042401175958, -0.220881626637236]
     )
@@ -922,7 +922,7 @@ def test_multistate_identities(mg):
     """tests/multistate.R."""
 
     common = r.coxph(["Surv(etime, event) ~ sex", "1:0 ~ age / common"], mg, id="id")
-    assert common.coef_names == ("sexM_1:2", "age", "sexM_1:3")
+    assert common.coefficient_names == ("sexM_1:2", "age", "sexM_1:3")
     expected = [0.0905561234948941, 0.0574827668179705, 0.373851590192247]
     assert common.coefficients == approx(expected)
     assert common.loglik == approx([-6351.08896303735, -6172.61726290313])
@@ -931,7 +931,7 @@ def test_multistate_identities(mg):
             ["Surv(etime, event) ~ sex", f"{lhs} ~ age / common"], mg, id="id", istate="entry"
         )
         assert fit.states == ("Entry", "pcm", "death")
-        assert fit.coef_names == common.coef_names
+        assert fit.coefficient_names == common.coefficient_names
         assert fit.coefficients == approx(expected)
         assert fit.loglik == approx(common.loglik)
     names = ("age_1:2", "sexM_1:2", "mspike", "age_1:3", "sexM_1:3")
@@ -944,11 +944,11 @@ def test_multistate_identities(mg):
     ]
     for lhs in ('1:state("pcm")', '1:"pcm"', '1:c("pcm")'):
         fit = r.coxph(["Surv(etime, event) ~ age + sex", f"{lhs} ~ mspike"], mg, id="id")
-        assert fit.coef_names == names
+        assert fit.coefficient_names == names
         assert fit.coefficients == approx(values)
         assert fit.loglik == approx([-6350.61063851234, -6143.46068723565])
     removed = r.coxph(["Surv(etime, event) ~ age + sex + mspike", "1:3 ~ -mspike"], mg, id="id")
-    assert removed.coef_names == names
+    assert removed.coefficient_names == names
     assert removed.coefficients == approx(values)
     strata = r.coxph(
         ["Surv(etime, event) ~ age + strata(sex)", '1:state("pcm") ~ mspike'],
@@ -956,14 +956,14 @@ def test_multistate_identities(mg):
         id="id",
         ties="breslow",
     )
-    assert strata.coef_names == ("age_1:2", "mspike", "age_1:3")
+    assert strata.coefficient_names == ("age_1:2", "mspike", "age_1:3")
     assert strata.coefficients == approx(
         [0.0164591499397845, 0.862114518103395, 0.0642932156003545]
     )
     swapped = r.coxph(
         ["Surv(etime, event) ~ age + sex", "1:2 ~ mspike + strata(sex) - sex"], mg, id="id"
     )
-    assert swapped.coef_names == ("age_1:2", "mspike", "age_1:3", "sexM")
+    assert swapped.coefficient_names == ("age_1:2", "mspike", "age_1:3", "sexM")
     assert swapped.coefficients == approx(
         [0.0164591499397836, 0.862114518103394, 0.0645438014943822, 0.391576147058642]
     )
@@ -982,7 +982,7 @@ def test_pbcseq_shared_hazards(pbc2):
     assert fit.cmap.colnames == [
         f"{source}:{target}" for target in range(1, 6) for source in range(1, 5) if source != target
     ]
-    assert fit.coef_names == ("age", "ph(2:5/1:5)", "ph(3:5/1:5)", "ph(4:5/1:5)")
+    assert fit.coefficient_names == ("age", "ph(2:5/1:5)", "ph(3:5/1:5)", "ph(4:5/1:5)")
     expected = [0.0481214978977572, 0.744843937488483, 1.51340328010702, 3.42199383994622]
     assert fit.coefficients == approx(expected)
     single = r.coxph("Surv(tstart, tstop, death) ~ age + bili4", pbc2, ties="breslow")
@@ -997,7 +997,7 @@ def test_pbcseq_shared_hazards(pbc2):
         other = r.coxph([lines[0], f"{lhs} ~ age / common + shared"], pbc2, id="id", istate="bili4")
         assert other.coefficients == approx(expected)
     shared = r.coxph([lines[0], "c(1:4):5 ~ age / shared"], pbc2, id="id", istate="bili4")
-    assert shared.coef_names == (
+    assert shared.coefficient_names == (
         "age_1:5",
         "age_2:5",
         "age_3:5",
@@ -1020,7 +1020,7 @@ def test_pbcseq_shared_hazards(pbc2):
     )
     assert shared.loglik == approx([-726.559267793818, -584.270186543885])
     separate = r.coxph([lines[0], "0:5 ~ age"], pbc2, id="id", istate="bili4")
-    assert separate.coef_names == ("age_1:5", "age_2:5", "age_3:5", "age_4:5")
+    assert separate.coefficient_names == ("age_1:5", "age_2:5", "age_3:5", "age_4:5")
     assert separate.coefficients == approx(
         [0.093715393492755, 0.104242877310579, 0.0770424345777695, 0.037449585213589]
     )
@@ -1072,7 +1072,7 @@ def test_timeline_formula_list(pdata):
 
     assert len(pdata) == 2257
     fit = r.coxph(["Surv2(day, bstat) ~ 1", "(1:3):4 ~ edema + albumin + ast"], pdata, id="id")
-    assert fit.coef_names == (
+    assert fit.coefficient_names == (
         "edema_1:4",
         "albumin_1:4",
         "ast_1:4",
@@ -1149,14 +1149,14 @@ def test_coef_and_vcov_matrices(mg_fit, common_fit):
         ]
     ]
     assert r.vcov(mg_fit) == mg_fit.var
-    assert r.coef_names(mg_fit) == list(mg_fit.coef_names)
+    assert r.coef_names(mg_fit) == list(mg_fit.coefficient_names)
 
 
 def test_summary(mg_fit, shared_fit):
     summary = r.model_summary(mg_fit)
     row = summary["coefficients"][2]
     assert row["name"] == "age_1:3"
-    assert [row[k] for k in ("coef", "exp_coef", "naive_se", "robust_se", "z")] == approx(
+    assert [row[k] for k in ("coef", "exp(coef)", "se(coef)", "robust se", "z")] == approx(
         [
             0.0645438014943818,
             1.06667229906214,
@@ -1166,9 +1166,9 @@ def test_summary(mg_fit, shared_fit):
         ],
         rel=1e-6,
     )
-    assert row["p"] == approx(3.97454244627841e-69, rel=1e-5)
+    assert row["Pr(>|z|)"] == approx(3.97454244627841e-69, rel=1e-5)
     conf = summary["conf_int"][3]
-    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
+    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95")] == approx(
         [1.47931056836788, 0.675990573840959, 1.30026053308818, 1.68301636633348], rel=1e-6
     )
     assert summary["logtest"]["test"] == approx(386.731006613854)
@@ -1186,7 +1186,7 @@ def test_summary(mg_fit, shared_fit):
     shared = r.model_summary(shared_fit, conf_int=0.9)
     row = shared["coefficients"][2]
     assert row["name"] == "ph(1:3/1:2)"
-    assert [row[k] for k in ("coef", "exp_coef", "naive_se", "robust_se", "z")] == approx(
+    assert [row[k] for k in ("coef", "exp(coef)", "se(coef)", "robust se", "z")] == approx(
         [
             -1.66314799096339,
             0.189541365446661,
@@ -1196,9 +1196,9 @@ def test_summary(mg_fit, shared_fit):
         ],
         rel=1e-6,
     )
-    assert row["p"] == approx(0.0015491433527694, rel=1e-5)
+    assert row["Pr(>|z|)"] == approx(0.0015491433527694, rel=1e-5)
     conf = shared["conf_int"][2]
-    assert [conf["lower"], conf["upper"]] == approx(
+    assert [conf["lower .90"], conf["upper .90"]] == approx(
         [0.0798663060433971, 0.449825852667626], rel=1e-6
     )
     assert shared["logtest"]["test"] == approx(1007.2094978127)
@@ -1213,7 +1213,7 @@ def test_likelihood_generics(mg_fit):
     assert r.bic(mg_fit) == approx(12342.9766693448)
     assert r.extract_aic(mg_fit) == approx([4, 12323.4469194608])
     intervals = r.confint(mg_fit)
-    assert [entry["name"] for entry in intervals] == list(mg_fit.coef_names)
+    assert [entry["name"] for entry in intervals] == list(mg_fit.coefficient_names)
     assert r.model_formula(mg_fit) == "Surv(etime, event) ~ age + sex"
 
 

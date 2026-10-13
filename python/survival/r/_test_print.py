@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Mapping
 from typing import Any, cast
 
 from .. import _survival as _core
@@ -26,6 +25,7 @@ from ._types import (
     CoxZphResult,
     ModelPrint,
     NamedMatrix,
+    SummaryCchResult,
     SurvConcordanceResult,
     SurvdiffResult,
 )
@@ -59,7 +59,7 @@ def print_clogit(
     return print_coxph(x, digits=digits, signif_stars=signif_stars, width=width)
 
 
-def _case_cohort_report(x: Mapping[str, Any], width: int, *, summary: bool) -> ModelPrint:
+def _case_cohort_report(x: SummaryCchResult, width: int, *, summary: bool) -> ModelPrint:
     tables: dict[str, NamedMatrix] = {}
     if x["stratified"]:
         lines = [f"Exposure-stratified case-cohort analysis, {x['method']} method."]
@@ -82,17 +82,17 @@ def _case_cohort_report(x: Mapping[str, Any], width: int, *, summary: bool) -> M
         columns = ["Coef", "HR", "(95%", "CI)", "p"]
         values = [
             [
-                row["coef"],
-                _exp(row["coef"]),
-                _exp(row["coef"] - 1.96 * row["se"]),
-                _exp(row["coef"] + 1.96 * row["se"]),
+                row["Value"],
+                _exp(row["Value"]),
+                _exp(row["Value"] - 1.96 * row["SE"]),
+                _exp(row["Value"] + 1.96 * row["SE"]),
                 row["p"],
             ]
             for row in rows
         ]
     else:
         columns = ["Value", "SE", "Z", "p"]
-        values = [[float(row[key]) for key in ("coef", "se", "z", "p")] for row in rows]
+        values = [[float(row[key]) for key in columns] for row in rows]
     table = NamedMatrix([row["name"] for row in rows], columns, values)
     tables["coefficients"] = table
     display = _rounded(table, 3) if summary else table
@@ -114,13 +114,13 @@ def print_cch(x: CchModel, *, width: Any = 80) -> ModelPrint:
     return _case_cohort_report(summary_cch(x), width, summary=False)
 
 
-def print_summary_cch(x: Mapping[str, Any], digits: Any = 3, *, width: Any = 80) -> ModelPrint:
+def print_summary_cch(x: SummaryCchResult, digits: Any = 3, *, width: Any = 80) -> ModelPrint:
     """Return case-cohort hazard ratios and 1.96-SE confidence limits.
 
     R accepts but ignores ``digits`` here, rounding the display to three decimal
     places. The report's numeric table retains unrounded values.
     """
-    if not isinstance(x, Mapping) or x.get("model_type") != "cch":
+    if not isinstance(x, SummaryCchResult):
         raise TypeError("print_summary_cch requires a case-cohort summary")
     _, _, width = print_options(1, digits, width, 3)
     return _case_cohort_report(x, width, summary=True)

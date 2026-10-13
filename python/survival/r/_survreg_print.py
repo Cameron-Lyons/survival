@@ -18,7 +18,7 @@ from ._print import (
 )
 from ._survpenal_print import SurvregPenalPrint, _naprint, _signif, print_survreg_penal
 from ._survreg import SurvregModel, survreg_summary
-from ._types import ModelPrint, NamedMatrix
+from ._types import ModelPrint, NamedMatrix, SummarySurvregResult
 
 
 def _scales(
@@ -140,7 +140,7 @@ def _correlation_lines(table: NamedMatrix, digits: int, width: int) -> list[str]
 
 
 def print_summary_survreg(
-    x: Mapping[str, Any],
+    x: SummarySurvregResult,
     digits: Any = None,
     signif_stars: Any = False,
     *,
@@ -152,7 +152,7 @@ def print_summary_survreg(
     likelihood's independence assumption. The complete correlation matrix is
     retained in ``tables['correlation']``; its lower triangle is displayed.
     """
-    if not isinstance(x, Mapping) or x.get("model_type") != "survreg":
+    if not isinstance(x, SummarySurvregResult):
         raise TypeError("print_summary_survreg requires an AFT model summary")
     _, digits, width = print_options(1, digits, width, 3)
     stars = _normalize_bool_option(signif_stars, "signif_stars")
@@ -162,18 +162,18 @@ def print_summary_survreg(
         if robust
         else ["Value", "Std. Error", "z", "p"]
     )
-    keys = ["coef", "se", "naive_se", "z", "p"] if robust else ["coef", "se", "z", "p"]
-    rows = x["coefficients"]
+    rows = x["table"]
     table = NamedMatrix(
-        [row["name"] for row in rows], columns, [[float(row[key]) for key in keys] for row in rows]
+        [row["name"] for row in rows],
+        columns,
+        [[float(row[column]) for column in columns] for row in rows],
     )
     tables = {"coefficients": table}
     lines = coefficient_matrix_lines(table, digits, width, signif_stars=stars)
     metadata = dict(x)
-    metadata.setdefault("fixed_scale", len(x["var"]) == len(x["location_coefficients"]))
-    metadata.setdefault(
-        "scale_names", [row["name"] for row in rows[len(x["location_coefficients"]) :]]
-    )
+    scale = x["scale"]
+    metadata["scales"] = list(scale.values()) if isinstance(scale, dict) else [scale]
+    metadata["scale_names"] = list(scale) if isinstance(scale, dict) else []
     lines += _scales(metadata, digits, width)
     parameters = x.get("distribution_parameters")
     description = (
@@ -194,7 +194,7 @@ def print_summary_survreg(
     )
     lines.append(_sample_size(x))
     if x.get("correlation") is not None:
-        names = [row["name"] for row in rows if not math.isnan(float(row["coef"]))]
+        names = [row["name"] for row in rows if not math.isnan(float(row["Value"]))]
         correlation = NamedMatrix(names, list(names), [list(row) for row in x["correlation"]])
         tables["correlation"] = correlation
         lines.extend(_correlation_lines(correlation, digits, width))

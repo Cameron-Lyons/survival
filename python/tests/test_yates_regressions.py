@@ -432,7 +432,7 @@ def _lung_with_unused_level():
 def test_unused_factor_levels_stay_as_aliased_columns():
     data = _lung_with_unused_level()
     fit = r.coxph("Surv(time, status) ~ g", data)
-    assert list(fit.coef_names) == ["gb", "gc"]
+    assert list(fit.coefficient_names) == ["gb", "gc"]
     assert r.coef(fit) == approx([0.383302234567895, math.nan])
     assert_rows_close(r.vcov(fit), [[0.024849256452365, 0.0], [0.0, 0.0]])
     assert r.vcov(fit, complete=False) == [[pytest.approx(0.024849256452365)]]
@@ -488,7 +488,7 @@ def test_a_subset_keeps_the_levels_it_leaves_unused():
     lung["e"] = RFactor(lung["ph.ecog"], [0.0, 1.0, 2.0, 3.0])
     subset = [value is not None and value < 3 for value in lung["ph.ecog"]]
     fit = r.coxph("Surv(time, status) ~ e", lung, subset=subset)
-    assert list(fit.coef_names) == ["e1", "e2", "e3"]
+    assert list(fit.coefficient_names) == ["e1", "e2", "e3"]
     assert r.coef(fit) == approx([0.368640502213039, 0.915301849920346, math.nan])
     assert_rows_close(
         r.vcov(fit),
@@ -527,7 +527,7 @@ def test_cch_with_an_unused_level():
     with pytest.raises(ValueError, match="init contains non-finite value NaN"):
         r.cch("Surv(edrel, rel) ~ h + age", data, **arguments)
     fit = r.cch("Surv(edrel, rel) ~ h + age", data, method="SelfPrentice", **arguments)
-    assert fit.coef_names == ("hUH", "hXX", "age")
+    assert fit.coefficient_names == ("hUH", "hXX", "age")
     assert fit.coefficients == approx([1.492705307615764, math.nan, 0.066043805308395])
     assert [fit.var[i][i] for i in range(3)] == approx(
         [0.02271371366870318, 0.0, 0.00051099847863195]

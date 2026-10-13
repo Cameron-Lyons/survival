@@ -106,13 +106,18 @@ def snapshot(case):
         )
     if method == "summary.cch":
         table = source["table"]
-        result = dict(source, model_type="cch")
         names = table["rows"] or ["age"]
-        result["coefficients"] = [
-            dict(name=name, **dict(zip(["coef", "se", "z", "p"], values, strict=True)))
-            for name, values in zip(names, table["values"], strict=True)
-        ]
-        return result
+        return r.SummaryCchResult(
+            method=source["method"],
+            cohort_size=source["cohort_size"],
+            subcohort_size=source["subcohort_size"],
+            coefficients=[
+                dict(name=name, **dict(zip(["Value", "SE", "Z", "p"], values, strict=True)))
+                for name, values in zip(names, table["values"], strict=True)
+            ],
+            stratified=source["stratified"],
+            stratum_names=source["stratum_names"] or None,
+        )
     if method == "concordance":
         count, names = count_input(source["count"])
         estimates = np.asarray(source["concordance"], dtype=float).tolist()
@@ -287,7 +292,7 @@ def test_fitted_concordance_does_not_invent_formula_omission_metadata():
 
 def test_case_cohort_large_hazard_ratios_remain_infinite(objects):
     summary = r.model_summary(objects("Prentice_single"))
-    summary["coefficients"][0]["coef"] = 1000
+    summary["coefficients"][0]["Value"] = 1000
     report = r.print_summary_cch(summary)
     assert report.tables["coefficients"].values[0][1:4] == [float("inf")] * 3
     assert "Inf" in report.lines[-1]

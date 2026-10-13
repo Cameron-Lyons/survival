@@ -101,7 +101,7 @@ def test_coxph_basis_terms_match_r(lung, rhs, names, coefficients, n):
     beyond = pytest.warns(UserWarning, match="beyond boundary knots")
     with beyond if "Boundary" in rhs else nullcontext():
         fit = r.coxph(f"Surv(time, status) ~ {rhs}", lung)
-    assert list(fit.coef_names) == names
+    assert list(fit.coefficient_names) == names
     assert fit.n == n
     for actual, expected in zip(r.coef(fit), coefficients, strict=True):
         if math.isnan(expected):

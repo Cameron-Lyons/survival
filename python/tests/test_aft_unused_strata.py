@@ -70,8 +70,9 @@ def test_unused_scale_strata_match_r_fit_and_methods(case):
     else:
         close([fit.df], case["df"])
     summary = r.model_summary(fit)
-    assert summary["scale_names"] == case["scale_names"]
-    close(summary["scales"], case["scale"])
+    scale = summary["scale"]
+    assert (list(scale) if isinstance(scale, dict) else []) == case["scale_names"]
+    close(list(scale.values()) if isinstance(scale, dict) else [scale], case["scale"])
 
 
 @pytest.mark.parametrize("kind", ["plain", "robust", "ridge"])

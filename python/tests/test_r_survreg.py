@@ -117,14 +117,21 @@ def test_survreg_strata_scales_and_labels(lung):
     assert fit.df_residual == 223
 
     summary = r.model_summary(fit)
-    assert summary["coefficient_names"] == ["(Intercept)", "age", "sex", "sex=1", "sex=2"]
-    assert [row["coef"] for row in summary["coefficients"]] == pytest.approx(
+    assert [row["name"] for row in summary["table"]] == [
+        "(Intercept)",
+        "age",
+        "sex",
+        "sex=1",
+        "sex=2",
+    ]
+    assert [row["Value"] for row in summary["table"]] == pytest.approx(
         [6.21020507, -0.01120008, 0.37043715, -0.21884929, -0.44233152]
     )
-    assert [row["se"] for row in summary["coefficients"]] == pytest.approx(
+    assert [row["Std. Error"] for row in summary["table"]] == pytest.approx(
         [0.471152566, 0.006825942, 0.117360605, 0.074958411, 0.109408127]
     )
-    assert summary["scales"] == pytest.approx(fit.scale)
+    assert list(summary["scale"].values()) == pytest.approx(fit.scale)
+    assert list(summary["scale"]) == ["sex=1", "sex=2"]
 
     data = dict(lung, sexf=["m" if value == 1 else "f" for value in lung["sex"]])
     character = r.survreg("Surv(time, status) ~ age + strata(sexf)", data=data)
@@ -154,10 +161,10 @@ def test_survreg_cluster_and_robust_variance(lung, lung_weibull):
     assert robust.cluster is None
     summary = r.model_summary(robust)
     assert summary["robust"] is True
-    first = summary["coefficients"][0]
-    assert first["se"] == pytest.approx(0.490594463098)
-    assert first["naive_se"] == pytest.approx(0.481366952857)
-    assert first["robust_se"] == first["se"]
+    first = summary["table"][0]
+    assert first["Std. Err"] == pytest.approx(0.490594463098)
+    assert first["(Naive SE)"] == pytest.approx(0.481366952857)
+    assert "Std. Error" not in first
     assert first["z"] == pytest.approx(12.7903054975)
     assert first["p"] == pytest.approx(1.85742323572e-37)
 
@@ -428,50 +435,50 @@ def test_residuals_survreg_all_types(lung_weibull):
 
 def test_anova_survreg_sequential_terms(lung, lung_weibull):
     table = _survreg.anova_survreg(lung_weibull)
-    assert table.terms == ["NULL", "age", "sex"]
-    assert table.loglik == pytest.approx([2307.70237618, 2303.78770423, 2294.10886286])
-    assert table.resid_df == [226, 225, 224]
-    assert math.isnan(table.df[0])
-    assert table.df[1:] == [1.0, 1.0]
-    assert table.deviance[1:] == pytest.approx([3.91467195, 9.67884137])
-    assert table.p[1:] == pytest.approx([0.0478663565064, 0.00186402139024])
+    assert table.row_names == ["NULL", "age", "sex"]
+    assert table.neg2loglik == pytest.approx([2307.70237618, 2303.78770423, 2294.10886286])
+    assert table["Resid. Df"] == [226, 225, 224]
+    assert math.isnan(table["Df"][0])
+    assert table["Df"][1:] == [1.0, 1.0]
+    assert table["Deviance"][1:] == pytest.approx([3.91467195, 9.67884137])
+    assert table["Pr(>Chi)"][1:] == pytest.approx([0.0478663565064, 0.00186402139024])
     frame = r.as_data_frame(table)
     assert list(frame) == ["Df", "Deviance", "Resid. Df", "-2*LL", "Pr(>Chi)"]
     assert "Scale estimated" in table.heading
-    assert _survreg.anova_survreg(lung_weibull, test="none").p is None
+    assert "Pr(>Chi)" not in _survreg.anova_survreg(lung_weibull, test="none")
 
     stratified = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     table = _survreg.anova_survreg(stratified)
-    assert table.terms == ["NULL", "age", "strata(sex)", "sex"]
-    assert table.deviance[1:] == pytest.approx(
+    assert table.row_names == ["NULL", "age", "strata(sex)", "sex"]
+    assert table["Deviance"][1:] == pytest.approx(
         [3.9146719483806, 2.15017143626028, 10.2579304565488]
     )
-    assert table.resid_df == [226, 225, 224, 223]
-    assert table.p[1:] == pytest.approx(
+    assert table["Resid. Df"] == [226, 225, 224, 223]
+    assert table["Pr(>Chi)"][1:] == pytest.approx(
         [0.0478663565063668, 0.142553971171007, 0.00136098270268315]
     )
 
     intercept_only = r.survreg("Surv(time, status) ~ 1", data=lung)
     table = _survreg.anova_survreg(intercept_only)
-    assert table.terms == ["NULL"]
-    assert table.resid_df == [226]
+    assert table.row_names == ["NULL"]
+    assert table["Resid. Df"] == [226]
 
 
 def test_anova_survreg_model_list(lung, lung_weibull):
     small = r.survreg("Surv(time, status) ~ age", data=lung)
     large = r.survreg("Surv(time, status) ~ age + strata(sex) + sex", data=lung)
     table = _survreg.anova_survreg(small, large)
-    assert table.terms == ["age", "age + strata(sex) + sex"]
-    assert table.test_labels == ["", "+strata(sex)+sex"]
-    assert table.resid_df == [225, 223]
-    assert table.loglik == pytest.approx([2303.788, 2291.380], abs=1e-3)
-    assert table.df[1] == 2.0
-    assert table.deviance[1] == pytest.approx(12.4081, abs=1e-4)
-    assert table.p[1] == pytest.approx(0.002021226, rel=1e-6)
+    assert table["Terms"] == ["age", "age + strata(sex) + sex"]
+    assert table["Test"] == ["", "+strata(sex)+sex"]
+    assert table["Resid. Df"] == [225, 223]
+    assert table.neg2loglik == pytest.approx([2303.788, 2291.380], abs=1e-3)
+    assert table["Df"][1] == 2.0
+    assert table["Deviance"][1] == pytest.approx(12.4081, abs=1e-4)
+    assert table["Pr(>Chi)"][1] == pytest.approx(0.002021226, rel=1e-6)
     reversed_table = _survreg.anova_survreg([large, small])
-    assert reversed_table.test_labels == ["", "-strata(sex)-sex"]
-    assert reversed_table.df[1] == -2.0
-    assert reversed_table.p[1] == pytest.approx(0.002021226, rel=1e-6)
+    assert reversed_table["Test"] == ["", "-strata(sex)-sex"]
+    assert reversed_table["Df"][1] == -2.0
+    assert reversed_table["Pr(>Chi)"][1] == pytest.approx(0.002021226, rel=1e-6)
     assert list(r.as_data_frame(table)) == [
         "Terms",
         "Resid. Df",
@@ -614,24 +621,23 @@ def test_survreg_argument_errors(lung):
 
 def test_model_summary_survreg_structure(lung_weibull):
     summary = r.model_summary(lung_weibull)
-    assert summary["model_type"] == "survreg"
-    assert summary["coefficient_names"] == ["(Intercept)", "age", "sex", "Log(scale)"]
-    assert summary["location_coefficient_names"] == ["(Intercept)", "age", "sex"]
-    assert summary["location_coefficients"] == pytest.approx(r.coef(lung_weibull))
+    assert isinstance(summary, r.SummarySurvregResult)
+    assert [row["name"] for row in summary["table"]] == ["(Intercept)", "age", "sex", "Log(scale)"]
+    assert list(summary["coefficients"]) == ["(Intercept)", "age", "sex"]
+    assert list(summary["coefficients"].values()) == pytest.approx(r.coef(lung_weibull))
     assert summary["scale"] == pytest.approx(0.754050947641)
-    assert summary["scales"] == pytest.approx([0.754050947641])
     assert summary["distribution"] == "Weibull"
     assert summary["parms"] == "Weibull distribution"
     assert (summary["df"], summary["n"], summary["iter"], summary["idf"]) == (4, 228, 5, 2)
     assert summary["loglik"] == pytest.approx([-1153.85118809, -1147.05443143])
     assert summary["var"] == lung_weibull.var
-    assert summary["correlation"] is None
+    assert summary.correlation is None
+    assert "correlation" not in summary
     assert summary["chi"] == pytest.approx(2 * (-1147.05443143 + 1153.85118809))
     assert summary["robust"] is False
-    rows = summary["coefficients"]
-    assert [row["name"] for row in rows] == summary["coefficient_names"]
-    assert rows[3]["coef"] == pytest.approx(math.log(0.754050947641))
-    assert rows[3]["se"] == pytest.approx(math.sqrt(lung_weibull.var[3][3]))
+    rows = summary["table"]
+    assert rows[3]["Value"] == pytest.approx(math.log(0.754050947641))
+    assert rows[3]["Std. Error"] == pytest.approx(math.sqrt(lung_weibull.var[3][3]))
     assert rows[1]["p"] == pytest.approx(0.0781188632, rel=1e-6)
 
 
