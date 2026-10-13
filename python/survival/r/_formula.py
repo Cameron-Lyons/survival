@@ -49,6 +49,7 @@ from ._expression import (
     _expression_label,
     _expression_source,
     _ExpressionVector,
+    _match_call,
     _parse_expression,
 )
 from ._names import _make_unique
@@ -1713,6 +1714,8 @@ def _transform_argument(term: str) -> tuple[str, str] | None:
         if term.startswith(prefix) and term.endswith(")"):
             arguments = _formula_response_parts(term[len(prefix) : -1])
             if len(arguments) != 1:
+                if wrapper == "log":
+                    return None
                 raise ValueError(f"{wrapper}() requires exactly one column")
             return wrapper, arguments[0]
     return None
@@ -1771,6 +1774,12 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
     if factor_items is not None:
         wrapper, column_items = factor_items
         columns = [column for column, _quoted in column_items]
+        if len(columns) > 1:
+            tree = _parse_expression(term)
+            arguments, _dots = _match_call(tree)
+            if any(child.columns for name, child in arguments.items() if name != "x"):
+                raise ValueError(f"{wrapper}() requires exactly one column")
+            return _CovariateTerm(term, arithmetic=term)
         if len(columns) != 1:
             raise ValueError(f"{wrapper}() requires exactly one column")
         if any(_unsupported_formula_name(column, quoted) for column, quoted in column_items):
@@ -1803,8 +1812,10 @@ def _parse_covariate_atom(term: str) -> _CovariateTerm:
         except ValueError as exc:
             raise ValueError(f"unsupported formula term(s): {term_name}") from exc
         if (
-            tree.kind == "binary" and tree.value in {"&", "|", "==", "!=", "<", "<=", ">", ">="}
-        ) or (tree.kind == "unary" and tree.value == "!"):
+            (tree.kind == "binary" and tree.value in {"&", "|", "==", "!=", "<", "<=", ">", ">="})
+            or (tree.kind == "unary" and tree.value == "!")
+            or (tree.kind == "call" and not tree.parens)
+        ):
             return _CovariateTerm(term, arithmetic=term)
         raise ValueError(f"unsupported formula term(s): {term_name}")
     return _CovariateTerm(term_name)

@@ -390,12 +390,12 @@ def test_an_rmap_expression_that_cannot_be_read_is_an_error():
             ratetable=us,
             rmap={"age": "agyr * 365.25", "sex": "sex", "year": "year"},
         )
-    with pytest.raises(ValueError, match=r"rmap age = round\(ageyr\) \* 365.25: unsupported"):
+    with pytest.raises(ValueError, match=r"rmap age = cumsum\(ageyr\) \* 365.25: unsupported"):
         r.pyears(
             "Surv(time, status) ~ grp",
             _cohort(),
             ratetable=us,
-            rmap={"age": "round(ageyr) * 365.25", "sex": "sex", "year": "year"},
+            rmap={"age": "cumsum(ageyr) * 365.25", "sex": "sex", "year": "year"},
         )
 
 
@@ -426,7 +426,7 @@ def test_an_rmap_expression_that_cannot_be_read_is_an_error():
             [-0.021862150819588585],
             227,
         ),
-        ("I(age*1e-3)", ["I(age*1e-3)"], [18.720179204551467], 228),
+        ("I(age*1e-3)", ["I(age * 0.001)"], [18.720179204551467], 228),
         ("I(age + TRUE)", ["I(age + TRUE)"], [0.018720179204551463], 228),
         (
             "age + sex %in% inst",
@@ -463,7 +463,7 @@ def test_comparisons_coerce_a_string_or_a_factor_as_r_does():
         ),
         ('I(sex == "2")', ['I(sex == "2")TRUE'], [-0.53102353761950805]),
         ('I(age == "60")', ['I(age == "60")TRUE'], [-0.0077053755111580755]),
-        ('I(age*1.5 == "105")', ['I(age*1.5 == "105")TRUE'], [0.03511306967484052]),
+        ('I(age*1.5 == "105")', ['I(age * 1.5 == "105")TRUE'], [0.03511306967484052]),
         ("I(sex == TRUE)", ["I(sex == TRUE)TRUE"], [0.53102353761950649]),
     ]:
         fit = r.coxph(f"Surv(time, status) ~ {rhs}", data)
@@ -590,7 +590,7 @@ def test_a_comparison_in_surv_is_not_a_variable_name():
 
 def test_unsupported_expressions_raise_the_formula_error():
     lung = datasets.load_lung()
-    for rhs in ("I(sex && age > 60)", "as.numeric(sex[1])", "I(system(age))", "log(age, 2)"):
+    for rhs in ("I(sex && age > 60)", "as.numeric(sex[1])", "I(system(age))", "cumsum(age)"):
         with pytest.raises(ValueError, match="unsupported formula|requires exactly one"):
             r.coxph(f"Surv(time, status) ~ {rhs}", lung)
     with pytest.raises(ValueError, match="non-numeric argument to binary operator"):

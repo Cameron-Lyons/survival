@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Expression terms are labelled with R's deparsed text: `I(age>60)` gives the
+  coefficient `I(age > 60)TRUE` and `I(age*1e-3)` gives `I(age * 0.001)`, as in
+  R, instead of repeating the formula's spacing.
 - A bare `cut()` term in `survfit`, `survdiff` and `survexp` formulas used the
   raw variable, giving one curve per distinct value. `cut()` terms are now R
   factors evaluated before subsetting, and `coxph`/`survreg` accept them.
@@ -37,6 +40,12 @@
 
 ### Added
 
+- Formula terms accept R's `factor(levels =, labels =)`, `relevel()`,
+  `interaction()`, `ifelse()`, `pmin()`/`pmax()`, `round()`, `signif()`,
+  `floor()`, `ceiling()`, `trunc()`, `abs()`, `sign()`, `log(x, base)`,
+  `log1p()`, `expm1()`, `log2()`, `log10()`, `as.character()`, `as.integer()`,
+  `as.logical()`, `is.na()`, `c()` and `%in%`, in models, curves, tests and
+  predictions, with R's argument matching and result types.
 - `survival.r.Factor`, R's `factor()`: a list of labels that carries its levels.
 - `subset(strata=, states=)` and `dim` on ordinary and multi-state `survfit`
   curves (R's `fit[...]`).
