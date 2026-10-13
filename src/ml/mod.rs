@@ -2,23 +2,19 @@ pub(crate) mod active_learning;
 pub(crate) mod adversarial_robustness;
 pub(crate) mod attention_cox;
 pub(crate) mod config_validation;
-#[path = "contrastive_surv.rs"]
-pub(crate) mod contrastive_surv_module;
+pub(crate) mod contrastive;
 pub(crate) mod cox_time;
 pub(crate) mod deep_pamm;
-#[path = "deep_surv/mod.rs"]
-pub(crate) mod deep_surv_module;
-#[path = "deephit/mod.rs"]
-pub(crate) mod deephit_module;
+pub(crate) mod deep_surv_net;
+pub(crate) mod deephit_net;
 pub(crate) mod differential_privacy;
 pub(crate) mod distributionally_robust;
-#[path = "dynamic_deephit/mod.rs"]
-pub(crate) mod dynamic_deephit_module;
+pub(crate) mod dynamic_deephit_net;
 pub(crate) mod dysurv;
 pub(crate) mod ensemble_surv;
 pub(crate) mod federated_learning;
-#[path = "galee.rs"]
-pub(crate) mod galee_module;
+pub(crate) mod forest;
+pub(crate) mod galee_net;
 pub(crate) mod gpu_acceleration;
 pub(crate) mod gradient_boost;
 pub(crate) mod graph_surv;
@@ -30,14 +26,10 @@ pub(crate) mod neural_ode_surv;
 pub(crate) mod recurrent_surv;
 pub(crate) mod state_space_surv;
 pub(crate) mod streaming_survival;
-#[path = "survival_forest.rs"]
-pub(crate) mod survival_forest_module;
 pub(crate) mod survival_transformer;
-#[path = "survtrace/mod.rs"]
-pub(crate) mod survtrace_module;
+pub(crate) mod survtrace_net;
 pub(crate) mod temporal_fusion;
-#[path = "tracer/mod.rs"]
-pub(crate) mod tracer_module;
+pub(crate) mod tracer_net;
 pub(crate) mod transfer_learning;
 pub(crate) mod utils;
 
@@ -63,7 +55,7 @@ pub use adversarial_robustness::{
 #[cfg(feature = "ml")]
 pub use attention_cox::{AttentionCoxConfig, AttentionCoxModel, fit_attention_cox};
 #[cfg(feature = "ml")]
-pub use contrastive_surv_module::{
+pub use contrastive::{
     ContrastiveSurv, ContrastiveSurvConfig, ContrastiveSurvResult, SurvivalLossType,
     contrastive_surv,
 };
@@ -72,9 +64,9 @@ pub use cox_time::{CoxTimeConfig, CoxTimeModel, fit_cox_time};
 #[cfg(feature = "ml")]
 pub use deep_pamm::{DeepPAMMConfig, DeepPAMMModel, fit_deep_pamm};
 #[cfg(feature = "ml")]
-pub use deep_surv_module::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
+pub use deep_surv_net::{Activation, DeepSurv, DeepSurvConfig, deep_surv};
 #[cfg(feature = "ml")]
-pub use deephit_module::{DeepHit, DeepHitConfig, deephit};
+pub use deephit_net::{DeepHit, DeepHitConfig, deephit};
 #[cfg(feature = "ml")]
 pub use differential_privacy::{
     DPConfig, DPCoxResult, DPHistogramResult, DPSurvivalResult, LocalDPResult, dp_cox_regression,
@@ -86,7 +78,7 @@ pub use distributionally_robust::{
     robustness_analysis,
 };
 #[cfg(feature = "ml")]
-pub use dynamic_deephit_module::{
+pub use dynamic_deephit_net::{
     DynamicDeepHit, DynamicDeepHitConfig, TemporalType, dynamic_deephit,
 };
 #[cfg(feature = "ml")]
@@ -105,7 +97,11 @@ pub use federated_learning::{
     federated_cox, secure_aggregate,
 };
 #[cfg(feature = "ml")]
-pub use galee_module::{GALEE, GALEEConfig, GALEEResult, UnimodalConstraint, galee};
+pub use forest::{
+    SplitRule, SurvivalForest, SurvivalForestConfig, SurvivalForestInput, survival_forest,
+};
+#[cfg(feature = "ml")]
+pub use galee_net::{GALEE, GALEEConfig, GALEEResult, UnimodalConstraint, galee};
 #[cfg(feature = "ml")]
 pub use gpu_acceleration::{
     BatchPredictionResult, ComputeBackend, DeviceInfo, GPUConfig, ParallelCoxResult,
@@ -143,19 +139,15 @@ pub use streaming_survival::{
     ConceptDriftDetector, StreamingCoxConfig, StreamingCoxModel, StreamingKaplanMeier,
 };
 #[cfg(feature = "ml")]
-pub use survival_forest_module::{
-    SplitRule, SurvivalForest, SurvivalForestConfig, SurvivalForestInput, survival_forest,
-};
-#[cfg(feature = "ml")]
 pub use survival_transformer::{
     SurvivalTransformerConfig, SurvivalTransformerModel, fit_survival_transformer,
 };
 #[cfg(feature = "ml")]
-pub use survtrace_module::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
+pub use survtrace_net::{SurvTrace, SurvTraceActivation, SurvTraceConfig, survtrace};
 #[cfg(feature = "ml")]
 pub use temporal_fusion::{TFTConfig, TemporalFusionTransformer, fit_temporal_fusion_transformer};
 #[cfg(feature = "ml")]
-pub use tracer_module::{Tracer, TracerConfig, tracer};
+pub use tracer_net::{Tracer, TracerConfig, tracer};
 #[cfg(feature = "ml")]
 pub use transfer_learning::{
     DomainAdaptationResult, PretrainedSurvivalModel, TransferLearningConfig, TransferStrategy,

@@ -97,7 +97,7 @@ pub fn cipoisson(
 #[doc = " R vectors."]
 #[pyfunction(name = "cipoisson")]
 #[pyo3(signature = (k, time=None, p=None, method="exact"))]
-pub fn cipoisson_py(
+pub(crate) fn cipoisson_py(
     k: Vec<f64>,
     time: Option<Vec<f64>>,
     p: Option<Vec<f64>>,

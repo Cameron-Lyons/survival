@@ -270,11 +270,10 @@ def test_coxph_fit_counting_process_strata_weights_offset_match_r():
     assert exact.var[0] == pytest.approx([0.70878875738958225])
     assert exact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
 
-    agexact = regression.agexact(start, stop, status, x)
-    assert isinstance(agexact, regression.AgexactFit)
-    assert agexact.coefficients == pytest.approx([0.56988220267373335])
-    assert agexact.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
-    assert agexact.var[0] == pytest.approx([0.70878875738958225])
+    bare = survival.r.agexact_fit(x, survival.r.Surv(start, stop, status))
+    assert bare.coefficients == pytest.approx([0.56988220267373335])
+    assert bare.loglik == pytest.approx([-6.0684255882441098, -5.8190977265322319])
+    assert bare.var[0] == pytest.approx([0.70878875738958225])
 
 
 def test_coxph_fit_validates_inputs():

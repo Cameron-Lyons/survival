@@ -345,24 +345,6 @@ class AeqSurvResult:
     @property
     def time2(self) -> list[float] | None: ...
 
-class AgexactFit:
-    @property
-    def coefficients(self) -> list[float]: ...
-    @property
-    def flag(self) -> int: ...
-    @property
-    def iter(self) -> int: ...
-    @property
-    def loglik(self) -> list[float]: ...
-    @property
-    def means(self) -> list[float]: ...
-    @property
-    def sctest(self) -> float: ...
-    @property
-    def u(self) -> list[float]: ...
-    @property
-    def var(self) -> list[list[float]]: ...
-
 class AggregateGroups:
     @property
     def labels(self) -> list[list[str]]: ...
@@ -11329,19 +11311,6 @@ def aeq_surv(
     time2: Sequence[float] | None = None,
     tolerance: float | None = None,
 ) -> AeqSurvResult: ...
-def agexact(
-    start: ArrayLike,
-    stop: ArrayLike,
-    event: ArrayLike,
-    x: ArrayLike,
-    offset: ArrayLike | None = None,
-    strata: ArrayLike | None = None,
-    init: Sequence[float] | None = None,
-    iter_max: int | None = None,
-    eps: float | None = None,
-    toler_chol: float | None = None,
-    nocenter: Sequence[float] | None = None,
-) -> AgexactFit: ...
 def aggregate_survfit(
     surv: ArrayLike | None = None,
     pstate: ArrayLike | None = None,

@@ -49,7 +49,7 @@ pub fn lvcf<I: SubjectId>(
 #[doc = " Python entry point of [`lvcf`]."]
 #[pyfunction(name = "lvcf")]
 #[pyo3(signature = (id, missing, time=None))]
-pub fn lvcf_py(
+pub(crate) fn lvcf_py(
     id: Vec<IdValue>,
     missing: Vec<bool>,
     time: Option<Vec<f64>>,

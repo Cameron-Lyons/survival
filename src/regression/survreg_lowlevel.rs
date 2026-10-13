@@ -65,7 +65,7 @@ impl SurvregFitResult {
 #[doc = " Bare AFT fit, preserving the response scale and dropping training data."]
 #[pyfunction]
 #[pyo3(signature = (data, distribution, init=None, scale=0.0, control=None, nstrat=None))]
-pub fn survreg_fit_raw(
+pub(crate) fn survreg_fit_raw(
     py: Python<'_>,
     data: &SurvregData,
     distribution: &SurvregDistribution,

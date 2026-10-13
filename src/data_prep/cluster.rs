@@ -32,7 +32,7 @@ pub fn cluster<I: SubjectId>(id: &[I]) -> ClusterResult {
 
 #[doc = " Python entry point of [`cluster`]."]
 #[pyfunction(name = "cluster")]
-pub fn cluster_py(id: Vec<IdValue>) -> PyResult<ClusterResult> {
+pub(crate) fn cluster_py(id: Vec<IdValue>) -> PyResult<ClusterResult> {
     if id.iter().any(IdValue::is_missing) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "id must not contain missing values",

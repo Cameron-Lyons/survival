@@ -291,7 +291,7 @@ pub fn finegray_expand(input: &FineGrayInput<'_>) -> SurvivalResult<FineGrayOutp
 #[pyfunction(name = "finegray_expand")]
 #[pyo3(signature = (time, status, event_type=1, start=None, strata=None, id=None, weights=None, timefix=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn finegray_expand_py(
+pub(crate) fn finegray_expand_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

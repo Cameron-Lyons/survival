@@ -166,7 +166,7 @@ pub(crate) fn compute_landmark(time: &[f64], status: &[i32], landmark_time: f64)
 
 #[doc = " Python entry point of `compute_landmark`."]
 #[pyfunction(name = "landmark_analysis")]
-pub fn landmark_analysis_py(
+pub(crate) fn landmark_analysis_py(
     time: Vec<f64>,
     status: Vec<i32>,
     landmark_time: f64,
@@ -176,7 +176,7 @@ pub fn landmark_analysis_py(
     Ok(compute_landmark(&time, &status, landmark_time))
 }
 
-pub(crate) fn compute_landmarks_parallel(
+pub fn compute_landmarks_parallel(
     time: &[f64],
     status: &[i32],
     landmark_times: &[f64],
@@ -189,7 +189,7 @@ pub(crate) fn compute_landmarks_parallel(
 
 #[doc = " Python entry point of `compute_landmarks_parallel`."]
 #[pyfunction(name = "landmark_analysis_batch")]
-pub fn landmark_analysis_batch_py(
+pub(crate) fn landmark_analysis_batch_py(
     time: Vec<f64>,
     status: Vec<i32>,
     landmark_times: Vec<f64>,
@@ -290,7 +290,7 @@ pub(crate) fn compute_conditional_survival(
 #[doc = " Python entry point of `compute_conditional_survival`."]
 #[pyfunction(name = "conditional_survival")]
 #[pyo3(signature = (time, status, given_time, target_time, confidence_level=None))]
-pub fn conditional_survival_py(
+pub(crate) fn conditional_survival_py(
     time: Vec<f64>,
     status: Vec<i32>,
     given_time: f64,
@@ -400,7 +400,7 @@ pub(crate) fn compute_hazard_ratio(
 #[doc = " Python entry point of `compute_hazard_ratio`."]
 #[pyfunction(name = "hazard_ratio")]
 #[pyo3(signature = (time, status, group, confidence_level=None))]
-pub fn hazard_ratio_py(
+pub(crate) fn hazard_ratio_py(
     time: Vec<f64>,
     status: Vec<i32>,
     group: Vec<i32>,
@@ -502,7 +502,7 @@ pub(crate) fn compute_survival_at_times(
 #[doc = " Python entry point of `compute_survival_at_times`."]
 #[pyfunction(name = "survival_at_times")]
 #[pyo3(signature = (time, status, eval_times, confidence_level=None))]
-pub fn survival_at_times_py(
+pub(crate) fn survival_at_times_py(
     time: Vec<f64>,
     status: Vec<i32>,
     eval_times: Vec<f64>,
@@ -681,7 +681,7 @@ fn validate_life_table_inputs(time: &[f64], status: &[i32], breaks: &[f64]) -> S
 
 #[doc = " Python entry point of `compute_life_table`."]
 #[pyfunction(name = "life_table")]
-pub fn life_table_py(
+pub(crate) fn life_table_py(
     time: Vec<f64>,
     status: Vec<i32>,
     breaks: Vec<f64>,

@@ -595,7 +595,7 @@ pub fn cox_zph<'a>(
 #[cfg(feature = "python")]
 #[pyfunction(name = "cox_zph")]
 #[pyo3(signature = (fit, transform = None, terms = true, singledf = false, global_test = true, assign = None))]
-pub fn cox_zph_py(
+pub(crate) fn cox_zph_py(
     py: Python<'_>,
     fit: &Bound<'_, PyAny>,
     transform: Option<ZphTransform>,

@@ -89,7 +89,7 @@ pub fn anova_coxph(
 #[doc = " test=\"Chisq\")`.  `names` default to `NULL` and the model index like R."]
 #[pyfunction(name = "anova_coxph")]
 #[pyo3(signature = (loglik, df, names=None, sequential=true, test=Some("Chisq")))]
-pub fn anova_coxph_py(
+pub(crate) fn anova_coxph_py(
     loglik: Vec<f64>,
     df: Vec<f64>,
     names: Option<Vec<String>>,

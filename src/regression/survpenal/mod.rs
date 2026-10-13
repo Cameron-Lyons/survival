@@ -2,7 +2,8 @@
 mod density_tests;
 mod kernel;
 mod lowlevel;
-pub use lowlevel::{SurvpenalFitResult, survpenal_fit_raw};
+pub use lowlevel::SurvpenalFitResult;
+pub(crate) use lowlevel::survpenal_fit_raw;
 #[cfg(test)]
 mod tests;
 

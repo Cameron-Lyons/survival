@@ -252,7 +252,7 @@ pub(crate) fn align_us_year_axis_validated(
 #[doc = " Python entry point of [`match_ratetable`]."]
 #[pyfunction(name = "match_ratetable")]
 #[pyo3(signature = (ratetable, names, columns))]
-pub fn match_ratetable_py(
+pub(crate) fn match_ratetable_py(
     py: Python<'_>,
     ratetable: &RateTable,
     names: Vec<String>,

@@ -227,7 +227,7 @@ fn finish_surv(
 #[pyfunction(name = "survsplit")]
 #[pyo3(signature = (time, status, cut, start=None, id=None, zero=0.0, timefix=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn survsplit_py(
+pub(crate) fn survsplit_py(
     time: Vec<f64>,
     status: Vec<f64>,
     cut: Vec<f64>,

@@ -44,7 +44,7 @@ pub fn nostutter<I: SubjectId, S: SubjectId>(
 #[doc = " Python entry point of [`nostutter`]."]
 #[pyfunction(name = "nostutter")]
 #[pyo3(signature = (id, state, censor, single=false))]
-pub fn nostutter_py(
+pub(crate) fn nostutter_py(
     id: Vec<IdValue>,
     state: Vec<Option<IdValue>>,
     censor: IdValue,

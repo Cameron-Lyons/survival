@@ -269,7 +269,7 @@ pub fn coxsurv_fit(
 #[pyfunction(name = "coxsurv_fit")]
 #[pyo3(signature = (y, x, weights, risk, strata, nstrata, x2, risk2, stype=2, ctype=1, varmat=None, y2=None, strata2=None, id2=None, keep_details=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn coxsurv_fit_py(
+pub(crate) fn coxsurv_fit_py(
     py: Python<'_>,
     y: FloatMatrix,
     x: FloatMatrix,

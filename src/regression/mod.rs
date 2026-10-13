@@ -1,9 +1,6 @@
-#[path = "aareg_fit.rs"]
-pub(crate) mod aareg_fit_module;
-pub(crate) mod agexact;
+pub(crate) mod aareg_fit;
 pub(crate) mod blogit;
-#[path = "cause_specific_cox.rs"]
-pub(crate) mod cause_specific_cox_module;
+pub(crate) mod cause_specific;
 pub(crate) mod cch;
 pub(crate) mod cox_optimizer;
 pub(crate) mod cox_zph;
@@ -18,12 +15,9 @@ pub(crate) mod coxphms;
 pub(crate) mod cure_models;
 pub(crate) mod elastic_net;
 pub(crate) mod exact_ties;
-#[path = "fast_cox/mod.rs"]
-pub(crate) mod fast_cox_module;
+pub(crate) mod fast_cox;
 pub(crate) mod finegray_data;
 pub(crate) mod finegray_expand;
-#[path = "finegray_regression.rs"]
-pub(crate) mod finegray_regression_module;
 pub(crate) mod functional_survival;
 pub(crate) mod high_dimensional;
 pub(crate) mod joint_competing;
@@ -32,6 +26,7 @@ pub(crate) mod parametric_survival;
 pub(crate) mod penalized;
 pub(crate) mod recurrent_events;
 pub(crate) mod spline_hazard;
+pub(crate) mod subdistribution;
 pub(crate) mod survpenal;
 mod survreg_callbacks;
 pub(crate) mod survreg_density;
@@ -41,22 +36,21 @@ pub(crate) mod survreg_lowlevel;
 pub(crate) mod survreg_predict;
 pub(crate) mod survregc1;
 
-pub use aareg_fit_module::{
-    AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit, aareg_fit_py,
-};
-pub use agexact::{AgexactFit, AgexactOptions, agexact_fit, agexact_py};
+pub(crate) use aareg_fit::aareg_fit_py;
+pub use aareg_fit::{AaregData, AaregFitResult, AaregOptions, AaregTest, aareg_fit};
 pub use blogit::LinkFunctionParams;
-pub use cause_specific_cox_module::{
+pub use cause_specific::{
     CauseSpecificCoxConfig, CauseSpecificCoxResult, CensoringType, cause_specific_cox,
     cause_specific_cox_all,
 };
-pub use cch::{CchFitResult, cch, cch_borgan, cch_borgan_fit, cch_fit};
+pub use cch::{CchData, CchFitResult, CchMethod, CchOptions, cch};
+pub(crate) use cch::{cch_borgan_fit, cch_fit};
 pub use cox_optimizer::TieMethod;
 #[cfg(feature = "python")]
-pub use cox_zph::cox_zph_py;
+pub(crate) use cox_zph::cox_zph_py;
 pub use cox_zph::{CoxZph, CoxZphTest, ZphFit, ZphTransform, cox_zph};
 #[cfg(feature = "python")]
-pub use cox_zph_smooth::cox_zph_smooth_py;
+pub(crate) use cox_zph_smooth::cox_zph_smooth_py;
 pub use cox_zph_smooth::{CoxZphSmooth, cox_zph_smooth};
 pub use coxpenal::{
     COXPENAL_OUTER_MAX, CoxPenalty, CoxPenaltyTerms, CoxpenalData, CoxpenalFit, CoxpenalOptions,
@@ -69,10 +63,13 @@ pub use coxph::{
     Basehaz, CoxNewData, CoxPHFit, CoxPrediction, CoxSurvfitCurve, CoxTermsPrediction, CoxphData,
     CoxphOptions, PredictReference, SurvfitOptions, coxph_fit,
 };
-pub use coxph_detail::{CoxphDetail, coxph_detail, coxph_detail_py};
+pub(crate) use coxph_detail::coxph_detail_py;
+pub use coxph_detail::{CoxphDetail, coxph_detail};
 pub use coxph_diagnostics::{CoxResidualType, Residuals, SchoenfeldResiduals};
-pub use coxph_lowlevel::{CoxphFitResult, coxph_fit_raw};
-pub use coxph_wtest::{CoxphWtest, coxph_wtest_py, wald_tests};
+pub use coxph_lowlevel::CoxphFitResult;
+pub(crate) use coxph_lowlevel::coxph_fit_raw;
+pub(crate) use coxph_wtest::coxph_wtest_py;
+pub use coxph_wtest::{CoxphWtest, wald_tests};
 pub use coxphms::coxphms_fit;
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
@@ -86,15 +83,14 @@ pub use elastic_net::{
     ElasticNetCVConfig, ElasticNetConfig, ElasticNetCoxPath, ElasticNetCoxResult,
     ElasticNetPathConfig, PenaltyType, elastic_net_cox, elastic_net_cox_cv, elastic_net_cox_path,
 };
-pub use fast_cox_module::{
+pub use fast_cox::{
     FastCoxCVConfig, FastCoxConfig, FastCoxPath, FastCoxPathConfig, FastCoxResult,
     FastCoxSolverConfig, ScreeningRule, fast_cox, fast_cox_cv, fast_cox_path,
 };
-pub use finegray_data::{FineGrayOutput, finegray, finegray_py};
-pub use finegray_expand::{FineGrayInput, finegray_expand, finegray_expand_py};
-pub use finegray_regression_module::{
-    CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
-};
+pub(crate) use finegray_data::finegray_py;
+pub use finegray_data::{FineGrayOutput, finegray};
+pub(crate) use finegray_expand::finegray_expand_py;
+pub use finegray_expand::{FineGrayInput, finegray_expand};
 pub use functional_survival::{
     BasisType, FunctionalPCAResult, FunctionalSurvivalConfig, FunctionalSurvivalResult,
     fpca_survival, functional_cox,
@@ -113,8 +109,9 @@ pub use longitudinal_survival::{
     TimeVaryingCoxResult, joint_longitudinal_model, landmark_cox_analysis,
     longitudinal_dynamic_pred, time_varying_cox,
 };
+pub(crate) use parametric_survival::survreg_fit_py;
 pub use parametric_survival::{
-    SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_py, survreg_fit_with_nstrata,
+    SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_with_nstrata,
 };
 pub use penalized::{PenaltyControl, PenaltyControlInput, PenaltyControlState, PenaltyController};
 pub use recurrent_events::{
@@ -126,15 +123,19 @@ pub use spline_hazard::{
     FlexibleParametricResult, HazardSplineResult, RestrictedCubicSplineResult, SplineConfig,
     flexible_parametric_model, predict_hazard_spline, restricted_cubic_spline,
 };
+pub use subdistribution::{
+    CompetingRisksCIF, FineGrayResult, competing_risks_cif, finegray_regression,
+};
 #[cfg(feature = "python")]
 pub use survpenal::survpenal_fit_from_state;
+pub(crate) use survpenal::survpenal_fit_raw;
 pub use survpenal::{
     SurvpenalData, SurvpenalFit, SurvpenalFitResult, SurvpenalOptions, survpenal_fit,
-    survpenal_fit_raw,
 };
 pub use survreg_distributions::{
     SurvregDensity, SurvregDistribution, SurvregFamily, SurvregTransform, dsurvreg, psurvreg,
     qsurvreg, rsurvreg, survreg_dtest,
 };
-pub use survreg_lowlevel::{SurvregFitResult, survreg_fit_raw};
+pub use survreg_lowlevel::SurvregFitResult;
+pub(crate) use survreg_lowlevel::survreg_fit_raw;
 pub use survreg_predict::{SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg};

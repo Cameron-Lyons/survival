@@ -180,7 +180,7 @@ pub fn rmst_comparison(
 #[pyfunction(name = "survmean_curves")]
 #[pyo3(signature = (time, surv, n_risk, n_event, n, lower=None, upper=None, strata=None, n_id=None, start_time=0.0, rmean="common", rmean_at=None, scale=1.0))]
 #[allow(clippy::too_many_arguments)]
-pub fn survmean_curves_py(
+pub(crate) fn survmean_curves_py(
     py: Python<'_>,
     time: FloatVec,
     surv: FloatVec,
@@ -226,7 +226,7 @@ pub fn survmean_curves_py(
 #[doc = " weights=None, conf_level=0.95)`."]
 #[pyfunction(name = "rmst_comparison")]
 #[pyo3(signature = (time, status, group, tau, weights=None, conf_level=0.95))]
-pub fn rmst_comparison_py(
+pub(crate) fn rmst_comparison_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

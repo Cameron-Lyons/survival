@@ -262,7 +262,7 @@ pub fn rmst_optimal_threshold(
 
 #[pyfunction(name = "rmst_optimal_threshold")]
 #[pyo3(signature = (time, status, alpha=0.05, min_events_per_interval=5))]
-pub fn rmst_optimal_threshold_py(
+pub(crate) fn rmst_optimal_threshold_py(
     time: Vec<f64>,
     status: Vec<i32>,
     alpha: f64,

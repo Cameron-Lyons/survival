@@ -294,7 +294,7 @@ pub fn survfit_matrix(
 #[pyfunction(name = "survfit_matrix")]
 #[pyo3(signature = (curves, from_state, to_state, states, p0=None, method="discrete", start_time=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfit_matrix_py(
+pub(crate) fn survfit_matrix_py(
     py: Python<'_>,
     curves: Vec<Vec<SurvfitKMResult>>,
     from_state: IntVec,

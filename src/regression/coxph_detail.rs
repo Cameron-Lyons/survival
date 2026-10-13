@@ -196,7 +196,7 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
 #[doc = " `coxph.detail(fit, riskmat)` on a fitted model."]
 #[pyfunction(name = "coxph_detail")]
 #[pyo3(signature = (fit, riskmat = false))]
-pub fn coxph_detail_py(fit: &CoxPHFit, riskmat: bool) -> PyResult<CoxphDetail> {
+pub(crate) fn coxph_detail_py(fit: &CoxPHFit, riskmat: bool) -> PyResult<CoxphDetail> {
     Ok(coxph_detail(fit, riskmat)?)
 }
 

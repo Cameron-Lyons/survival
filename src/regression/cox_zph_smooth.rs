@@ -118,7 +118,7 @@ pub fn cox_zph_smooth(
 #[cfg(feature = "python")]
 #[pyfunction(name = "cox_zph_smooth")]
 #[pyo3(signature = (x, y, variance, df=4, nsmo=40, se=true))]
-pub fn cox_zph_smooth_py(
+pub(crate) fn cox_zph_smooth_py(
     py: Python<'_>,
     x: FloatVec,
     y: FloatMatrix,

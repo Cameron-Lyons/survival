@@ -1089,7 +1089,7 @@ fn aj_inputs(
 #[pyfunction(name = "survfitresid_aj")]
 #[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", collapse=false, weighted=None, timefix=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitresid_aj_py(
+pub(crate) fn survfitresid_aj_py(
     py: Python<'_>,
     time: FloatVec,
     state: IntVec,
@@ -1133,7 +1133,7 @@ pub fn survfitresid_aj_py(
 #[pyfunction(name = "pseudo_aj")]
 #[pyo3(signature = (time, state, states, times, start=None, weights=None, strata=None, id=None, istate=None, istate_levels=None, cluster=None, p0=None, type_="pstate", timefix=true, collapse=true, start_time=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn pseudo_aj_py(
+pub(crate) fn pseudo_aj_py(
     py: Python<'_>,
     time: FloatVec,
     state: IntVec,
@@ -1207,7 +1207,7 @@ fn km_inputs(
 #[pyfunction(name = "survfitresid")]
 #[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, collapse=false, weighted=None, timefix=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn survfitresid_py(
+pub(crate) fn survfitresid_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,
@@ -1248,7 +1248,7 @@ pub fn survfitresid_py(
 #[pyfunction(name = "pseudo")]
 #[pyo3(signature = (time, status, times, start=None, weights=None, strata=None, id=None, type_="pstate", stype=1, ctype=1, timefix=true, collapse=true, start_time=None, call_stype=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn pseudo_py(
+pub(crate) fn pseudo_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

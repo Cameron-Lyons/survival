@@ -102,7 +102,7 @@ pub fn number_needed_to_treat(
 
 #[pyfunction(name = "number_needed_to_treat")]
 #[pyo3(signature = (time, status, group, time_horizon, conf_level=0.95))]
-pub fn number_needed_to_treat_py(
+pub(crate) fn number_needed_to_treat_py(
     time: Vec<f64>,
     status: Vec<i32>,
     group: Vec<i32>,

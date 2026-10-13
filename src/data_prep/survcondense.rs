@@ -75,7 +75,7 @@ pub fn survcondense<I: SubjectId>(
 
 #[doc = " Python entry point of [`survcondense`]."]
 #[pyfunction(name = "survcondense")]
-pub fn survcondense_py(
+pub(crate) fn survcondense_py(
     id: Vec<IdValue>,
     start: Vec<f64>,
     stop: Vec<f64>,

@@ -3,15 +3,14 @@ mod quantiles;
 mod survmean;
 mod threshold;
 
-pub use nnt::{NNTResult, number_needed_to_treat, number_needed_to_treat_py};
-pub use quantiles::{SurvfitCurveQuantiles, quantile_survfit_curves_py};
-pub use survmean::{
-    RmstComparisonResult, RmstGroupResult, SurvfitSummaryRow, rmst_comparison, rmst_comparison_py,
-    survmean_curves_py,
-};
-pub use threshold::{
-    ChangepointInfo, RMSTOptimalThresholdResult, rmst_optimal_threshold, rmst_optimal_threshold_py,
-};
+pub(crate) use nnt::number_needed_to_treat_py;
+pub use nnt::{NNTResult, number_needed_to_treat};
+pub use quantiles::SurvfitCurveQuantiles;
+pub(crate) use quantiles::quantile_survfit_curves_py;
+pub use survmean::{RmstComparisonResult, RmstGroupResult, SurvfitSummaryRow, rmst_comparison};
+pub(crate) use survmean::{rmst_comparison_py, survmean_curves_py};
+pub(crate) use threshold::rmst_optimal_threshold_py;
+pub use threshold::{ChangepointInfo, RMSTOptimalThresholdResult, rmst_optimal_threshold};
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};

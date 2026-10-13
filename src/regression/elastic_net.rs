@@ -379,7 +379,7 @@ fn coordinate_descent_cox(
 
 #[pyfunction(name = "elastic_net_cox")]
 #[pyo3(signature = (input, config))]
-pub(crate) fn elastic_net_cox_typed(
+pub fn elastic_net_cox_typed(
     input: &CoxRegressionInput,
     config: &ElasticNetConfig,
 ) -> PyResult<ElasticNetCoxResult> {
@@ -459,7 +459,7 @@ pub(crate) fn elastic_net_cox_typed(
 
 #[pyfunction(name = "elastic_net_cox_path")]
 #[pyo3(signature = (input, config=None))]
-pub(crate) fn elastic_net_cox_path_typed(
+pub fn elastic_net_cox_path_typed(
     input: &CoxRegressionInput,
     config: Option<&ElasticNetPathConfig>,
 ) -> PyResult<ElasticNetCoxPath> {
@@ -573,7 +573,7 @@ pub(crate) fn elastic_net_cox_path_typed(
 
 #[pyfunction(name = "elastic_net_cox_cv")]
 #[pyo3(signature = (input, config=None))]
-pub(crate) fn elastic_net_cox_cv_typed(
+pub fn elastic_net_cox_cv_typed(
     input: &CoxRegressionInput,
     config: Option<&ElasticNetCVConfig>,
 ) -> PyResult<(f64, f64, Vec<f64>, Vec<f64>)> {

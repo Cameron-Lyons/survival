@@ -1,14 +1,12 @@
-#[path = "dynamic_prediction/mod.rs"]
-pub(crate) mod dynamic_prediction_module;
-#[path = "joint_model.rs"]
-pub(crate) mod joint_model_module;
+pub(crate) mod dynamic;
+pub(crate) mod shared_parameter;
 
-pub use dynamic_prediction_module::{
+pub use dynamic::{
     DynamicCIndexResult, DynamicPredictionResult, IPCWAUCResult, SuperLandmarkResult,
     TimeDependentROCResult, TimeVaryingAUCResult, dynamic_auc, dynamic_brier_score,
     dynamic_c_index, dynamic_prediction, ipcw_auc, landmarking_analysis, super_landmark_model,
     time_dependent_roc, time_varying_auc,
 };
-pub use joint_model_module::{
+pub use shared_parameter::{
     AssociationStructure, JointModelResult, JointSurvivalModelConfig, joint_model,
 };

@@ -510,7 +510,7 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
 #[pyfunction(name = "survcheck")]
 #[pyo3(signature = (id, time2, status, states, time1=None, istate=None, istate_levels=None, istate0="(s0)", censor_label="censored", timefix=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn survcheck_py(
+pub(crate) fn survcheck_py(
     id: Vec<i64>,
     time2: Vec<f64>,
     status: Vec<i32>,

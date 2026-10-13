@@ -143,7 +143,7 @@ pub fn yates_sgtt(input: &YatesSgttInput<'_>) -> SurvivalResult<YatesSgttResult>
 #[pyfunction(name = "yates_sgtt")]
 #[pyo3(signature = (x, assign, adjustment_terms, beta, vmat, coefficient_assign, test_terms, sigma2=None, include_intercept=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_sgtt_py(
+pub(crate) fn yates_sgtt_py(
     py: Python<'_>,
     x: FloatRows,
     assign: Vec<usize>,

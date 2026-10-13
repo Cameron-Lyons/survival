@@ -357,7 +357,7 @@ fn expand(input: &SurvObrienInput<'_>, transform: bool) -> SurvivalResult<SurvOb
 #[doc = " expansion runs without the GIL."]
 #[pyfunction(name = "survobrien")]
 #[pyo3(signature = (time, status, continuous, start=None, strata=None, transform=true))]
-pub fn survobrien_py(
+pub(crate) fn survobrien_py(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

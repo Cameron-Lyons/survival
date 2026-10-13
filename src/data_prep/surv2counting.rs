@@ -208,7 +208,7 @@ pub fn surv2counting<I: SubjectId>(
 #[doc = " `\"true\"` or `\"first\"`."]
 #[pyfunction(name = "surv2counting")]
 #[pyo3(signature = (id, time, status, has_states=false, repeated="false", missing=Vec::new()))]
-pub fn surv2counting_py(
+pub(crate) fn surv2counting_py(
     id: Vec<IdValue>,
     time: Vec<f64>,
     status: Vec<Option<i32>>,

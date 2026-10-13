@@ -11,7 +11,8 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 mod rng;
 mod sgtt;
-pub use sgtt::{YatesSgttInput, YatesSgttResult, yates_sgtt, yates_sgtt_py};
+pub(crate) use sgtt::yates_sgtt_py;
+pub use sgtt::{YatesSgttInput, YatesSgttResult, yates_sgtt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum YatesTest {
@@ -901,7 +902,7 @@ pub fn yates_survival_summary(
 
 #[pyfunction(name = "yates_survival_summary")]
 #[pyo3(signature = (mean, variance, conf_int=0.95))]
-pub fn yates_survival_summary_py(
+pub(crate) fn yates_survival_summary_py(
     py: Python<'_>,
     mean: FloatMatrix,
     variance: FloatMatrix,
@@ -915,7 +916,7 @@ pub fn yates_survival_summary_py(
 #[pyfunction(name = "yates")]
 #[pyo3(signature = (cmat, beta, vmat, offset=0.0, sigma2=None, estimable=None, test="global"))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_py(
+pub(crate) fn yates_py(
     py: Python<'_>,
     cmat: FloatRows,
     beta: FloatVec,
@@ -988,7 +989,7 @@ fn simulate_py(
 #[pyfunction(name = "yates_risk")]
 #[pyo3(signature = (xmatlist, beta, vmat, means, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_risk_py(
+pub(crate) fn yates_risk_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     beta: FloatVec,
@@ -1021,7 +1022,7 @@ pub fn yates_risk_py(
 #[pyfunction(name = "yates_response")]
 #[pyo3(signature = (xmatlist, beta, vmat, inverse_link, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_response_py(
+pub(crate) fn yates_response_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     beta: FloatVec,
@@ -1076,7 +1077,7 @@ pub fn yates_response_py(
 #[pyfunction(name = "yates_predict")]
 #[pyo3(signature = (xmatlist, beta, vmat, predict, means=None, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_predict_py(
+pub(crate) fn yates_predict_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     beta: FloatVec,
@@ -1128,7 +1129,7 @@ pub fn yates_predict_py(
 #[pyfunction(name = "yates_survival")]
 #[pyo3(signature = (xmatlist, beta, vmat, means, time, cumhaz, rmean, conf_int=0.95, estimable=None, nsim=200, seed=0, test="global", term=None, normal_draws=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn yates_survival_py(
+pub(crate) fn yates_survival_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     beta: FloatVec,
@@ -1169,7 +1170,7 @@ pub fn yates_survival_py(
 #[doc = " model matrices (nested rows), one per level."]
 #[pyfunction(name = "yates_population_means")]
 #[pyo3(signature = (xmatlist, weights=None))]
-pub fn population_means_py(
+pub(crate) fn population_means_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     weights: Option<FloatVec>,
@@ -1181,7 +1182,7 @@ pub fn population_means_py(
 #[doc = " Python entry point for [`yates_estimable`]: `x` is the fit's model matrix."]
 #[pyfunction(name = "yates_estimable")]
 #[pyo3(signature = (xmatlist, x, intercept=false))]
-pub fn yates_estimable_py(
+pub(crate) fn yates_estimable_py(
     py: Python<'_>,
     xmatlist: Vec<FloatRows>,
     x: FloatRows,

@@ -4,9 +4,9 @@ use survival::concordance::{ConcordanceOptions, concordancefit};
 use survival::core::SurvResponse;
 use survival::data_types::SurvivalData;
 use survival::regression::{
-    AaregData, AaregOptions, AgexactOptions, CoxPHFit, CoxphData, CoxphOptions, SurvregControl,
-    SurvregData, SurvregDistribution, TieMethod, aareg_fit, agexact_fit, cch, cch_borgan, finegray,
-    survreg_fit,
+    AaregData, AaregOptions, CchData, CchMethod, CchOptions, CoxPHFit, CoxphData, CoxphFitResult,
+    CoxphOptions, SurvregControl, SurvregData, SurvregDistribution, TieMethod, aareg_fit, cch,
+    finegray, survreg_fit,
 };
 use survival::surv_analysis::{
     self, PseudoResidualType, RmeanOption, SurvfitKMData, SurvfitKMOptions, nelson_aalen, pseudo,
@@ -826,19 +826,21 @@ mod exact_counting_process_cox {
         let event = (0..n).map(|row| i32::from(row % 4 != 0)).collect();
         let x = generate_covariates(n, 2);
         let inputs = (start, stop, event, x);
-        let options = AgexactOptions {
+        let options = CoxphOptions {
+            method: TieMethod::Exact,
             init: Some(vec![0.25, -0.15]),
             iter_max: 0,
-            ..AgexactOptions::default()
+            ..CoxphOptions::default()
         };
         bencher
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_fit(
+                    CoxphFitResult::fit(
                         CoxphData::try_new(stop, Some(start), event, x, None, None, None)
                             .expect("benchmark delayed-entry data should be valid"),
-                        &options,
+                        options.clone(),
+                        false,
                     )
                     .expect("untied delayed-entry exact fit should succeed"),
                 )
@@ -852,20 +854,22 @@ mod exact_counting_process_cox {
         let event: Vec<i32> = (0..n).map(|person| i32::from(person + 1 < n)).collect();
         let x = generate_covariates(n, 2);
         let inputs = (start, stop, event, x);
-        let options = AgexactOptions {
+        let options = CoxphOptions {
+            method: TieMethod::Exact,
             init: Some(vec![0.25, -0.15]),
             iter_max: 0,
-            ..AgexactOptions::default()
+            ..CoxphOptions::default()
         };
 
         bencher
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_fit(
+                    CoxphFitResult::fit(
                         CoxphData::try_new(stop, Some(start), event, x, None, None, None)
                             .expect("benchmark counting-process data should be valid"),
-                        &options,
+                        options.clone(),
+                        false,
                     )
                     .expect("near-complete tied exact fit should succeed"),
                 )
@@ -884,16 +888,18 @@ mod exact_counting_process_cox {
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_fit(
+                    CoxphFitResult::fit(
                         CoxphData::try_new(stop, Some(start), event, x, None, None, None)
                             .expect("benchmark counting-process data should be valid"),
-                        &AgexactOptions {
-                            init: None,
+                        CoxphOptions {
+                            method: TieMethod::Exact,
                             iter_max: 0,
                             eps: 1e-9,
                             toler_chol: 1e-9,
                             nocenter: None,
+                            ..CoxphOptions::default()
                         },
+                        false,
                     )
                     .expect("untied exact counting-process benchmark should succeed"),
                 )
@@ -914,16 +920,18 @@ mod exact_counting_process_cox {
             .with_inputs(|| inputs.clone())
             .bench_local_values(|(start, stop, event, x)| {
                 black_box(
-                    agexact_fit(
+                    CoxphFitResult::fit(
                         CoxphData::try_new(stop, Some(start), event, x, None, None, None)
                             .expect("benchmark counting-process data should be valid"),
-                        &AgexactOptions {
-                            init: None,
+                        CoxphOptions {
+                            method: TieMethod::Exact,
                             iter_max: 0,
                             eps: 1e-9,
                             toler_chol: 1e-9,
                             nocenter: None,
+                            ..CoxphOptions::default()
                         },
+                        false,
                     )
                     .expect("benchmark exact counting-process fit should succeed"),
                 )
@@ -1371,15 +1379,20 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         bencher.bench_local(|| {
             let fit = cch(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                subcohort.clone(),
-                id.clone(),
-                n * 4,
-                None,
-                "Prentice",
-                false,
+                CchData {
+                    stop: time.clone(),
+                    status: status.clone(),
+                    covariates: covariates.clone(),
+                    subcohort: subcohort.clone(),
+                    id: id.clone(),
+                    start: None,
+                    stratum: None,
+                },
+                CchOptions {
+                    cohort_size: vec![n * 4],
+                    method: CchMethod::Prentice,
+                    robust: false,
+                },
             )
             .expect("benchmark Prentice fit should converge");
             black_box(fit);
@@ -1391,15 +1404,20 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         bencher.bench_local(|| {
             let fit = cch(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                subcohort.clone(),
-                id.clone(),
-                n * 4,
-                None,
-                "LinYing",
-                true,
+                CchData {
+                    stop: time.clone(),
+                    status: status.clone(),
+                    covariates: covariates.clone(),
+                    subcohort: subcohort.clone(),
+                    id: id.clone(),
+                    start: None,
+                    stratum: None,
+                },
+                CchOptions {
+                    cohort_size: vec![n * 4],
+                    method: CchMethod::LinYing,
+                    robust: true,
+                },
             )
             .expect("benchmark Lin-Ying fit should converge");
             black_box(fit);
@@ -1411,16 +1429,21 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
         bencher.bench_local(|| {
-            let fit = cch_borgan(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                subcohort.clone(),
-                id.clone(),
-                stratum.clone(),
-                vec![n * 2, n * 2],
-                None,
-                "I.Borgan",
+            let fit = cch(
+                CchData {
+                    stop: time.clone(),
+                    status: status.clone(),
+                    covariates: covariates.clone(),
+                    subcohort: subcohort.clone(),
+                    id: id.clone(),
+                    start: None,
+                    stratum: Some(stratum.clone()),
+                },
+                CchOptions {
+                    cohort_size: vec![n * 2, n * 2],
+                    method: CchMethod::IBorgan,
+                    robust: false,
+                },
             )
             .expect("benchmark I.Borgan fit should converge");
             black_box(fit);
@@ -1432,16 +1455,21 @@ mod case_cohort_bench {
         let (time, status, covariates, subcohort, id) = case_cohort_data(n, 4);
         let stratum = (0..n).map(|idx| (idx / 4) % 2).collect::<Vec<_>>();
         bencher.bench_local(|| {
-            let fit = cch_borgan(
-                time.clone(),
-                status.clone(),
-                covariates.clone(),
-                subcohort.clone(),
-                id.clone(),
-                stratum.clone(),
-                vec![n * 2, n * 2],
-                None,
-                "II.Borgan",
+            let fit = cch(
+                CchData {
+                    stop: time.clone(),
+                    status: status.clone(),
+                    covariates: covariates.clone(),
+                    subcohort: subcohort.clone(),
+                    id: id.clone(),
+                    start: None,
+                    stratum: Some(stratum.clone()),
+                },
+                CchOptions {
+                    cohort_size: vec![n * 2, n * 2],
+                    method: CchMethod::IIBorgan,
+                    robust: false,
+                },
             )
             .expect("benchmark II.Borgan fit should converge");
             black_box(fit);

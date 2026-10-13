@@ -271,7 +271,7 @@ pub fn summary_pyears(
     scale=1.0,
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn summary_pyears_py(
+pub(crate) fn summary_pyears_py(
     pyears: Vec<f64>,
     n: Vec<f64>,
     event: Option<Vec<f64>>,

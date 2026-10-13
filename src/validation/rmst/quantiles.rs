@@ -34,7 +34,7 @@ impl From<SurvfitQuantiles> for SurvfitCurveQuantiles {
 #[pyfunction(name = "quantile_survfit_curves")]
 #[pyo3(signature = (time, surv, lower=None, upper=None, strata=None, probs=None, conf_int=true, start_time=0.0, scale=1.0, tolerance=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn quantile_survfit_curves_py(
+pub(crate) fn quantile_survfit_curves_py(
     py: Python<'_>,
     time: FloatVec,
     surv: FloatVec,
