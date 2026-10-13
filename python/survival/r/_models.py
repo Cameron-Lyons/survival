@@ -82,11 +82,12 @@ from ._pyears import (
     summary_ratetable,
     summary_survexp,
 )
-from ._surv import Surv
+from ._surv import Surv, Surv2
 from ._surv_summary_print import SurvivalTablePrint
 from ._survfit import (
     _derived_survfit,
     _engine_of,
+    _summary_survfit_frame,
     median_surv,
     median_survfit,
     quantile_surv,
@@ -124,6 +125,7 @@ from ._types import (
     RateTablePrint,
     ResponsePrint,
     SummarySurvfitCoxmsResult,
+    SummarySurvfitResult,
     SurvDiffResult,
     SurvExpResult,
     SurvExpSummary,
@@ -954,11 +956,16 @@ def _positions(selection: Any, count: int, labels: Sequence[str], name: str) -> 
     ``labels``, labels."""
 
     positions = []
+    lookup: dict[str, int] | None = None
     for value in _materialize_1d(selection, name):
         if isinstance(value, str):
-            if value not in labels:
+            if lookup is None:
+                lookup = {}
+                for position, label in enumerate(labels):
+                    lookup.setdefault(label, position)
+            if value not in lookup:
                 raise ValueError(f"{name} {value!r} is not one of {', '.join(labels)}")
-            positions.append(labels.index(value))
+            positions.append(lookup[value])
         else:
             position = _integer_scalar(value, name)
             if not 0 <= position < count:
@@ -1474,6 +1481,10 @@ def _surv_response_frame(response: Surv) -> dict[str, list[Any]]:
     return frame
 
 
+def _surv2_response_frame(response: Surv2) -> dict[str, list[Any]]:
+    return {"time": list(response.time), "status": list(response.status)}
+
+
 @singledispatch
 def as_data_frame(result: Any) -> dict[str, list[Any]]:
     """``as.data.frame``: a result object as a plain column-oriented table."""
@@ -1482,12 +1493,14 @@ def as_data_frame(result: Any) -> dict[str, list[Any]]:
 
 
 as_data_frame.register(Surv, _surv_response_frame)
+as_data_frame.register(Surv2, _surv2_response_frame)
 as_data_frame.register(CoxSurvfitResult, _cox_survfit_frame)
 as_data_frame.register(CoxBaseHazardResult, _cox_basehaz_frame)
 as_data_frame.register(SurvfitMultiStateResult, _survfit_multistate_frame)
 as_data_frame.register(CoxSurvfitMultiStateResult, _coxms_curves_frame)
 as_data_frame.register(SummarySurvfitCoxmsResult, _summary_coxms_frame)
 as_data_frame.register(SurvfitResult, _survfit_frame)
+as_data_frame.register(SummarySurvfitResult, _summary_survfit_frame)
 as_data_frame.register(CoxZPHResult, _cox_zph_frame)
 as_data_frame.register(CoxPHDetailResult, _coxph_detail_frame)
 as_data_frame.register(ConcordanceResult, _concordance_frame)

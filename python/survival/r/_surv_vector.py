@@ -16,16 +16,18 @@ from ._coerce import (
     _scalar_or_vector,
     _warn_outside_package,
 )
-from ._surv import Surv
+from ._surv import Surv, Surv2
 
 
-def _response(x: Any) -> Surv:
-    if not isinstance(x, Surv):
+def _response(x: Any) -> Any:
+    if not isinstance(x, Surv | Surv2):
         raise TypeError("argument is not a Surv object")
     return x
 
 
-def _columns(x: Surv) -> tuple[tuple[Any, ...], ...]:
+def _columns(x: Surv | Surv2) -> tuple[tuple[Any, ...], ...]:
+    if isinstance(x, Surv2):
+        return x.time, x.status
     if x.start is not None:
         return x.start, x.time, x.event
     if x.time2 is not None:
@@ -33,11 +35,22 @@ def _columns(x: Surv) -> tuple[tuple[Any, ...], ...]:
     return x.time, x.event
 
 
-def concat_surv(*objects: Surv) -> Surv:
-    """R's ``c.Surv``: join rows with matching censoring type and state levels."""
+def concat_surv(*objects: Any) -> Any:
+    """R's ``c.Surv`` and ``c.Surv2``: join rows with matching censoring type and states."""
 
     if not objects:
         raise ValueError("at least one Surv object is required")
+    if all(isinstance(x, Surv2) for x in objects):
+        first2 = objects[0]
+        if any(x.states != first2.states for x in objects[1:]):
+            raise ValueError("all elements must have the same list of states")
+        return Surv2._from_normalized(
+            time=tuple(chain.from_iterable(x.time for x in objects)),
+            status=tuple(chain.from_iterable(x.status for x in objects)),
+            states=first2.states,
+            repeated=first2.repeated,
+            clabel=first2.clabel,
+        )
     if any(not isinstance(x, Surv) for x in objects):
         raise TypeError("all elements must be of class Surv")
     first = objects[0]
@@ -124,9 +137,17 @@ def _each_column(column: tuple[Any, ...], each: int) -> tuple[Any, ...]:
     return tuple(np.repeat(np.asarray(column, dtype=object), each).tolist())
 
 
-def _repeat_response(x: Surv, operation: Callable[[tuple[Any, ...]], tuple[Any, ...]]) -> Surv:
+def _repeat_response(x: Any, operation: Callable[[tuple[Any, ...]], tuple[Any, ...]]) -> Any:
     """Repeat immutable normalized columns without an output-sized vector of row indices."""
 
+    if isinstance(x, Surv2):
+        return Surv2._from_normalized(
+            time=operation(x.time),
+            status=operation(x.status),
+            states=x.states,
+            repeated=x.repeated,
+            clabel=x.clabel,
+        )
     return Surv._from_normalized(
         time=operation(x.time),
         event=operation(x.event),
@@ -250,6 +271,8 @@ def levels_surv(x: Surv) -> list[str] | None:
     """R's ``levels.Surv``: multistate event levels, or None for ordinary responses."""
 
     x = _response(x)
+    if isinstance(x, Surv2):
+        return list(x.states) or None
     return list(x.states) if x.type in {"mright", "mcounting"} else None
 
 

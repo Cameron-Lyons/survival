@@ -54,6 +54,7 @@ from ._coerce import (
 from ._fit import (
     _empty_prediction,
     _excluded_rows,
+    _fitted_xlevels,
     _model_matrix_contrasts,
     _model_matrix_evaluated,
     _model_matrix_names_and_assign,
@@ -174,6 +175,18 @@ class SurvregModelResult:
     @property
     def coefficients(self) -> list[float]:
         return [float(value) for value in self.fit.coefficients[: len(self.fit.means)]]
+
+    @property
+    def xlevels(self) -> dict[str, list[str]] | None:
+        """R's ``fit$xlevels``: the levels of the factor variables."""
+
+        return _fitted_xlevels(self.design)
+
+    @property
+    def contrasts(self) -> dict[str, Any] | None:
+        """R's ``fit$contrasts``: the coding of each factor variable."""
+
+        return _model_matrix_contrasts(self.design) or None
 
     @property
     def icoef(self) -> list[float]:
@@ -798,7 +811,9 @@ def survreg(
         fit=fit,
         formula=formula if isinstance(formula, str) else None,
         coefficient_names=frame.names,
-        dist=dist if isinstance(dist, str) else distribution,
+        dist=_match_arg(dist, "dist", tuple(survreg_distributions))
+        if isinstance(dist, str)
+        else distribution,
         control=control,
         design=frame.design,
         weights=frame.weights,

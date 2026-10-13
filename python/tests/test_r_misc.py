@@ -616,3 +616,29 @@ def test_frailty_encoding_normalizes_levels_and_sparse_default():
     assert _frailty_encoding(list("abcdef"))["sparse"] is True
     with pytest.raises(ValueError, match="outside supplied levels"):
         _frailty_encoding(["c"], levels=["a", "b"])
+
+
+def test_cch_borgan_strata_follow_the_factor_levels():
+    """R orders the Borgan strata by ``levels(stratum)``: ``cch(..., stratum = ~st4,
+    method = "I.Borgan")$subcohort.size`` is ``FH.1 886, UH.1 66, FH.2 23, UH.2 179`` on
+    the nwtco case-cohort data; here the same layout on a small design."""
+
+    n = 40
+    data = {
+        "time": [float((7 * i) % 23 + 1) for i in range(n)],
+        "status": [int(i % 3 == 0) for i in range(n)],
+        "x": [((5 * i) % 11) / 10.0 for i in range(n)],
+        "sub": [i % 3 != 0 or i % 2 == 0 for i in range(n)],
+        "id": list(range(1, n + 1)),
+        "s": RFactor(["b" if i % 2 else "a" for i in range(n)], ["b", "a"]),
+    }
+    fit = r.cch(
+        "Surv(time, status) ~ x",
+        data=data,
+        subcoh="sub",
+        id="id",
+        stratum="s",
+        cohort_size={"b": 60, "a": 60},
+        method="I.Borgan",
+    )
+    assert fit.stratum_names == ("b", "a")

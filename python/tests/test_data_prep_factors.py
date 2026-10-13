@@ -96,3 +96,13 @@ def test_finegray_keeps_covariate_levels():
     fit = r.coxph("Surv(fgstart, fgstop, fgstatus) ~ sex + age", data=expanded, weights="fgwt")
     assert r.coef_names(fit) == ["sexM", "age"]
     assert r.coef(fit) == pytest.approx([-0.25975679140012597, -0.017301705075068171], rel=1e-9)
+
+
+def test_survsplit_zero_may_hold_one_start_per_row():
+    """R: ``survSplit(Surv(time, status) ~ x, d, cut = c(4, 7), zero = c(0, 1, 2, 0, 1, 0))``."""
+
+    data = {"time": [5, 8, 3, 9, 6, 4], "status": [1, 0, 1, 1, 0, 1], "x": [1, 2, 3, 4, 5, 6]}
+    split = r.survSplit("Surv(time, status) ~ x", data, cut=[4, 7], zero=[0, 1, 2, 0, 1, 0])
+    assert list(split["tstart"]) == [0.0, 4.0, 1.0, 4.0, 7.0, 2.0, 0.0, 4.0, 7.0, 1.0, 4.0, 0.0]
+    assert list(split["time"]) == [4.0, 5.0, 4.0, 7.0, 8.0, 3.0, 4.0, 7.0, 9.0, 4.0, 6.0, 4.0]
+    assert list(split["status"]) == [0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1]

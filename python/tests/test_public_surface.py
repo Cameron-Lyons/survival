@@ -189,3 +189,107 @@ def test_survreg_distribution_helpers_match_r():
     assert control.iter_max == 30
     assert math.isclose(control.rel_tolerance, 1e-9)
     assert math.isclose(control.toler_chol, 1e-10)
+
+
+R_EXPORTS = [
+    "aareg",
+    "aeqSurv",
+    "agexact.fit",
+    "agreg.fit",
+    "attrassign",
+    "basehaz",
+    "bcloglog",
+    "blog",
+    "blogit",
+    "bprobit",
+    "brier",
+    "cch",
+    "cipoisson",
+    "clogit",
+    "cluster",
+    "concordance",
+    "concordancefit",
+    "cox.zph",
+    "coxph",
+    "coxph.control",
+    "coxph.detail",
+    "coxph.fit",
+    "coxph.wtest",
+    "coxsurv.fit",
+    "dsurvreg",
+    "finegray",
+    "format.Surv",
+    "frailty",
+    "frailty.gamma",
+    "frailty.gaussian",
+    "frailty.t",
+    "fromtimeline",
+    "is.na.Surv",
+    "is.ratetable",
+    "is.Surv",
+    "lvcf",
+    "match.ratetable",
+    "neardate",
+    "nostutter",
+    "nsk",
+    "pseudo",
+    "pspline",
+    "psurvreg",
+    "pyears",
+    "qsurvreg",
+    "ratetableDate",
+    "ridge",
+    "royston",
+    "rsurvreg",
+    "rttright",
+    "statefig",
+    "strata",
+    "Surv",
+    "Surv2",
+    "survcheck",
+    "survConcordance",
+    "survConcordance.fit",
+    "survcondense",
+    "survdiff",
+    "survexp",
+    "survfit",
+    "survfit_confint",
+    "survfit0",
+    "survfitcoxph.fit",
+    "survfitKM",
+    "survobrien",
+    "survpenal.fit",
+    "survreg",
+    "survreg.control",
+    "survreg.distributions",
+    "survreg.fit",
+    "survregDtest",
+    "survSplit",
+    "tcut",
+    "tmerge",
+    "untangle.specials",
+    "yates",
+    "yates_setup",
+]
+R_FITTERS = {
+    "agexact_fit",
+    "agreg_fit",
+    "coxph_fit",
+    "coxsurv_fit",
+    "survfitKM",
+    "survfitcoxph_fit",
+    "survpenal_fit",
+    "survreg_fit",
+}
+R_SPELLINGS = {"format.Surv": "format_surv", "is.na.Surv": "is_na_surv", "is.Surv": "is_surv"}
+
+
+def test_r_namespace_exports_are_available_from_the_root():
+    """R survival 3.8-11's ``getNamespaceExports``, except R's low-level fitters, which stay in
+    ``survival.r`` so the root holds no algorithm-level names."""
+
+    for r_name in R_EXPORTS:
+        name = R_SPELLINGS.get(r_name, r_name.replace(".", "_"))
+        assert name in survival.r.__all__, r_name
+        if name not in R_FITTERS:
+            assert getattr(survival, name) is getattr(survival.r, name), r_name

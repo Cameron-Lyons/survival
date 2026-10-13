@@ -411,9 +411,41 @@ def _old_style_formula(data: Any, start: Any, end: Any, event: Any) -> str:
     return f"Surv({', '.join(f'`{name}`' for name in columns)}) ~ ."
 
 
-def _split_kernel(response: Any, cut: list[float], zero: float, timefix: bool, id: Any) -> Any:
-    """Run the ``survsplit`` kernel on a ``Surv``/``Surv2`` response."""
+def _zero_values(zero: Any) -> float | list[float]:
+    if isinstance(zero, str) or not hasattr(zero, "__iter__"):
+        return _finite_float(zero, "zero")
+    values = [_finite_float(value, "zero") for value in _materialize_1d(zero, "zero")]
+    return values[0] if len(values) == 1 else values
 
+
+def _split_kernel(
+    response: Any, cut: list[float], zero: float | list[float], timefix: bool, id: Any
+) -> Any:
+    """Run the ``survsplit`` kernel on a ``Surv``/``Surv2`` response; a ``zero`` vector
+    gives each row of a response without start times its own start, as R's
+    ``cbind(zero, Y)`` does."""
+
+    if isinstance(zero, list):
+        if isinstance(response, Surv2) or response.start is not None:
+            zero = zero[0]
+        else:
+            if len(zero) != len(response):
+                raise ValueError("zero must have length 1 or one value per observation")
+            if any(
+                not math.isnan(time) and time <= origin
+                for time, origin in zip(response.time, zero, strict=True)
+            ):
+                raise ValueError("'zero' parameter must be less than any observed times")
+            response = Surv._from_normalized(
+                time=response.time,
+                event=response.event,
+                start=zero,
+                time2=None,
+                surv_type="mcounting" if response.type == "mright" else "counting",
+                states=response.states,
+                clabel=response.clabel,
+            )
+            zero = 0.0
     if isinstance(response, Surv2):
         if id is None:
             raise ValueError("an id statement is required")
@@ -468,7 +500,7 @@ def survSplit(
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
     cut_values = _cut_points(cut)
-    zero_value = _finite_float(zero, "zero")
+    zero_value = _zero_values(zero)
     if isinstance(formula, Surv | Surv2) and response is None:
         response, formula = formula, None
     if response is not None:
@@ -548,7 +580,7 @@ def _survsplit_object(
     response: Any,
     data: Any | None,
     cut: list[float],
-    zero: float,
+    zero: float | list[float],
     timefix: bool,
     id: Any | None,
     start: str | None,

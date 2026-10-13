@@ -239,3 +239,35 @@ def test_named_arguments_are_matched_first_and_positionals_fill_the_rest():
         assert r.coef(fit) == pytest.approx([0.0187201792045515], rel=1e-9)
     with pytest.raises(TypeError, match="Surv expects"):
         r.Surv([1, 2], [1, 0], [1, 1], event=[1, 0])
+
+
+def test_surv2_supports_r_vector_methods():
+    """R: for ``s <- Surv2(1:4, c(0, 1, 0, 1))``, ``c``, ``rev``, ``tail``, ``rep``, ``[``,
+    ``duplicated`` and ``t`` operate on the rows and keep the ``Surv2`` class."""
+
+    s = r.Surv2([1, 2, 3, 4], [0, 1, 0, 1])
+    joined = r.concat_surv(s, s)
+    assert isinstance(joined, r.Surv2)
+    assert joined.time == (1.0, 2.0, 3.0, 4.0) * 2
+    assert r.duplicated_surv(joined) == [False] * 4 + [True] * 4
+    assert r.rev_surv(s).status == (1, 0, 1, 0)
+    assert r.tail_surv(s, 2).time == (3.0, 4.0)
+    assert r.rep_surv(s, 2).status == (0, 1, 0, 1) * 2
+    assert s.subset([1, 2]).time == (2.0, 3.0)
+    assert r.transpose_surv(s) == [[1.0, 2.0, 3.0, 4.0], [0, 1, 0, 1]]
+    assert r.as_data_frame(s) == {"time": [1.0, 2.0, 3.0, 4.0], "status": [0, 1, 0, 1]}
+    states = r.Surv2([1, 2, 3], r.Factor(["a", "b", "a"]))
+    assert r.levels_surv(states) == ["b"]
+    assert r.concat_surv(states, states).states == ("b",)
+
+
+def test_origin_may_hold_one_value_per_observation():
+    """R: ``Surv(c(1, 2, 3), c(1, 0, 1), origin = c(0, 1, 2))`` has times 1, 1, 1 and
+    ``Surv(c(1, 2, NA), c(3, NA, 5), type = "interval2", origin = c(1, 0, 1))`` has
+    ``time1`` 0, 2, 4 and ``time2`` 2, 1, 1."""
+
+    assert r.Surv([1, 2, 3], [1, 0, 1], origin=[0, 1, 2]).time == (1.0, 1.0, 1.0)
+    interval = r.Surv([1, 2, None], [3, None, 5], type="interval2", origin=[1, 0, 1])
+    assert (interval.time, interval.time2) == ((0.0, 2.0, 4.0), (2.0, 1.0, 1.0))
+    with pytest.raises(ValueError, match="origin must have length 1"):
+        r.Surv([1, 2, 3], [1, 0, 1], origin=[0, 1])

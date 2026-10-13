@@ -25,12 +25,31 @@
   `assign` raise ordinary errors instead of panicking.
 - `tcut()` accepts calendar dates.
 - `survdiff`'s strata table keeps a level emptied by missing-value removal.
+- `survreg` records the matched distribution name (`"exponential"` for `"exp"`).
+- `cch`'s Borgan strata follow the stratum factor's level order.
+- R bridge multi-state curves fitted without confidence intervals no longer
+  fail on `names()` and `$pstate`.
+- Selecting stacked Kaplan-Meier curves with a zero count no longer panics.
+- `aareg` centers covariates before forming risk-set moments and decides rank
+  with R's column-relative QR rule (`qrtol`): covariates offset by large
+  constants keep R's precision, and rescaled covariates such as `age * 1e-6`
+  are no longer reported as rank deficient.
 
 ### Added
 
 - `survival.r.Factor`, R's `factor()`: a list of labels that carries its levels.
 - `subset(strata=, states=)` and `dim` on ordinary and multi-state `survfit`
   curves (R's `fit[...]`).
+- The package root exports R's remaining survival functions (`brier`,
+  `royston`, `ridge`, `frailty*`, `cluster`, `coxph_control`, `survreg_control`,
+  `yates_setup`, ...) and generics such as `summary_survfit`; R's low-level
+  fitters stay in `survival.r`.
+- `summary_survfit(..., data_frame=True)` and `as_data_frame` of a summary return
+  R's `data.frame = TRUE` table.
+- `Surv2` supports R's vector methods (`c`, `rep`, `rev`, `head`, `tail`,
+  `duplicated`, `unique`, `t`, `[`) and `as_data_frame`.
+- `xlevels` and `contrasts` on `coxph` and `survreg` fits.
+- `Surv(origin=)` and `survSplit(zero=)` accept one value per observation.
 
 ### Performance
 
@@ -39,6 +58,8 @@
   `predict` on 20,000 new rows 2.7 ms (R 4.0 ms).
 - The Aalen-Johansen influence updates run over contiguous rows: a multi-state
   `survfit(..., id=)` on 100,000 subjects takes 1.8 s, down from 4.1 s (R 3.2 s).
+- `summary` and `print` of a `survfit` with 4,000 curves take 9 ms and 23 ms,
+  down from 1.35 s and 1.06 s; curve subsetting looks labels up in a dict.
 
 ## 2.0.0
 

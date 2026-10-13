@@ -2849,7 +2849,11 @@ def _column_or_values(data: Any, values: Any, name: str) -> Any:
     if isinstance(values, str):
         if data is None:
             raise ValueError(f"{name} column lookup requires data")
-        return _column_source(data, values) if name == "cluster" else _column(data, values)
+        return (
+            _column_source(data, values)
+            if name in {"cluster", "stratum"}
+            else _column(data, values)
+        )
     return values
 
 

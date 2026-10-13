@@ -87,6 +87,9 @@ from .r import (
     aeqSurv as aeqSurv,
 )
 from .r import (
+    aggregate_survfit as aggregate_survfit,
+)
+from .r import (
     aic as aic,
 )
 from .r import (
@@ -97,6 +100,9 @@ from .r import (
 )
 from .r import (
     as_data_frame as as_data_frame,
+)
+from .r import (
+    attrassign as attrassign,
 )
 from .r import (
     basehaz as basehaz,
@@ -117,6 +123,9 @@ from .r import (
     bprobit as bprobit,
 )
 from .r import (
+    brier as brier,
+)
+from .r import (
     cch as cch,
 )
 from .r import (
@@ -124,6 +133,9 @@ from .r import (
 )
 from .r import (
     clogit as clogit,
+)
+from .r import (
+    cluster as cluster,
 )
 from .r import (
     coef as coef,
@@ -138,6 +150,9 @@ from .r import (
     concordance as concordance,
 )
 from .r import (
+    concordancefit as concordancefit,
+)
+from .r import (
     confint as confint,
 )
 from .r import (
@@ -145,6 +160,9 @@ from .r import (
 )
 from .r import (
     coxph as coxph,
+)
+from .r import (
+    coxph_control as coxph_control,
 )
 from .r import (
     coxph_detail as coxph_detail,
@@ -186,6 +204,18 @@ from .r import (
     format_surv as format_surv,
 )
 from .r import (
+    frailty as frailty,
+)
+from .r import (
+    frailty_gamma as frailty_gamma,
+)
+from .r import (
+    frailty_gaussian as frailty_gaussian,
+)
+from .r import (
+    frailty_t as frailty_t,
+)
+from .r import (
     fromtimeline as fromtimeline,
 )
 from .r import (
@@ -209,7 +239,15 @@ from .r import (
 from .r import (
     lvcf as lvcf,
 )
-from .r import median as median
+from .r import (
+    match_ratetable as match_ratetable,
+)
+from .r import (
+    median as median,
+)
+from .r import (
+    median_survfit as median_survfit,
+)
 from .r import (
     model_formula as model_formula,
 )
@@ -258,7 +296,12 @@ from .r import (
 from .r import (
     qsurvreg as qsurvreg,
 )
-from .r import quantile as quantile
+from .r import (
+    quantile as quantile,
+)
+from .r import (
+    quantile_survfit as quantile_survfit,
+)
 from .r import (
     ratetableDate as ratetableDate,
 )
@@ -269,13 +312,37 @@ from .r import (
     rev_surv as rev_surv,
 )
 from .r import (
+    ridge as ridge,
+)
+from .r import (
+    royston as royston,
+)
+from .r import (
     rsurvreg as rsurvreg,
 )
 from .r import (
     rttright as rttright,
 )
 from .r import (
+    statefig as statefig,
+)
+from .r import (
     strata as strata,
+)
+from .r import (
+    summary_pyears as summary_pyears,
+)
+from .r import (
+    summary_ratetable as summary_ratetable,
+)
+from .r import (
+    summary_survexp as summary_survexp,
+)
+from .r import (
+    summary_survfit as summary_survfit,
+)
+from .r import (
+    summary_tmerge as summary_tmerge,
 )
 from .r import (
     survcheck as survcheck,
@@ -323,6 +390,15 @@ from .r import (
     survreg as survreg,
 )
 from .r import (
+    survreg_control as survreg_control,
+)
+from .r import (
+    survreg_distributions as survreg_distributions,
+)
+from .r import (
+    survregDtest as survregDtest,
+)
+from .r import (
     survSplit as survSplit,
 )
 from .r import (
@@ -347,10 +423,16 @@ from .r import (
     unique_surv as unique_surv,
 )
 from .r import (
+    untangle_specials as untangle_specials,
+)
+from .r import (
     vcov as vcov,
 )
 from .r import (
     yates as yates,
+)
+from .r import (
+    yates_setup as yates_setup,
 )
 from .sklearn_compat import (
     AFTEstimator as AFTEstimator,
