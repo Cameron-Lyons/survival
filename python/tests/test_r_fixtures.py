@@ -1821,7 +1821,7 @@ class YatesHandler(TopicHandler):
             beta = np.linalg.lstsq(x, y, rcond=None)[0]
             sigma2 = float(np.sum((y - x @ beta) ** 2) / (len(y) - x.shape[1]))
             variance = np.linalg.inv(x.T @ x) * sigma2
-            fit = r.YatesModel(case["formula"], data, beta.tolist(), variance.tolist(), sigma2)
+            fit = r.YatesFitAdapter(case["formula"], data, beta.tolist(), variance.tolist(), sigma2)
             assert np.allclose(_design_rows_from_spec(data, fit.design, len(y)), x)
         else:
             fit = _coxph_fit(topic, {**case, "args": {}})

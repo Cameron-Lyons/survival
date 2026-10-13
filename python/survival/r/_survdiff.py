@@ -28,7 +28,7 @@ from ._formula import (
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._survfit import _curve_factor
-from ._types import NaAction, StrataFactor, SurvDiffResult, _InteractionTerm, _ModelCovariateTerm
+from ._types import NaAction, StrataFactor, SurvdiffResult, _InteractionTerm, _ModelCovariateTerm
 
 
 def _response_check(y: Surv) -> None:
@@ -79,13 +79,13 @@ def _formula_inputs(
     return y, columns, strata, strata_levels, offset, _na_action_record(na_action, removed)
 
 
-def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvDiffResult:
+def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvdiffResult:
     """``survdiff`` with an ``offset()`` term: the observed against the expected events."""
 
     if any(value < 0.0 or value > 1.0 for value in offset):
         raise ValueError("The offset must be a survival probability")
     fit = _core.survdiff_one_sample(y._event_codes(), offset, rho)
-    return SurvDiffResult(
+    return SurvdiffResult(
         n=[len(y)],
         obs=[fit.obs[0][0]],
         exp=[fit.exp[0][0]],
@@ -113,7 +113,7 @@ def _k_sample(
     rho: float,
     timefix: bool,
     strata_levels: list[str] | None = None,
-) -> SurvDiffResult:
+) -> SurvdiffResult:
     strata_codes = (
         None
         if strata is None
@@ -129,7 +129,7 @@ def _k_sample(
     )
     strata_counts = fit.strata
     stratified = strata_counts is not None
-    return SurvDiffResult(
+    return SurvdiffResult(
         n=[int(value) for value in fit.n],
         obs=fit.obs if stratified else [row[0] for row in fit.obs],
         exp=fit.exp if stratified else [row[0] for row in fit.exp],
@@ -156,7 +156,7 @@ def survdiff(
     *,
     group: Any | None = None,
     **kwargs: Any,
-) -> SurvDiffResult:
+) -> SurvdiffResult:
     """R's ``survdiff``: the log-rank (``rho = 0``) and G-rho family tests.
 
     ``response`` is a formula string (``"Surv(time, status) ~ sex + strata(inst)"``) evaluated

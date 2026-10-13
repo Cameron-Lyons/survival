@@ -68,7 +68,7 @@ def column(spec, container):
 
 def restored_initial():
     spec = REFERENCE["initial"]
-    return survival.r._types.TMergeFrame(
+    return survival.r._types.TmergeFrame(
         columns={name: value["values"] for name, value in spec["columns"].items()},
         tname=spec["tname"],
         tevent=spec["tevent"],

@@ -18,7 +18,7 @@ Every `print_*` function returns an object instead of writing to stdout:
   column for coefficient tables). A null Cox model gives an empty mapping.
 - Curve output uses `SurvfitPrint` (compact tables) and `SurvivalTablePrint`
   (detailed tables); raw responses and rate tables use `ResponsePrint` and
-  `RateTablePrint`.
+  `RatetablePrint`.
 - Editing a print object or its converted columns never changes the fit or
   summary. Printing reuses existing fits and summaries and never refits a model.
 - Options are explicit arguments; no global R print options or locale settings are

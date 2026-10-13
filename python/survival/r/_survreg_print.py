@@ -17,7 +17,7 @@ from ._print import (
     print_options,
 )
 from ._survpenal_print import SurvregPenalPrint, _naprint, _signif, print_survreg_penal
-from ._survreg import SurvregModelResult, survreg_summary
+from ._survreg import SurvregModel, survreg_summary
 from ._types import ModelPrint, NamedMatrix
 
 
@@ -85,7 +85,7 @@ def _statistics(x: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def print_survreg(
-    x: SurvregModelResult,
+    x: SurvregModel,
     digits: Any = None,
     *,
     width: Any = 80,
@@ -96,7 +96,7 @@ def print_survreg(
     coefficient and named-scale vectors; likelihood and scalar scale displays
     use seven digits. Reports do not print automatically.
     """
-    if not isinstance(x, SurvregModelResult):
+    if not isinstance(x, SurvregModel):
         raise TypeError("print_survreg requires an AFT fit")
     if x.penalized is not None:
         return print_survreg_penal(x, digits=digits, width=width)

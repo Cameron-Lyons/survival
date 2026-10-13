@@ -49,7 +49,7 @@ assert positions["sex"] == [1.0, 2.0]
 assert positions["year"] == [9496.0, 9862.0]
 ```
 
-`RateTableMatch` contains `r` (one row per observation), `dimid` (column names in
+`RatetableMatch` contains `r` (one row per observation), `dimid` (column names in
 table order), `cutpoints` and `summary` (R's matched-population text for the
 built-in tables, `None` for custom tables).
 
@@ -87,7 +87,7 @@ With a rate table, requested times are selected from the fitted grid with one
 forward scan. Duplicate requests keep separate rows, including signed zeros, and
 follow-up times can add fitted rows between requests without merging nearby
 distinct times. Scaling divides the reported times after selection.
-`SurvExpResult.cumhaz` is `-log(surv)` with R's domain behavior: zero survival
+`SurvexpResult.cumhaz` is `-log(surv)` with R's domain behavior: zero survival
 gives positive infinity and missing or negative survival gives NaN, including for
 Cox curves whose group has an exhausted risk set. As in R, an empty sparse group
 has cohort survival zero and conditional survival one.
@@ -111,7 +111,7 @@ and G groups, beyond the model and prediction design.
   The Python numeric entry point takes flattened baseline times and hazards with
   their lengths, subject risks, zero-based strata and groups, weights, optional
   follow-up and requested times; it accepts NumPy vectors and releases the GIL.
-  `SurvExpResult.to_arrays()` returns independent writable time-by-group survival
+  `SurvexpResult.to_arrays()` returns independent writable time-by-group survival
   and risk-count matrices.
 - The R bridge's `survexp` evaluates formulas, contrasts and factor levels in R
   and computes cohort and individual predictions with the shared kernels for both
@@ -230,7 +230,7 @@ under `na.exclude`.
 summaries, rate tables and their summaries, and the `tmerge` count table support
 `as_data_frame`.
 
-- `summary_survexp` returns a `SurvExpSummary`: a vector for one curve or a
+- `summary_survexp` returns a `SummarySurvexpResult`: a vector for one curve or a
   time-by-curve matrix, with `strata` labels naming the columns. Requested times
   are sorted with duplicates kept; missing times and times outside the observed
   range are dropped. Survival uses the preceding observation (one before the
@@ -240,7 +240,7 @@ summaries, rate tables and their summaries, and the `tmerge` count table support
   callers use
   `population::summary_survexp`, whose selector validates shapes and time order and
   makes one sweep after sorting.
-- `summary_ratetable` returns a `RateTableSummary` with the canonical attributes, a
+- `summary_ratetable` returns a `SummaryRatetableResult` with the canonical attributes, a
   dimension table and the native summary text through `str(result)`. Factor
   dimensions have levels; others have bounds in native units, with calendar bounds
   as ISO dates.

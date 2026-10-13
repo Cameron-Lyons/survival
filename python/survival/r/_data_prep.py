@@ -59,7 +59,7 @@ from ._formula import (
     model_frame,
 )
 from ._surv import Surv, Surv2
-from ._types import ModelFrame, TcutResult, TMergeFrame, TMergeOperation, _SurvResponseSpec
+from ._types import ModelFrame, TcutResult, TmergeFrame, TmergeOperation, _SurvResponseSpec
 
 
 _NEARDATE_TIME_UNITS = {
@@ -922,51 +922,51 @@ _TMERGE_COUNT_NAMES = (
 )
 
 
-def summary_tmerge(object: TMergeFrame, **_kwargs: Any) -> dict[str, list[Any]]:
+def summary_tmerge(object: TmergeFrame, **_kwargs: Any) -> dict[str, list[Any]]:
     """R's ``summary.tmerge`` count matrix as a column-oriented table.
 
     ``term`` names each operation; the remaining columns count early, late,
     gap, within-interval, boundary and unmatched-ID updates.
     """
 
-    if not isinstance(object, TMergeFrame):
-        raise TypeError("summary_tmerge requires a TMergeFrame")
+    if not isinstance(object, TmergeFrame):
+        raise TypeError("summary_tmerge requires a TmergeFrame")
     return {
         "term": list(object.tcount),
         **{name: [row[name] for row in object.tcount.values()] for name in _TMERGE_COUNT_NAMES},
     }
 
 
-def tdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation:
+def tdc(time: Any, value: Any | None = None, init: Any | None = None) -> TmergeOperation:
     """A time-dependent covariate argument for :func:`tmerge`."""
 
-    return TMergeOperation("tdc", time, value=value, default=init)
+    return TmergeOperation("tdc", time, value=value, default=init)
 
 
-def cumtdc(time: Any, value: Any | None = None, init: Any | None = None) -> TMergeOperation:
+def cumtdc(time: Any, value: Any | None = None, init: Any | None = None) -> TmergeOperation:
     """A cumulative time-dependent covariate argument for :func:`tmerge`."""
 
-    return TMergeOperation("cumtdc", time, value=value, default=init)
+    return TmergeOperation("cumtdc", time, value=value, default=init)
 
 
-def event(time: Any, value: Any | None = None, censor: Any | None = None) -> TMergeOperation:
+def event(time: Any, value: Any | None = None, censor: Any | None = None) -> TmergeOperation:
     """An event argument for :func:`tmerge`."""
 
-    return TMergeOperation("event", time, value=value, censor=censor)
+    return TmergeOperation("event", time, value=value, censor=censor)
 
 
-def cumevent(time: Any, value: Any | None = None, censor: Any | None = None) -> TMergeOperation:
+def cumevent(time: Any, value: Any | None = None, censor: Any | None = None) -> TmergeOperation:
     """A cumulative event argument for :func:`tmerge`."""
 
-    return TMergeOperation("cumevent", time, value=value, censor=censor)
+    return TmergeOperation("cumevent", time, value=value, censor=censor)
 
 
-def _tmerge_operation(value: Any, name: str) -> TMergeOperation:
-    if isinstance(value, TMergeOperation):
+def _tmerge_operation(value: Any, name: str) -> TmergeOperation:
+    if isinstance(value, TmergeOperation):
         operation = value
     elif isinstance(value, Mapping):
         kind = value.get("kind", value.get("type", value.get("class")))
-        operation = TMergeOperation(
+        operation = TmergeOperation(
             kind=str(kind),
             time=value.get("time"),
             value=value.get("value"),
@@ -1016,7 +1016,7 @@ def _tmerge_retained(
 ) -> tuple[dict[str, str] | None, dict[str, Any], list[str], dict[str, dict[str, int]]]:
     """The ``tm.retain`` attribute of a previous call: names, event censors, tdc names, tcount."""
 
-    if isinstance(data1, TMergeFrame):
+    if isinstance(data1, TmergeFrame):
         return (
             dict(data1.tname),
             dict(data1.tevent),
@@ -1204,7 +1204,7 @@ class _TmergeArgument:
 
 
 def _tmerge_argument(
-    name: str, operation: TMergeOperation, data2: Any, n2: int, control: Mapping[str, Any]
+    name: str, operation: TmergeOperation, data2: Any, n2: int, control: Mapping[str, Any]
 ) -> _TmergeArgument:
     time = _numeric_or_nan(_tmerge_vector(operation.time, data2, n2, name), f"{name} time")
     values = None if operation.value is None else _tmerge_vector(operation.value, data2, n2, name)
@@ -1318,7 +1318,7 @@ def _apply_tmerge_argument(
     data2: Any,
     id2: list[Any],
     name: str,
-    operation: TMergeOperation,
+    operation: TmergeOperation,
     control: Mapping[str, Any],
     tevent: dict[str, Any],
     tdcvar: list[str],
@@ -1397,7 +1397,7 @@ def _tmerge_first_call(
     id2: list[Any],
     tstart: Any | None,
     tstop: Any | None,
-    first: tuple[str, TMergeOperation] | None,
+    first: tuple[str, TmergeOperation] | None,
     control: Mapping[str, Any],
 ) -> dict[str, list[Any]]:
     """R's first ``tmerge`` call: ``data1`` with the ``(tstart, tstop]`` range of each subject.
@@ -1469,8 +1469,8 @@ def _tmerge_inputs(
     id: Any,
     tstart: Any,
     tstop: Any,
-    operations: Mapping[str, TMergeOperation],
-) -> tuple[Any, Any, Any, Any, Any, dict[str, TMergeOperation]]:
+    operations: Mapping[str, TmergeOperation],
+) -> tuple[Any, Any, Any, Any, Any, dict[str, TmergeOperation]]:
     """Prepare shared one-shot sources once across both frames and all updates.
 
     Only data1 is retained in the result; unused data2 iterators remain unread.
@@ -1507,7 +1507,7 @@ def tmerge(
     operations: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     **args: Any,
-) -> TMergeFrame:
+) -> TmergeFrame:
     """R's ``tmerge``: build ``(tstart, tstop]`` data with time-dependent covariates.
 
     ``id`` is the name of the subject column (on the first call it must exist in
@@ -1568,7 +1568,7 @@ def tmerge(
         tcount[name] = _apply_tmerge_argument(
             newdata, data2, id2, name, operation, control, tevent, tdcvar, first_call
         )
-    return TMergeFrame(
+    return TmergeFrame(
         columns=newdata,
         tname={key: str(control[key]) for key in ("idname", "tstartname", "tstopname")},
         tevent=tevent,

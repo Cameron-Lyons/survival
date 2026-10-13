@@ -22,7 +22,7 @@ from ._coxph import _block, _frailty_print, _frailty_wald, _pspline_print, _wald
 from ._formula import _design_term_name
 from ._print import numeric_vector_lines, print_options
 from ._survpenal_lowlevel import SurvpenalFitResult, _PenaltyPrintInfo
-from ._survreg import SurvregModelResult, survreg_df
+from ._survreg import SurvregModel, survreg_df
 from ._types import NaAction, _PenaltyDesignTerm
 
 _COLUMNS = ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
@@ -66,7 +66,7 @@ class SurvregPenalPrint:
 
 
 def _term_table(
-    fit: SurvregModelResult | SurvpenalFitResult, penalized: Any, terms: bool, digits: int
+    fit: SurvregModel | SurvpenalFitResult, penalized: Any, terms: bool, digits: int
 ) -> tuple[list[str], list[list[float]], list[str]]:
     """print.survreg.penal's loop over ``pterms`` (lines 40-76) of the fit's
     ``SurvpenalFit``: the row names, the rows and the printfun history lines."""
@@ -262,7 +262,7 @@ def _naprint(na_action: NaAction) -> str:
 
 
 def print_survreg_penal(
-    fit: SurvregModelResult | SurvpenalFitResult,
+    fit: SurvregModel | SurvpenalFitResult,
     terms: Any = False,
     maxlabel: Any = 25,
     digits: Any | None = None,
@@ -279,7 +279,7 @@ def print_survreg_penal(
         fit._fit
         if isinstance(fit, SurvpenalFitResult)
         else fit.penalized
-        if isinstance(fit, SurvregModelResult)
+        if isinstance(fit, SurvregModel)
         else None
     )
     if penalized is None:

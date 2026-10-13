@@ -147,7 +147,7 @@ def test_generics_dispatch_to_survreg_or_fail_clearly():
         with pytest.raises(TypeError, match="requires a fitted coxph or survreg model"):
             generic(object())
     with pytest.raises(
-        TypeError, match="fitted model, survival curve, population result, or TMergeFrame"
+        TypeError, match="fitted model, survival curve, population result, or TmergeFrame"
     ):
         r.model_summary(object())
     with pytest.raises(TypeError, match="requires a fitted coxph or survreg model"):

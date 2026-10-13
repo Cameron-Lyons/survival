@@ -21,7 +21,7 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._fit import _model_frame
-from ._types import AaregModelResult
+from ._types import AaregModel
 
 _TESTS = ("aalen", "variance", "nrisk")
 
@@ -53,7 +53,7 @@ def aareg(
     x: Any = False,
     y: Any = False,
     **kwargs: Any,
-) -> AaregModelResult:
+) -> AaregModel:
     """Fit Aalen's additive regression model (R's ``aareg``)."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
@@ -102,7 +102,7 @@ def aareg(
         codes = list(range(len(order))) if cluster_codes is None else cluster_codes
         cluster_order = list(dict.fromkeys(codes[i] for i in order))
         influences = [influences[i] for i in cluster_order]
-    return AaregModelResult(
+    return AaregModel(
         n=[int(value) for value in raw.n],
         times=list(raw.times),
         n_risk=list(raw.n_risk),
@@ -147,7 +147,7 @@ def _cumsum(values: list[float]) -> list[float]:
 
 
 def _summary_influence_covariance(
-    fit: AaregModelResult, times: list[float], weights: list[list[float]]
+    fit: AaregModel, times: list[float], weights: list[list[float]]
 ) -> list[list[float]]:
     """Reweight stored group influences with a bounded conversion buffer.
 
@@ -180,7 +180,7 @@ def _summary_influence_covariance(
 
 
 def summary_aareg(
-    fit: AaregModelResult,
+    fit: AaregModel,
     maxtime: Any | None = None,
     test: Any | None = None,
     scale: Any = 1.0,

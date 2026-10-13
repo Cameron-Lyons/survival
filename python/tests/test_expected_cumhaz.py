@@ -19,7 +19,7 @@ REFERENCE = json.loads(
 @pytest.mark.parametrize("case", REFERENCE["synthetic"], ids=lambda case: case["name"])
 def test_expected_cumulative_hazards_match_r_logarithm(case):
     values = np.asarray(case["surv"], dtype=float)
-    fit = r.SurvExpResult(
+    fit = r.SurvexpResult(
         list(range(len(values))), values.tolist(), np.ones_like(values).tolist(), "cohort", 1
     )
     for result in (fit, pickle.loads(pickle.dumps(fit))):

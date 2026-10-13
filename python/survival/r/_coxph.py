@@ -104,13 +104,13 @@ from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
-    CoxBaseHazardResult,
+    BasehazResult,
     CoxPenaltyBasis,
-    CoxPHDetailResult,
-    CoxPHWTestResult,
+    CoxphDetailResult,
+    CoxphWtestResult,
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
-    CoxZPHResult,
+    CoxZphResult,
     NaAction,
     PredictResult,
     PsplineResult,
@@ -1726,7 +1726,7 @@ def _wtest_b(b: Any) -> tuple[list[list[float | None]], bool]:
     return [[None if _is_missing_value(value) else float(value)] for value in raw], False
 
 
-def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
+def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxphWtestResult:
     """R's ``coxph.wtest``: the Wald statistic ``b' var^-1 b`` for each column of ``b``."""
 
     toler = _finite_float(toler_chol, "toler_chol")
@@ -1748,7 +1748,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     b_values = [[value for value in row if value is not None] for row in b_rows]
     if var_length == 0:
         if nvar == 0:
-            return CoxPHWTestResult(test=[], df=0, solve=0.0)
+            return CoxphWtestResult(test=[], df=0, solve=0.0)
         raise ValueError("Argument lengths do not match")
     if var_length == 1:
         if nvar != 1:
@@ -1757,7 +1757,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
         if not math.isfinite(variance):
             raise ValueError("infinite argument in coxph.wtest")
         values = b_values[0]
-        return CoxPHWTestResult(
+        return CoxphWtestResult(
             test=[value * value / variance for value in values],
             df=1,
             solve=[value / variance for value in values],
@@ -1776,7 +1776,7 @@ def coxph_wtest(var: Any, b: Any, toler_chol: Any = 1e-9) -> CoxPHWTestResult:
     solve: list[float] | list[list[float]] = (
         solve_rows if b_is_matrix and ntest > 1 else [row[0] for row in solve_rows]
     )
-    return CoxPHWTestResult(test=list(result.test), df=int(result.df), solve=solve)
+    return CoxphWtestResult(test=list(result.test), df=int(result.df), solve=solve)
 
 
 def _prediction_newdata(
@@ -2710,7 +2710,7 @@ def survfit_coxph(
     )
 
 
-def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBaseHazardResult:
+def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> BasehazResult:
     """R's ``basehaz``: the cumulative hazard of ``survfit(fit)`` as a data frame."""
 
     from ._coxphms import CoxphmsModel
@@ -2729,7 +2729,7 @@ def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBa
     strata = None
     if sfit.strata is not None:
         strata = [name for name, count in sfit.strata.items() for _ in range(count)]
-    return CoxBaseHazardResult(hazard=hazard, time=list(sfit.time), strata=strata)
+    return BasehazResult(hazard=hazard, time=list(sfit.time), strata=strata)
 
 
 def cox_zph(
@@ -2739,7 +2739,7 @@ def cox_zph(
     singledf: Any = False,
     global_test: Any = True,
     **kwargs: Any,
-) -> CoxZPHResult:
+) -> CoxZphResult:
     """R's ``cox.zph``: test the proportional hazards assumption of a Cox model.
 
     ``transform`` is ``"km"``, ``"rank"``, ``"identity"``, ``"log"`` or a function
@@ -2817,7 +2817,7 @@ def cox_zph(
         strata = _stacked_strata_labels(result.strata)
     elif result.strata is not None and fit.strata_levels:
         strata = [fit.strata_levels[int(code)] for code in result.strata]
-    return CoxZPHResult(
+    return CoxZphResult(
         table=table,
         x=list(result.x),
         time=list(result.time),
@@ -2841,7 +2841,7 @@ def _detail_response(
     return [[begin, t, float(e)] for t, e in zip(time, status, strict=True)]
 
 
-def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHDetailResult:
+def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxphDetailResult:
     """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood.
 
     A multi-state fit is described on its stacked data (coxph.getdata stacks it): ``x``
@@ -2890,7 +2890,7 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxPHD
         y = [y[idx] for idx in order]
         if risk_rows is not None:
             risk_rows = [risk_rows[idx] for idx in order]
-    return CoxPHDetailResult(
+    return CoxphDetailResult(
         time=list(detail.time),
         nevent=[int(value) for value in detail.nevent],
         nrisk=[int(value) for value in detail.nrisk],
@@ -3040,9 +3040,9 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
     if any(isinstance(fit, CoxphmsModel) for fit in fits):
         raise NotImplementedError("anova not yet available for multistate")
     if not isinstance(fits[0], CoxphModel):
-        from ._survreg import SurvregModelResult, anova_survreg
+        from ._survreg import SurvregModel, anova_survreg
 
-        if not isinstance(fits[0], SurvregModelResult):
+        if not isinstance(fits[0], SurvregModel):
             raise TypeError("anova requires fitted coxph or survreg models")
         return anova_survreg(*fits, test=test)
     if any(not isinstance(fit, CoxphModel) for fit in fits):

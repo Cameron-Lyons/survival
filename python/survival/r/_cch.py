@@ -20,7 +20,7 @@ from ._coerce import (
 from ._fit import _model_frame, _r_levels
 from ._formula import _column_source
 from ._surv import _complete_codes, _strata
-from ._types import CchModelResult
+from ._types import CchModel
 
 _METHODS = {
     "prentice": "Prentice",
@@ -84,7 +84,7 @@ def cch(
     subset: Any | None = None,
     na_action: str | None = "fail",
     **kwargs: Any,
-) -> CchModelResult:
+) -> CchModel:
     """Fit a case-cohort Cox model (R's ``cch``).
 
     ``subcoh``, ``id`` and ``stratum`` are vectors or column names of ``data``;
@@ -203,7 +203,7 @@ def cch(
         )
         subcohort_size = (sum(subcohort),)
         cohort_sizes = (size,)
-    return CchModelResult(
+    return CchModel(
         fit=fit,
         formula=formula,
         design=frame.design,
@@ -219,7 +219,7 @@ def cch(
     )
 
 
-def summary_cch(fit: CchModelResult) -> dict[str, Any]:
+def summary_cch(fit: CchModel) -> dict[str, Any]:
     """R's ``summary.cch``: ``Value``/``SE``/``Z``/``p`` per coefficient."""
 
     rows = []

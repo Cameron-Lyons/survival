@@ -16,7 +16,7 @@ from ._coerce import (
 )
 from ._print import print_options
 from ._surv import Surv, Surv2, as_character_surv
-from ._types import RateTable, RateTablePrint, ResponsePrint
+from ._types import RateTable, RatetablePrint, ResponsePrint
 
 _MAX_NOTE = " [ reached 'max' / getOption(\"max.print\") -- omitted "
 
@@ -252,7 +252,7 @@ def _quantity(count: int, name: str) -> str:
 
 def print_ratetable(
     x: RateTable, digits: Any = None, *, width: Any = 80, max_print: Any = 99999, **kwargs: Any
-) -> RateTablePrint:
+) -> RatetablePrint:
     """Format rate arrays as vectors, matrices or column-major matrix slices.
 
     Rendering stops at ``max_print`` using R's row/slice rules. The report still
@@ -344,4 +344,4 @@ def print_ratetable(
                     if last_columns < nc:
                         omitted.append(_quantity(nc - last_columns, "column"))
                 lines.append(_MAX_NOTE + " ".join(omitted) + " ]")
-    return RateTablePrint(dims, dimid, dimnames, rates, digits, lines, displayed)
+    return RatetablePrint(dims, dimid, dimnames, rates, digits, lines, displayed)

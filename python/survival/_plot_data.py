@@ -13,7 +13,7 @@ from . import _survival as _core
 from .r._types import (
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
-    SurvExpResult,
+    SurvexpResult,
     SurvfitMultiStateResult,
     SurvfitResult,
 )
@@ -24,7 +24,7 @@ SurvivalFit = (
     | CoxSurvfitResult
     | SurvfitMultiStateResult
     | CoxSurvfitMultiStateResult
-    | SurvExpResult
+    | SurvexpResult
 )
 Transform = str | Callable[[FloatArray], Any] | None
 _MULTISTATE = (SurvfitMultiStateResult, CoxSurvfitMultiStateResult)
@@ -186,15 +186,15 @@ def survfit_plot_data(
     ``conf_int`` requests a confidence level; ``"only"`` suppresses the estimate.
     """
 
-    if not isinstance(fit, (SurvfitResult, CoxSurvfitResult, SurvExpResult, *_MULTISTATE)):
+    if not isinstance(fit, (SurvfitResult, CoxSurvfitResult, SurvexpResult, *_MULTISTATE)):
         raise TypeError("plotting requires a fitted survfit result")
     time = np.asarray(fit.time, dtype=float)
     if time.ndim != 1 or not len(time) or not np.isfinite(time).all():
         raise ValueError("survival curves must contain finite fitted times")
-    expected_fit = fit if isinstance(fit, SurvExpResult) else None
+    expected_fit = fit if isinstance(fit, SurvexpResult) else None
     groups = (
         list(fit.strata.items())
-        if not isinstance(fit, SurvExpResult) and fit.strata
+        if not isinstance(fit, SurvexpResult) and fit.strata
         else [("", len(time))]
     )
     if any(size < 1 for _, size in groups) or sum(size for _, size in groups) != len(time):
@@ -332,13 +332,13 @@ def survfit_plot_data(
         raise ValueError("mark_time must be a boolean or vector of times")
     event_counts = (
         np.zeros((len(time), 1))
-        if isinstance(fit, SurvExpResult)
+        if isinstance(fit, SurvexpResult)
         else _array(fit.n_event, len(time), "n_event")
     )
     events = event_counts[:, 0]
     censored = (
         np.zeros(len(time))
-        if isinstance(fit, SurvExpResult)
+        if isinstance(fit, SurvexpResult)
         else (
             events == 0
             if fit.n_censor is None

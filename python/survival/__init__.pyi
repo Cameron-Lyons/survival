@@ -26,16 +26,16 @@ from . import spatial as spatial
 from . import surv_analysis as surv_analysis
 from . import validation as validation
 from .r import (
-    AaregModelResult as AaregModelResult,
+    AaregModel as AaregModel,
 )
 from .r import (
-    CchModelResult as CchModelResult,
+    CchModel as CchModel,
 )
 from .r import (
     Factor as Factor,
 )
 from .r import (
-    FineGrayFrame as FineGrayFrame,
+    FinegrayFrame as FinegrayFrame,
 )
 from .r import (
     FineGrayOutput as FineGrayOutput,
@@ -56,7 +56,7 @@ from .r import (
     Surv2 as Surv2,
 )
 from .r import (
-    SurvExpResult as SurvExpResult,
+    SurvexpResult as SurvexpResult,
 )
 from .r import (
     SurvfitConfidenceIntervalResult as SurvfitConfidenceIntervalResult,
@@ -68,13 +68,13 @@ from .r import (
     TcutResult as TcutResult,
 )
 from .r import (
-    TMergeFrame as TMergeFrame,
+    TmergeFrame as TmergeFrame,
 )
 from .r import (
-    TMergeOperation as TMergeOperation,
+    TmergeOperation as TmergeOperation,
 )
 from .r import (
-    YatesModel as YatesModel,
+    YatesFitAdapter as YatesFitAdapter,
 )
 from .r import (
     YatesResult as YatesResult,

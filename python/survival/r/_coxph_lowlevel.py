@@ -20,10 +20,11 @@ from ._coerce import (
 )
 from ._coxph import _cox_fit_diagnostic_messages, coxph_control
 from ._surv import Surv
+from ._types import _renamed_classes
 
 
 @dataclass(frozen=True)
-class CoxFitResult:
+class CoxphFitResult:
     """Bare fit components with R's output shapes and explicit row/column names.
 
     The native result retains no design matrix or response data. It owns the
@@ -106,7 +107,7 @@ def _fit(
     resid: Any,
     nocenter: Any,
     column_names: Any,
-) -> CoxFitResult:
+) -> CoxphFitResult:
     if not isinstance(y, Surv):
         raise TypeError("y must be a Surv object")
     allowed = (
@@ -183,7 +184,7 @@ def _fit(
         fitted, options["iter.max"], options["eps"], options["toler.inf"], offset_centered=False
     ):
         _warn_outside_package(message, RuntimeWarning)
-    return CoxFitResult(
+    return CoxphFitResult(
         fitted,
         kind,
         "coxph" if kind == "agexact" else method,
@@ -207,7 +208,7 @@ def coxph_fit(
     nocenter: Any = None,
     *,
     column_names: Sequence[str] | None = None,
-) -> CoxFitResult:
+) -> CoxphFitResult:
     """R's bare right-censored fitter: original offsets and optional residuals.
 
     As in R, this fitter uses Efron only for ``method='efron'`` and Breslow
@@ -245,7 +246,7 @@ def agreg_fit(
     nocenter: Any = None,
     *,
     column_names: Sequence[str] | None = None,
-) -> CoxFitResult:
+) -> CoxphFitResult:
     """R's bare counting-process fitter, including the final score and iteration info."""
     return _fit(
         "agreg",
@@ -278,7 +279,7 @@ def agexact_fit(
     nocenter: Any = None,
     *,
     column_names: Sequence[str] | None = None,
-) -> CoxFitResult:
+) -> CoxphFitResult:
     """R's bare exact fitter, using entry zero for a right-censored response.
 
     R's single-column predictor matrix and historical ``method='coxph'`` result
@@ -300,3 +301,11 @@ def agexact_fit(
         nocenter,
         column_names,
     )
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "CoxFitResult": "CoxphFitResult",
+    },
+)

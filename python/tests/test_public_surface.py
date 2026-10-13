@@ -105,19 +105,19 @@ def test_model_functions_return_the_exported_classes(ovarian, cox, weibull):
     results = [
         (cox, r.CoxphModel),
         (r.clogit("fustat ~ age + strata(rx)", ovarian), r.ClogitModel),
-        (weibull, r.SurvregModelResult),
+        (weibull, r.SurvregModel),
         (r.anova(cox), r.AnovaCoxphResult),
         (r.anova(weibull), r.SurvregAnovaResult),
         (r.brier(cox), r.BrierResult),
         (r.concordance(cox), r.ConcordanceResult),
-        (overlap, r.SurvCheckResult),
-        (overlap.overlap, r.SurvCheckProblem),
+        (overlap, r.SurvcheckResult),
+        (overlap.overlap, r.SurvcheckProblem),
         (km, r.SurvfitResult),
         (r.survfit0(km), r.SurvfitResult),
         (r.survfit(cox), r.CoxSurvfitResult),
         (r.survfit("Surv(time, ev) ~ 1", mstate), r.SurvfitMultiStateResult),
         (r.pspline(ovarian["age"]), r.PsplineResult),
-        (r.statefig([1, 1], {"a": [0, 1], "b": [0, 0]}), r.StateFigResult),
+        (r.statefig([1, 1], {"a": [0, 1], "b": [0, 0]}), r.StatefigResult),
         (r.nsk(ovarian["age"], df=3), survival._survival.SplineBasisResult),
     ]
     for value, cls in results:

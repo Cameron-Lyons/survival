@@ -33,7 +33,7 @@ def close(actual, expected):
 
 
 def check_result(result, expected, probs):
-    assert isinstance(result, r.SurvfitQuantileResult)
+    assert isinstance(result, r.QuantileSurvfitResult)
     assert result.probs == list(probs)
     assert result.strata is None
     for name in ("quantile", "lower", "upper"):

@@ -34,7 +34,7 @@ def response(name):
 
 def expected_fit(name):
     encoded = REFERENCE["expected"][name]
-    return r.SurvExpResult(
+    return r.SurvexpResult(
         time=encoded["time"],
         surv=encoded["surv"],
         n_risk=encoded["n_risk"],

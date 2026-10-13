@@ -27,7 +27,7 @@ def _group_fit():
 def test_residuals_survfit_matches_r_pstate_and_cumhaz():
     result = r.residuals_survfit(_group_fit(), times=[5, 2])
 
-    assert isinstance(result, r.SurvfitResidualsResult)
+    assert isinstance(result, r.ResidualsSurvfitResult)
     assert result.time == [2.0, 5.0]
     assert result.id == [1, 2, 3, 4, 5, 6, 7, 8]
     assert result.curve == [1, 1, 1, 1, 2, 2, 2, 2]

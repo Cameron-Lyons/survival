@@ -91,13 +91,13 @@ R's model-frame row labels, and new-data stratum counts keep the fitted labels.
 
 ## External linear models and GLMs
 
-`r.concordance` accepts external fits through the `YatesModel` adapter, which does
+`r.concordance` accepts external fits through the `YatesFitAdapter` adapter, which does
 not refit the model:
 
 ```python
 from survival import r
 
-model = r.YatesModel(
+model = r.YatesFitAdapter(
     "y ~ x + group",
     retained_training_data,
     coefficients,

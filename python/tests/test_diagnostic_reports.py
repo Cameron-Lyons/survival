@@ -92,7 +92,7 @@ def snapshot(case):
     method = case["method"]
     if method == "cox.zph":
         table = source["table"]
-        return r.CoxZPHResult(
+        return r.CoxZphResult(
             [
                 dict(name=name, **dict(zip(["chisq", "df", "p"], values, strict=True)))
                 for name, values in zip(table["rows"], table["values"], strict=True)
@@ -132,7 +132,7 @@ def snapshot(case):
             source["concordance"], stats, source["n"], source["std_err"], na_action=omitted(source)
         )
     if method == "survdiff":
-        return r.SurvDiffResult(
+        return r.SurvdiffResult(
             source["n"],
             np.atleast_1d(source["obs"]).tolist(),
             np.atleast_1d(source["exp"]).tolist(),

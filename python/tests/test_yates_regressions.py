@@ -265,7 +265,7 @@ def test_yates_setup_errors_follow_r():
 
 def test_yates_model_uses_the_linear_predictor_for_other_predictions():
     data = _veteran()
-    model = r.YatesModel("time ~ karno", data, [-60.0, 3.0], [[400.0, -6.0], [-6.0, 0.1]])
+    model = r.YatesFitAdapter("time ~ karno", data, [-60.0, 3.0], [[400.0, -6.0], [-6.0, 0.1]])
     linear = r.yates(model, "karno", levels=[40, 60])
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -323,7 +323,9 @@ def test_yates_model_drops_an_aliased_coefficient():
             0.370303085291109,
         ],
     ]
-    model = r.YatesModel("time ~ celltype + karno + k2", data, beta, variance, 19291.6313423402)
+    model = r.YatesFitAdapter(
+        "time ~ celltype + karno + k2", data, beta, variance, 19291.6313423402
+    )
     result = r.yates(model, "celltype")
     assert result.estimate["pmm"] == approx(
         [194.1684820546716, 84.9215504800889, 65.3191863402093, 149.1574323650583]
@@ -461,7 +463,7 @@ def test_unused_factor_levels_stay_as_aliased_columns():
 
 def test_yates_model_drops_unused_levels_as_lm_does():
     data = _lung_with_unused_level()
-    model = r.YatesModel(
+    model = r.YatesFitAdapter(
         "time ~ g",
         data,
         [347.035087719298, -83.6052631578947],

@@ -26,7 +26,7 @@ def assert_close(actual, expected):
 
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["name"])
 def test_sgtt_matches_r_for_linear_models(case):
-    fit = r.YatesModel(
+    fit = r.YatesFitAdapter(
         case["formula"],
         case["data"],
         numbers(case["beta"]),

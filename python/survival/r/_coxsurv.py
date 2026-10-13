@@ -23,11 +23,11 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._surv import Surv
-from ._types import StrataFactor
+from ._types import StrataFactor, _renamed_classes
 
 
 @dataclass(frozen=True)
-class CoxSurvFitResult:
+class CoxsurvRawResult:
     """Bare curves with read-only NumPy views and explicit labels.
 
     Ordinary predictions have one matrix column per new row (a vector for
@@ -109,26 +109,26 @@ class CoxSurvFitResult:
 
 
 @dataclass(frozen=True)
-class CoxSurvFitList(Sequence[CoxSurvFitResult]):
+class CoxsurvRawList(Sequence[CoxsurvRawResult]):
     """Named per-curve views, returned by ``unlist=False``.
 
     Names identify strata for ordinary curves or IDs for individual curves.
     Every view shares the same native owner; selecting one retains its siblings.
     """
 
-    curves: tuple[CoxSurvFitResult, ...]
+    curves: tuple[CoxsurvRawResult, ...]
     names: tuple[str, ...]
 
     def __len__(self) -> int:
         return len(self.curves)
 
     @overload
-    def __getitem__(self, index: int) -> CoxSurvFitResult: ...
+    def __getitem__(self, index: int) -> CoxsurvRawResult: ...
 
     @overload
-    def __getitem__(self, index: slice) -> tuple[CoxSurvFitResult, ...]: ...
+    def __getitem__(self, index: slice) -> tuple[CoxsurvRawResult, ...]: ...
 
-    def __getitem__(self, index: int | slice) -> CoxSurvFitResult | tuple[CoxSurvFitResult, ...]:
+    def __getitem__(self, index: int | slice) -> CoxsurvRawResult | tuple[CoxsurvRawResult, ...]:
         return self.curves[index]
 
 
@@ -197,7 +197,7 @@ def coxsurv_fit(
     *,
     rownames: Any = None,
     **kwargs: Any,
-) -> CoxSurvFitResult | CoxSurvFitList:
+) -> CoxsurvRawResult | CoxsurvRawList:
     """Compute curves from prepared Cox responses, covariates and relative risks.
 
     Designs must already use the same centering convention as the supplied
@@ -293,14 +293,14 @@ def coxsurv_fit(
         keep_details=not unlist,
     )
     counts = tuple(fitted.n)
-    result = CoxSurvFitResult(fitted, labels, row_names, ids is not None, slice(None), counts)
+    result = CoxsurvRawResult(fitted, labels, row_names, ids is not None, slice(None), counts)
     if unlist:
         return result
     curves = []
     start = 0
     for index, (label, length) in enumerate(zip(labels, fitted.lengths, strict=True)):
         curves.append(
-            CoxSurvFitResult(
+            CoxsurvRawResult(
                 fitted,
                 (label,),
                 row_names,
@@ -310,7 +310,7 @@ def coxsurv_fit(
             )
         )
         start += length
-    return CoxSurvFitList(tuple(curves), labels)
+    return CoxsurvRawList(tuple(curves), labels)
 
 
 def survfitcoxph_fit(
@@ -332,7 +332,7 @@ def survfitcoxph_fit(
     *,
     rownames: Any = None,
     **kwargs: Any,
-) -> CoxSurvFitResult | CoxSurvFitList:
+) -> CoxsurvRawResult | CoxsurvRawList:
     """Legacy direct Cox curves. ``vartype`` is unused, as in R's wrapper.
 
     ``survtype`` selects 1=Kalbfleisch–Prentice, 2=Breslow or 3=Efron.
@@ -360,3 +360,12 @@ def survfitcoxph_fit(
         rownames=rownames,
         **kwargs,
     )
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "CoxSurvFitResult": "CoxsurvRawResult",
+        "CoxSurvFitList": "CoxsurvRawList",
+    },
+)

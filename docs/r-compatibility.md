@@ -928,7 +928,7 @@ this does not show.
 - Python/native quantiles of a stratified `survfit.coxph` object with several
   curves have one row per (stratum, curve), ordered as `summary()`'s table;
   R and the R bridge return a stratum x curve x probability array.
-  Python/native quantiles and medians always return a `SurvfitQuantileResult`,
+  Python/native quantiles and medians always return a `QuantileSurvfitResult`,
   including single-response and single-probability calls.
   Tolerance-induced interpolation ties use R's averaged indices
   without emitting its "collapsing to unique x values" warning.
@@ -982,7 +982,7 @@ this does not show.
 - Repeated stratum labels in selected multi-state Cox curves gain suffixes such
   as `b`, `b.1`, so the Python dictionary keeps every selected time block.
 - Print functions return objects (`ModelPrint`, `SurvfitPrint`,
-  `SurvivalTablePrint`, `ResponsePrint`, `RateTablePrint`) instead of printing and
+  `SurvivalTablePrint`, `ResponsePrint`, `RatetablePrint`) instead of printing and
   returning the fit invisibly. They omit R call expressions, which Python fits do
   not store, strip trailing spaces and read no global print options. Curve and
   expected-curve output does not reconstruct omission notices, and expected-curve

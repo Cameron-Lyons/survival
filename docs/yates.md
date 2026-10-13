@@ -60,7 +60,7 @@ coefficients and covariance.
 
 ## External models
 
-`r.YatesModel(formula, data, coefficients, variance, sigma2=None, *, family=None,
+`r.YatesFitAdapter(formula, data, coefficients, variance, sigma2=None, *, family=None,
 weights=None, linear_predictors=None)` adapts an externally fitted linear model or
 GLM without refitting it. Coefficients and covariance follow the formula's design
 columns, including the intercept. The adapter uses treatment contrasts. `sigma2`
@@ -69,7 +69,7 @@ supplies sum-of-squares columns for linear models and is normally `None` for GLM
 ```python
 import numpy as np
 
-adapter = r.YatesModel(
+adapter = r.YatesFitAdapter(
     "y ~ group + age", data, coefficients, covariance,
     family={"linkinv": lambda eta: 1 / (1 + np.exp(-eta))},
 )

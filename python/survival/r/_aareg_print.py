@@ -10,7 +10,7 @@ from ._aareg import summary_aareg
 from ._coerce import _r_format_number
 from ._print import format_pvalues, numeric_matrix_lines, print_options
 from ._survpenal_print import _naprint, _signif
-from ._types import AaregModelResult, ModelPrint, NamedMatrix
+from ._types import AaregModel, ModelPrint, NamedMatrix
 
 
 def _report(
@@ -47,7 +47,7 @@ def _report(
 
 
 def print_aareg(
-    x: AaregModelResult,
+    x: AaregModel,
     maxtime: Any = None,
     test: Any = None,
     scale: Any = 1,
@@ -60,7 +60,7 @@ def print_aareg(
     entries to three significant figures before printing with seven digits.
     The footer retains the fit's test label even when ``test`` overrides it.
     """
-    if not isinstance(x, AaregModelResult):
+    if not isinstance(x, AaregModel):
         raise TypeError("print_aareg requires an Aalen fit")
     _, digits, width = print_options(1, None, width, 7)
     summary = summary_aareg(x, maxtime=maxtime, test=test, scale=scale)

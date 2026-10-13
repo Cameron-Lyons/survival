@@ -11,7 +11,7 @@ import numpy as np
 from ._plot_data import FloatArray
 from ._plot_helpers import axes as get_axes
 from ._plot_helpers import panel_axes, styles, variables
-from .r._types import AaregModelResult
+from .r._types import AaregModel
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ def _influence_variance(
 
 
 def aareg_plot_data(
-    fit: AaregModelResult,
+    fit: AaregModel,
     *,
     se: bool = True,
     maxtime: float | None = None,
@@ -80,7 +80,7 @@ def aareg_plot_data(
     not extend the curve to it. ``var`` selects names or one-based indices.
     """
 
-    if not isinstance(fit, AaregModelResult):
+    if not isinstance(fit, AaregModel):
         raise TypeError("fit must be returned by survival.r.aareg")
     if not isinstance(se, bool | np.bool_):
         raise TypeError("se must be boolean")
@@ -141,7 +141,7 @@ class AalenPlot:
 
 
 def _draw_aareg(
-    fit: AaregModelResult,
+    fit: AaregModel,
     *,
     ax: Any = None,
     overlay: bool = False,
@@ -203,7 +203,7 @@ def _draw_aareg(
     return AalenPlot(axes, data, tuple(lines), tuple(confidence))
 
 
-def plot_aareg(fit: AaregModelResult, *, ax: Any = None, **kwargs: Any) -> AalenPlot:
+def plot_aareg(fit: AaregModel, *, ax: Any = None, **kwargs: Any) -> AalenPlot:
     """Plot cumulative Aalen coefficients, with pointwise 1.96-SE bands by default.
 
     With ``se=True`` each coefficient has its own panel; without bands, all
@@ -217,9 +217,7 @@ def plot_aareg(fit: AaregModelResult, *, ax: Any = None, **kwargs: Any) -> Aalen
     return _draw_aareg(fit, ax=ax, **kwargs)
 
 
-def lines_aareg(
-    fit: AaregModelResult, *, ax: Any = None, se: bool = False, **kwargs: Any
-) -> AalenPlot:
+def lines_aareg(fit: AaregModel, *, ax: Any = None, se: bool = False, **kwargs: Any) -> AalenPlot:
     """Add Aalen coefficient curves to one axis, preserving its scales and limits.
 
     Accepts the same options as ``plot_aareg``; confidence bands are off by

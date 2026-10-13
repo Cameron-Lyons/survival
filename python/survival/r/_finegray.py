@@ -25,7 +25,7 @@ from ._coerce import (
 from ._formula import _model_variables, _strata_keep, _strata_specs, model_frame
 from ._names import _make_names
 from ._surv import Surv, _complete_codes
-from ._types import FineGrayFrame, ModelFrame
+from ._types import FinegrayFrame, ModelFrame
 
 
 def _etype_index(states: Sequence[str], etype: Any) -> int:
@@ -81,7 +81,7 @@ def finegray(
     id: Any | None = None,
     timefix: bool = True,
     **kwargs: Any,
-) -> FineGrayFrame:
+) -> FinegrayFrame:
     """R's ``finegray``: expand a multi-state ``Surv`` response into Fine-Gray weighted rows.
 
     The result carries the model-frame columns plus ``<prefix>start``,
@@ -138,7 +138,7 @@ def finegray(
     columns[output_names[3]] = split.wt
     if count_name is not None:
         columns[count_name] = split.add
-    return FineGrayFrame(columns, event=response.states[enum - 1])
+    return FinegrayFrame(columns, event=response.states[enum - 1])
 
 
 def _finegray_frame(result: _core.FineGrayOutput) -> dict[str, list[Any]]:

@@ -21,13 +21,13 @@ from ._print import (
 )
 from ._survpenal_print import _naprint, _signif
 from ._types import (
-    CchModelResult,
+    CchModel,
     ConcordanceResult,
-    CoxZPHResult,
+    CoxZphResult,
     ModelPrint,
     NamedMatrix,
     SurvConcordanceResult,
-    SurvDiffResult,
+    SurvdiffResult,
 )
 
 
@@ -106,9 +106,9 @@ def _case_cohort_report(x: Mapping[str, Any], width: int, *, summary: bool) -> M
     return ModelPrint(tables, statistics, 3 if summary else 7, lines)
 
 
-def print_cch(x: CchModelResult, *, width: Any = 80) -> ModelPrint:
+def print_cch(x: CchModel, *, width: Any = 80) -> ModelPrint:
     """Return R's case-cohort coefficient report and sampling counts."""
-    if not isinstance(x, CchModelResult):
+    if not isinstance(x, CchModel):
         raise TypeError("print_cch requires a case-cohort fit")
     _, _, width = print_options(1, None, width, 7)
     return _case_cohort_report(summary_cch(x), width, summary=False)
@@ -127,10 +127,10 @@ def print_summary_cch(x: Mapping[str, Any], digits: Any = 3, *, width: Any = 80)
 
 
 def print_cox_zph(
-    x: CoxZPHResult, digits: Any = None, signif_stars: Any = False, *, width: Any = 80
+    x: CoxZphResult, digits: Any = None, signif_stars: Any = False, *, width: Any = 80
 ) -> ModelPrint:
     """Return coefficient/term and global proportional-hazards test tables."""
-    if not isinstance(x, CoxZPHResult):
+    if not isinstance(x, CoxZphResult):
         raise TypeError("print_cox_zph requires a proportional-hazards diagnostic")
     _, digits, width = print_options(1, digits, width, 3)
     stars = _normalize_bool_option(signif_stars, "signif_stars")
@@ -250,9 +250,9 @@ def _ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else math.nan if numerator == 0 else math.inf
 
 
-def print_survdiff(x: SurvDiffResult, digits: Any = None, *, width: Any = 80) -> ModelPrint:
+def print_survdiff(x: SurvdiffResult, digits: Any = None, *, width: Any = 80) -> ModelPrint:
     """Return grouped log-rank/G-rho or one-sample expected-survival tests."""
-    if not isinstance(x, SurvDiffResult):
+    if not isinstance(x, SurvdiffResult):
         raise TypeError("print_survdiff requires a survival-difference test")
     _, digits, width = print_options(1, digits, width, 3)
     lines = []

@@ -9,11 +9,11 @@ from typing import Any
 from ._coerce import _float_vector
 from ._fit import _r_factor_design
 from ._formula import _design_term_output_names, _fit_formula_design, model_frame
-from ._types import _FormulaDesign
+from ._types import _FormulaDesign, _renamed_classes
 
 
 @dataclass(frozen=True)
-class YatesModel:
+class YatesFitAdapter:
     """Supply an external linear model or GLM to :func:`yates` or :func:`concordance`.
 
     Coefficients and covariance follow the R formula's design-column order,
@@ -77,3 +77,11 @@ class YatesModel:
             if len(values) != frame.n or any(not math.isfinite(value) for value in values):
                 raise ValueError("linear_predictors must be finite and match the model rows")
             object.__setattr__(self, "linear_predictors", values)
+
+
+__getattr__ = _renamed_classes(
+    globals(),
+    {
+        "YatesModel": "YatesFitAdapter",
+    },
+)

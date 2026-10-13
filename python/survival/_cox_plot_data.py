@@ -12,7 +12,7 @@ import numpy as np
 from . import _survival as _core
 from ._plot_data import FloatArray
 from ._plot_helpers import variables
-from .r._types import CoxZPHResult
+from .r._types import CoxZphResult
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ def _interpolate(x: FloatArray, y: FloatArray, query: FloatArray) -> FloatArray:
 
 
 def cox_zph_plot_data(
-    result: CoxZPHResult,
+    result: CoxZphResult,
     *,
     df: int = 4,
     nsmo: int = 40,
@@ -66,7 +66,7 @@ def cox_zph_plot_data(
     This function does not import Matplotlib.
     """
 
-    if not isinstance(result, CoxZPHResult):
+    if not isinstance(result, CoxZphResult):
         raise TypeError("result must be returned by survival.r.cox_zph")
     if not isinstance(hr, bool | np.bool_) or not isinstance(se, bool | np.bool_):
         raise TypeError("hr and se must be boolean")
