@@ -535,7 +535,9 @@ def penalty_columns(
         if spec.combine is not None:
             basis = _combine_basis(basis, spec.combine)
         first = 0 if spec.intercept else 1
-        return [list(column) for column in zip(*(row[first:] for row in basis), strict=True)]
+        if not basis:
+            return []
+        return np.asarray(basis, dtype=float)[:, first:].T.tolist()
     lookup = {level: i + 1 for i, level in enumerate(spec.levels)}
     if any(value not in lookup for value in x):
         raise ValueError(f"newdata column {spec.columns[0]!r} contains an unknown frailty level")

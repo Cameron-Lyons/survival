@@ -182,7 +182,13 @@ def _aligned(values: Any | None, n: int, name: str) -> Sequence[Any] | None:
     materialized = _materialize_labels(values, name)
     if len(materialized) != n:
         raise ValueError(f"{name} must have the same length as the Surv response")
-    if any(_is_missing_value(value) for value in materialized):
+    array = _numeric_ndarray(values)
+    missing = (
+        bool(array.dtype.kind == "f" and np.isnan(array).any())
+        if array is not None
+        else any(_is_missing_value(value) for value in materialized)
+    )
+    if missing:
         raise ValueError(f"{name} contains missing values")
     if _mstate_categories(values) is not None:
         return _r_factor(materialized, _mstate_categories(values))

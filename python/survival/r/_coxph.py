@@ -927,7 +927,11 @@ def _coxph_fit_frame(
         sparse = next((term for term in penalized_terms if term.penalty.sparse), None)
         if sparse is not None:
             column = frame.assign[_design_term_name(sparse)][0]
-            sparse_values = tuple(row[column] for row in data.x)
+            sparse_values = (
+                tuple(data.x[:, column].tolist())
+                if isinstance(data.x, np.ndarray)
+                else tuple(row[column] for row in data.x)
+            )
         dense = [
             i
             for i, term in enumerate(frame.design.covariates)

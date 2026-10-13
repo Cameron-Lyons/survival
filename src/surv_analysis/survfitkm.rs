@@ -923,12 +923,20 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 let haz = d1 / nrisk;
                 let (dn_term, risk_term) =
                     robust::hazard_influence_terms(d0, d1, nrisk, options.ctype);
-                for g in 0..nid {
-                    if options.stype == SurvType::KaplanMeier {
-                        inf1[g] = inf1[g] * (1.0 - haz) + gwt[g] * km * haz / nrisk;
+                if options.stype == SurvType::KaplanMeier {
+                    for (value, &weight) in inf1.iter_mut().zip(&gwt) {
+                        *value = *value * (1.0 - haz) + weight * km * haz / nrisk;
                     }
-                    if options.ctype == HazardType::NelsonAalen || gcount[g] > 0 {
-                        inf2[g] -= gwt[g] * risk_term;
+                }
+                if options.ctype == HazardType::NelsonAalen {
+                    for (value, &weight) in inf2.iter_mut().zip(&gwt) {
+                        *value -= weight * risk_term;
+                    }
+                } else {
+                    for ((value, &weight), &count) in inf2.iter_mut().zip(&gwt).zip(&gcount) {
+                        if count > 0 {
+                            *value -= weight * risk_term;
+                        }
                     }
                 }
                 while person2 < nused {
@@ -947,8 +955,10 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     person2 += 1;
                 }
                 km *= 1.0 - haz;
-                v1 = inf1.iter().map(|v| v * v).sum();
-                v2 = inf2.iter().map(|v| v * v).sum();
+                (v1, v2) = inf1
+                    .iter()
+                    .zip(&inf2)
+                    .fold((0.0, 0.0), |(a, b), (x, y)| (a + x * x, b + y * y));
             }
             match options.stype {
                 SurvType::KaplanMeier => {

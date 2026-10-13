@@ -15,7 +15,7 @@ use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::sorted_indices_by;
 use crate::internal::step::find_interval;
 use crate::internal::validation::{validate_finite, validate_non_empty};
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, s};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -511,8 +511,11 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
     let nobs = d.sort2.len();
     let nstate = d.p0.len();
     let nout = d.otime.len();
-    let mut infp = Array3::<f64>::zeros((nobs, nout, nstate));
-    let mut infa = d.doauc.then(|| Array3::<f64>::zeros((nobs, nout, nstate)));
+    let mut infp = Array3::<f64>::zeros((nobs, nstate, nout));
+    let mut infa = d.doauc.then(|| Array3::<f64>::zeros((nobs, nstate, nout)));
+    let mut cur = vec![0.0; nstate * nobs];
+    let mut cur_auc = d.doauc.then(|| vec![0.0; nstate * nobs]);
+    let mut update = vec![0.0; nstate * nobs];
     let mut ws = vec![0.0; nstate];
     let mut atrisk = vec![false; nobs];
     let mut pstate: Vec<f64> = d.p0.to_vec();
@@ -527,32 +530,32 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
     if itime < nout {
         for j in 0..nstate {
             for i in 0..nobs {
-                infp[[i, itime, j]] = d.i0[[i, j]];
+                cur[j * nobs + i] = d.i0[[i, j]];
             }
         }
     }
-    let carry_forward = |infp: &mut Array3<f64>, infa: &mut Option<Array3<f64>>, itime: usize| {
-        if itime + 1 < nout {
+    let store = |infp: &mut Array3<f64>,
+                 infa: &mut Option<Array3<f64>>,
+                 cur: &[f64],
+                 cur_auc: &Option<Vec<f64>>,
+                 itime: usize| {
+        for k in 0..nstate {
             for i in 0..nobs {
-                for k in 0..nstate {
-                    infp[[i, itime + 1, k]] = infp[[i, itime, k]];
-                }
+                infp[[i, k, itime]] = cur[k * nobs + i];
             }
-            if let Some(infa) = infa {
+        }
+        if let (Some(infa), Some(cur_auc)) = (infa, cur_auc) {
+            for k in 0..nstate {
                 for i in 0..nobs {
-                    for k in 0..nstate {
-                        infa[[i, itime + 1, k]] = infa[[i, itime, k]];
-                    }
+                    infa[[i, k, itime]] = cur_auc[k * nobs + i];
                 }
             }
         }
     };
-    let add_auc = |infp: &Array3<f64>, infa: &mut Option<Array3<f64>>, itime: usize, width: f64| {
-        if let Some(infa) = infa {
-            for i in 0..nobs {
-                for k in 0..nstate {
-                    infa[[i, itime, k]] += infp[[i, itime, k]] * width;
-                }
+    let add_auc = |cur: &[f64], cur_auc: &mut Option<Vec<f64>>, width: f64| {
+        if let Some(cur_auc) = cur_auc {
+            for (area, &value) in cur_auc.iter_mut().zip(cur) {
+                *area += value * width;
             }
         }
     };
@@ -568,11 +571,11 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
         let p2 = d.sort2[i];
         let ctime = d.etime[p2];
         while itime < nout && d.otime[itime] < ctime {
-            add_auc(&infp, &mut infa, itime, d.otime[itime] - starttime);
+            add_auc(&cur, &mut cur_auc, d.otime[itime] - starttime);
             if d.doauc {
                 starttime = d.otime[itime];
             }
-            carry_forward(&mut infp, &mut infa, itime);
+            store(&mut infp, &mut infa, &cur, &cur_auc, itime);
             itime += 1;
         }
         if itime == nout {
@@ -609,42 +612,59 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
             }
         }
         if nevent > 0 && d.doauc {
-            add_auc(&infp, &mut infa, itime, ctime - starttime);
+            add_auc(&cur, &mut cur_auc, ctime - starttime);
             starttime = ctime;
         }
         if nevent == 1 {
             let temp = -cmat[[oldstate, oldstate]];
-            for j in 0..nobs {
-                let value = infp[[j, itime, oldstate]];
-                infp[[j, itime, newstate]] += temp * value;
-                infp[[j, itime, oldstate]] -= temp * value;
+            if oldstate != newstate {
+                let (low, high) = cur.split_at_mut(oldstate.max(newstate) * nobs);
+                let (old_row, new_row) = if oldstate < newstate {
+                    (
+                        &mut low[oldstate * nobs..(oldstate + 1) * nobs],
+                        &mut high[..nobs],
+                    )
+                } else {
+                    (
+                        &mut high[..nobs],
+                        &mut low[newstate * nobs..(newstate + 1) * nobs],
+                    )
+                };
+                for (old, new) in old_row.iter_mut().zip(new_row.iter_mut()) {
+                    let value = *old;
+                    *new += temp * value;
+                    *old -= temp * value;
+                }
             }
             let temp2 = pstate[oldstate] / ws[oldstate];
-            infp[[psave, itime, newstate]] += temp2;
-            infp[[psave, itime, oldstate]] -= temp2;
+            cur[newstate * nobs + psave] += temp2;
+            cur[oldstate * nobs + psave] -= temp2;
             for &q in &d.sort2[i..] {
                 if atrisk[q] && d.cstate[q] == oldstate {
-                    infp[[q, itime, oldstate]] += temp * temp2;
-                    infp[[q, itime, newstate]] -= temp * temp2;
+                    cur[oldstate * nobs + q] += temp * temp2;
+                    cur[newstate * nobs + q] -= temp * temp2;
                 }
             }
         } else if nevent > 1 {
-            for j in 0..nobs {
-                for k in 0..nstate {
-                    tempvec[k] = (0..nstate)
-                        .map(|kk| infp[[j, itime, kk]] * cmat[[kk, k]])
-                        .sum();
+            update.fill(0.0);
+            for k in 0..nstate {
+                let target = &mut update[k * nobs..(k + 1) * nobs];
+                for kk in 0..nstate {
+                    let weight = cmat[[kk, k]];
+                    for (sum, &value) in target.iter_mut().zip(&cur[kk * nobs..(kk + 1) * nobs]) {
+                        *sum += value * weight;
+                    }
                 }
-                for k in 0..nstate {
-                    infp[[j, itime, k]] += tempvec[k];
-                }
+            }
+            for (value, delta) in cur.iter_mut().zip(&update) {
+                *value += delta;
             }
             for &q in &d.sort2[i..] {
                 if atrisk[q] {
                     let old = d.cstate[q];
                     let temp2 = pstate[old] / ws[old];
                     for k in 0..nstate {
-                        infp[[q, itime, k]] -= cmat[[old, k]] * temp2;
+                        cur[k * nobs + q] -= cmat[[old, k]] * temp2;
                     }
                 }
             }
@@ -656,8 +676,8 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
                 if d.status[q] > 1 && old != d.status[q] - 1 {
                     let temp2 = pstate[old] / ws[old];
                     let new = d.status[q] - 1;
-                    infp[[q, itime, old]] -= temp2;
-                    infp[[q, itime, new]] += temp2;
+                    cur[old * nobs + q] -= temp2;
+                    cur[new * nobs + q] += temp2;
                 }
             }
         }
@@ -678,11 +698,11 @@ fn survfitresid_kernel(d: &AJResidData<'_>) -> (Array3<f64>, Option<Array3<f64>>
         }
     }
     while itime < nout {
-        add_auc(&infp, &mut infa, itime, d.otime[itime] - starttime);
+        add_auc(&cur, &mut cur_auc, d.otime[itime] - starttime);
         if d.doauc {
             starttime = d.otime[itime];
         }
-        carry_forward(&mut infp, &mut infa, itime);
+        store(&mut infp, &mut infa, &cur, &cur_auc, itime);
         itime += 1;
     }
     (infp, infa)
@@ -891,7 +911,7 @@ fn residuals_aj_from_fit(
                 (0..rows.len())
                     .map(|k| {
                         (0..nstate)
-                            .map(|j| (0..times.len()).map(|t| source[[k, t, j]]).collect())
+                            .map(|j| source.slice(s![k, j, ..]).to_vec())
                             .collect()
                     })
                     .collect()
