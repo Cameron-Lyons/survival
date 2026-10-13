@@ -535,8 +535,12 @@ def _formula_frame(
     keep_model: bool,
 ) -> _SurvregFrame:
     spec = _formula_response_spec(formula)
-    data, supplied = _prepare_formula_inputs(data, weights=weights, offset=offset, cluster=cluster)
-    weights, offset, cluster = (supplied[name] for name in ("weights", "offset", "cluster"))
+    data, supplied = _prepare_formula_inputs(
+        data, weights=weights, offset=offset, cluster=cluster, subset=subset
+    )
+    weights, offset, cluster, subset = (
+        supplied[name] for name in ("weights", "offset", "cluster", "subset")
+    )
     full_data = data
     weights = _column_or_values(data, weights, "weights")
     offset = _column_or_values(data, offset, "offset")

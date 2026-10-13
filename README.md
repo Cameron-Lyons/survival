@@ -164,7 +164,7 @@ influence workspaces when `se_fit=False`. See [performance](docs/performance.md)
 for the algorithms.
 
 Time-dependent `r.tmerge` updates also accept shared one-shot iterator inputs,
-including categorical events, and read only referenced update columns. See
+including categorical events, and use only referenced update columns. See
 [time-dependent data](docs/data-preparation.md#time-dependent-data).
 
 Cox and AFT matrix inputs also accept these array layouts. Lists and tuples

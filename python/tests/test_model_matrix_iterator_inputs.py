@@ -41,7 +41,7 @@ class UnusedIterator:
         return self
 
     def __next__(self):
-        raise AssertionError("unused model-matrix column was consumed")
+        raise StopIteration
 
 
 class FactorArray(np.ndarray):
@@ -182,9 +182,7 @@ def test_unretained_iterator_fit_matrix_rebuild_and_pickle_match_stock(name, lay
         check_matrix(r.model_matrix(candidate, _with_metadata=True), spec["stored"]["value"])
     for column, value in data.items():
         if isinstance(value, ColumnIterator):
-            assert value.consumed == (
-                [] if column == "id" else REFERENCE["inputs"][spec["source"]][column]["values"]
-            )
+            assert value.consumed == REFERENCE["inputs"][spec["source"]][column]["values"]
 
 
 @pytest.mark.parametrize(

@@ -160,6 +160,15 @@ fits already behaved this way.
 | `hasattr(fit, "penalty")` | `fit.penalty is not None` |
 | `coxfit.coef_names`, `cchfit.coef_names` | `coefficient_names`, as on every model |
 
+### One-shot iterator columns are read when a function is called
+
+A one-shot iterator (a generator, `iter(list)`, ...) passed as a data column or a
+row-aligned argument is read into a list when the function is called, whether
+or not the formula uses it. In 2.x an unused iterator column stayed unread
+through fitting, copying and pickling. An iterator's `dtype` attribute is no
+longer consulted; pass a NumPy array or floats for double storage. Lists,
+arrays and data frames are unaffected.
+
 ## R bridge (survivalr)
 
 - `cox_zph()` and `coxph_detail()` are removed; call R's `cox.zph()` and

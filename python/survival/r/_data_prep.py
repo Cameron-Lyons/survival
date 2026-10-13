@@ -1473,7 +1473,7 @@ def _tmerge_inputs(
 ) -> tuple[Any, Any, Any, Any, Any, dict[str, TmergeOperation]]:
     """Prepare shared one-shot sources once across both frames and all updates.
 
-    Only data1 is retained in the result; unused data2 iterators remain unread.
+    Only data1 is retained in the result.
     The formula input adapter supplies reusable buffers and factor metadata.
     """
 

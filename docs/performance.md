@@ -187,6 +187,6 @@ benchmarks.
   columns and M expanded rows.
 - Term grouping (`attrassign`) is one O(P + T) pass over P columns and T terms.
 - Response repetition, `lvcf`, `neardate` and `tmerge` avoid per-row Python index
-  lists and repeated sorts; `tmerge` never reads unreferenced update columns.
+  lists and repeated sorts; `tmerge` does not convert unreferenced update columns.
 - P-spline penalties fill the three nonzero entries of each second-difference row
   directly instead of a cubic dense product.

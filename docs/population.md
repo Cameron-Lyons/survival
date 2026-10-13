@@ -193,7 +193,7 @@ margins.
 `pyears` and `survexp` prepare one-shot data columns, direct response arguments,
 weights, subsets and vector rate mappings together before evaluating `cut`, `tcut`
 or rate-map expressions; an iterator used as a column and a direct argument is
-read once and unused columns are never read. Categorical sources keep their
+read once, and one-shot columns the formula does not use are read too. Categorical sources keep their
 labels, order and unused levels, and date rate sources stay dates in retained
 models. Person-years matrix responses accept NumPy row iterators as well as
 arrays and row lists.

@@ -317,20 +317,20 @@ Formula data may be a mapping of columns, a pandas or Polars data frame, or a
 fitted object's retained data. Columns may be lists, tuples, NumPy arrays, pandas
 or Polars series, masked arrays or one-shot iterators.
 
-- Each used one-shot column or row-aligned argument is read once per call; the
-  missing-value checks, subset selection, expression evaluation, fitting and
-  prediction then read the same prepared values. This also applies to the direct
-  response arguments of `survfit`, `survdiff` and `survcheck`, to Aalen fits and
-  to the formula-based data preparation functions. An iterator shared by a column
-  and a direct argument, such as `weights`, is read once. Unused mapping columns
-  are never read. The caller must supply a fresh iterator for another call.
-- Declared factor levels, ordering and contrasts, and declared integer or double
-  types, survive preparation. Ordinary lists, arrays and data frames keep their
-  ownership.
-- Used iterator values survive pickle and copy, and variables removed from the
+- Every one-shot column and row-aligned argument is read into a list when the
+  function is called, whether or not the formula uses it; the missing-value
+  checks, subset selection, expression evaluation, fitting and prediction then
+  read those lists. This also applies to the direct response arguments of
+  `survfit`, `survdiff` and `survcheck`, to Aalen fits and to the formula-based
+  data preparation functions. An iterator shared by a column and a direct
+  argument, such as `weights`, is read once. The caller must supply a fresh
+  iterator for another call.
+- Declared factor levels, ordering and contrasts survive preparation; an
+  iterator's values are stored as they come, so integers stay R integers.
+  Ordinary lists, arrays and data frames keep their ownership.
+- The values read survive pickle and copy, and variables removed from the
   design, such as `z` in `x + z - z`, remain available when rebuilding a model
-  frame. Unrelated iterators are not read during serialization; reading such a
-  column from the restored object raises an input error.
+  frame.
 - Rows come from evaluated formula variables and supplied row-aligned arguments:
   `~x` uses the length of `x` regardless of other mapping columns. A
   variable-free `~1` with no extra vectors has zero rows for a mapping and keeps
