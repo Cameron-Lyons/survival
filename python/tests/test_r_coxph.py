@@ -5,6 +5,7 @@ datasets); vector comparisons use R's precision of 15 significant digits.
 """
 
 import math
+import pickle
 
 import pytest
 
@@ -140,7 +141,7 @@ def test_coxph_ties_init_and_control(ovarian):
         r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, init=[0.1])
     with pytest.raises(ValueError, match="overflow or underflow"):
         r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, init=[50.0, 0.0])
-    with pytest.raises(ValueError, match="Argument dats not matched"):
+    with pytest.raises(TypeError, match="Argument dats not matched"):
         r.coxph("Surv(futime, fustat) ~ age", ovarian, dats=1)
     with pytest.raises(ValueError, match="use only one of method or ties"):
         r.coxph("Surv(futime, fustat) ~ age", ovarian, ties="efron", method="breslow")
@@ -421,7 +422,13 @@ def test_predict_types_match_r(fit):
         [[0.746015836107493, 0.316024685939725], [0.845771909208786, 0.316024685939725]],
         rel=1e-6,
     )
-    assert r.predict_terms_constant(fit) == approx(7.06870387921157)
+    assert isinstance(terms.fit, r.TermsPrediction)
+    assert terms.fit.constant == approx(7.06870387921157)
+    assert r.predict(fit, type="terms").constant == approx(7.06870387921157)
+    assert r.predict(fit, type="terms", collapse=[1, 2] * 13).constant is None
+    assert pickle.loads(pickle.dumps(terms.fit)).constant == terms.fit.constant
+    aft = r.survreg("Surv(futime, fustat) ~ age + rx", datasets.load_ovarian())
+    assert not hasattr(r.predict(aft, type="terms"), "constant")
     assert r.predict(fit, type="terms", terms="rx")[:1] == approx([[0.401986506332557]])
     assert r.predict(fit, type="terms", terms=[2])[:1] == approx([[0.401986506332557]])
     assert r.predict(fit, type="lp", collapse=[1, 2] * 13) == approx(

@@ -86,7 +86,6 @@
 \alias{finegray}
 \alias{survobrien}
 \alias{fromtimeline}
-\alias{totimeline}
 \alias{coxph}
 \alias{coxph.control}
 \alias{coxph.fit}
@@ -115,10 +114,8 @@
 \alias{survConcordance.fit}
 \alias{print.survConcordance}
 \alias{cox.zph}
-\alias{cox_zph}
 \alias{coxph.detail}
 \alias{coxph.wtest}
-\alias{coxph_detail}
 \alias{yates}
 \alias{yates_setup}
 \alias{yates_setup.coxph}

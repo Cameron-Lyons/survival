@@ -318,7 +318,7 @@ releases the GIL.
 ## Residuals and pseudo-values
 
 Ordinary and multi-state fitted curves support R-style influence residuals and
-pseudo-values through `r.survfit_residuals` and `r.pseudo`: survival, cumulative
+pseudo-values through `r.residuals_survfit` and `r.pseudo`: survival, cumulative
 hazard and restricted mean time for ordinary curves, and state probabilities,
 cumulative transition hazards and integrated occupancy for multi-state curves.
 They keep case weights, subject ids, grouping, estimator settings and conditional
@@ -349,7 +349,7 @@ fit = r.survfit(
     {"time": [1, None, 3, 4], "status": [1, 0, 1, 0]},
     na_action="na.exclude",
 )
-result = r.survfit_residuals(fit, times=[2, 3])
+result = r.residuals_survfit(fit, times=[2, 3])
 ```
 
 ## Restricted-mean comparisons

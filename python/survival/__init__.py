@@ -169,13 +169,11 @@ _R_EXPORTS = [
     "survfit",
     "survfit0",
     "survfit_confint",
-    "survfit_residuals",
     "survSplit",
     "survreg",
     "tdc",
     "tcut",
     "tmerge",
-    "totimeline",
     "vcov",
     "yates",
     "brier",
@@ -204,6 +202,7 @@ _R_EXPORTS = [
     "summary_tmerge",
     "quantile_survfit",
     "median_survfit",
+    "residuals_survfit",
 ]
 
 __all__ = list(dict.fromkeys([*_PUBLIC_MODULES, *_R_EXPORTS, *_SKLEARN_EXPORTS]))

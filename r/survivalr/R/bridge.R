@@ -1396,19 +1396,11 @@ attrassign <- function(object, tt) {
   NULL
 }
 
-.attach_term_prediction_constant <- function(value, object, type, retained = TRUE) {
-  if (!isTRUE(retained) || is.null(type) || !inherits(object, "survival_py_coxph")) {
+.attach_term_prediction_constant <- function(value, constant) {
+  if (is.null(constant)) {
     return(value)
   }
-  type_key <- tolower(gsub("-", "_", trimws(type)))
-  if (!startsWith("terms", type_key)) {
-    return(value)
-  }
-  module <- .survival_python_module()
-  if (!reticulate::py_has_attr(module, "predict_terms_constant")) {
-    return(value)
-  }
-  constant <- as.numeric(.call_r_api("predict_terms_constant", object))[[1L]]
+  constant <- as.numeric(constant)[[1L]]
   if (is.list(value) && all(c("fit", "se.fit") %in% names(value))) {
     attr(value$fit, "constant") <- constant
   } else {
@@ -2257,7 +2249,7 @@ pspline <- function(x, df = 4, theta, nterm = 2.5 * df, degree = 3,
     degree = degree,
     eps = if (missing(eps)) NULL else eps,
     method = if (missing(method)) NULL else method,
-    boundary_knots = if (missing(Boundary.knots)) NULL else Boundary.knots,
+    Boundary_knots = if (missing(Boundary.knots)) NULL else Boundary.knots,
     intercept = intercept,
     penalty = penalty,
     combine = if (missing(combine)) NULL else combine
@@ -3864,7 +3856,7 @@ totimeline <- function(formula, data, id, istate) {
     istate_levels <- levels(istate_factor)
   }
   result <- .call_r_api(
-    "totimeline",
+    "_totimeline",
     start = .as_python_vector(response[, 1L]),
     stop = .as_python_vector(response[, 2L]),
     status = .as_python_vector(response[, 3L]),
@@ -6438,7 +6430,7 @@ residuals.survival_py_survfit <- function(object, times, type = "pstate",
     stop("the times argument is required", call. = FALSE)
   }
   result <- .call_r_api(
-    "survfit_residuals",
+    "residuals_survfit",
     object,
     times = times,
     type = type,
@@ -8876,10 +8868,6 @@ cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
   )
 }
 
-cox_zph <- function(fit, ...) {
-  cox.zph(fit, ...)
-}
-
 coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time"), ...) {
   .call_r_api(
     "coxph_detail",
@@ -8889,10 +8877,6 @@ coxph.detail <- function(object, riskmat = FALSE, rorder = c("data", "time"), ..
     ...,
     .wrap = c("survival_py_coxph_detail", "survival_py_object")
   )
-}
-
-coxph_detail <- function(object, ...) {
-  coxph.detail(object, ...)
 }
 
 coxph.wtest <- function(var, b, toler.chol = 1e-09) {
@@ -9272,8 +9256,7 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   }
   value <- .attach_group_names(value, group_names)
   value <- .attach_prediction_row_names(value, row_metadata)
-  .attach_term_prediction_constant(value, object, type,
-    retained = !grouped && !isFALSE(row_metadata[["terms_constant"]]))
+  .attach_term_prediction_constant(value, row_metadata[["terms_constant"]])
 }
 
 .attach_prediction_row_names <- function(value, metadata) {

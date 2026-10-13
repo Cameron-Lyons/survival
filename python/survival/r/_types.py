@@ -459,6 +459,23 @@ class SurvConcordanceResult:
     na_action: NaAction | None = None
 
 
+class TermsPrediction(list):
+    """``predict(fit, type="terms")`` for a Cox model: one row of term contributions
+    per observation.
+
+    ``constant`` is R's ``attr(, "constant")``, ``sum(coef * means)``, which the
+    terms add up to the linear predictor less.  It is None where R drops the
+    attribute: rows padded for ``na.exclude``, ``collapse`` sums and a sparse
+    frailty without new data.
+    """
+
+    constant: float | None
+
+    def __init__(self, rows: Any = (), constant: float | None = None) -> None:
+        super().__init__(rows)
+        self.constant = constant
+
+
 @dataclass(frozen=True)
 class PredictResult:
     fit: Any
@@ -498,7 +515,7 @@ class StrataFactor:
 
 
 @dataclass(frozen=True)
-class Timeline:
+class _Timeline:
     """Timeline rows built from counting-process data (R's ``totimeline``).
 
     ``status`` codes index ``state_levels`` (0 is the censoring level) and

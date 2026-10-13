@@ -44,7 +44,7 @@ def test_residuals_and_summary_of_a_survfit(lung):
     resid = r.residuals(km, times=[100, 300])
     assert len(resid.resid) == 228
     assert resid.resid[0] == pytest.approx([0.001260239445, 0.004376894225], rel=1e-9)
-    assert resid == r.survfit_residuals(km, times=[100, 300])
+    assert resid == r.residuals_survfit(km, times=[100, 300])
     table = r.model_summary(km).table
     assert [row[table.colnames.index("median")] for row in table.values] == [270.0, 426.0]
     with pytest.raises(TypeError, match="residuals method for coxph survival curve not found"):
@@ -138,7 +138,7 @@ def test_as_data_frame_rejects_mappings_that_are_not_columns(lung):
 def test_multistate_curve_residuals_and_summary():
     aj = r.survfit("Surv(time, status, type = 'mstate') ~ 1", _multistate())
     assert r.model_summary(aj) == r.summary_survfit(aj)
-    assert r.residuals(aj, times=[2.5, 5.5]) == r.survfit_residuals(aj, times=[2.5, 5.5])
+    assert r.residuals(aj, times=[2.5, 5.5]) == r.residuals_survfit(aj, times=[2.5, 5.5])
 
 
 def test_reprs_stay_short(lung):

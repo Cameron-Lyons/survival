@@ -442,7 +442,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     z = c("A", "A", "B"),
     x = c(10, 10, 20)
   )
-  legacy_timeline <- totimeline(
+  legacy_timeline <- survivalr:::totimeline(
     Surv(start, stop, state) ~ z + x,
     data = counting_data,
     id = id,
@@ -456,7 +456,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
   )
   expect_equal(legacy_timeline$id, c(1, 1, 1, 2, 2))
   counting_no_istate <- counting_data[c("id", "start", "stop", "state", "z", "x")]
-  legacy_timeline_without_istate <- totimeline(
+  legacy_timeline_without_istate <- survivalr:::totimeline(
     Surv(start, stop, state) ~ z + x,
     data = counting_no_istate,
     id = id

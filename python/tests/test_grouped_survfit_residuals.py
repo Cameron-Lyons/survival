@@ -44,7 +44,7 @@ def call(case, data_frame=False):
     }
     if case["operation"] == "residual":
         options["weighted"] = case["weighted"]
-        return r.survfit_residuals(fitted(case["dataset"]), **options)
+        return r.residuals_survfit(fitted(case["dataset"]), **options)
     return r.pseudo(fitted(case["dataset"]), **options)
 
 

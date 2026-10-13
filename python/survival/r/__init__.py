@@ -97,7 +97,6 @@ from ._models import (
     model_weights,
     nobs,
     predict,
-    predict_terms_constant,
     quantile,
     residuals,
     vcov,
@@ -138,7 +137,6 @@ from ._surv import (
     is_na_surv,
     is_surv,
     strata,
-    totimeline,
 )
 from ._surv_summary_print import (
     SurvivalTablePrint,
@@ -174,7 +172,7 @@ from ._survfit import (
 )
 from ._survfit_lowlevel import SurvfitKMResult, survfitKM
 from ._survfit_print import SurvfitPrint, print_survfit, print_survfitms
-from ._survfit_residuals import pseudo, survfit_residuals
+from ._survfit_residuals import pseudo, residuals_survfit
 from ._survpenal_lowlevel import SurvpenalFitResult, survpenal_fit
 from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
 from ._survreg import (
@@ -246,7 +244,7 @@ from ._types import (
     SurvfitResidualsResult,
     SurvfitResult,
     TcutResult,
-    Timeline,
+    TermsPrediction,
     TMergeFrame,
     TMergeOperation,
     YatesPrint,
@@ -323,6 +321,7 @@ __all__ = [
     "NaAction",
     "NamedMatrix",
     "PredictResult",
+    "TermsPrediction",
     "PsplineResult",
     "PyearsResult",
     "PyearsSummary",
@@ -351,7 +350,6 @@ __all__ = [
     "TMergeFrame",
     "TMergeOperation",
     "TcutResult",
-    "Timeline",
     "YatesModel",
     "YatesResult",
     "aic",
@@ -453,7 +451,6 @@ __all__ = [
     "print_summary_survfitms",
     "print_survexp",
     "print_summary_survexp",
-    "predict_terms_constant",
     "median",
     "median_surv",
     "median_survfit",
@@ -464,6 +461,7 @@ __all__ = [
     "qsurvreg",
     "ratetableDate",
     "residuals",
+    "residuals_survfit",
     "royston",
     "rsurvreg",
     "rttright",
@@ -492,14 +490,12 @@ __all__ = [
     "survfit",
     "survfit0",
     "survfit_confint",
-    "survfit_residuals",
     "survSplit",
     "survreg",
     "survreg_control",
     "survreg_distributions",
     "survregDtest",
     "tcut",
-    "totimeline",
     "yates",
     "vcov",
 ]
