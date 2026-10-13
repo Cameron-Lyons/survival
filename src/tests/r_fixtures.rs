@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use crate::internal::matrix::{matrix_from_rows, matrix_rows};
-use crate::regression::cch::{CchFitResult, cch, cch_borgan};
+use crate::regression::cch::{CchData, CchFitResult, CchMethod, CchOptions, cch};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::cox_zph::{CoxZphTest, ZphTransform, cox_zph};
 use crate::regression::coxpenal::{
@@ -3362,15 +3362,20 @@ fn r_fixtures_cch() {
             let x = matrix_from_rows(&x, "x").map_err(|err| format!("{err:?}"))?;
             match text(&args["stratum"]) {
                 None => cch(
-                    response.time.clone(),
-                    response.status.clone(),
-                    x,
-                    subcohort,
-                    id,
-                    num(&args["cohort.size"])? as usize,
-                    response.start.clone(),
-                    method,
-                    false,
+                    CchData {
+                        stop: response.time.clone(),
+                        status: response.status.clone(),
+                        covariates: x,
+                        subcohort,
+                        id,
+                        start: response.start.clone(),
+                        stratum: None,
+                    },
+                    CchOptions {
+                        cohort_size: vec![num(&args["cohort.size"])? as usize],
+                        method: CchMethod::parse(method).map_err(|err| format!("{err:?}"))?,
+                        robust: false,
+                    },
                 )
                 .map_err(|err| format!("{err:?}")),
                 Some(column) => {
@@ -3389,16 +3394,21 @@ fn r_fixtures_cch() {
                         .iter()
                         .map(|&v| v as usize)
                         .collect();
-                    cch_borgan(
-                        response.time.clone(),
-                        response.status.clone(),
-                        x,
-                        subcohort,
-                        id,
-                        stratum,
-                        sizes,
-                        response.start.clone(),
-                        method,
+                    cch(
+                        CchData {
+                            stop: response.time.clone(),
+                            status: response.status.clone(),
+                            covariates: x,
+                            subcohort,
+                            id,
+                            start: response.start.clone(),
+                            stratum: Some(stratum),
+                        },
+                        CchOptions {
+                            cohort_size: sizes,
+                            method: CchMethod::parse(method).map_err(|err| format!("{err:?}"))?,
+                            robust: false,
+                        },
                     )
                     .map_err(|err| format!("{err:?}"))
                 }

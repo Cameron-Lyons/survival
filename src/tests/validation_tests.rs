@@ -6,7 +6,7 @@ mod tests {
         survfitkm, survmean,
     };
     use crate::tests::common::{LOOSE_TOL, STRICT_TOL, approx_eq};
-    use crate::validation::calibration_module::{
+    use crate::validation::calibration_curves::{
         calibration_curve, stratify_risk, time_dependent_auc,
     };
     use crate::validation::landmark::{

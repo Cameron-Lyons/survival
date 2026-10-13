@@ -164,7 +164,7 @@ impl CoxphFitResult {
 #[pyfunction]
 #[pyo3(signature = (time, status, x, entry=None, strata=None, weights=None, offset=None, method="efron", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, resid=true))]
 #[allow(clippy::too_many_arguments)]
-pub fn coxph_fit_raw(
+pub(crate) fn coxph_fit_raw(
     py: Python<'_>,
     time: FloatVec,
     status: IntVec,

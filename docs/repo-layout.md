@@ -124,7 +124,7 @@ damaged-table formatting also avoids out-of-range indexing. See
 [rate tables](population.md#rate-tables).
 
 The core bindings take these types for every numeric vector and matrix input
-(`coxph_fit`, `coxpenal_fit`, `agexact`, `SurvregData`, `cch_fit`,
+(`coxph_fit`, `coxpenal_fit`, `coxph_fit_raw`, `SurvregData`, `cch_fit`,
 `aareg_fit`, `pyears`, `survexp`, `survdiff`, `survfitkm`, `survfitaj`, the
 pseudo-value and residual kernels, `cox_survfit_baseline`, ...), so NumPy
 arrays are read in one copy instead of element by element, and nested lists

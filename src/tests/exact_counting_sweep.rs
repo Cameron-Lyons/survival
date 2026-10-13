@@ -1,5 +1,5 @@
-use super::{AgexactOptions, agexact_fit};
-use crate::regression::CoxphData;
+use crate::regression::cox_optimizer::TieMethod;
+use crate::regression::{CoxphData, CoxphFitResult, CoxphOptions};
 use ndarray::Array2;
 use serde_json::Value;
 
@@ -12,6 +12,23 @@ fn close(actual: f64, expected: f64, tolerance: f64) {
         (actual - expected).abs() <= tolerance * (1.0 + expected.abs()),
         "actual={actual:.16e}, expected={expected:.16e}",
     );
+}
+
+fn exact_fit(data: CoxphData, init: Option<Vec<f64>>, iter_max: usize) -> CoxphFitResult {
+    CoxphFitResult::fit(
+        data,
+        CoxphOptions {
+            method: TieMethod::Exact,
+            init,
+            iter_max,
+            eps: 1e-9,
+            toler_chol: 1e-10,
+            nocenter: None,
+            ..CoxphOptions::default()
+        },
+        false,
+    )
+    .unwrap()
 }
 
 fn reference_input(case: &Value) -> CoxphData {
@@ -33,7 +50,7 @@ fn reference_input(case: &Value) -> CoxphData {
 #[test]
 fn counting_sweep_matches_stock_r_fits_and_zero_iteration_information() {
     let reference: Value = serde_json::from_str(include_str!(
-        "../../../test/r/kernel_references/exact_counting_sweep.json"
+        "../../test/r/kernel_references/exact_counting_sweep.json"
     ))
     .unwrap();
     assert_eq!(reference["survival_version"], "3.8.12");
@@ -43,17 +60,11 @@ fn counting_sweep_matches_stock_r_fits_and_zero_iteration_information() {
             if expected.is_null() {
                 continue;
             }
-            let fit = agexact_fit(
+            let fit = exact_fit(
                 reference_input(case),
-                &AgexactOptions {
-                    init: Some(numbers(&case["init"])),
-                    iter_max: iterations,
-                    eps: 1e-9,
-                    toler_chol: 1e-10,
-                    nocenter: None,
-                },
-            )
-            .unwrap_or_else(|error| panic!("{} {key}: {error}", case["name"]));
+                Some(numbers(&case["init"])),
+                iterations,
+            );
             for (actual, expected) in fit
                 .coefficients
                 .iter()
@@ -69,10 +80,10 @@ fn counting_sweep_matches_stock_r_fits_and_zero_iteration_information() {
             }
             let variance: Vec<Vec<f64>> =
                 serde_json::from_value(expected["variance"].clone()).unwrap();
-            for (actual, expected) in fit.var.iter().flatten().zip(variance.iter().flatten()) {
+            for (actual, expected) in fit.var.iter().zip(variance.iter().flatten()) {
                 close(*actual, *expected, 2e-9);
             }
-            close(fit.sctest, expected["score"].as_f64().unwrap(), 2e-9);
+            close(fit.score, expected["score"].as_f64().unwrap(), 2e-9);
             assert_eq!(fit.iter, expected["iter"].as_u64().unwrap() as usize);
             if iterations == 0 {
                 assert_eq!(fit.flag, 0);
@@ -199,20 +210,12 @@ fn general_and_growing_sweeps_match_independent_risk_set_enumeration() {
                 for permutation in [1, 19] {
                     let data = generated_input(seed, scheme, shift, permutation);
                     let (likelihood, score, variance) = enumerate_untied(&data, &beta);
-                    let fit = agexact_fit(
-                        data,
-                        &AgexactOptions {
-                            init: Some(beta.to_vec()),
-                            iter_max: 0,
-                            ..AgexactOptions::default()
-                        },
-                    )
-                    .unwrap();
+                    let fit = exact_fit(data, Some(beta.to_vec()), 0);
                     close(fit.loglik[0], likelihood, 2e-10);
                     for (i, expected) in variance.iter().enumerate() {
-                        close(fit.u[i], score[i], 2e-10);
+                        close(fit.first[i], score[i], 2e-10);
                         for (j, value) in expected.iter().enumerate() {
-                            close(fit.var[i][j], *value, 2e-10);
+                            close(fit.var[[i, j]], *value, 2e-10);
                         }
                     }
                 }
@@ -237,20 +240,12 @@ fn dominant_risk_removal_matches_fresh_information_and_surviving_rows() {
         .unwrap();
         let beta = [1.0, 0.0];
         let (likelihood, score, variance) = enumerate_untied(&data, &beta);
-        let fit = agexact_fit(
-            data,
-            &AgexactOptions {
-                init: Some(beta.to_vec()),
-                iter_max: 0,
-                ..AgexactOptions::default()
-            },
-        )
-        .unwrap();
+        let fit = exact_fit(data, Some(beta.to_vec()), 0);
         close(fit.loglik[0], likelihood, 2e-12);
         for (i, expected) in variance.iter().enumerate() {
-            close(fit.u[i], score[i], 2e-12);
+            close(fit.first[i], score[i], 2e-12);
             for (j, value) in expected.iter().enumerate() {
-                close(fit.var[i][j], *value, 2e-12);
+                close(fit.var[[i, j]], *value, 2e-12);
             }
         }
     }
@@ -276,20 +271,12 @@ fn entry_at_a_death_time_is_excluded_while_censors_at_that_time_remain() {
     .unwrap();
     let beta = [0.3, -0.2];
     let (likelihood, score, variance) = enumerate_untied(&data, &beta);
-    let fit = agexact_fit(
-        data,
-        &AgexactOptions {
-            init: Some(beta.to_vec()),
-            iter_max: 0,
-            ..AgexactOptions::default()
-        },
-    )
-    .unwrap();
+    let fit = exact_fit(data, Some(beta.to_vec()), 0);
     close(fit.loglik[0], likelihood, 2e-12);
     for (i, expected) in variance.iter().enumerate() {
-        close(fit.u[i], score[i], 2e-12);
+        close(fit.first[i], score[i], 2e-12);
         for (j, value) in expected.iter().enumerate() {
-            close(fit.var[i][j], *value, 2e-12);
+            close(fit.var[[i, j]], *value, 2e-12);
         }
     }
 }

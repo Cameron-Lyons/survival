@@ -2,11 +2,10 @@ pub(crate) mod causal_forest;
 pub(crate) mod counterfactual_survival;
 pub(crate) mod dependent_censoring;
 pub(crate) mod double_ml;
-#[path = "g_computation.rs"]
-pub(crate) mod g_computation_module;
 pub(crate) mod instrumental_variable;
 pub(crate) mod ipcw;
 pub(crate) mod msm;
+pub(crate) mod standardization;
 pub(crate) mod target_trial;
 pub(crate) mod tmle;
 
@@ -25,7 +24,6 @@ pub use dependent_censoring::{
 pub use double_ml::{
     CATEResult, DoubleMLConfig, DoubleMLResult, double_ml_cate, double_ml_survival,
 };
-pub use g_computation_module::{GComputationResult, g_computation, g_computation_survival_curves};
 pub use instrumental_variable::{
     GEstimationConfig, GEstimationResult, IVCoxConfig, IVCoxResult, MediationSurvivalConfig,
     MediationSurvivalResult, RDSurvivalConfig, RDSurvivalResult, g_estimation_aft, iv_cox,
@@ -36,6 +34,7 @@ pub use ipcw::{
     ipcw_treatment_effect,
 };
 pub use msm::{MSMResult, compute_longitudinal_iptw, marginal_structural_model};
+pub use standardization::{GComputationResult, g_computation, g_computation_survival_curves};
 pub use target_trial::{
     TargetTrialResult, TrialEmulationConfig, sequential_trial_emulation, target_trial_emulation,
 };

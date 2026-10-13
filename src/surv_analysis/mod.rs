@@ -16,8 +16,7 @@ pub(crate) mod survfit_coxphms;
 pub(crate) mod survfit_matrix;
 pub(crate) mod survfit_summary;
 pub(crate) mod survfitaj;
-#[path = "survfitaj_extended.rs"]
-pub(crate) mod survfitaj_extended_module;
+pub(crate) mod survfitaj_ext;
 pub(crate) mod survfitkm;
 
 pub(crate) use aggregate_survfit::aggregate_survfit_py;
@@ -74,7 +73,7 @@ pub use survfitaj::{
     SurvfitAJCounts, SurvfitAJData, SurvfitAJInfluence, SurvfitAJOptions, SurvfitAJResult,
     survfitaj,
 };
-pub use survfitaj_extended_module::{
+pub use survfitaj_ext::{
     AalenJohansenExtendedConfig, AalenJohansenExtendedResult, TransitionMatrix, TransitionType,
     VarianceEstimator, survfitaj_extended,
 };

@@ -68,6 +68,69 @@ impl BorganMethod {
     }
 }
 
+#[doc = " `cch`'s estimation method, R's `method`."]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CchMethod {
+    Prentice,
+    SelfPrentice,
+    LinYing,
+    IBorgan,
+    IIBorgan,
+}
+
+impl CchMethod {
+    #[doc = " The method R names `value` (`\"Prentice\"`, `\"I.Borgan\"`, ...), ignoring case"]
+    #[doc = " and punctuation."]
+    pub fn parse(value: &str) -> SurvivalResult<Self> {
+        match normalized(value).as_str() {
+            "prentice" => Ok(Self::Prentice),
+            "selfprentice" => Ok(Self::SelfPrentice),
+            "linying" => Ok(Self::LinYing),
+            "iborgan" => Ok(Self::IBorgan),
+            "iiborgan" => Ok(Self::IIBorgan),
+            _ => Err(SurvivalError::invalid_input(
+                "method must be 'Prentice', 'SelfPrentice', 'LinYing', 'I.Borgan' or 'II.Borgan'",
+            )),
+        }
+    }
+
+    #[doc = " R's spelling of the method."]
+    pub fn r_name(self) -> &'static str {
+        match self {
+            Self::Prentice => "Prentice",
+            Self::SelfPrentice => "SelfPrentice",
+            Self::LinYing => "LinYing",
+            Self::IBorgan => "I.Borgan",
+            Self::IIBorgan => "II.Borgan",
+        }
+    }
+}
+
+#[doc = " The case-cohort sample [`cch`] fits."]
+#[derive(Debug, Clone)]
+pub struct CchData {
+    pub stop: Vec<f64>,
+    pub status: Vec<i32>,
+    pub covariates: Array2<f64>,
+    #[doc = " 1 for the rows of the random subcohort, 0 for the cases outside it."]
+    pub subcohort: Vec<i32>,
+    pub id: Vec<i64>,
+    pub start: Option<Vec<f64>>,
+    #[doc = " The 0-based stratum of each row, which the Borgan methods require."]
+    pub stratum: Option<Vec<usize>>,
+}
+
+#[doc = " The options of [`cch`]."]
+#[derive(Debug, Clone)]
+pub struct CchOptions {
+    #[doc = " The size of the full cohort, or of each stratum's cohort for the Borgan"]
+    #[doc = " methods."]
+    pub cohort_size: Vec<usize>,
+    pub method: CchMethod,
+    #[doc = " The robust variance of the LinYing method."]
+    pub robust: bool,
+}
+
 #[doc = " R's `cch` object: the underlying Cox fit plus the case-cohort variance"]
 #[doc = " pieces."]
 #[derive(Debug, Clone)]
@@ -747,7 +810,69 @@ fn finish(computation: CchComputation, metadata: CchMetadata) -> CchFitResult {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn cch(
+#[doc = " R's `cch`: a Cox model fitted to case-cohort data, with the variance of the"]
+#[doc = " chosen method."]
+pub fn cch(data: CchData, options: CchOptions) -> SurvivalResult<CchFitResult> {
+    let CchData {
+        stop,
+        status,
+        covariates,
+        subcohort,
+        id,
+        start,
+        stratum,
+    } = data;
+    let unstratified = match options.method {
+        CchMethod::Prentice => UnstratifiedMethod::Prentice,
+        CchMethod::SelfPrentice => UnstratifiedMethod::SelfPrentice,
+        CchMethod::LinYing => UnstratifiedMethod::LinYing,
+        CchMethod::IBorgan | CchMethod::IIBorgan => {
+            let stratum = stratum.ok_or_else(|| {
+                SurvivalError::invalid_input("the Borgan methods require a stratum")
+            })?;
+            let borgan = if options.method == CchMethod::IBorgan {
+                BorganMethod::I
+            } else {
+                BorganMethod::II
+            };
+            return cch_stratified(
+                stop,
+                status,
+                covariates,
+                subcohort,
+                id,
+                stratum,
+                options.cohort_size,
+                start,
+                borgan,
+            );
+        }
+    };
+    if stratum.is_some() {
+        return Err(SurvivalError::invalid_input(
+            "a stratum is used only by the Borgan methods",
+        ));
+    }
+    let [cohort_size] = options.cohort_size[..] else {
+        return Err(SurvivalError::invalid_input(
+            "cohort_size must be one size without strata",
+        ));
+    };
+    cch_unstratified(
+        stop,
+        status,
+        covariates,
+        subcohort,
+        id,
+        cohort_size,
+        start,
+        unstratified,
+        options.robust,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cch_unstratified(
     stop: Vec<f64>,
     status: Vec<i32>,
     covariates: Array2<f64>,
@@ -755,7 +880,7 @@ pub fn cch(
     id: Vec<i64>,
     cohort_size: usize,
     start: Option<Vec<f64>>,
-    method: &str,
+    method: UnstratifiedMethod,
     robust: bool,
 ) -> SurvivalResult<CchFitResult> {
     let covariates = covariates.view();
@@ -768,7 +893,6 @@ pub fn cch(
         &id,
         cohort_size,
     )?;
-    let method = UnstratifiedMethod::parse(method)?;
     let entry = start.unwrap_or_else(|| vec![0.0; stop.len()]);
     let subcohort_size = subcohort.iter().filter(|&&sampled| sampled == 1).count();
     let computation = match method {
@@ -815,7 +939,7 @@ pub fn cch(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn cch_borgan(
+fn cch_stratified(
     stop: Vec<f64>,
     status: Vec<i32>,
     covariates: Array2<f64>,
@@ -824,7 +948,7 @@ pub fn cch_borgan(
     stratum: Vec<usize>,
     cohort_sizes: Vec<usize>,
     start: Option<Vec<f64>>,
-    method: &str,
+    method: BorganMethod,
 ) -> SurvivalResult<CchFitResult> {
     let covariates = covariates.view();
     validate_borgan_inputs(
@@ -837,7 +961,6 @@ pub fn cch_borgan(
         &stratum,
         &cohort_sizes,
     )?;
-    let method = BorganMethod::parse(method)?;
     let entry = start.unwrap_or_else(|| vec![0.0; stop.len()]);
     let mut subcohort_size = vec![0usize; cohort_sizes.len()];
     for &s in &stratum {
@@ -872,7 +995,7 @@ pub fn cch_borgan(
 #[pyfunction]
 #[pyo3(signature = (stop, status, covariates, subcohort, id, cohort_size, start=None, method="Prentice", robust=false))]
 #[allow(clippy::too_many_arguments)]
-pub fn cch_fit(
+pub(crate) fn cch_fit(
     py: Python<'_>,
     stop: FloatVec,
     status: IntVec,
@@ -884,8 +1007,9 @@ pub fn cch_fit(
     method: &str,
     robust: bool,
 ) -> PyResult<CchFitResult> {
+    let method = UnstratifiedMethod::parse(method)?;
     Ok(py.detach(|| {
-        cch(
+        cch_unstratified(
             stop.into_inner(),
             status.into_inner(),
             covariates.into_inner(),
@@ -899,11 +1023,11 @@ pub fn cch_fit(
     })?)
 }
 
-#[doc = " Python binding of [`cch_borgan`]."]
+#[doc = " Python binding of [`cch`] for the Borgan methods."]
 #[pyfunction]
 #[pyo3(signature = (stop, status, covariates, subcohort, id, stratum, cohort_sizes, start=None, method="I.Borgan"))]
 #[allow(clippy::too_many_arguments)]
-pub fn cch_borgan_fit(
+pub(crate) fn cch_borgan_fit(
     py: Python<'_>,
     stop: FloatVec,
     status: IntVec,
@@ -915,8 +1039,9 @@ pub fn cch_borgan_fit(
     start: Option<FloatVec>,
     method: &str,
 ) -> PyResult<CchFitResult> {
+    let method = BorganMethod::parse(method)?;
     Ok(py.detach(|| {
-        cch_borgan(
+        cch_stratified(
             stop.into_inner(),
             status.into_inner(),
             covariates.into_inner(),
@@ -933,6 +1058,66 @@ pub fn cch_borgan_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn fit(
+        stop: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Array2<f64>,
+        subcohort: Vec<i32>,
+        id: Vec<i64>,
+        cohort_size: usize,
+        start: Option<Vec<f64>>,
+        method: &str,
+        robust: bool,
+    ) -> SurvivalResult<CchFitResult> {
+        cch(
+            CchData {
+                stop,
+                status,
+                covariates,
+                subcohort,
+                id,
+                start,
+                stratum: None,
+            },
+            CchOptions {
+                cohort_size: vec![cohort_size],
+                method: CchMethod::parse(method)?,
+                robust,
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fit_borgan(
+        stop: Vec<f64>,
+        status: Vec<i32>,
+        covariates: Array2<f64>,
+        subcohort: Vec<i32>,
+        id: Vec<i64>,
+        stratum: Vec<usize>,
+        cohort_sizes: Vec<usize>,
+        start: Option<Vec<f64>>,
+        method: &str,
+    ) -> SurvivalResult<CchFitResult> {
+        cch(
+            CchData {
+                stop,
+                status,
+                covariates,
+                subcohort,
+                id,
+                start,
+                stratum: Some(stratum),
+            },
+            CchOptions {
+                cohort_size: cohort_sizes,
+                method: CchMethod::parse(method)?,
+                robust: false,
+            },
+        )
+    }
 
     type CchFixture = (Vec<f64>, Vec<i32>, Array2<f64>, Vec<i32>, Vec<i64>);
     type CountingCchFixture = (
@@ -1006,7 +1191,7 @@ mod tests {
     fn unstratified_methods_fit_real_survival_times() {
         let (stop, status, covariates, subcohort, id) = fixture();
         for method in ["Prentice", "SelfPrentice", "LinYing"] {
-            let result = cch(
+            let result = fit(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1059,7 +1244,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch(
+            let result = fit(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1107,7 +1292,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch(
+            let result = fit(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1155,7 +1340,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance, expected_opt) in expected {
-            let result = cch_borgan(
+            let result = fit_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1198,7 +1383,7 @@ mod tests {
             ),
         ];
         for (method, expected_coefficients, expected_variance) in expected {
-            let result = cch_borgan(
+            let result = fit_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1243,7 +1428,7 @@ mod tests {
             ),
         ];
         for (method, expected_head, expected_last) in expected {
-            let result = cch_borgan(
+            let result = fit_borgan(
                 stop.clone(),
                 status.clone(),
                 covariates.clone(),
@@ -1266,7 +1451,7 @@ mod tests {
     fn rejects_censored_rows_outside_subcohort() {
         let (stop, status, covariates, mut subcohort, id) = fixture();
         subcohort[1] = 0;
-        let error = cch(
+        let error = fit(
             stop, status, covariates, subcohort, id, 20, None, "Prentice", false,
         )
         .expect_err("invalid sampling should fail");
@@ -1298,7 +1483,7 @@ mod tests {
             });
             let id = (0..n).map(|idx| idx as i64).collect::<Vec<_>>();
             for method in ["Prentice", "LinYing"] {
-                cch(
+                fit(
                     stop.clone(),
                     status.clone(),
                     covariates.clone(),

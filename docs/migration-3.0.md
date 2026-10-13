@@ -169,6 +169,25 @@ through fitting, copying and pickling. An iterator's `dtype` attribute is no
 longer consulted; pass a NumPy array or floats for double storage. Lists,
 arrays and data frames are unaffected.
 
+## Rust crate
+
+- **PyO3 wrappers are private.** The `#[pyfunction]` wrappers that the Python
+  module registers for a typed Rust function are `pub(crate)`: every `*_py`
+  function, `cch_fit`, `cch_borgan_fit`, `coxph_fit_raw`, `survreg_fit_raw` and
+  `survpenal_fit_raw`. Call the typed functions instead, such as `cox_zph`,
+  `survexp`, `royston`, `CoxphFitResult::fit`, `SurvregFitResult::fit` and
+  `SurvpenalFitResult::fit`.
+- **`cch` takes typed inputs.** `cch(CchData, CchOptions)` replaces
+  `cch(stop, status, covariates, subcohort, id, cohort_size, start, method,
+  robust)` and `cch_borgan(...)`. `CchOptions::method` is a `CchMethod`
+  (`Prentice`, `SelfPrentice`, `LinYing`, `IBorgan`, `IIBorgan`;
+  `CchMethod::parse` reads R's names). `CchData::stratum` is required by the
+  Borgan methods.
+- **`agexact` is removed.** `AgexactFit`, `AgexactOptions` and `agexact_fit` are
+  gone; `CoxphFitResult::fit` with `TieMethod::Exact` fits the same model. The
+  Python kernel `survival.regression.agexact` is removed too; use
+  `survival.r.agexact_fit`. The R bridge's `agexact.fit` calls it.
+
 ## R bridge (survivalr)
 
 - `cox_zph()` and `coxph_detail()` are removed; call R's `cox.zph()` and

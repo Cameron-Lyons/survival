@@ -7104,74 +7104,43 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
     stop("rownames and y have different lengths", call. = FALSE)
   }
 
-  agfit <- do.call(
-    .kernels_attr("agexact"),
-    .compact_null(list(
-      start = as.double(start),
-      stop = as.double(stop_time),
-      event = as.integer(event),
-      x = .coxph_fit_covariates(x, n),
-      offset = as.double(offset),
-      strata = if (has_strata) as.integer(strata_codes) else NULL,
-      init = as.list(as.double(init)),
-      iter_max = as.integer(control[["iter.max"]]),
+  fit <- .call_python_with_warnings("agexact_fit", .compact_null(list(
+    x = .coxph_fit_covariates(x, n),
+    y = .as_python_surv(y),
+    strata = if (has_strata) as.list(as.integer(strata_codes)) else NULL,
+    offset = as.list(as.double(offset)),
+    init = as.list(as.double(init)),
+    control = list(
+      iter.max = as.integer(control[["iter.max"]]),
       eps = as.double(control[["eps"]]),
-      toler_chol = as.double(control[["toler.chol"]]),
-      nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
-    ))
-  )
+      toler.chol = as.double(control[["toler.chol"]]),
+      toler.inf = as.double(control[["toler.inf"]])
+    ),
+    resid = isTRUE(resid),
+    nocenter = if (is.null(nocenter)) NULL else as.list(as.numeric(nocenter))
+  )), user_warnings = TRUE)
 
-  variance <- .as_numeric_matrix(.result_field(agfit, "var"))
-  coefficients <- .as_numeric_vector(.result_field(agfit, "coefficients"))
-  score_vector <- .as_numeric_vector(.result_field(agfit, "u"))
-  means <- .as_numeric_vector(.result_field(agfit, "means"))
-  flag <- as.integer(.result_field(agfit, "flag"))
-  which_singular <- if (flag < nvar) diag(variance) == 0 else rep(FALSE, nvar)
-  infs <- abs(score_vector %*% variance)
-  if (control[["iter.max"]] > 1L) {
-    if (flag == 1000L) {
-      warning("Ran out of iterations and did not converge", call. = FALSE)
-    } else {
-      infs <- (infs > control[["eps"]]) &
-        infs > control[["toler.inf"]] * abs(coefficients)
-      if (any(infs)) {
-        warning(
-          paste(
-            "Loglik converged before variable ",
-            paste(seq_len(nvar)[infs], collapse = ","),
-            "; beta may be infinite. "
-          ),
-          call. = FALSE
-        )
-      }
-    }
-  }
-
+  coefficients <- .as_nullable_numeric_vector(.result_field(fit, "coefficients"))
+  coefficients[is.nan(coefficients)] <- NA_real_
   names(coefficients) <- colnames(x)
-  linear_predictors <- x %*% coefficients + offset - sum(coefficients * means)
-  risk_score <- as.double(exp(linear_predictors))
-  coefficients[which_singular] <- NA_real_
+  variance <- .as_numeric_matrix(.result_field(fit, "var"))
+  if (nvar == 0L) variance <- matrix(numeric(), 0L, 0L)
+  means <- .as_numeric_vector(.result_field(fit, "means"))
+  beta <- coefficients
+  beta[is.na(beta)] <- 0
   out <- list(
     coefficients = coefficients,
     var = variance,
-    loglik = .as_numeric_vector(.result_field(agfit, "loglik")),
-    score = if (nvar == 0L) 0 else as.numeric(.result_field(agfit, "sctest")),
-    iter = if (nvar == 0L) 1L else as.integer(.result_field(agfit, "iter")),
-    linear.predictors = linear_predictors,
+    loglik = .as_numeric_vector(.result_field(fit, "loglik")),
+    score = if (nvar == 0L) 0 else as.numeric(.result_field(fit, "score")),
+    iter = if (nvar == 0L) 1L else as.integer(.result_field(fit, "iter")),
+    linear.predictors = x %*% beta + offset - sum(beta * means),
     means = means,
     method = "coxph"
   )
 
   if (isTRUE(resid)) {
-    counting <- .kernels_attr("CountingProcessData")(
-      as.double(start), as.double(stop_time), as.integer(event)
-    )
-    residual_input <- .kernels_attr("AndersenGillInput")(
-      counting,
-      as.list(risk_score),
-      strata = if (has_strata) as.list(as.integer(strata_codes)) else NULL
-    )
-    martingale <- .as_numeric_vector(.kernels_attr("agmart")(residual_input, "breslow"))
+    martingale <- .as_numeric_vector(.result_field(fit, "residuals"))
     names(martingale) <- rownames
     out$residuals <- martingale
     out <- out[c(

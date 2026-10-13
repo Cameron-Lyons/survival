@@ -107,7 +107,7 @@ impl SurvpenalFitResult {
 #[pyfunction]
 #[pyo3(signature = (data, distribution, penalties, pcols, assign=None, init=None, scale=0.0, control=None, nstrat=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn survpenal_fit_raw(
+pub(crate) fn survpenal_fit_raw(
     py: Python<'_>,
     data: &SurvregData,
     distribution: &SurvregDistribution,

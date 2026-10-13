@@ -1,4 +1,5 @@
 pub(crate) mod common;
+pub(crate) mod exact_counting_sweep;
 pub(crate) mod r_fixtures;
 pub(crate) mod r_survival_validation;
 pub(crate) mod r_validation_tests;
