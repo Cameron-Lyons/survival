@@ -1156,7 +1156,7 @@ def test_summary(mg_fit, shared_fit):
     summary = r.model_summary(mg_fit)
     row = summary["coefficients"][2]
     assert row["name"] == "age_1:3"
-    assert [row[k] for k in ("coef", "exp_coef", "naive_se", "robust_se", "z")] == approx(
+    assert [row[k] for k in ("coef", "exp(coef)", "se(coef)", "robust se", "z")] == approx(
         [
             0.0645438014943818,
             1.06667229906214,
@@ -1166,9 +1166,9 @@ def test_summary(mg_fit, shared_fit):
         ],
         rel=1e-6,
     )
-    assert row["p"] == approx(3.97454244627841e-69, rel=1e-5)
+    assert row["Pr(>|z|)"] == approx(3.97454244627841e-69, rel=1e-5)
     conf = summary["conf_int"][3]
-    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
+    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95")] == approx(
         [1.47931056836788, 0.675990573840959, 1.30026053308818, 1.68301636633348], rel=1e-6
     )
     assert summary["logtest"]["test"] == approx(386.731006613854)
@@ -1186,7 +1186,7 @@ def test_summary(mg_fit, shared_fit):
     shared = r.model_summary(shared_fit, conf_int=0.9)
     row = shared["coefficients"][2]
     assert row["name"] == "ph(1:3/1:2)"
-    assert [row[k] for k in ("coef", "exp_coef", "naive_se", "robust_se", "z")] == approx(
+    assert [row[k] for k in ("coef", "exp(coef)", "se(coef)", "robust se", "z")] == approx(
         [
             -1.66314799096339,
             0.189541365446661,
@@ -1196,9 +1196,9 @@ def test_summary(mg_fit, shared_fit):
         ],
         rel=1e-6,
     )
-    assert row["p"] == approx(0.0015491433527694, rel=1e-5)
+    assert row["Pr(>|z|)"] == approx(0.0015491433527694, rel=1e-5)
     conf = shared["conf_int"][2]
-    assert [conf["lower"], conf["upper"]] == approx(
+    assert [conf["lower .90"], conf["upper .90"]] == approx(
         [0.0798663060433971, 0.449825852667626], rel=1e-6
     )
     assert shared["logtest"]["test"] == approx(1007.2094978127)

@@ -280,8 +280,8 @@ def test_summary_has_the_loglik_pair_and_var(weibull):
     assert summary["loglik"] == approx([-1153.8511880894062, -1147.0544314319495], rel=1e-12)
     assert summary["chi"] == approx(13.593513314913253)
     assert_matrix(summary["var"], WEIBULL_VAR)
-    assert summary["correlation"] is None
-    assert r.model_summary(weibull, correlation=False)["correlation"] is None
+    assert summary.correlation is None
+    assert r.model_summary(weibull, correlation=False).correlation is None
     with pytest.raises(TypeError, match="correlation must be True or False"):
         r.model_summary(weibull, correlation="yes")
 
@@ -320,7 +320,7 @@ def test_summary_correlation(weibull, lung):
     stratified = r.model_summary(
         r.survreg("Surv(time, status) ~ age + strata(sex)", data=lung), correlation=True
     )
-    assert stratified["coefficient_names"] == ["(Intercept)", "age", "sex=1", "sex=2"]
+    assert [row["name"] for row in stratified["table"]] == ["(Intercept)", "age", "sex=1", "sex=2"]
     assert_matrix(
         stratified["correlation"],
         [
@@ -396,7 +396,13 @@ def test_summary_correlation(weibull, lung):
 
 def test_summary_correlation_leaves_out_an_aliased_coefficient(aliased):
     summary = r.model_summary(aliased, correlation=True)
-    assert summary["coefficient_names"] == ["(Intercept)", "age", "age2", "sex", "Log(scale)"]
+    assert [row["name"] for row in summary["table"]] == [
+        "(Intercept)",
+        "age",
+        "age2",
+        "sex",
+        "Log(scale)",
+    ]
     assert len(summary["var"]) == 5
     assert_matrix(
         summary["correlation"],

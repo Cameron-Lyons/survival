@@ -105,6 +105,61 @@ only imports, annotations and `isinstance` checks change, and pickles made by
 
 The native kernel classes in `survival.kernels` keep their names.
 
+### Summary results
+
+`summary` (`model_summary`) of a coxph, survreg, aareg or cch fit returns a
+frozen result: `SummaryCoxphResult`, `SummaryCoxphPenalResult`,
+`SummarySurvregResult`, `SummaryAaregResult` or `SummaryCchResult`. Each one
+supports attribute access and read-only `summary["component"]`; R's dotted
+spelling (`summary["conf.int"]`) works too. A component that R leaves out is
+None as an attribute and missing as a key. The components keep R's names and
+meanings, and table rows use R's column names:
+
+| 2.x | 3.0 |
+| --- | --- |
+| Cox rows `exp_coef`, `se`, `p` (`naive_se`/`robust_se` when robust) | `exp(coef)`, `se(coef)`, `Pr(>\|z\|)`, plus `robust se`; as in R, `se(coef)` of a robust fit is the naive standard error |
+| Cox `conf_int` rows `lower`, `upper`, and `conf_level` | `lower .95`, `upper .95`, named for the level as in R |
+| Cox `loglik` (final) and `null_loglik` | `loglik`: R's pair (null, final) |
+| Cox `df`, `coefficient_names`, `coefficient_columns`, `model_type` | `logtest["df"]`, the rows' `name`, `columns`, `isinstance` |
+| Penalized Cox rows `se`, `chisq`, `df` | `se(coef)`, `Chisq`, `DF` |
+| survreg `coefficients` (the rows) | `table`; `coefficients` is R's named coefficient vector, as a dict |
+| survreg rows `coef`, `se`, `naive_se`, `robust_se` | `Value`, `Std. Error` (robust: `Std. Err`, `(Naive SE)`) |
+| survreg `scales`, `scale_names`, `location_coefficients`, `location_coefficient_names` | `scale` (a dict by stratum when there are several) and `coefficients` |
+| aareg rows `se`, `robust_se`, and `columns` | `se(coef)`, `robust se` |
+| cch rows `coef`, `se`, `z` | `Value`, `SE`, `Z` |
+
+The summaries are read-only; `dict(summary)` gives a plain dict.
+
+### `anova` tables
+
+`anova` of Cox models and of survreg models returns one type, `AnovaResult`. It
+replaces `AnovaCoxphResult` and `SurvregAnovaResult`. `columns` holds the table
+under R's column names, `row_names` the row names and `heading` R's heading.
+`result["Pr(>|Chi|)"]` reads a column, and `frame()` returns the columns.
+
+| 2.x | 3.0 |
+| --- | --- |
+| `anova(coxfit).rows[i].loglik`, `.chisq`, `.df`, `.p_value`, `.name` | `result.loglik`, `result["Chisq"]`, `result["Df"]`, `result["Pr(>\|Chi\|)"]`, `result.row_names` |
+| survreg `table.loglik` (which held -2 log-likelihood) | `result.neg2loglik` (the `-2*LL` column) |
+| survreg `table.terms`, `df`, `deviance`, `resid_df`, `p`, `test_labels` | `result.row_names`, `result["Df"]`, `["Deviance"]`, `["Resid. Df"]`, `["Pr(>Chi)"]`, `["Test"]` |
+| `as_data_frame(anova(coxfit))["model"]` | `anova(coxfit).row_names` |
+| `anova(coxfit, test="none")` raised ValueError | omits the p-values for one model; a list of models has p-values for any `test` but None, as in R |
+
+### Penalized Cox components
+
+On a penalized Cox fit, `pterms`, `assign2` and `history` are dicts keyed by
+term, like R's named vectors and lists. `assign2` is new. On a fit without a
+penalty, `df`, `var2`, `frail`, `fvar`, `penalty`, `pterms`, `assign2` and
+`history` are None (R's `NULL`); in 2.x they raised AttributeError. survreg
+fits already behaved this way.
+
+| 2.x | 3.0 |
+| --- | --- |
+| `fit.pterms == [1, 0]` | `fit.pterms == {"pspline(age, df=3)": 1, "sex": 0}` |
+| `fit.history[0]` | `fit.history["pspline(age, df=3)"]` |
+| `hasattr(fit, "penalty")` | `fit.penalty is not None` |
+| `coxfit.coef_names`, `cchfit.coef_names` | `coefficient_names`, as on every model |
+
 ## R bridge (survivalr)
 
 - `cox_zph()` and `coxph_detail()` are removed; call R's `cox.zph()` and

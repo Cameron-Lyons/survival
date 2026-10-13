@@ -115,6 +115,8 @@ from ._types import (
     NaAction,
     PredictResult,
     PsplineResult,
+    SummaryCoxphPenalResult,
+    SummaryCoxphResult,
     TermsPrediction,
     _CategoricalDesignTerm,
     _CovariateTerm,
@@ -359,7 +361,7 @@ class CoxphModel:
 
     def summary(
         self, conf_int: float = 0.95, scale: float = 1.0, terms: bool = False
-    ) -> dict[str, Any]:
+    ) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel:
         return summary_coxph(self, conf_int=conf_int, scale=scale, terms=terms)
 
 
@@ -1393,7 +1395,11 @@ def clogit(
 
 def _coefficient_table(
     fit: CoxphModel, scale: float
-) -> tuple[list[str], list[dict[str, float | str]]]:
+) -> tuple[list[str], list[dict[str, float | str]], list[float]]:
+    """summary.coxph's coefficient rows under R's column names, and the standard errors
+    the tests use (the robust ones of a robust fit).  As in R, ``se(coef)`` of a robust
+    fit is the unscaled naive standard error."""
+
     beta = [value * scale for value in fit.coefficients]
     var = fit.var
     naive = fit.naive_var
@@ -1401,22 +1407,19 @@ def _coefficient_table(
     rows: list[dict[str, float | str]] = []
     for idx, (name, value) in enumerate(zip(fit.coefficient_names, beta, strict=True)):
         z = value / se[idx] if se[idx] > 0.0 else math.nan
-        row: dict[str, float | str] = {
-            "name": name,
-            "coef": value,
-            "exp_coef": _r_exp(value),
-            "se": se[idx],
-            "z": z,
-            "p": _core.pchisq(z * z, 1.0, lower_tail=False),
-        }
-        if naive is not None:
-            row["naive_se"] = _r_sqrt(naive[idx][idx])
-            row["robust_se"] = se[idx]
+        row: dict[str, float | str] = {"name": name, "coef": value, "exp(coef)": _r_exp(value)}
+        if naive is None:
+            row["se(coef)"] = se[idx]
+        else:
+            row["se(coef)"] = _r_sqrt(naive[idx][idx])
+            row["robust se"] = se[idx]
+        row["z"] = z
+        row["Pr(>|z|)"] = _core.pchisq(z * z, 1.0, lower_tail=False)
         rows.append(row)
     columns = ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
     if naive is not None:
         columns.insert(3, "robust se")
-    return columns, rows
+    return columns, rows, se
 
 
 def _conf_int_rows(
@@ -1427,13 +1430,14 @@ def _conf_int_rows(
 
     level = _normalize_conf_level(conf_int, "conf_int")
     z = NormalDist().inv_cdf((1.0 + level) / 2.0)
+    suffix = _r_format_number(round(100 * level, 2), 15)
     return [
         {
             "name": name,
             "exp(coef)": _r_exp(b),
             "exp(-coef)": _r_exp(-b),
-            "lower": _r_exp(b - z * error),
-            "upper": _r_exp(b + z * error),
+            f"lower .{suffix}": _r_exp(b - z * error),
+            f"upper .{suffix}": _r_exp(b + z * error),
         }
         for name, b, error in zip(names, beta, se, strict=True)
     ]
@@ -1441,10 +1445,10 @@ def _conf_int_rows(
 
 def summary_coxph(
     fit: CoxphModel, conf_int: Any = 0.95, scale: Any = 1.0, terms: Any = False
-) -> Any:
-    """R's ``summary.coxph`` as a dict keyed like the R list (the fit itself for a null
-    model, as R returns the object unchanged); a penalized fit dispatches to
-    :func:`summary_coxph_penal`, the only method that reads ``terms``."""
+) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel:
+    """R's ``summary.coxph`` (the fit itself for a null model, as R returns the object
+    unchanged); a penalized fit dispatches to :func:`summary_coxph_penal`, the only
+    method that reads ``terms``."""
 
     if fit.penalized is not None:
         return summary_coxph_penal(fit, conf_int=conf_int, scale=scale, terms=terms)
@@ -1456,65 +1460,62 @@ def summary_coxph(
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
-    columns, rows = _coefficient_table(fit, scale_value)
-    result: dict[str, Any] = {
-        "model_type": "coxph",
-        "n": fit.n,
-        "nevent": fit.nevent,
-        "na_action": fit.na_action,
-        "loglik": loglik[1],
-        "null_loglik": loglik[0],
-        "df": df,
-        "coefficient_names": list(fit.coefficient_names),
-        "coefficient_columns": columns,
-        "coefficients": rows,
-        "logtest": {
+    columns, rows, se = _coefficient_table(fit, scale_value)
+    from ._coxphms import CoxphmsModel
+
+    wald = fit.wald_test
+    return SummaryCoxphResult(
+        n=fit.n,
+        nevent=fit.nevent,
+        na_action=fit.na_action,
+        loglik=list(loglik),
+        coefficients=rows,
+        conf_int=_conf_int_rows(
+            fit.coefficient_names, [value * scale_value for value in beta], se, conf_int
+        )
+        if conf_int
+        else None,
+        logtest={
             "test": logtest,
             "df": df,
             "pvalue": _core.pchisq(logtest, df, lower_tail=False),
         },
-        "sctest": {"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
-        "rsq": {
+        sctest={"test": score, "df": df, "pvalue": _core.pchisq(score, df, lower_tail=False)},
+        rsq={
             "rsq": 1.0 - math.exp(-logtest / fit.n),
             "maxrsq": 1.0 - math.exp(2.0 * loglik[0] / fit.n),
         },
-        "used_robust": fit.robust,
-        "method": fit.method,
-        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
-    }
-    if conf_int:
-        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
-        result["conf_int"] = _conf_int_rows(
-            fit.coefficient_names,
-            [value * scale_value for value in beta],
-            [float(row["se"]) for row in rows],
-            conf_int,
-        )
-    from ._coxphms import CoxphmsModel
-
-    if isinstance(fit, CoxphmsModel):
-        result["cmap"] = fit.cmap
-        result["states"] = list(fit.states)
-    wald = fit.wald_test
-    if wald is not None:
-        result["waldtest"] = {
-            "test": round(wald, 2),
-            "df": df,
-            "pvalue": _core.pchisq(wald, df, lower_tail=False),
-        }
-    if fit.rscore is not None:
-        result["robscore"] = {
+        waldtest=None
+        if wald is None
+        else {"test": round(wald, 2), "df": df, "pvalue": _core.pchisq(wald, df, lower_tail=False)},
+        robscore=None
+        if fit.rscore is None
+        else {
             "test": fit.rscore,
             "df": df,
             "pvalue": _core.pchisq(fit.rscore, df, lower_tail=False),
-        }
-    return result
+        },
+        used_robust=fit.robust,
+        concordance={"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+        columns=columns,
+        method=fit.method,
+        cmap=fit.cmap if isinstance(fit, CoxphmsModel) else None,
+        states=list(fit.states) if isinstance(fit, CoxphmsModel) else None,
+    )
 
 
 def _penal_row(
     name: str, coef: float, se: float, se2: float, chisq: float, df: float, p: float
 ) -> dict[str, Any]:
-    return {"name": name, "coef": coef, "se": se, "se2": se2, "chisq": chisq, "df": df, "p": p}
+    return {
+        "name": name,
+        "coef": coef,
+        "se(coef)": se,
+        "se2": se2,
+        "Chisq": chisq,
+        "DF": df,
+        "p": p,
+    }
 
 
 def _wald_row(name: str, coef: float, var: float, var2: float) -> dict[str, Any]:
@@ -1637,8 +1638,8 @@ def summary_coxph_penal(
     terms: Any = False,
     *,
     _print_digits: int = 7,
-) -> dict[str, Any]:
-    """R's ``summary.coxph.penal`` as a dict keyed like the R list.
+) -> SummaryCoxphPenalResult:
+    """R's ``summary.coxph.penal``.
 
     ``coefficients`` has one row per term with columns ``coef``, ``se(coef)``,
     ``se2`` (from the sandwich variance ``var2``), ``Chisq``, ``DF`` and ``p``: a
@@ -1726,34 +1727,32 @@ def summary_coxph_penal(
             )
     logtest = -2.0 * (fit.loglik[0] - fit.loglik[1])
     df_total = _coxph_df(fit)
-    result: dict[str, Any] = {
-        "model_type": "coxph.penal",
-        "n": fit.n,
-        "nevent": fit.nevent,
-        "na_action": fit.na_action,
-        "loglik": fit.loglik[1],
-        "null_loglik": fit.loglik[0],
-        "iter": fit.iter,
-        "df": list(penalized.df),
-        "coefficient_columns": ["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
-        "coefficients": rows,
-        "print2": print2,
-        "logtest": {
-            "test": logtest,
-            "df": df_total,
-            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
-        },
-        "concordance": {"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
-    }
-    if conf_int and beta:
-        result["conf_level"] = _normalize_conf_level(conf_int, "conf_int")
-        result["conf_int"] = _conf_int_rows(
+    return SummaryCoxphPenalResult(
+        n=fit.n,
+        nevent=fit.nevent,
+        na_action=fit.na_action,
+        loglik=list(fit.loglik),
+        iter=list(penalized.iter),
+        df=list(penalized.df),
+        coefficients=rows,
+        conf_int=_conf_int_rows(
             fit.coefficient_names,
             [value * scale_value for value in beta],
             [_r_sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
             conf_int,
         )
-    return result
+        if conf_int and beta
+        else None,
+        print2=print2,
+        logtest={
+            "test": logtest,
+            "df": df_total,
+            "pvalue": _core.pchisq(logtest, df_total, lower_tail=False),
+        },
+        concordance={"C": fit.concordance["concordance"], "se(C)": fit.concordance["std"]},
+        columns=["coef", "se(coef)", "se2", "Chisq", "DF", "p"],
+        method=fit.method,
+    )
 
 
 def _wtest_b(b: Any) -> tuple[list[list[float | None]], bool]:

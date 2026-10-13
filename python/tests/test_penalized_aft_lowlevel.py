@@ -173,7 +173,7 @@ def test_zero_frailty_cox_report():
         },
     )
     report = fit.summary()
-    assert math.isnan(report["coefficients"][-1]["chisq"])
+    assert math.isnan(report["coefficients"][-1]["Chisq"])
 
 
 @pytest.mark.parametrize("sparse", [False, True])

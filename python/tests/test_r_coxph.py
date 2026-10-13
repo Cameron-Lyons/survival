@@ -321,9 +321,9 @@ def test_clogit_matches_r():
 def test_summary_coxph_matches_r(fit):
     summary = r.model_summary(fit)
     rows = summary["coefficients"]
-    assert summary["coefficient_columns"] == ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
+    assert summary.columns == ["coef", "exp(coef)", "se(coef)", "z", "Pr(>|z|)"]
     assert [row["name"] for row in rows] == ["age", "rx"]
-    assert [rows[0][k] for k in ("coef", "exp_coef", "se", "z", "p")] == approx(
+    assert [rows[0][k] for k in summary.columns] == approx(
         [
             0.147326595469114,
             1.15873233797022,
@@ -333,7 +333,7 @@ def test_summary_coxph_matches_r(fit):
         ],
         rel=1e-6,
     )
-    assert [rows[1][k] for k in ("coef", "exp_coef", "se", "z", "p")] == approx(
+    assert [rows[1][k] for k in summary.columns] == approx(
         [
             -0.803973012665114,
             0.447547316050731,
@@ -344,7 +344,7 @@ def test_summary_coxph_matches_r(fit):
         rel=1e-6,
     )
     conf = summary["conf_int"][0]
-    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
+    assert [conf[k] for k in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95")] == approx(
         [1.15873233797022, 0.863012075551224, 1.05852882579423, 1.26842141502431], rel=1e-6
     )
     assert summary["logtest"] == approx(
@@ -359,7 +359,7 @@ def test_summary_coxph_matches_r(fit):
     assert summary["concordance"] == approx(
         {"C": 0.798165137614679, "se(C)": 0.0763261991426006}, rel=1e-6
     )
-    assert (summary["n"], summary["nevent"], summary["df"], summary["used_robust"]) == (
+    assert (summary["n"], summary["nevent"], summary["logtest"]["df"], summary["used_robust"]) == (
         26,
         12,
         2,

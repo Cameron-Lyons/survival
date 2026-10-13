@@ -97,6 +97,7 @@ from ._types import (
     AnovaResult,
     NaAction,
     PredictResult,
+    SummarySurvregResult,
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
@@ -1765,11 +1766,11 @@ def model_matrix_survreg(
     return result
 
 
-def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[str, Any]:
+def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> SummarySurvregResult:
     """``summary.survreg``: the coefficient table, the pieces of the fit R copies
     (``loglik`` as (intercept-only, full), ``var``, ``scale``, ...) and, with
     ``correlation``, the correlation matrix of the coefficients that are not ``NA``
-    (its rows follow theirs in ``coefficient_names``)."""
+    (its rows follow theirs in ``table``)."""
 
     model = fit.fit
     coefficients = [float(value) for value in model.coefficients]
@@ -1794,16 +1795,14 @@ def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[s
             statistic = math.nan
         else:
             statistic = math.copysign(math.inf, value)
-        row: dict[str, float | str] = {
-            "name": names[idx],
-            "coef": value,
-            "se": standard_error,
-            "naive_se": naive_standard_error,
-            "z": statistic,
-            "p": _normal_two_sided_p_value(statistic),
-        }
+        row: dict[str, float | str] = {"name": names[idx], "Value": value}
         if robust:
-            row["robust_se"] = standard_error
+            row["Std. Err"] = standard_error
+            row["(Naive SE)"] = naive_standard_error
+        else:
+            row["Std. Error"] = standard_error
+        row["z"] = statistic
+        row["p"] = _normal_two_sided_p_value(statistic)
         rows.append(row)
 
     correl = None
@@ -1813,19 +1812,29 @@ def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> dict[s
             [variance[i][j] / (standard_errors[i] * standard_errors[j]) for j in keep] for i in keep
         ]
 
-    result: dict[str, Any] = {
-        "model_type": "survreg",
-        "coefficients": rows,
-        "coefficient_names": names,
-        "var": variance,
-        "correlation": correl,
-        "df": fit.df,
-        "n": fit.n,
-        "robust": robust,
-        "na_action": fit.na_action,
-    }
-    result.update(survreg_summary(fit))
-    return result
+    pieces = survreg_summary(fit)
+    location = _location_names(fit)
+    scales = list(model.scale)
+    return SummarySurvregResult(
+        coefficients=dict(zip(location, fit.coefficients, strict=True)),
+        table=rows,
+        var=variance,
+        df=fit.df,
+        loglik=pieces["loglik"],
+        iter=pieces["iter"],
+        idf=pieces["idf"],
+        scale=scales[0] if len(scales) == 1 else dict(zip(fit.strata_levels, scales, strict=True)),
+        parms=pieces["parms"],
+        n=fit.n,
+        chi=pieces["chi"],
+        robust=robust,
+        fixed_scale=pieces["fixed_scale"],
+        distribution=pieces["distribution"],
+        chi_df=pieces["chi_df"],
+        na_action=fit.na_action,
+        correlation=correl,
+        distribution_parameters=pieces.get("distribution_parameters"),
+    )
 
 
 __getattr__ = _renamed_classes(

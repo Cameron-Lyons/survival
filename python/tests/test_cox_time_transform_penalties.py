@@ -137,7 +137,7 @@ def test_native_penalty_results_match_r_fit_summary_and_residuals(case):
         summary = r.model_summary(fit)
         compare(
             [
-                [row[k] for k in ("coef", "se", "se2", "chisq", "df", "p")]
+                [row[k] for k in ("coef", "se(coef)", "se2", "Chisq", "DF", "p")]
                 for row in summary["coefficients"]
             ],
             case["summary"],
@@ -252,8 +252,8 @@ def test_sparse_callback_without_formatter_has_a_group_wald_summary():
     row = r.model_summary(fit)["coefficients"][-1]
     assert row["name"] == "tt(rx)"
     assert math.isnan(row["coef"])
-    close(row["chisq"], sum(b * b / v for b, v in zip(fit.frail, fit.fvar, strict=True)))
-    close(row["df"], fit.df[-1])
+    close(row["Chisq"], sum(b * b / v for b, v in zip(fit.frail, fit.fvar, strict=True)))
+    close(row["DF"], fit.df[-1])
 
 
 def test_boolean_penalty_basis_keeps_its_numeric_penalty():

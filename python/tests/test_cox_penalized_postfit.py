@@ -74,7 +74,7 @@ def _table(result):
 def _columns(summary):
     rows = summary["coefficients"]
     return [row["name"] for row in rows], [
-        [row[key] for row in rows] for key in ("coef", "se", "se2", "chisq", "df", "p")
+        [row[key] for row in rows] for key in ("coef", "se(coef)", "se2", "Chisq", "DF", "p")
     ]
 
 
@@ -170,8 +170,8 @@ def test_anova_rows_of_a_frailty(lung_inst, lung_ecog, kidney):
 def test_summary_of_a_pspline_fit_splits_linear_and_nonlinear(lung):
     fit = _fit("pspline(age, df=4) + sex", lung)
     summary = r.model_summary(fit, conf_int=0.9, scale=2)
-    assert summary["model_type"] == "coxph.penal"
-    assert summary["coefficient_columns"] == ["coef", "se(coef)", "se2", "Chisq", "DF", "p"]
+    assert isinstance(summary, r.SummaryCoxphPenalResult)
+    assert summary.columns == ["coef", "se(coef)", "se2", "Chisq", "DF", "p"]
     names, (coef, se, se2, chisq, df, p) = _columns(summary)
     assert names == ["pspline(age, df=4), linear", "pspline(age, df=4), nonlin", "sex"]
     assert coef == approx([0.016899678546633299, math.nan, -0.51821168761417724])
@@ -193,12 +193,12 @@ def test_summary_of_a_pspline_fit_splits_linear_and_nonlinear(lung):
         assert key not in summary
     conf = summary["conf_int"]
     assert [row["name"] for row in conf] == [f"ps(age){j}" for j in range(3, 15)] + ["sex"]
-    assert [conf[0][key] for key in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
-        [2.2903921066606721, 0.43660646449658447, 0.21449943680468256, 24.456455832237371]
-    )
-    assert [conf[-1][key] for key in ("exp(coef)", "exp(-coef)", "lower", "upper")] == approx(
-        [0.35472112016701302, 2.8191160411569824, 0.20382498032113774, 0.61732900890898079]
-    )
+    assert [
+        conf[0][key] for key in ("exp(coef)", "exp(-coef)", "lower .90", "upper .90")
+    ] == approx([2.2903921066606721, 0.43660646449658447, 0.21449943680468256, 24.456455832237371])
+    assert [
+        conf[-1][key] for key in ("exp(coef)", "exp(-coef)", "lower .90", "upper .90")
+    ] == approx([0.35472112016701302, 2.8191160411569824, 0.20382498032113774, 0.61732900890898079])
     assert fit.summary()["coefficients"] == r.model_summary(fit)["coefficients"]
 
 

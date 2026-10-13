@@ -498,13 +498,13 @@ def test_signif_rounds_halfway_cases_like_r():
 
 
 def _summary_row(summary: dict[str, Any], name: str) -> list[float]:
-    row = next(row for row in summary["coefficients"] if row["name"] == name)
-    return [row["coef"], row["se"], row["z"], row["p"]]
+    row = next(row for row in summary["table"] if row["name"] == name)
+    return [row["Value"], row["Std. Error"], row["z"], row["p"]]
 
 
 def test_summary(f_ps, f_strata, f_fixed, lung):
     summary = r.model_summary(f_ps)
-    assert summary["coefficient_names"] == [
+    assert [row["name"] for row in summary["table"]] == [
         "(Intercept)",
         *[f"ps(age){k}" for k in range(3, 13)],
         "sex",
@@ -530,13 +530,13 @@ def test_summary(f_ps, f_strata, f_fixed, lung):
     assert summary["chi_df"] == approx(2.49352777012269)
 
     summary = r.model_summary(f_fixed)
-    assert summary["coefficient_names"] == ["(Intercept)", "ridge(age)", "ridge(sex)"]
+    assert [row["name"] for row in summary["table"]] == ["(Intercept)", "ridge(age)", "ridge(sex)"]
     assert summary["chi_df"] == approx(1.97961128683534)
 
     robust = r.model_summary(r.survreg(S + "ridge(age, sex, theta = 1)", lung, robust=True))
-    row = robust["coefficients"][1]
+    row = robust["table"][1]
     assert row["name"] == "ridge(age)"
-    assert [row["coef"], row["se"], row["naive_se"], row["z"], row["p"]] == approx(
+    assert [row["Value"], row["Std. Err"], row["(Naive SE)"], row["z"], row["p"]] == approx(
         [
             -0.0122117247372104,
             0.00733358364618504,

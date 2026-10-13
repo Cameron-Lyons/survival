@@ -201,7 +201,7 @@ def test_complete_constructor_tt_fits_and_shared_formula_path_match_stock(case):
     summary = r.model_summary(fit)
     close(
         [
-            [row[key] for key in ("coef", "se", "se2", "chisq", "df", "p")]
+            [row[key] for key in ("coef", "se(coef)", "se2", "Chisq", "DF", "p")]
             for row in summary["coefficients"]
         ],
         expected["summary"],

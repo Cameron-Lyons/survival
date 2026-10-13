@@ -771,27 +771,16 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
     elif aspect == "summary.coefficients":
         rows = summary["coefficients"]
         r_cols = expected["colnames"]
-        keys = {
-            "coef": ("coef", RTOL_COEF),
-            "exp(coef)": ("exp_coef", RTOL_COEF),
-            "se(coef)": ("naive_se" if "robust se" in r_cols else "se", RTOL_VAR),
-            "robust se": ("robust_se", RTOL_VAR),
-            "z": ("z", RTOL_VAR),
-            "Pr(>|z|)": ("p", RTOL_VAR),
-            "Value": ("coef", RTOL_COEF),
-            "SE": ("se", RTOL_VAR),
-            "Z": ("z", RTOL_VAR),
-            "p": ("p", RTOL_VAR),
-        }
+        coefficient_columns = {"coef", "exp(coef)", "Value"}
         if expected["rownames"]:
             assert_exact(
                 [row["name"] for row in rows], expected["rownames"], path="coefficients.rows"
             )
         for row, r_row in zip(rows, expected["values"], strict=True):
             for col_name, value in zip(r_cols, r_row, strict=True):
-                key, rtol = keys[col_name]
+                rtol = RTOL_COEF if col_name in coefficient_columns else RTOL_VAR
                 assert_close(
-                    row[key], value, rtol=rtol, path=f"coefficients[{row['name']}].{col_name}"
+                    row[col_name], value, rtol=rtol, path=f"coefficients[{row['name']}].{col_name}"
                 )
     elif aspect == "summary.conf_int":
         rows = summary["conf_int"]
@@ -800,14 +789,9 @@ def _check_summary(fit: Any, aspect: str, expected: Mapping[str, Any]) -> None:
             row = next((item for item in rows if item["name"] == name), None)
             if row is None:
                 raise FixtureMismatchError(f"conf_int has no row {name!r}")
-            for col_name, key in (
-                ("exp(coef)", "exp(coef)"),
-                ("exp(-coef)", "exp(-coef)"),
-                ("lower .95", "lower"),
-                ("upper .95", "upper"),
-            ):
+            for col_name in ("exp(coef)", "exp(-coef)", "lower .95", "upper .95"):
                 assert_close(
-                    row[key],
+                    row[col_name],
                     exp_row[r_cols.index(col_name)],
                     rtol=RTOL_VAR,
                     path=f"conf_int[{name}].{col_name}",
@@ -1409,17 +1393,17 @@ class SurvregHandler(TopicHandler):
         elif aspect == "summary":
             exp = _expect(case, "summary")
             summary = r.model_summary(fit)
-            rows = _attr(summary, "coefficients")
+            rows = summary["table"]
             cols = exp["table"]["colnames"]
             for row, values in zip(rows, exp["table"]["values"], strict=True):
                 assert_close(
-                    row["coef"],
+                    row["Value"],
                     values[cols.index("Value")],
                     rtol=RTOL_COEF,
                     path=f"summary[{row['name']}].value",
                 )
                 assert_close(
-                    row["se"],
+                    row["Std. Error"],
                     values[cols.index("Std. Error")],
                     rtol=RTOL_VAR,
                     path=f"summary[{row['name']}].se",
@@ -1585,14 +1569,6 @@ class AaregHandler(TopicHandler):
             summary = r.model_summary(fit)
             assert_close(summary["chisq"], exp["chisq"][0][0], rtol=RTOL_VAR, path="chisq")
             table = exp["table"]
-            columns = {
-                "slope": "slope",
-                "coef": "coef",
-                "se(coef)": "se",
-                "robust se": "robust_se",
-                "z": "z",
-                "p": "p",
-            }
             assert_exact(
                 [row["name"] for row in summary["table"]],
                 table["rownames"],
@@ -1601,7 +1577,7 @@ class AaregHandler(TopicHandler):
             for row, values in zip(summary["table"], table["values"], strict=True):
                 for name, value in zip(table["colnames"], values, strict=True):
                     assert_close(
-                        row[columns[name]],
+                        row[name],
                         value,
                         rtol=RTOL_VAR,
                         path=f"summary[{row['name']}].{name}",

@@ -124,6 +124,7 @@ from ._types import (
     QuantileSurvfitResult,
     RatetablePrint,
     ResponsePrint,
+    SummaryCchResult,
     SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
@@ -822,7 +823,7 @@ model_summary.register(TmergeFrame, summary_tmerge)
 
 
 @model_summary.register(CchModel)
-def _model_summary_cch(fit: CchModel, **kwargs: Any) -> dict[str, Any]:
+def _model_summary_cch(fit: CchModel, **kwargs: Any) -> SummaryCchResult:
     return summary_cch(fit)
 
 

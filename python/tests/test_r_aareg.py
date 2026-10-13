@@ -62,7 +62,13 @@ def test_aareg_matches_r(ovarian):
 def test_summary_aareg_matches_r(ovarian):
     fit = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian)
     summary = r.model_summary(fit)
-    assert summary["columns"] == ["slope", "coef", "se(coef)", "z", "p"]
+    assert [key for key in summary["table"][0] if key != "name"] == [
+        "slope",
+        "coef",
+        "se(coef)",
+        "z",
+        "p",
+    ]
     assert [row["name"] for row in summary["table"]] == ["Intercept", "age", "ecog.ps"]
     assert [row["slope"] for row in summary["table"]] == approx(
         [-0.00717943180642173, 0.000194242827812841, -0.000520067101518314], rel=1e-6
@@ -70,7 +76,7 @@ def test_summary_aareg_matches_r(ovarian):
     assert [row["coef"] for row in summary["table"]] == approx(
         [-0.267333077106693, 0.00603271092747513, 0.000202778734584543], rel=1e-6
     )
-    assert [row["se"] for row in summary["table"]] == approx(
+    assert [row["se(coef)"] for row in summary["table"]] == approx(
         [0.120427978765407, 0.00249081989075946, 0.0284768623309702], rel=1e-6
     )
     assert [row["z"] for row in summary["table"]] == approx(
@@ -101,7 +107,7 @@ def test_aareg_options(ovarian):
         ],
         rel=1e-6,
     )
-    assert "robust_se" in r.model_summary(dfbeta)["table"][0]
+    assert "robust se" in r.model_summary(dfbeta)["table"][0]
     nrisk = r.aareg("Surv(futime, fustat) ~ age + ecog.ps", ovarian, test="nrisk")
     assert nrisk.test == "nrisk"
     assert nrisk.test_statistic == approx(
