@@ -10205,6 +10205,9 @@ as.data.frame.survival_py_coxph_detail <- function(x, row.names = NULL, optional
 }
 
 as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALSE, ...) {
+  if (is.null(row.names)) {
+    row.names <- as.character(unlist(.result_field(x, "row_names"), use.names = FALSE))
+  }
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
 

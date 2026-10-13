@@ -732,23 +732,25 @@ def test_coxph_detail_matches_r(fit):
 
 def test_anova_matches_r(fit, ovarian):
     table = r.anova(fit)
-    assert [row.name for row in table.rows] == ["NULL", "age", "rx"]
-    assert [row.loglik for row in table.rows] == approx(
-        [-34.9849403711626, -27.8381472910825, -27.0418988630084]
-    )
-    assert [row.chisq for row in table.rows][1:] == approx(
-        [14.2935861601602, 1.59249685614817], rel=1e-6
-    )
-    assert [row.df for row in table.rows] == [None, 1, 1]
-    assert [row.p_value for row in table.rows][1:] == approx(
-        [0.000156396864322538, 0.206969765174687], rel=1e-6
-    )
+    assert isinstance(table, r.AnovaResult)
+    assert table.row_names == ["NULL", "age", "rx"]
+    assert table.loglik == approx([-34.9849403711626, -27.8381472910825, -27.0418988630084])
+    assert table["Chisq"][1:] == approx([14.2935861601602, 1.59249685614817], rel=1e-6)
+    assert math.isnan(table["Df"][0])
+    assert table["Df"][1:] == [1.0, 1.0]
+    assert table["Pr(>|Chi|)"][1:] == approx([0.000156396864322538, 0.206969765174687], rel=1e-6)
+    assert table.heading[1] == " Cox model: response is Surv(futime, fustat)"
+    assert "Pr(>|Chi|)" in repr(table)
     nested = r.anova(r.coxph("Surv(futime, fustat) ~ age", ovarian), fit)
-    assert [row.loglik for row in nested.rows] == approx([-27.8381472910825, -27.0418988630084])
-    assert [row.chisq for row in nested.rows][1:] == approx([1.59249685614817], rel=1e-6)
-    assert r.anova(fit, test=None).rows[1].p_value is None
+    assert nested.row_names == ["1", "2"]
+    assert nested.loglik == approx([-27.8381472910825, -27.0418988630084])
+    assert nested["Chisq"][1:] == approx([1.59249685614817], rel=1e-6)
+    assert nested.heading[2:] == [" Model 1: ~ age", " Model 2: ~ age + rx"]
+    assert "Pr(>|Chi|)" not in r.anova(fit, test=None)
+    assert "Pr(>|Chi|)" not in r.anova(fit, test="none")
+    assert "Pr(>|Chi|)" in r.anova(r.coxph("Surv(futime, fustat) ~ age", ovarian), fit, test="F")
     frame = r.as_data_frame(table)
-    assert list(frame) == ["model", "loglik", "Chisq", "Df", "Pr(>|Chi|)"]
+    assert list(frame) == ["loglik", "Chisq", "Df", "Pr(>|Chi|)"]
     with pytest.raises(ValueError, match="robust variances"):
         r.anova(r.coxph("Surv(futime, fustat) ~ age + rx", ovarian, robust=True))
     with pytest.raises(ValueError, match="same ties option"):

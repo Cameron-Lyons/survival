@@ -975,20 +975,11 @@ class CoxphHandler(TopicHandler):
 
 
 def _check_anova(result: Any, expected: Mapping[str, Any], nested: bool = False) -> None:
-    rows = list(result.rows)
-    assert_close(
-        [row.loglik for row in rows], expected["loglik"], rtol=RTOL_COEF, path="anova.loglik"
-    )
-    assert_close(
-        [row.chisq for row in rows][1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq"
-    )
-    assert_close(
-        [row.p_value for row in rows][1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p"
-    )
+    assert_close(result.loglik, expected["loglik"], rtol=RTOL_COEF, path="anova.loglik")
+    assert_close(result["Chisq"][1:], expected["chisq"][1:], rtol=RTOL_VAR, path="anova.chisq")
+    assert_close(result["Pr(>|Chi|)"][1:], expected["p"][1:], rtol=RTOL_VAR, path="anova.p")
     if not nested:
-        assert_exact(
-            [row.df for row in rows][1:], [int(v) for v in expected["df"][1:]], path="anova.df"
-        )
+        assert_exact(result["Df"][1:], [int(v) for v in expected["df"][1:]], path="anova.df")
 
 
 def _check_cox_residual(fit: Any, kind: str, expected: Any) -> None:
@@ -1442,10 +1433,17 @@ class SurvregHandler(TopicHandler):
         elif aspect == "anova":
             exp = _expect(case, "anova")
             result = r.anova(fit)
-            assert_exact(list(_attr(result, "terms")), exp["terms"], path="anova.terms")
-            for key in ("loglik", "resid_df", "df", "deviance", "p"):
+            assert_exact(result.row_names, exp["terms"], path="anova.terms")
+            columns = {
+                "loglik": "-2*LL",
+                "resid_df": "Resid. Df",
+                "df": "Df",
+                "deviance": "Deviance",
+                "p": "Pr(>Chi)",
+            }
+            for key, column in columns.items():
                 assert_close(
-                    as_float_list(_attr(result, key)),
+                    as_float_list(result[column]),
                     exp[key],
                     rtol=RTOL_VAR if key == "p" else RTOL_COEF,
                     path=f"anova.{key}",
@@ -2137,9 +2135,9 @@ class ValidationExtraHandler(TopicHandler):
         elif case["name"] == "anova_lung_model_list":
             fits = [r.coxph(formula, case_data(self.topic, case)) for formula in case["formulas"]]
             result = r.anova(*fits)
-            field = {"p": "p_value"}.get(aspect, aspect)
+            column = {"p": "Pr(>|Chi|)", "chisq": "Chisq", "df": "Df"}.get(aspect, aspect)
             assert_close(
-                as_float_list([getattr(row, field) for row in result.rows]),
+                as_float_list(result[column]),
                 case["expected"][aspect],
                 rtol=RTOL_VAR,
                 path=aspect,

@@ -465,6 +465,68 @@ class SurvConcordanceResult:
     na_action: NaAction | None = None
 
 
+def _anova_cell(value: Any) -> str:
+    if isinstance(value, float):
+        return "" if math.isnan(value) else f"{value:.5g}"
+    return str(value)
+
+
+@dataclass(frozen=True, repr=False)
+class AnovaResult:
+    """R's ``anova`` table of Cox and parametric survival models (an ``anova`` data frame).
+
+    ``columns`` holds the table under R's column names, in R's order: ``loglik``,
+    ``Chisq``, ``Df`` and ``Pr(>|Chi|)`` for coxph; ``Df``, ``Deviance``, ``Resid. Df``,
+    ``-2*LL`` and ``Pr(>Chi)`` for survreg, with ``Terms`` and ``Test`` for a list of
+    models.  The p-value column is absent without a test, and NaN stands for R's NA.
+    ``row_names`` are the table's row names and ``heading`` the lines R prints above it.
+    ``result["Chisq"]`` is a column.
+    """
+
+    columns: dict[str, list[Any]]
+    row_names: list[str]
+    heading: list[str]
+
+    def __getitem__(self, column: str) -> list[Any]:
+        return self.columns[column]
+
+    def __contains__(self, column: object) -> bool:
+        return column in self.columns
+
+    def frame(self) -> dict[str, list[Any]]:
+        """The table as columns, with R's column names."""
+
+        return {name: list(values) for name, values in self.columns.items()}
+
+    @property
+    def loglik(self) -> list[float] | None:
+        """The log-likelihoods of a Cox table."""
+
+        return self.columns.get("loglik")
+
+    @property
+    def neg2loglik(self) -> list[float] | None:
+        """The ``-2*LL`` column of a survreg table."""
+
+        return self.columns.get("-2*LL")
+
+    def __repr__(self) -> str:
+        header = ["", *self.columns]
+        body = [
+            [name, *(_anova_cell(values[i]) for values in self.columns.values())]
+            for i, name in enumerate(self.row_names)
+        ]
+        widths = [max(len(row[j]) for row in [header, *body]) for j in range(len(header))]
+        lines = [
+            " ".join(
+                cell.ljust(widths[j]) if j == 0 else cell.rjust(widths[j])
+                for j, cell in enumerate(row)
+            ).rstrip()
+            for row in [header, *body]
+        ]
+        return "\n".join([*self.heading, "", *lines])
+
+
 class TermsPrediction(list):
     """``predict(fit, type="terms")`` for a Cox model: one row of term contributions
     per observation.

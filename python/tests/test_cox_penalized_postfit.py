@@ -62,13 +62,12 @@ def _fit(formula, data):
 
 
 def _table(result):
-    rows = list(result.rows)
     return (
-        [row.name for row in rows],
-        [row.loglik for row in rows],
-        [math.nan if row.chisq is None else row.chisq for row in rows],
-        [math.nan if row.df is None else row.df for row in rows],
-        [math.nan if row.p_value is None else row.p_value for row in rows],
+        result.row_names,
+        result.loglik,
+        result["Chisq"],
+        result["Df"],
+        result["Pr(>|Chi|)"],
     )
 
 

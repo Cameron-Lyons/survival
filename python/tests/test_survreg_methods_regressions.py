@@ -418,8 +418,8 @@ def test_anova_p_values_are_pchisq(lung):
     veteran = survival.datasets.load_veteran()
     fit = r.survreg("Surv(time, status) ~ karno + celltype + age", data=veteran)
     table = r.anova(fit)
-    assert table.df == approx([math.nan, 1.0, 3.0, 1.0])
-    assert table.p == approx(
+    assert table["Df"] == approx([math.nan, 1.0, 3.0, 1.0])
+    assert table["Pr(>Chi)"] == approx(
         [
             math.nan,
             3.1038630560756744e-11,
@@ -432,12 +432,12 @@ def test_anova_p_values_are_pchisq(lung):
     f2 = r.survreg("Surv(time, status) ~ age + sex", data=lung)
     f3 = r.survreg("Surv(time, status) ~ age + sex", data=lung, dist="lognormal")
     table = r.anova(f1, f2, f3)
-    assert table.df == approx([math.nan, 1.0, 0.0])
-    assert table.deviance == approx([math.nan, 9.6788413665326516, -23.3914223240822139])
-    assert table.p == approx([math.nan, 0.0018640213902380439, math.nan])
+    assert table["Df"] == approx([math.nan, 1.0, 0.0])
+    assert table["Deviance"] == approx([math.nan, 9.6788413665326516, -23.3914223240822139])
+    assert table["Pr(>Chi)"] == approx([math.nan, 0.0018640213902380439, math.nan])
     reversed_table = r.anova(f2, f1)
-    assert reversed_table.df == approx([math.nan, -1.0])
-    assert reversed_table.p == approx([math.nan, 0.0018640213902380439])
+    assert reversed_table["Df"] == approx([math.nan, -1.0])
+    assert reversed_table["Pr(>Chi)"] == approx([math.nan, 0.0018640213902380439])
 
 
 def test_chisq_p_values_follow_stat_anova():

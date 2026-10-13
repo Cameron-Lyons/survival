@@ -119,7 +119,8 @@ def test_as_data_frame_shapes(ovarian, fit):
     detail = r.as_data_frame(r.coxph_detail(fit))
     assert list(detail) == ["time", "nevent", "nrisk", "hazard", "varhaz", "cumhaz", "wtrisk"]
     anova = r.as_data_frame(r.anova(fit))
-    assert anova["model"] == ["NULL", "age", "factor(rx)"]
+    assert list(anova) == ["loglik", "Chisq", "Df", "Pr(>|Chi|)"]
+    assert r.anova(fit).row_names == ["NULL", "age", "factor(rx)"]
     assert math.isnan(anova["Chisq"][0])
     concordance = r.as_data_frame(r.concordance(fit))
     assert list(concordance) == [

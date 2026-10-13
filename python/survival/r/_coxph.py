@@ -104,6 +104,7 @@ from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
+    AnovaResult,
     BasehazResult,
     CoxPenaltyBasis,
     CoxphDetailResult,
@@ -2957,12 +2958,22 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxphD
     )
 
 
-def _anova_test_name(test: Any) -> str | None:
-    if test is None or test is False:
-        return None
-    if isinstance(test, str) and test.strip().lower() in {"chisq", "chi"}:
-        return "Chisq"
-    raise ValueError("test must be 'Chisq' or None")
+def _cox_anova_result(native: Any, row_names: list[str], heading: list[str]) -> AnovaResult:
+    rows = list(native.rows)
+    columns: dict[str, list[Any]] = {
+        "loglik": [float(row.loglik) for row in rows],
+        "Chisq": [math.nan if row.chisq is None else float(row.chisq) for row in rows],
+        "Df": [math.nan if row.df is None else float(row.df) for row in rows],
+    }
+    if native.test is not None:
+        columns["Pr(>|Chi|)"] = [
+            math.nan if row.p_value is None else float(row.p_value) for row in rows
+        ]
+    return AnovaResult(columns, row_names, heading)
+
+
+def _cox_response(fit: CoxphModel) -> str:
+    return fit.formula.split("~", 1)[0].strip()
 
 
 def _model_matrix_by_term(fit: CoxphModel) -> list[tuple[list[str], list[list[float]]]]:
@@ -3011,7 +3022,7 @@ def _nested_frame(fit: CoxphModel, names: list[str], columns: list[list[float]])
     )
 
 
-def _anova_single(fit: CoxphModel, test: str | None) -> Any:
+def _anova_single(fit: CoxphModel, test: Any) -> AnovaResult:
     """anova.coxph for one model.  As in R, where anova.coxph.penal is not registered,
     the leading terms of a penalized model are refitted unpenalized and the full model
     counts ``sum(fit$df)``, so a step's Df can be fractional or negative."""
@@ -3045,10 +3056,19 @@ def _anova_single(fit: CoxphModel, test: str | None) -> Any:
     if blocks:
         logliks.append(fit.loglik[1])
         dfs.append(_coxph_df(fit))
-    return _core.anova_coxph(logliks, dfs, ["NULL", *_term_labels(fit)], sequential=True, test=test)
+    names = ["NULL", *_term_labels(fit)]
+    native = _core.anova_coxph(
+        logliks, dfs, names, sequential=True, test="Chisq" if test == "Chisq" else None
+    )
+    heading = [
+        "Analysis of Deviance Table",
+        f" Cox model: response is {_cox_response(fit)}",
+        "Terms added sequentially (first to last)",
+    ]
+    return _cox_anova_result(native, names[: len(logliks)], heading)
 
 
-def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
+def _anova_list(fits: Sequence[CoxphModel], test: Any) -> AnovaResult:
     if any(fit.rscore is not None for fit in fits):
         raise ValueError("Can't do anova tables with robust variances")
     if any(fit.method != fits[0].method for fit in fits):
@@ -3070,12 +3090,29 @@ def _anova_list(fits: Sequence[CoxphModel], test: str | None) -> Any:
         return _anova_single(fits[0], test)
     logliks = [fit.loglik[-1] for fit in fits]
     dfs = [_coxph_df(fit) for fit in fits]
-    return _core.anova_coxph(logliks, dfs, None, sequential=False, test=test)
+    with_test = test is not None and test is not False
+    native = _core.anova_coxph(
+        logliks, dfs, None, sequential=False, test="Chisq" if with_test else None
+    )
+    numbers = [str(i) for i in range(1, len(fits) + 1)]
+    width = max(len(number) for number in numbers)
+    heading = [
+        "Analysis of Deviance Table",
+        f" Cox model: response is  {_cox_response(fits[0])}",
+        *(
+            f" Model {number.rjust(width)}: ~ {fit.formula.split('~', 1)[1].strip()}"
+            for number, fit in zip(numbers, fits, strict=True)
+        ),
+    ]
+    return _cox_anova_result(native, numbers, heading)
 
 
-def anova(*fits: Any, test: Any = "Chisq") -> Any:
+def anova(*fits: Any, test: Any = "Chisq") -> AnovaResult:
     """R's ``anova.coxph``: sequential terms of one model, or a list of nested
-    models (survreg fits go to ``anova_survreg``)."""
+    models (survreg fits go to ``anova_survreg``).
+
+    As in R, one model gets p-values for ``test="Chisq"`` only and a list of models for
+    any ``test`` but None."""
 
     if len(fits) == 1 and isinstance(fits[0], list | tuple):
         fits = tuple(fits[0])
@@ -3093,7 +3130,6 @@ def anova(*fits: Any, test: Any = "Chisq") -> Any:
         return anova_survreg(*fits, test=test)
     if any(not isinstance(fit, CoxphModel) for fit in fits):
         raise TypeError("All arguments must be Cox models")
-    test_name = _anova_test_name(test)
     if len(fits) == 1:
-        return _anova_single(fits[0], test_name)
-    return _anova_list(list(fits), test_name)
+        return _anova_single(fits[0], test)
+    return _anova_list(list(fits), test)
