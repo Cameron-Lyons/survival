@@ -4,7 +4,7 @@
 package.  Two test suites read them:
 
 - `python/tests/test_r_fixtures.py` calls the public Python API
-  (`survival.r_api`) with the same data and compares every recorded quantity.
+  (`survival.r`) with the same data and compares every recorded quantity.
 - `src/tests/r_fixtures.rs` (with `src/tests/r_fixtures/dataprep.rs`) does
   the same for the kernels reachable without Python: the Kaplan-Meier /
   Aalen-Johansen engines and their summaries (`survfitkm`, `survfitaj`,
@@ -217,4 +217,4 @@ quoted in progress reports.
 
 Set `R_FIXTURES_FULL_TRACEBACK=1` to get full Python tracebacks (the suite
 re-raises from the test frame by default because pytest's traceback rendering
-of the large `r_api.py` dominates the runtime otherwise).
+of the large `survival.r` modules dominates the runtime otherwise).

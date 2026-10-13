@@ -1,0 +1,18 @@
+* installing *source* package ‘survivalr’ ...
+** this is package ‘survivalr’ version ‘0.2.0’
+** using staged installation
+** libs
+using C compiler: ‘x86_64-conda-linux-gnu-cc (conda-forge gcc 16.2.0-7) 16.2.0’
+x86_64-conda-linux-gnu-cc -std=gnu23 -I"/home/cam/.cache/survival-agents/r312/lib/R/include" -DNDEBUG   -DNDEBUG -D_FORTIFY_SOURCE=2 -O2 -isystem /home/cam/.cache/survival-agents/r312/include -I/home/cam/.cache/survival-agents/r312/include -Wl,-rpath-link,/home/cam/.cache/survival-agents/r312/lib    -fpic  -march=nocona -mtune=haswell -ftree-vectorize -fPIC -fstack-protector-strong -fno-plt -O2 -ffunction-sections -pipe -fno-merge-constants -isystem /home/cam/.cache/survival-agents/r312/include -fdebug-prefix-map=/home/conda/feedstock_root/build_artifacts/r-base-split_1781522246325/work=/usr/local/src/conda/r-base-4.5.3 -fdebug-prefix-map=/home/cam/.cache/survival-agents/r312=/usr/local/src/conda-prefix  -c persistence.c -o persistence.o
+x86_64-conda-linux-gnu-cc -std=gnu23 -shared -L/home/cam/.cache/survival-agents/r312/lib/R/lib -Wl,-O2 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now -Wl,--disable-new-dtags -Wl,--gc-sections -Wl,--allow-shlib-undefined -Wl,-rpath,/home/cam/.cache/survival-agents/r312/lib -Wl,-rpath-link,/home/cam/.cache/survival-agents/r312/lib -L/home/cam/.cache/survival-agents/r312/lib -o survivalr.so persistence.o -L/home/cam/.cache/survival-agents/r312/lib/R/lib -lR
+installing to /home/cam/.cache/survival-agents/rlib-v3a/00LOCK-survivalr/00new/survivalr/libs
+** R
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+** building package indices
+** testing if installed package can be loaded from temporary location
+** checking absolute paths in shared objects and dynamic libraries
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+* DONE (survivalr)
