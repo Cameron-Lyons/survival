@@ -758,85 +758,24 @@ class _EvaluatedModelFrame(_FormulaRows):
         self.column_metadata = dict(column_metadata or {})
 
 
-class _FormulaIteratorColumn(Sequence[Any]):
-    """One call's lazy, reusable values and metadata from an iterator column."""
-
-    __slots__ = ("source", "name", "prepared", "metadata")
-
-    def __init__(
-        self, source: Iterator[Any] | None, name: str, metadata: dict[str, Any] | None = None
-    ) -> None:
-        self.source = source
-        self.name = name
-        self.prepared: Any = _MISSING
-        self.metadata = (
-            {
-                key: value
-                for key in ("dtype", "kind")
-                if (value := getattr(source, key, _MISSING)) is not _MISSING
-            }
-            if metadata is None
-            else metadata
-        )
-
-    def _values(self) -> Any:
-        if self.prepared is _MISSING:
-            if self.source is None:
-                raise ValueError(
-                    f"unused iterator column {self.name!r} is unavailable after serialization"
-                )
-            self.prepared = _rows_of(self.source, _coerce_array_like(self.source, self.name))
-        return self.prepared
-
-    def __iter__(self):
-        return iter(self._values())
-
-    def __len__(self) -> int:
-        return len(self._values())
-
-    def __getitem__(self, index: int | slice) -> Any:
-        return self._values()[index]
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("__") and name.endswith("__"):
-            raise AttributeError(name)
-        if name in self.metadata:
-            return self.metadata[name]
-        return getattr(self._values(), name)
-
-    def __reduce__(self):
-        constructor = type(self), (None, self.name, self.metadata)
-        if self.prepared is _MISSING:
-            return constructor
-        return (*constructor, self.prepared)
-
-    def __setstate__(self, prepared: Any) -> None:
-        self.prepared = prepared
-
-
 def _prepare_formula_inputs(data: Any, **row_aligned: Any) -> tuple[Any, dict[str, Any]]:
-    """Own one-shot columns/arguments together, without reading unused columns.
+    """Read one-shot iterator columns and arguments into lists, once per call.
 
-    Lazy columns survive cache/subset preparation's shallow mapping copies.
-    Memoization by iterator identity also preserves aliased columns and arguments.
+    An iterator passed as both a column and an argument is read once and shared.
     Reusable inputs keep their storage, row rules and metadata.
     """
 
-    sources = data if isinstance(data, Mapping) else {}
-    memo = {
-        id(value.source): value
-        for value in [*sources.values(), *row_aligned.values()]
-        if isinstance(value, _FormulaIteratorColumn)
-    }
+    read: dict[int, Any] = {}
 
     def owned(value: Any, name: str) -> Any:
         if not isinstance(value, Iterator):
             return value
         key = id(value)
-        if key not in memo:
-            memo[key] = _FormulaIteratorColumn(value, name)
-        return memo[key]
+        if key not in read:
+            read[key] = _rows_of(value, _coerce_array_like(value, name))
+        return read[key]
 
+    sources = data if isinstance(data, Mapping) else {}
     replacements = {
         name: owned(value, str(name))
         for name, value in sources.items()
@@ -1387,12 +1326,7 @@ def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray,
     if isinstance(source, _core.TcutResult) or (values and isinstance(values[0], list | tuple)):
         return _rows_of(source, [None if row < 0 else values[row] for row in rows])
     vector = _expression_source(source, name)
-    if (
-        vector.kind in {"logical", "factor"}
-        or isinstance(source, _ExpressionVector)
-        or isinstance(source, _FormulaIteratorColumn)
-        and source.metadata
-    ):
+    if vector.kind in {"logical", "factor"} or isinstance(source, _ExpressionVector):
         return vector.take(rows)
     return _rows_of(source, [None if row < 0 else values[row] for row in rows])
 
@@ -1547,10 +1481,6 @@ def _apply_formula_na_action(
     data = _with_strata_cache(data, _strata_specs(terms), n)
     data = _with_evaluated_variables(data, _frame_variables(terms), n)
     if action == "pass":
-        for name in _formula_columns(formula, data):
-            source = _column_source(data, name)
-            if isinstance(source, _FormulaIteratorColumn) and len(source) != n:
-                raise ValueError(f"variable lengths differ (found for '{name}')")
         return data, row_aligned, []
 
     normalized = response_spec is not None and response_spec.surv and not response_spec.timeline
@@ -3130,6 +3060,7 @@ def model_frame(
         raise ValueError("extra columns must not be named like a model.frame argument")
     data, supplied = _prepare_formula_inputs(
         data,
+        subset=subset,
         weights=weights,
         offset=offset,
         id=id,
@@ -3137,6 +3068,7 @@ def model_frame(
         istate=istate,
         **dict(extra or {}),
     )
+    subset = supplied.pop("subset")
     if extra is not None:
         extra = {str(name): supplied[str(name)] for name in extra}
     action = _normalize_na_action(na_action)

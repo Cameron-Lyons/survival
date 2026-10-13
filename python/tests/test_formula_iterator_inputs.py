@@ -1,4 +1,8 @@
-"""Formula one-shot columns retain independent stock-R fitting and row selection."""
+"""Formula one-shot columns give stock R's fits and row selection.
+
+Iterator columns and arguments are read into lists when a function is called, whether
+or not the formula uses them.
+"""
 
 import copy
 import json
@@ -38,16 +42,8 @@ class ColumnIterator:
         return value
 
 
-class UnusedIterator:
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        raise AssertionError("an unused formula column was consumed")
-
-
 def layout_columns(specs, layout):
-    columns = {"unused": UnusedIterator()}
+    columns = {"unused": iter([8.0])}
     for key, spec in specs.items():
         values = copy.deepcopy(spec["values"])
         if layout in {"iterator", "generator"}:
@@ -313,37 +309,6 @@ def test_prediction_newdata_columns_and_shared_collapse_match_stock(case, layout
             assert len(column.consumed) in {0, len(specs[name]["values"])}
 
 
-@pytest.mark.parametrize("routine", ["coxph", "survreg"])
-@pytest.mark.parametrize("retained", [False, True])
-@pytest.mark.parametrize("copy_method", ["pickle", "deepcopy", "copy"])
-def test_formula_iterator_fits_serialize_without_reading_unused_columns(
-    routine, retained, copy_method
-):
-    case = next(
-        case for case in REFERENCE["cases"] if case["name"] == f"{routine}/complete/all/omit"
-    )
-    data = data_columns("complete", "iterator")
-    fit = getattr(r, routine)(case["formula"], data, weights="wt", model=retained, x=True)
-    if copy_method == "pickle":
-        restored = pickle.loads(pickle.dumps(fit))
-    else:
-        restored = getattr(copy, copy_method)(fit)
-    check_result(case, restored, with_frame=retained or routine == "coxph")
-    prediction = next(
-        case
-        for case in REFERENCE["prediction_cases"]
-        if case["name"] == f"{routine}/complete/pass/lp/FALSE"
-    )
-    newdata = layout_columns(REFERENCE["prediction_inputs"]["complete"], "iterator")
-    assert_values(r.predict(restored, newdata, type="lp"), prediction["result"])
-    for name, column in data.items():
-        if isinstance(column, ColumnIterator):
-            assert len(column.consumed) in {
-                0,
-                len(REFERENCE["inputs"]["complete"][name]["values"]),
-            }
-
-
 @pytest.mark.parametrize("case", REFERENCE["special_cases"], ids=lambda case: case["name"])
 @pytest.mark.parametrize("retained", [False, True])
 @pytest.mark.parametrize("copy_method", ["pickle", "deepcopy", "copy"])
@@ -353,7 +318,7 @@ def test_typed_and_formally_removed_iterator_columns_survive_subset_and_serializ
     specs = REFERENCE["special_inputs"][case["input"]]
     data = layout_columns(specs, "iterator")
     if case["input"] == "typed_double":
-        data["x"].dtype = np.dtype("float64")
+        data["x"] = ColumnIterator([float(value) for value in specs["x"]["values"]])
     fit = r.coxph(
         case["formula"],
         data,

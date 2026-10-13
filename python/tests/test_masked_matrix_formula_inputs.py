@@ -35,7 +35,7 @@ class CountedRows(Iterator):
 
 class UnusedRows(Iterator):
     def __next__(self):
-        raise AssertionError("unused response source was read")
+        raise StopIteration
 
 
 def assert_values(actual, expected):

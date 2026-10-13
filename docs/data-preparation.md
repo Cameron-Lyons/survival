@@ -42,8 +42,8 @@ assert frame["tstop"] == [10.0, 20.0]
   the same values, including a first event's time vector, which defines the
   subject's range before its event is placed.
 - All `data1` columns are kept and must have equal lengths. Only referenced
-  `data2` columns are read; unrelated columns may be unavailable or have another
-  length. Each used time or value column must match the ids. For mappings, the ids
+  `data2` columns are used; unrelated columns may have another length (one-shot
+  iterators among them are still read). Each used time or value column must match the ids. For mappings, the ids
   set the update row count; for a data frame, a direct id vector must also match
   its row count.
 - Declared factor levels determine censor values even when the first level does

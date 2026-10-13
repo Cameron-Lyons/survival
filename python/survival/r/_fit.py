@@ -730,6 +730,7 @@ def _model_frame(
         raise ValueError("a data argument is required with a formula")
     data, supplied = _prepare_formula_inputs(
         data,
+        subset=subset,
         **{
             "weights": weights,
             "offset": offset,
@@ -740,6 +741,7 @@ def _model_frame(
             **dict(extra or {}),
         },
     )
+    subset = supplied.pop("subset")
     full_data = data
     aligned = {name: _column_or_values(data, value, name) for name, value in supplied.items()}
     if subset is not None:

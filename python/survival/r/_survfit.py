@@ -245,7 +245,8 @@ def _formula_model_frame(
     timeline data (a ``Surv2`` response) is converted before the ``na.action``, as
     survfit.R does."""
 
-    data, extras = _prepare_formula_inputs(data, **extras)
+    data, extras = _prepare_formula_inputs(data, subset=subset, **extras)
+    subset = extras.pop("subset")
     response_name = _formula_response_spec(formula).name
     extras = {
         name: _column_source(data, values) if isinstance(values, str) else values

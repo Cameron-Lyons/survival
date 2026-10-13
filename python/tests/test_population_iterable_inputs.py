@@ -218,10 +218,6 @@ def test_population_complete_outputs_match_stock_r(case, layout, retention, cox)
     assert_result(fit, case, retention)
     for source in counted.values():
         assert len(source.seen) in {0, len(source.values)}
-    if "unused" in counted:
-        assert counted["unused"].seen == []
-    if case["formula"].startswith("~") and "time" in counted:
-        assert counted["time"].seen == []
 
 
 @pytest.mark.parametrize("function_name", ["pyears", "survexp"])
@@ -267,10 +263,9 @@ def test_direct_pyears_named_response_reuses_original_rate_and_weight_sources(la
     assert_result(fit, direct_case, "xy")
     if counted:
         assert counted["time"].seen == counted["time"].values
-        assert counted["unused"].seen == []
 
 
-def test_cox_prediction_mapping_keeps_unused_iterators_unread(cox):
+def test_cox_prediction_mapping_reads_and_ignores_unused_iterators(cox):
     data = {
         "time": [2, 3, 4],
         "grp": ["a", "b", "a"],
@@ -279,7 +274,7 @@ def test_cox_prediction_mapping_keeps_unused_iterators_unread(cox):
     }
     output = r.survexp("time ~ grp", data, ratetable=cox, rmap={"z": "score + 1"}, times=[2, 5])
     assert output.n == 3
-    assert data["unused"].seen == []
+    assert data["unused"].seen == ["never", "read"]
 
 
 @pytest.mark.parametrize(
@@ -294,8 +289,6 @@ def test_response_free_population_calls_ignore_first_unused_column(case_name, co
     }
     fit = r.survexp(case["formula"], data, model=True, **options(case, cox))
     assert_result(fit, case, "model")
-    assert counted["unused"].seen == []
-    assert counted["time"].seen == []
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -326,8 +319,6 @@ def test_direct_survexp_vectors_match_complete_stock_formula_outputs(
     for name in ("time", "age_days", "sex", "entry"):
         if name in counted:
             assert len(counted[name].seen) == len(counted[name].values)
-    if "unused" in counted:
-        assert counted["unused"].seen == []
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -351,7 +342,6 @@ def test_one_iterator_aliased_across_direct_response_weight_and_rate_mapping(mis
     }
     assert_result(fit, direct_case, "xy")
     assert len(counted["time"].seen) == len(counted["time"].values)
-    assert counted["unused"].seen == []
 
 
 def test_retained_population_outputs_do_not_own_reusable_input_storage(cox):
@@ -379,7 +369,6 @@ def test_scalar_only_rate_map_does_not_get_rows_from_unused_mapping_data():
             rmap={"age": 2, "sex": "male"},
             times=[0, 2],
         )
-    assert unused.seen == []
 
 
 MATRIX_CASES = [case for case in REFERENCE["cases"] if case["formula"].startswith("Y_")]
@@ -456,6 +445,5 @@ def test_scalar_rate_maps_expand_to_stock_weight_rows(case, layout):
         assert_component(getattr(fit, name), expected[name])
     assert fit.method == expected["method"]
     assert fit.n == len(case["weights"])
-    assert unused.seen == []
     if layout == "iterator":
         assert weights.seen == case["weights"]

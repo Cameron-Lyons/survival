@@ -1066,7 +1066,7 @@ def _population_match_summary(table: RateTable, positions: list[list[float]]) ->
 def _prepare_population_inputs(
     data: Any, rmap: Mapping[str, Any] | None, **row_aligned: Any
 ) -> tuple[Any, Mapping[str, Any] | None, dict[str, Any]]:
-    """Share lazy ownership across data, direct arguments and rate mappings."""
+    """Read one-shot data, direct arguments and rate mappings once, together."""
 
     entries = list(rmap.items()) if isinstance(rmap, Mapping) else []
     mapped = {
