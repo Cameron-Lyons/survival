@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import chain
 from operator import index
@@ -437,10 +437,11 @@ def survreg_control(
     debug: Any = 0,
     outer_max: Any = 10,
     **dotted: Any,
-) -> Any:
+) -> SurvregControlResult:
     """R's ``survreg.control`` (``max_iter``/``eps``/``tol_chol`` are accepted aliases);
     ``outer.max`` bounds the outer iterations of a penalized fit and must be at least 1
-    (R does not check it), ``debug`` is accepted and unused as in R."""
+    (R does not check it), ``debug`` is accepted and unused as in R.  The result reads
+    like R's list: ``control["iter.max"]``, ``control["rel.tolerance"]``, ...."""
 
     for alias in ("rel.tolerance", "eps"):
         rel_tolerance = _pop_dotted_keyword(dotted, alias, "rel_tolerance", rel_tolerance, 1e-9)
@@ -457,22 +458,74 @@ def survreg_control(
     outer = _integer_scalar(outer_max, "outer.max")
     if outer < 1:
         raise ValueError("invalid value for outer.max")
-    return _core.SurvregControl(
+    native = _core.SurvregControl(
         iter_max=iterations,
         rel_tolerance=_finite_float(rel_tolerance, "rel.tolerance"),
         toler_chol=_finite_float(toler_chol, "toler.chol"),
         outer_max=outer,
     )
+    return SurvregControlResult(native, debug)
 
 
-def _resolve_control(control: Any | None, options: dict[str, Any]) -> Any:
+@dataclass(frozen=True)
+class SurvregControlResult(Mapping[str, Any]):
+    """R's ``survreg.control`` list: a read-only mapping with R's keys ``iter.max``,
+    ``rel.tolerance``, ``toler.chol``, ``debug``, ``maxiter`` and ``outer.max``, and the
+    same values as attributes.  ``control`` is the engine's ``SurvregControl``."""
+
+    control: _core.SurvregControl
+    debug: Any = 0
+
+    @property
+    def iter_max(self) -> int:
+        return int(self.control.iter_max)
+
+    @property
+    def maxiter(self) -> int:
+        return int(self.control.iter_max)
+
+    @property
+    def rel_tolerance(self) -> float:
+        return float(self.control.rel_tolerance)
+
+    @property
+    def toler_chol(self) -> float:
+        return float(self.control.toler_chol)
+
+    @property
+    def outer_max(self) -> int:
+        return int(self.control.outer_max)
+
+    def _values(self) -> dict[str, Any]:
+        return {
+            "iter.max": self.iter_max,
+            "rel.tolerance": self.rel_tolerance,
+            "toler.chol": self.toler_chol,
+            "debug": self.debug,
+            "maxiter": self.maxiter,
+            "outer.max": self.outer_max,
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values())
+
+    def __len__(self) -> int:
+        return 6
+
+
+def _resolve_control(control: Any | None, options: dict[str, Any]) -> _core.SurvregControl:
     if control is None:
-        return survreg_control(**options)
+        return survreg_control(**options).control
     if options:
         raise TypeError(f"unused argument(s) with control: {', '.join(sorted(options))}")
     if isinstance(control, _core.SurvregControl):
         return control
-    return survreg_control(**_control_mapping(control, "control"))
+    if isinstance(control, SurvregControlResult):
+        return control.control
+    return survreg_control(**_control_mapping(control, "control")).control
 
 
 @dataclass(frozen=True)
