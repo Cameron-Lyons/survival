@@ -397,7 +397,7 @@ fn shove_boundary_knots(knots: &mut [f64], low: f64, high: f64) -> SurvivalResul
     Ok(())
 }
 
-fn quantile_type7(sorted: &[f64], probability: f64) -> f64 {
+pub(crate) fn quantile_type7(sorted: &[f64], probability: f64) -> f64 {
     let n = sorted.len();
     let fuzz = 4.0 * f64::EPSILON;
     let nppm = 1.0 + probability * (n as f64 - 1.0);

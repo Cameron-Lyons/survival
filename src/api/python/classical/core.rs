@@ -47,6 +47,46 @@ fn pspline_basis_py(
     )?)
 }
 
+#[doc = " R's `ns(x, df, knots, intercept, Boundary.knots)` natural spline basis."]
+#[pyfunction(name = "ns_basis")]
+#[pyo3(signature = (x, df=None, knots=None, intercept=false, boundary_knots=None))]
+fn ns_basis_py(
+    x: Vec<f64>,
+    df: Option<usize>,
+    knots: Option<Vec<f64>>,
+    intercept: bool,
+    boundary_knots: Option<(f64, f64)>,
+) -> PyResult<crate::core::SplineBasisResult> {
+    Ok(crate::core::ns_basis(
+        &x,
+        df,
+        knots.as_deref(),
+        intercept,
+        boundary_knots,
+    )?)
+}
+
+#[doc = " R's `bs(x, df, knots, degree, intercept, Boundary.knots)` B-spline basis."]
+#[pyfunction(name = "bs_basis")]
+#[pyo3(signature = (x, df=None, knots=None, degree=3, intercept=false, boundary_knots=None))]
+fn bs_basis_py(
+    x: Vec<f64>,
+    df: Option<usize>,
+    knots: Option<Vec<f64>>,
+    degree: usize,
+    intercept: bool,
+    boundary_knots: Option<(f64, f64)>,
+) -> PyResult<crate::core::SplineBasisResult> {
+    Ok(crate::core::bs_basis(
+        &x,
+        df,
+        knots.as_deref(),
+        degree,
+        intercept,
+        boundary_knots,
+    )?)
+}
+
 #[doc = " Rebuilds an object pickled by its class's `__reduce__` from the class"]
 #[doc = " and the state `internal::pickle` encoded."]
 #[pyfunction(name = "_unpickle")]
@@ -119,6 +159,8 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cipoisson_py, m)?)?;
     m.add_function(wrap_pyfunction!(pchisq_py, m)?)?;
     m.add_function(wrap_pyfunction!(pspline_basis_py, m)?)?;
+    m.add_function(wrap_pyfunction!(ns_basis_py, m)?)?;
+    m.add_function(wrap_pyfunction!(bs_basis_py, m)?)?;
     m.add_function(wrap_pyfunction!(agexact_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_py, m)?)?;
     m.add_function(wrap_pyfunction!(cox_zph_smooth_py, m)?)?;

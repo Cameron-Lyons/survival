@@ -46,6 +46,10 @@
   `log1p()`, `expm1()`, `log2()`, `log10()`, `as.character()`, `as.integer()`,
   `as.logical()`, `is.na()`, `c()` and `%in%`, in models, curves, tests and
   predictions, with R's argument matching and result types.
+- Formula terms accept the bases `ns()`, `bs()`, `poly()` and `nsk()` and
+  `scale()`. Knots come from the full data column, as in `model.frame`, and new
+  data reuse the fitted basis, as R's `makepredictcall` arranges.
+  `survival.core.ns_basis` and `bs_basis` compute R's `ns` and `bs` directly.
 - `survival.r.Factor`, R's `factor()`: a list of labels that carries its levels.
 - `subset(strata=, states=)` and `dim` on ordinary and multi-state `survfit`
   curves (R's `fit[...]`).

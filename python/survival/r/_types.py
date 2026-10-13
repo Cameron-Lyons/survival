@@ -185,6 +185,10 @@ class _PenaltyDesignTerm:
     controller_history: Callable[[], Any] | None = None
     matrix_names: tuple[str, ...] = ()
     contrast_metadata: dict[str, Any] | None = None
+    basis: str | None = None
+    knots: tuple[float, ...] = ()
+    coefs: tuple[tuple[float, ...], tuple[float, ...]] | None = None
+    raw: bool = False
 
     @property
     def penalized(self) -> bool:
@@ -193,7 +197,10 @@ class _PenaltyDesignTerm:
 
     @property
     def kind(self) -> str:
-        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``."""
+        """The penalty function: ``"ridge"``, ``"pspline"`` or ``"frailty"``, or the
+        basis function ``"ns"``, ``"bs"``, ``"poly"`` or ``"nsk"`` of an unpenalized term."""
+        if self.basis is not None:
+            return self.basis
         return self.penalty.kind if self.penalized else "pspline"
 
 
