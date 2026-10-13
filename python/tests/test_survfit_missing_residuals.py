@@ -60,7 +60,7 @@ def test_survfit_missing_residual_rows_match_r(case):
     fit = fitted(case["dataset"], case["na_action"])
     assert fit.na_action == r.NaAction(tuple(case["na_rows"]), case["na_action"][3:])
     options = {"times": case["times"], "type": case["type"], "collapse": case["collapse"]}
-    result = r.survfit_residuals(fit, **options)
+    result = r.residuals_survfit(fit, **options)
     actual = np.asarray(result.resid)
     expected = expected_array(case["residual"])
     if actual.ndim == 3 and expected.ndim == 2:
@@ -70,7 +70,7 @@ def test_survfit_missing_residual_rows_match_r(case):
     row_names = case["residual"]["row_names"]
     if row_names is not None:
         assert [str(value) for value in result.id] == row_names
-    assert_frame(r.survfit_residuals(fit, data_frame=True, **options), case["residual_frame"])
+    assert_frame(r.residuals_survfit(fit, data_frame=True, **options), case["residual_frame"])
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -95,11 +95,11 @@ def test_bare_response_missing_rows_follow_formula_and_survive_survfit0(multista
         timefix=False,
     )
     assert bare.na_action == fit.na_action == r.NaAction((2, 6), action[3:])
-    expected = r.survfit_residuals(fit, times=[2.5, 6.5])
+    expected = r.residuals_survfit(fit, times=[2.5, 6.5])
     restored = pickle.loads(pickle.dumps(bare))
     for transformed in (bare, r.survfit0(bare), copy.deepcopy(bare), restored):
         assert transformed.na_action == bare.na_action
-        actual = r.survfit_residuals(transformed, times=[2.5, 6.5])
+        actual = r.residuals_survfit(transformed, times=[2.5, 6.5])
         assert actual.id == ([1, 3, 4, 5, 7, 8] if action == "na.omit" else list(range(1, 9)))
         np.testing.assert_allclose(actual.resid, expected.resid, rtol=0, atol=0)
         np.testing.assert_allclose(actual.curve, expected.curve, rtol=0, atol=0)
@@ -116,18 +116,18 @@ def test_subset_missing_positions_are_relative_to_selected_rows():
         timefix=False,
     )
     assert fit.na_action == r.NaAction((2, 5), "exclude")
-    result = r.survfit_residuals(fit, times=[2.5])
+    result = r.residuals_survfit(fit, times=[2.5])
     assert result.id == list(range(1, 7))
     np.testing.assert_array_equal(
         np.isnan(np.asarray(result.resid)[:, 0]), [False, True, False, False, True, False]
     )
-    frame = r.survfit_residuals(fit, times=[2.5], data_frame=True)
+    frame = r.residuals_survfit(fit, times=[2.5], data_frame=True)
     assert frame["(id)"] == [1, 3, 4, 6]
 
 
 def test_restored_multistate_missing_rows_keep_independent_state_time_dimensions():
     fit = fitted("aj_right", "na.exclude")
-    residual = r.survfit_residuals(fit, times=[2.5, 6.5])
+    residual = r.residuals_survfit(fit, times=[2.5, 6.5])
     assert np.shape(residual.resid) == (8, 3, 2)
     assert np.isnan(residual.resid[1]).all()
     assert np.isnan(residual.resid[5]).all()

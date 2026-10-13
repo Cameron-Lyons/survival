@@ -25,7 +25,7 @@ def _group_fit():
 
 
 def test_residuals_survfit_matches_r_pstate_and_cumhaz():
-    result = r.survfit_residuals(_group_fit(), times=[5, 2])
+    result = r.residuals_survfit(_group_fit(), times=[5, 2])
 
     assert isinstance(result, r.SurvfitResidualsResult)
     assert result.time == [2.0, 5.0]
@@ -35,7 +35,7 @@ def test_residuals_survfit_matches_r_pstate_and_cumhaz():
     assert result.id_name is None
     _close([row[0] for row in result.resid], [-0.125, -0.125, 0.125, 0.125, 0, 0, 0, 0])
     _close([row[1] for row in result.resid], [0] * 8)
-    cumhaz = r.survfit_residuals(_group_fit(), times=[2, 5], type="chaz")
+    cumhaz = r.residuals_survfit(_group_fit(), times=[2, 5], type="chaz")
     _close(
         [row[0] for row in cumhaz.resid],
         [0.1875, 0.159722222222222, -0.173611111111111, -0.173611111111111, 0, 0, 0, 0],
@@ -47,11 +47,11 @@ def test_residuals_survfit_collapse_and_weights_follow_r_rules():
     data["id"] = [1, 1, 2, 2, 3, 3, 4, 4]
     fit = r.survfit("Surv(time, status) ~ group", data, id="id", weights=[1, 2, 1, 2, 1, 2, 1, 2])
 
-    collapsed = r.survfit_residuals(fit, times=[2], collapse=True)
+    collapsed = r.residuals_survfit(fit, times=[2], collapse=True)
     assert collapsed.id == [1, 2, 3, 4]
     assert collapsed.curve == [1, 1, 2, 2]
     assert collapsed.id_name == "id"
-    per_row = r.survfit_residuals(fit, times=[2], weighted=True)
+    per_row = r.residuals_survfit(fit, times=[2], weighted=True)
     _close(
         [row[0] for row in collapsed.resid],
         [
@@ -62,8 +62,8 @@ def test_residuals_survfit_collapse_and_weights_follow_r_rules():
         ],
     )
     with pytest.raises(ValueError, match="collapse=TRUE and weighted=FALSE"):
-        r.survfit_residuals(fit, times=[2], collapse=True, weighted=False)
-    plain = r.survfit_residuals(_group_fit(), times=[2], collapse=True)
+        r.residuals_survfit(fit, times=[2], collapse=True, weighted=False)
+    plain = r.residuals_survfit(_group_fit(), times=[2], collapse=True)
     assert len(plain.id) == 8
 
 
@@ -77,19 +77,19 @@ def test_residuals_survfit_collapse_without_weights_matches_r():
     }
     fit = r.survfit("Surv(t1, t2, st) ~ g", data, id="id")
 
-    collapsed = r.survfit_residuals(fit, times=[2, 5], collapse=True)
+    collapsed = r.residuals_survfit(fit, times=[2, 5], collapse=True)
     assert collapsed.id == [1, 2, 3, 4]
     assert collapsed.curve == [1, 1, 2, 2]
     assert collapsed.id_name == "id"
     expected = [[0.25, 0.0], [-0.25, 0.0], [0.0, -0.25], [0.0, 0.25]]
     for row, want in zip(collapsed.resid, expected, strict=True):
         _close(row, want)
-    explicit = r.survfit_residuals(fit, times=[2, 5], collapse=True, weighted=True)
+    explicit = r.residuals_survfit(fit, times=[2, 5], collapse=True, weighted=True)
     assert explicit.resid == collapsed.resid
-    cumhaz = r.survfit_residuals(fit, times=[2, 5], collapse=True, type="cumhaz")
+    cumhaz = r.residuals_survfit(fit, times=[2, 5], collapse=True, type="cumhaz")
     for row, want in zip(cumhaz.resid, [[-0.25, 0], [0.25, 0], [0, 0.25], [0, -0.25]], strict=True):
         _close(row, want)
-    per_row = r.survfit_residuals(fit, times=[2, 5])
+    per_row = r.residuals_survfit(fit, times=[2, 5])
     assert per_row.id == [1, 1, 2, 2, 3, 3, 4, 4]
     _close([row[0] for row in per_row.resid], [0, 0.25, -0.25, 0, 0, 0, 0, 0])
 
@@ -101,7 +101,7 @@ def test_residuals_survfit_collapse_without_weights_matches_r():
             ["b", "a", "b", "censor", "b", "censor", "a"], ["censor", "a", "b"]
         ),
     }
-    multi = r.survfit_residuals(
+    multi = r.residuals_survfit(
         r.survfit("Surv(t1, t2, ev) ~ 1", states, id="id"), times=[2, 4], collapse=True
     )
     assert multi.id == [1, 2, 3, 4]
@@ -118,7 +118,7 @@ def test_residuals_survfit_collapse_without_weights_matches_r():
 
 
 def test_residuals_survfit_data_frame_layout_matches_r():
-    frame = r.survfit_residuals(_group_fit(), times=[2, 5], data_frame=True)
+    frame = r.residuals_survfit(_group_fit(), times=[2, 5], data_frame=True)
 
     assert list(frame) == ["(id)", "time", "resid", "curve"]
     assert frame["(id)"] == [1, 2, 3, 4, 5, 6, 7, 8] * 2
@@ -130,18 +130,18 @@ def test_residuals_survfit_data_frame_layout_matches_r():
 def test_residuals_survfit_argument_errors_match_r():
     fit = _group_fit()
     with pytest.raises(ValueError, match="the times argument is required"):
-        r.survfit_residuals(fit)
+        r.residuals_survfit(fit)
     with pytest.raises(ValueError, match="times must be a numeric vector"):
-        r.survfit_residuals(fit, times=["a"])
+        r.residuals_survfit(fit, times=["a"])
     with pytest.raises(ValueError, match="'type' should be one of"):
-        r.survfit_residuals(fit, times=[2], type="bogus")
+        r.residuals_survfit(fit, times=[2], type="bogus")
     with pytest.raises(ValueError, match="collapse must be TRUE/FALSE"):
-        r.survfit_residuals(fit, times=[2], collapse="yes")
+        r.residuals_survfit(fit, times=[2], collapse="yes")
     with pytest.raises(TypeError, match="argument must be a survfit object"):
-        r.survfit_residuals([1, 2], times=[2])
+        r.residuals_survfit([1, 2], times=[2])
     interval = r.survfit("Surv(l, r, type = 'interval2') ~ 1", {"l": [1, 2, None], "r": [3, 4, 2]})
     with pytest.raises(ValueError, match="residuals for interval-censored data are not available"):
-        r.survfit_residuals(interval, times=[2])
+        r.residuals_survfit(interval, times=[2])
 
 
 def test_residuals_survfit_multistate_reports_states_and_transitions():
@@ -151,7 +151,7 @@ def test_residuals_survfit_multistate_reports_states_and_transitions():
         "ev": r._coerce._r_factor(["a", "b", "censor", "a", "censor", "b"], ["censor", "a", "b"]),
     }
     fit = r.survfit("Surv(time, ev) ~ 1", data, id="id")
-    result = r.survfit_residuals(fit, times=[2, 4])
+    result = r.residuals_survfit(fit, times=[2, 4])
 
     assert result.columns == ["(s0)", "a", "b"]
     assert result.column_name == "state"
@@ -159,10 +159,10 @@ def test_residuals_survfit_multistate_reports_states_and_transitions():
     assert result.curve is None
     assert (len(result.resid), len(result.resid[0]), len(result.resid[0][0])) == (6, 3, 2)
     _close([sum(row[k][0] for row in result.resid) for k in range(3)], [0, 0, 0])
-    cumhaz = r.survfit_residuals(fit, times=[2, 4], type="cumhaz")
+    cumhaz = r.residuals_survfit(fit, times=[2, 4], type="cumhaz")
     assert cumhaz.columns == ["1:2", "1:3"]
     assert cumhaz.column_name == "transition"
-    frame = r.survfit_residuals(fit, times=[2], data_frame=True)
+    frame = r.residuals_survfit(fit, times=[2], data_frame=True)
     assert list(frame) == ["id", "state", "time", "resid"]
     assert frame["state"] == ["(s0)"] * 6 + ["a"] * 6 + ["b"] * 6
 
@@ -229,12 +229,12 @@ def _mgus2_competing_risks(n=60):
 def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
     fit = r.survfit("Surv(time, status) ~ 1", survival.datasets.load_aml(), start_time=10)
 
-    result = r.survfit_residuals(fit, times=[20, 40])
+    result = r.residuals_survfit(fit, times=[20, 40])
     assert len(result.resid) == 23
     assert result.resid[0] == [0.0, 0.0]
     _close(result.resid[1], [-0.04585537918871252, -0.01959631589261219])
     _close(result.resid[3], [-0.05322499370118418, -0.02274572380392486])
-    cumhaz = r.survfit_residuals(fit, times=[20, 40], type="cumhaz")
+    cumhaz = r.residuals_survfit(fit, times=[20, 40], type="cumhaz")
     _close(cumhaz.resid[1], [0.05227690204622154, 0.05227690204622154])
     values = r.pseudo(fit, times=[20, 40])
     _close(values[0], [0.825396825396825, 0.352733686067019])
@@ -244,7 +244,7 @@ def test_residuals_and_pseudo_of_a_start_time_fit_match_r():
     _close(r.pseudo(fit, times=[20, 40], type="rmst")[0], [9.03968253968254, 20.30599647266314])
 
     by_group = r.survfit("Surv(time, status) ~ x", survival.datasets.load_aml(), start_time=10)
-    resid = r.survfit_residuals(by_group, times=[20, 40]).resid
+    resid = r.residuals_survfit(by_group, times=[20, 40]).resid
     _close(resid[1], [-0.07875, -0.0405])
     assert resid[11] == [0.0, 0.0]
     group_values = r.pseudo(by_group, times=[20, 40])
@@ -265,7 +265,7 @@ def test_residuals_and_pseudo_refuse_a_curve_that_start_time_emptied(groups):
     emptied = "start.time has removed all the observations from at least one curve"
 
     with pytest.raises(ValueError, match=emptied):
-        r.survfit_residuals(fit, times=[6, 7])
+        r.residuals_survfit(fit, times=[6, 7])
     with pytest.raises(ValueError, match=emptied):
         r.pseudo(fit, times=[6, 7])
     with pytest.raises(ValueError, match=emptied):
@@ -277,7 +277,7 @@ def test_multistate_residuals_and_pseudo_of_a_start_time_fit_match_r():
     assert fit.n == [49]
     assert fit.start_time == 12.0
 
-    result = r.survfit_residuals(fit, times=[24, 60])
+    result = r.residuals_survfit(fit, times=[24, 60])
     assert len(result.resid) == 60
     assert result.columns == ["(s0)", "pcm", "death"]
     first = result.resid[0]
@@ -297,20 +297,20 @@ def test_ctype_2_hazard_residuals_warn_as_in_r():
     approximate = "code for ctype=2 not yet completed, result is approximate"
 
     with pytest.warns(UserWarning, match=approximate):
-        cumhaz = r.survfit_residuals(fit, times=[10, 20], type="cumhaz")
+        cumhaz = r.residuals_survfit(fit, times=[10, 20], type="cumhaz")
     _close(cumhaz.resid[1], [-0.0112852529328128, 0.0409916491134088])
     with pytest.warns(UserWarning, match=approximate):
         values = r.pseudo(fit, times=[10, 20], type="cumhaz")
     _close(values[0], [1.1901489312253064, 1.37595658762120])
     exp_cumhaz = r.survfit("Surv(time, status) ~ 1", aml, ctype=2, stype=2)
     with pytest.warns(UserWarning, match=approximate):
-        pstate = r.survfit_residuals(exp_cumhaz, times=[10, 20])
+        pstate = r.residuals_survfit(exp_cumhaz, times=[10, 20])
     _close(pstate.resid[0], [-0.03255074101112063, -0.0270312195408266])
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        pstate = r.survfit_residuals(fit, times=[10, 20])
-        auc = r.survfit_residuals(fit, times=[10, 20], type="auc")
+        pstate = r.residuals_survfit(fit, times=[10, 20])
+        auc = r.residuals_survfit(fit, times=[10, 20], type="auc")
     _close(pstate.resid[0], [-0.03383694481615816, -0.0279289068323845])
     _close(auc.resid[0], [-0.0144503652299554, -0.320325604480782])
 
@@ -322,12 +322,12 @@ def test_old_style_type_fits_use_the_default_stype_and_ctype_as_in_r():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        pstate = r.survfit_residuals(fh, times=[10, 20])
-        auc = r.survfit_residuals(fh, times=[10, 20], type="auc")
+        pstate = r.residuals_survfit(fh, times=[10, 20])
+        auc = r.residuals_survfit(fh, times=[10, 20], type="auc")
         values = r.pseudo(fh, times=[10, 20])
-        cumhaz = r.survfit_residuals(fh2, times=[10, 20], type="cumhaz")
+        cumhaz = r.residuals_survfit(fh2, times=[10, 20], type="cumhaz")
         chaz_values = r.pseudo(fh2, times=[10, 20], type="cumhaz")
-        fh2_pstate = r.survfit_residuals(fh2, times=[10, 20])
+        fh2_pstate = r.residuals_survfit(fh2, times=[10, 20])
     _close(pstate.resid[0], [-0.03437862026111806, -0.0285491513533135])
     _close(pstate.resid[1], [0.00954961673919946, -0.0285491513533135])
     _close(auc.resid[0], [-0.0153620986438052, -0.327053280062867])
@@ -347,7 +347,7 @@ def test_ctype_2_multistate_residuals_do_not_warn_as_in_r():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        cumhaz = r.survfit_residuals(fit, times=[24, 60], type="cumhaz")
+        cumhaz = r.residuals_survfit(fit, times=[24, 60], type="cumhaz")
         values = r.pseudo(fit, times=[24, 60], type="cumhaz")
     assert cumhaz.columns == ["1:2", "1:3"]
     _close(cumhaz.resid[0][0], [0.0, -0.000657462195923734])

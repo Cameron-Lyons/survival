@@ -114,6 +114,7 @@ from ._types import (
     NaAction,
     PredictResult,
     PsplineResult,
+    TermsPrediction,
     _CategoricalDesignTerm,
     _CovariateTerm,
     _DesignTerm,
@@ -1194,7 +1195,7 @@ def coxph(
     }
     control_args.update({key: kwargs.pop(key) for key in _COXPH_CONTROL_KWARGS if key in kwargs})
     if kwargs:
-        raise ValueError(f"Argument {', '.join(sorted(kwargs))} not matched")
+        raise TypeError(f"Argument {', '.join(sorted(kwargs))} not matched")
     if formula is None:
         raise TypeError("a formula argument is required")
     formulas = None
@@ -1892,8 +1893,9 @@ def predict_coxph(
 ) -> Any:
     """R's ``predict.coxph``: ``lp``, ``risk``, ``expected``, ``terms`` or ``survival``.
 
-    Returns the predictions (a list, or one row per observation for ``terms``), or a
-    :class:`PredictResult` of predictions and standard errors when ``se_fit``.  Without
+    Returns the predictions (a list, or a :class:`TermsPrediction` of one row per
+    observation for ``terms``), or a :class:`PredictResult` of predictions and standard
+    errors when ``se_fit``.  Without
     ``newdata`` a ``na.exclude`` fit's predictions are NaN at the rows it removed
     (``napredict``); ``na_action`` applies to ``newdata``, whose incomplete rows are NaN
     (``na.pass``, ``na.exclude``), dropped (``na.omit``) or refused (``na.fail``).  A
@@ -2059,17 +2061,22 @@ def predict_coxph(
     else:
         pred = _pad_rows(pred, gaps, width)
         se = None if se is None else _pad_rows(se, gaps, width)
+    terms_constant = (
+        _terms_constant(fit)
+        if predict_type == "terms"
+        and group_names is None
+        and (_sparse_term(fit) is None or (new is not None and not sparse_only))
+        and not (gaps and (new is None or action == "exclude"))
+        else None
+    )
+    if predict_type == "terms" and not as_arrays:
+        pred = TermsPrediction(pred, terms_constant)
     output = PredictResult(pred, se) if include_se else pred
     if with_row_names and group_names is None:
-        keep_terms_constant = (
-            predict_type == "terms"
-            and (_sparse_term(fit) is None or (new is not None and not sparse_only))
-            and not (gaps and (new is None or action == "exclude"))
-        )
 
         def row_result(fit_names: list[str] | None, se_names: list[str] | None) -> dict[str, Any]:
             metadata = _prediction_row_result(output, fit_names, se_names)
-            metadata["terms_constant"] = keep_terms_constant
+            metadata["terms_constant"] = terms_constant
             return metadata
 
         if new is not None and new.n == 0:
@@ -2189,14 +2196,9 @@ def _predict_terms(
     return rows, se_rows
 
 
-def predict_terms_constant(fit: CoxphModel) -> float:
-    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``.  A
-    multi-state fit has no terms prediction (predict.coxphms)."""
+def _terms_constant(fit: CoxphModel) -> float:
+    """``attr(predict(fit, type='terms'), 'constant')``: ``sum(coef * means)``."""
 
-    from ._coxphms import _PREDICT_INCOMPLETE, CoxphmsModel
-
-    if isinstance(fit, CoxphmsModel):
-        raise ValueError(_PREDICT_INCOMPLETE)
     return sum(
         coefficient * mean
         for coefficient, mean in zip(fit.coefficients, fit.means, strict=True)
@@ -2722,7 +2724,7 @@ def basehaz(fit: Any, newdata: Any | None = None, centered: Any = True) -> CoxBa
     sfit = survfit_coxph(fit, newdata, se_fit=False)
     hazard: Any = sfit.cumhaz
     if newdata is None and not _normalize_bool_option(centered, "centered"):
-        offset = _r_exp(-predict_terms_constant(fit))
+        offset = _r_exp(-_terms_constant(fit))
         hazard = [value * offset for value in hazard]
     strata = None
     if sfit.strata is not None:

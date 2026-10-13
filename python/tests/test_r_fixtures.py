@@ -1070,7 +1070,7 @@ class CoxphPredictHandler(TopicHandler):
                     result.se_fit, exp["se_fit"], rtol=RTOL_VAR, path=f"{aspect}.se_fit"
                 )
                 assert_close(
-                    r.predict_terms_constant(fit),
+                    result.fit.constant,
                     exp["constant"],
                     rtol=RTOL_COEF,
                     path=f"{aspect}.constant",
@@ -1949,7 +1949,7 @@ class PseudoHandler(TopicHandler):
         if kind == "pseudo":
             result = r.pseudo(fit, times=times, type=type_name)
         else:
-            result = r.survfit_residuals(fit, times=times, type=type_name).resid
+            result = r.residuals_survfit(fit, times=times, type=type_name).resid
         if exp and isinstance(exp[0], list) and isinstance(exp[0][0], list):
             for t, layer in enumerate(exp):
                 for subject, row in enumerate(layer):

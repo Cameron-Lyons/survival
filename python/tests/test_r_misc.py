@@ -582,11 +582,13 @@ def test_pspline_carries_r_attributes():
     assert outside.penalty is False
     assert outside.basis[0] == pytest.approx([2.0 / 3.0, -5.0 / 6.0, *([0.0] * 8)])
     same = r.pspline(
-        [0.0, 1.0, 5.0, 6.0], nterm=8, degree=3, boundary_knots=[1.0, 5.0], penalty=False
+        [0.0, 1.0, 5.0, 6.0], nterm=8, degree=3, penalty=False, **{"Boundary.knots": [1.0, 5.0]}
     )
     assert same.basis == outside.basis
     with pytest.raises(ValueError, match="only one of"):
-        r.pspline(x, Boundary_knots=[1.0, 5.0], boundary_knots=[1.0, 5.0])
+        r.pspline(x, Boundary_knots=[1.0, 5.0], **{"Boundary.knots": [1.0, 5.0]})
+    with pytest.raises(TypeError, match="boundary_knots"):
+        r.pspline(x, boundary_knots=[1.0, 5.0])
     fixed = r.pspline(x, theta=0.5)
     assert (fixed.method, fixed.theta, fixed.n_cols) == ("fixed", 0.5, 12)
     aic = r.pspline(x, df=0)

@@ -86,7 +86,6 @@
 \alias{finegray}
 \alias{survobrien}
 \alias{fromtimeline}
-\alias{totimeline}
 \alias{coxph}
 \alias{coxph.control}
 \alias{coxph.fit}
@@ -115,10 +114,8 @@
 \alias{survConcordance.fit}
 \alias{print.survConcordance}
 \alias{cox.zph}
-\alias{cox_zph}
 \alias{coxph.detail}
 \alias{coxph.wtest}
-\alias{coxph_detail}
 \alias{yates}
 \alias{yates_setup}
 \alias{yates_setup.coxph}
@@ -697,8 +694,6 @@ tmerge(data1, data2, id, ..., tstart, tstop, options)
 
 \method{summary}{tmerge}(object, ...)
 
-totimeline(formula, data, id, istate)
-
 royston(fit, newdata, ties = TRUE, adjust = FALSE)
 
 survcheck(formula, data = NULL, subset = NULL, na.action = na.pass,
@@ -785,13 +780,9 @@ survConcordance.fit(y, x, strata, weight)
 cox.zph(fit, transform = "km", terms = TRUE, singledf = FALSE,
   global = TRUE, ...)
 
-cox_zph(fit, ...)
-
 coxph.detail(object, riskmat = FALSE, rorder = c("data", "time"), ...)
 
 coxph.wtest(var, b, toler.chol = 1e-09)
-
-coxph_detail(object, ...)
 
 coxsurv.fit(ctype, stype, se.fit, varmat, cluster, y, x, wt,
   risk, position, strata, oldid, y2, x2, risk2, strata2,

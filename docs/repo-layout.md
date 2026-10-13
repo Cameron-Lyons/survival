@@ -219,7 +219,7 @@ imports from the ones above it):
 - `_coxph`: `coxph`/`clogit`, Cox tests, `basehaz`, `cox_zph`, `anova`, Cox
   curves and expected events
 - `_survfit`: KM/AJ/Turnbull/Cox curves, `survfit0`, aggregation, confint,
-  influence; `_survfit_residuals`: `survfit_residuals` and `pseudo`
+  influence; `_survfit_residuals`: `residuals_survfit` and `pseudo`
 - `_survreg`: `survreg` fitting, prediction/residual helpers, d/p/q/rsurvreg
 - `_models`: generics (`predict`, `residuals`, `coef`, `vcov`, `confint`,
   `model_summary`, `as_data_frame`, ...)

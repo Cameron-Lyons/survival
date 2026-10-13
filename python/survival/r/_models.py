@@ -49,7 +49,6 @@ from ._coxph import (
     residuals_coxph,
     summary_coxph,
 )
-from ._coxph import predict_terms_constant as predict_terms_constant
 from ._coxphms import CoxphmsModel, coef_coxphms, vcov_coxphms
 from ._data_prep import aeqSurv, summary_tmerge
 from ._finegray import _finegray_frame
@@ -95,7 +94,7 @@ from ._survfit import (
     summary_survfit,
 )
 from ._survfit_print import SurvfitPrint
-from ._survfit_residuals import survfit_residuals
+from ._survfit_residuals import residuals_survfit
 from ._survpenal_print import SurvregPenalPrint
 from ._survreg import (
     SurvregAnovaResult,
@@ -765,7 +764,7 @@ def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
 def residuals(fit: Any, **kwargs: Any) -> Any:
     """``residuals``: see :func:`survival.r._coxph.residuals_coxph`,
     :func:`survival.r._survreg.residuals_survreg` and
-    :func:`survival.r._survfit_residuals.survfit_residuals`; without ``type`` each
+    :func:`survival.r._survfit_residuals.residuals_survfit`; without ``type`` each
     method uses its own default (martingale for Cox models, response for survreg,
     pstate for survival curves)."""
 
@@ -774,7 +773,7 @@ def residuals(fit: Any, **kwargs: Any) -> Any:
 
 residuals.register(CoxphModel, residuals_coxph)
 residuals.register(SurvregModelResult, residuals_survreg)
-residuals.register(_SurvfitCurves, survfit_residuals)
+residuals.register(_SurvfitCurves, residuals_survfit)
 
 
 @residuals.register(CoxSurvfitMultiStateResult)

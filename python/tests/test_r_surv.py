@@ -200,8 +200,9 @@ def test_surv2_codes_states_and_repeated_option():
         r.Surv2([1, 2, 3], [1, 0])
 
 
-def test_totimeline_expands_counting_rows_like_r_draft():
-    result = r.totimeline(
+def test_bridge_totimeline_expands_counting_rows_like_r_draft():
+    totimeline = importlib.import_module("survival.pybridge")._totimeline
+    result = totimeline(
         [0, 3, 0],
         [3, 6, 4],
         [1, 0, 2],
@@ -212,13 +213,13 @@ def test_totimeline_expands_counting_rows_like_r_draft():
     assert result.state_levels == ["censor", "(s0)", "ill", "dead"]
     assert result.status == [1, 2, 0, 1, 3]
     assert result.data_row == [0, 1, 1, 2, 2]
-    with_istate = r.totimeline(
+    with_istate = totimeline(
         [0, 3], [3, 6], [1, 0], states=["ill"], id=[1, 1], istate=["well", "well"]
     )
     assert with_istate.state_levels == ["censor", "well", "ill"]
     assert with_istate.status == [1, 2, 0]
     with pytest.raises(ValueError, match="is not a recognized state"):
-        r.totimeline([0], [3], [1], states=["ill"], id=[1], istate=["x"], istate_levels=["y"])
+        totimeline([0], [3], [1], states=["ill"], id=[1], istate=["x"], istate_levels=["y"])
 
 
 def test_named_arguments_are_matched_first_and_positionals_fill_the_rest():

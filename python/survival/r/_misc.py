@@ -36,6 +36,7 @@ from ._coerce import (
     _select_rows,
     _materialize_labels,
     _normalize_bool_option,
+    _pop_dotted_keyword,
     _r_factor_levels,
     _scalar_or_vector,
     _subset_indices,
@@ -370,20 +371,21 @@ def pspline(
     intercept: Any = False,
     penalty: Any = True,
     combine: Any | None = None,
-    *,
-    boundary_knots: Any | None = None,
+    **kwargs: Any,
 ) -> PsplineResult:
     """The P-spline basis of R's ``pspline`` term with its penalty attributes.
 
-    ``Boundary_knots`` is R's ``Boundary.knots`` (the range of ``x`` by default); the
-    keyword ``boundary_knots`` is the same argument under the name the R bridge uses.  The
-    smoothing-parameter control functions live in the Cox fitter; ``method`` records which one
-    R would use (``fixed`` for a given ``theta``, ``aic`` for ``df = 0``, else ``df``).
+    ``Boundary_knots`` (or the dotted keyword ``Boundary.knots``) is R's
+    ``Boundary.knots``, the range of ``x`` by default.  The smoothing-parameter control
+    functions live in the Cox fitter; ``method`` records which one R would use (``fixed``
+    for a given ``theta``, ``aic`` for ``df = 0``, else ``df``).
     """
 
-    if Boundary_knots is not None and boundary_knots is not None:
-        raise ValueError("use only one of Boundary_knots or boundary_knots")
-    boundary_arg = Boundary_knots if boundary_knots is None else boundary_knots
+    boundary_arg = _pop_dotted_keyword(
+        kwargs, "Boundary.knots", "Boundary_knots", Boundary_knots, None
+    )
+    if kwargs:
+        raise TypeError(f"pspline got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     df_value, theta_value, nterm_value, eps_value, method_value = _pspline_method(
         df, theta, nterm, eps, method
     )
@@ -443,7 +445,7 @@ def predict_pspline(object: PsplineResult, newx: Any = _MISSING, **_kwargs: Any)
         newx,
         nterm=object.nterm,
         degree=object.degree,
-        boundary_knots=object.boundary_knots,
+        Boundary_knots=object.boundary_knots,
         intercept=object.intercept,
         combine=object.combine,
         penalty=False,

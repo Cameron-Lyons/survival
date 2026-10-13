@@ -303,6 +303,7 @@ _R_BRIDGE_HELPERS = {
     "_r_term_subscript": ("_coerce", "_r_term_subscript"),
     "_cox_fit_diagnostic_messages": ("_coxph", "_cox_fit_diagnostic_messages"),
     "_frailty_encoding": ("_misc", "_frailty_encoding"),
+    "_totimeline": ("_surv", "_totimeline"),
     "_survcheck_codes": ("_misc", "_survcheck_codes"),
     "_prediction_term_names": ("_models", "_prediction_term_names"),
     "_subset_coxms_curves": ("_models", "_subset_coxms_curves"),

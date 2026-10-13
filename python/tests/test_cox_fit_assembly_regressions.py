@@ -336,7 +336,7 @@ def test_toler_inf_reaches_the_convergence_warning(separated):
     )[1]
     assert ignored == [loud]
     assert _fit_quietly("Surv(t, s) ~ x + z", separated, **{"outer.max": 5})[1] == [loud]
-    with pytest.raises(ValueError, match="Argument bogus not matched"):
+    with pytest.raises(TypeError, match="Argument bogus not matched"):
         r.coxph("Surv(t, s) ~ x + z", separated, bogus=1)
 
 

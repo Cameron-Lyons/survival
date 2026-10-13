@@ -41,7 +41,7 @@ from ._coerce import (
     _warn_outside_package,
 )
 from ._surv_ops import _index_rows, _SurvivalOperations
-from ._types import _MISSING, StrataFactor, Timeline
+from ._types import _MISSING, StrataFactor, _Timeline
 
 
 def _normalize_surv_type(value: Any) -> str:
@@ -903,7 +903,7 @@ def _repeated_option(repeated: Any) -> str:
     raise ValueError("invalid value for repeated option")
 
 
-def totimeline(
+def _totimeline(
     start: Any,
     stop: Any,
     status: Any,
@@ -912,8 +912,9 @@ def totimeline(
     id: Any,
     istate: Any | None = None,
     istate_levels: Any | None = None,
-) -> Timeline:
-    """R's ``totimeline`` (draft): counting-process rows to timeline rows.
+) -> _Timeline:
+    """R's unexported ``totimeline`` draft, for the R bridge: counting-process rows
+    to timeline rows.
 
     Rows of a subject must be consecutive and in time order.  ``status`` holds the
     ``Surv`` codes, ``states`` the response states, and ``istate`` (with its
@@ -959,7 +960,7 @@ def totimeline(
         istate_codes,
     )
     censor = "(censor)" if "censor" in check_states else "censor"
-    return Timeline(
+    return _Timeline(
         time=list(result.time),
         status=list(result.state),
         data_row=list(result.covariate_row),

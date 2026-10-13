@@ -19,8 +19,6 @@ REFERENCE = json.loads(
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda c: c["name"])
 def test_pspline_prediction_keeps_training_basis_and_matches_r(case):
     options = dict(case["options"])
-    if "Boundary.knots" in options:
-        options["boundary_knots"] = options.pop("Boundary.knots")
     original = r.pspline(REFERENCE["x"], **options)
     assert original.dmat == case["dmat"]
     assert case["omitted_identical"]

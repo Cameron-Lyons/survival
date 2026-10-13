@@ -314,6 +314,9 @@ from .r import (
     residuals as residuals,
 )
 from .r import (
+    residuals_survfit as residuals_survfit,
+)
+from .r import (
     rev_surv as rev_surv,
 )
 from .r import (
@@ -389,9 +392,6 @@ from .r import (
     survfit_confint as survfit_confint,
 )
 from .r import (
-    survfit_residuals as survfit_residuals,
-)
-from .r import (
     survobrien as survobrien,
 )
 from .r import (
@@ -420,9 +420,6 @@ from .r import (
 )
 from .r import (
     tmerge as tmerge,
-)
-from .r import (
-    totimeline as totimeline,
 )
 from .r import (
     transpose_surv as transpose_surv,

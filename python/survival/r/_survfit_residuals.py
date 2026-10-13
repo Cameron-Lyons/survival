@@ -247,7 +247,7 @@ def _residual_frame(result: SurvfitResidualsResult) -> dict[str, list[Any]]:
     return frame
 
 
-def survfit_residuals(
+def residuals_survfit(
     object: Any,
     times: Any | None = None,
     type: str = "pstate",
@@ -272,7 +272,7 @@ def survfit_residuals(
     data_frame = _pop_dotted_keyword(kwargs, "data.frame", "data_frame", data_frame, False)
     if kwargs:
         unexpected = ", ".join(sorted(kwargs))
-        raise TypeError(f"survfit_residuals got unexpected keyword argument(s): {unexpected}")
+        raise TypeError(f"residuals_survfit got unexpected keyword argument(s): {unexpected}")
     fit = _check_survfit_object(object)
     collapse = _logical(collapse, "collapse")
     weighted = collapse if weighted is None else _logical(weighted, "weighted")

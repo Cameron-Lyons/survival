@@ -199,8 +199,6 @@ def test_predict_refusals(fa1, fst):
     for type_ in ("expected", "survival", "terms"):
         with pytest.raises(ValueError, match=incomplete):
             r.predict(fa1, type=type_)
-    with pytest.raises(ValueError, match=incomplete):
-        r.predict_terms_constant(fa1)
     for call in (lambda: r.predict(fst), lambda: r.predict(fa1, reference="strata")):
         with pytest.raises(ValueError, match="strata reference unfinished"):
             call()

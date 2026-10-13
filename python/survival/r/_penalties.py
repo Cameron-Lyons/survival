@@ -375,7 +375,7 @@ def _fit_pspline(
     ``combine`` sums basis columns and ``penalty = FALSE`` leaves an ordinary matrix term."""
 
     degree = _integer_scalar(kwargs.pop("degree", 3), "degree")
-    boundary = kwargs.pop("Boundary.knots", kwargs.pop("boundary_knots", None))
+    boundary = kwargs.pop("Boundary.knots", None)
     combine = kwargs.pop("combine", None)
     penalized = _normalize_bool_option(kwargs.pop("penalty", True), "penalty")
     intercept = _normalize_bool_option(kwargs.pop("intercept", False), "intercept")

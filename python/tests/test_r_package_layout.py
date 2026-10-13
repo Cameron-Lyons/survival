@@ -95,7 +95,6 @@ def test_r_bridge_exports_core_survival_entry_points():
         "survreg.control",
         "survreg.distributions",
         "survregDtest",
-        "totimeline",
         "dsurvreg",
         "psurvreg",
         "qsurvreg",
