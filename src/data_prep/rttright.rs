@@ -19,7 +19,7 @@ pub struct RttrightInput<'a, I> {
 #[doc = " The weights: one row per observation and one column per reporting"]
 #[doc = " time (a single column when no times were requested)."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RttrightResult {
     #[pyo3(get)]
     pub weights: Vec<Vec<f64>>,

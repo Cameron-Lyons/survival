@@ -17,6 +17,7 @@ import numpy as np
 
 from .. import _survival as _core
 from .._factor import Factor
+from ._types import _MISSING
 
 _SURV_TYPES = ("right", "left", "interval", "counting", "interval2", "mstate")
 _SURV_RESPONSE_TYPES = (*_SURV_TYPES[:-1], "mright", "mcounting")
@@ -1036,6 +1037,21 @@ def _pop_dotted_keyword(
     value = kwargs.pop(dotted)
     if current != default:
         raise ValueError(f"use only one of {canonical} or {dotted}")
+    return value
+
+
+def _first_argument(
+    value: Any, kwargs: dict[str, Any], name: str, r_name: str, function: str
+) -> Any:
+    """A function's first argument, given positionally, as ``name=`` or under R's name
+    ``r_name=`` (removed from *kwargs*)."""
+
+    if r_name in kwargs:
+        if value is not _MISSING:
+            raise TypeError(f"{function}() got multiple values for argument {r_name!r}")
+        return kwargs.pop(r_name)
+    if value is _MISSING:
+        raise TypeError(f"{function}() missing required argument: {r_name!r}")
     return value
 
 

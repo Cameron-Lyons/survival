@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub struct SuperLearnerConfig {
     #[pyo3(get, set)]
@@ -158,7 +158,7 @@ fn nnls_weights(predictions: &[Vec<f64>], outcomes: &[f64], n_models: usize) -> 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SuperLearnerResult {
     #[pyo3(get)]
     pub weights: Vec<f64>,

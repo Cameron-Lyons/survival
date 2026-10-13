@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DiffusionSurvivalConfig {
     #[pyo3(get, set)]
     pub diffusion_rate: f64,
@@ -36,7 +36,7 @@ impl DiffusionSurvivalConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DiffusionSurvivalResult {
     #[pyo3(get)]
     pub diffusion_rate: f64,

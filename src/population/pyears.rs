@@ -123,8 +123,8 @@ impl PyearsExpect {
 }
 
 #[doc = " The per-cell tables of R's `pyears` (column-major over `dims`)."]
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PyearsResult {
     #[doc = " Person-years per cell, divided by `scale`."]
     #[pyo3(get)]
@@ -152,6 +152,12 @@ pub struct PyearsResult {
 #[cfg(feature = "python")]
 #[pymethods]
 impl PyearsResult {
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[doc = " Independent writable NumPy snapshots of the column-major cell tables."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;

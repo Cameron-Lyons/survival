@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 
 #[doc = " The expanded data; every vector has one entry per output row."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FineGrayOutput {
     #[doc = " One-based row of the input each output row came from (R's `row`)."]
     #[pyo3(get)]

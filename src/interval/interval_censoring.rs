@@ -11,7 +11,7 @@ type DistributionFn = fn(f64, f64, f64) -> f64;
 type DistributionFns = (DistributionFn, DistributionFn);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum IntervalDistribution {
     Weibull,
     LogNormal,
@@ -38,7 +38,7 @@ impl IntervalDistribution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub(crate) enum CensorType {
     Exact,
     RightCensored,
@@ -47,7 +47,7 @@ pub(crate) enum CensorType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IntervalCensoredResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -391,7 +391,7 @@ pub struct TurnbullInput<'a> {
 #[doc = " `std_err` is empty without `se_fit`, and so are the limits without"]
 #[doc = " `se_fit` or with `conf_type = \"none\"`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct TurnbullCurve {
     pub group: i32,
     pub n: usize,
@@ -410,7 +410,7 @@ pub struct TurnbullCurve {
 #[doc = " `fit` holds the curves stacked as `survfit0`, `summary.survfit` and"]
 #[doc = " `quantile.survfit` read them."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct TurnbullResult {
     pub curves: Vec<TurnbullCurve>,
     pub conf_type: String,

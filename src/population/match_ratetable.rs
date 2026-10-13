@@ -26,7 +26,7 @@ impl RatetableColumn {
 #[doc = " column per rate-table dimension (in the table's order); factor columns"]
 #[doc = " hold R's one-based level subscripts, the others the numeric values."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MatchRatetableResult {
     #[pyo3(get)]
     pub r: Vec<Vec<f64>>,

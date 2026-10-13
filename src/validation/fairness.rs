@@ -7,7 +7,7 @@ use rayon::prelude::*;
 const DEFAULT_NOISE_LEVELS: &[f64] = &[0.01, 0.05, 0.1, 0.2];
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FairnessMetrics {
     #[pyo3(get)]
     pub demographic_parity: f64,
@@ -249,7 +249,7 @@ pub fn compute_fairness_metrics(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RobustnessResult {
     #[pyo3(get)]
     pub original_c_index: f64,
@@ -353,7 +353,7 @@ pub fn assess_model_robustness(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SubgroupAnalysisResult {
     #[pyo3(get)]
     pub subgroup_names: Vec<String>,

@@ -175,3 +175,20 @@ def test_model_summaries_are_read_only_mappings_with_r_names(fit):
         summary["n"] = 1
     with pytest.raises(KeyError):
         summary["robscore"]
+
+
+def test_r_first_argument_names_are_accepted(ovarian, fit):
+    assert r.predict(object=fit) == r.predict(fit)
+    assert r.vcov(object=fit) == r.vcov(fit)
+    assert r.coef(object=fit) == r.coef(fit)
+    assert r.residuals(object=fit) == r.residuals(fit)
+    assert r.model_summary(object=fit).n == fit.n
+    assert r.coxph_detail(object=fit).time == r.coxph_detail(fit).time
+    assert r.is_surv(x=r.Surv([1.0], [1]))
+    formula = "Surv(futime, fustat) ~ rx"
+    assert r.survdiff(formula=formula, data=ovarian).chisq == r.survdiff(formula, ovarian).chisq
+    assert r.survfit(formula=formula, data=ovarian).n == r.survfit(formula, ovarian).n
+    with pytest.raises(TypeError, match="multiple values for argument 'object'"):
+        r.vcov(fit, object=fit)
+    with pytest.raises(TypeError, match="missing required argument: 'formula'"):
+        r.survfit(data=ovarian)

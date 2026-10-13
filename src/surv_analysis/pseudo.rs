@@ -44,7 +44,7 @@ impl PseudoResidualType {
 #[doc = " subject when collapsed; `id` labels it (the observation index when no"]
 #[doc = " id was given) and `curve` says which curve it contributed to."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitResid {
     #[pyo3(get)]
     pub id: Vec<i64>,
@@ -477,7 +477,7 @@ pub fn pseudo(
 #[doc = " `values[r][k][j]` belongs to row `r`, state (or transition, for the"]
 #[doc = " cumulative hazard) `k`, at `times[j]`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvfitAJResid {
     #[pyo3(get)]
     pub id: Vec<i64>,

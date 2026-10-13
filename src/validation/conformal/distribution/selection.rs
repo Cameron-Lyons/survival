@@ -3,7 +3,7 @@ use super::super::*;
 const DEFAULT_COVERAGE_CANDIDATES: &[f64] = &[0.80, 0.85, 0.90, 0.95, 0.99];
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoverageSelectionResult {
     #[pyo3(get)]
     pub optimal_coverage: f64,

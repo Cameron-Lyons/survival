@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TFTConfig {
     #[pyo3(get, set)]
     pub hidden_dim: usize,
@@ -157,7 +157,7 @@ fn temporal_self_attention(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TemporalFusionTransformer {
     static_encoder_weights: Vec<Vec<f64>>,
     static_encoder_biases: Vec<f64>,

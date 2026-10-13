@@ -10,6 +10,7 @@ Fractional weights exercise the default robust variance of Kaplan-Meier fits.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import platform
@@ -42,8 +43,10 @@ def main() -> None:
         times = (rows + 1).astype(float)
         status = (rows % 3 != 0).astype(np.int32)
         weights = 0.5 + (rows % 7) / 4
-        for estimator in ["survfitkm", "nelson_aalen"]:
-            fit = getattr(surv_analysis, estimator)
+        for estimator, fit in [
+            ("survfitkm", surv_analysis.survfitkm),
+            ("nelson_aalen", functools.partial(surv_analysis.survfitkm, stype=2, ctype=1)),
+        ]:
             for weighted in [False, True]:
                 kwargs = {"weights": weights} if weighted else {}
                 result = fit(times, status, **kwargs)

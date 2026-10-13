@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub struct GroupLassoConfig {
     #[pyo3(get, set)]
@@ -59,7 +59,7 @@ impl GroupLassoConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GroupLassoResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

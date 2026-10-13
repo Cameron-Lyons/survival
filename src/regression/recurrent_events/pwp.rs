@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub enum PWPTimescale {
     Gap,
@@ -23,7 +23,7 @@ impl PWPTimescale {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PWPConfig {
     #[pyo3(get, set)]
     pub timescale: PWPTimescale,
@@ -59,7 +59,7 @@ impl PWPConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PWPResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

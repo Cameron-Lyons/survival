@@ -1,5 +1,5 @@
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct ConformalSurvivalConfig {
     #[pyo3(get, set)]
@@ -26,7 +26,7 @@ impl ConformalSurvivalConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct ConformalSurvivalResult {
     #[pyo3(get)]
@@ -65,7 +65,7 @@ impl ConformalSurvivalResult {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct BayesianBootstrapConfig {
     #[pyo3(get, set)]
@@ -89,7 +89,7 @@ impl BayesianBootstrapConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct BayesianBootstrapResult {
     #[pyo3(get)]
@@ -128,7 +128,7 @@ impl BayesianBootstrapResult {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct JackknifePlusConfig {
     #[pyo3(get, set)]
@@ -152,7 +152,7 @@ impl JackknifePlusConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct JackknifePlusResult {
     #[pyo3(get)]

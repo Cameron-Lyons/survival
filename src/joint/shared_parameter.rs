@@ -4,7 +4,7 @@ use rayon::prelude::*;
 type QuadratureRule = (Vec<f64>, Vec<f64>);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum AssociationStructure {
     Value,
     Slope,
@@ -31,7 +31,7 @@ impl AssociationStructure {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct JointSurvivalModelConfig {
     #[pyo3(get, set)]
     pub association: AssociationStructure,
@@ -67,7 +67,7 @@ impl JointSurvivalModelConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct JointModelResult {
     #[pyo3(get)]
     pub longitudinal_fixed: Vec<f64>,

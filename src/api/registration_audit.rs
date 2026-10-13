@@ -278,19 +278,19 @@ fn every_pyclass_and_pyfunction_is_registered_exactly_once() {
 #[test]
 fn scanner_handles_attributes_visibility_and_macros() {
     let source = r###"
-        /// `#[pyclass]` in a doc comment is ignored.
-        #[pyclass(from_py_object)]
+        /// `#[pyclass(module = "survival._survival")]` in a doc comment is ignored.
+        #[pyclass(module = "survival._survival", from_py_object)]
         #[derive(Debug, Clone)]
         pub struct Visible;
-        #[pyclass] pub(crate) enum Hidden { A }
+        #[pyclass(module = "survival._survival")] pub(crate) enum Hidden { A }
         #[pyfunction(name = "exported")]
         #[pyo3(signature = (x, y=None))]
         fn internal_name(x: f64) {}
-        macro_rules! m { ($name:ident) => { #[pyclass] pub struct $name; } }
+        macro_rules! m { ($name:ident) => { #[pyclass(module = "survival._survival")] pub struct $name; } }
         // #[pyfunction] fn commented() {}
         const S: &str = "#[pyfunction] fn in_string() {}";
-        const R: &str = r##"#[pyclass] "quoted" struct InRaw;"##;
-        const C: char = '"'; #[pyclass] struct AfterChar;
+        const R: &str = r##"#[pyclass(module = "survival._survival")] "quoted" struct InRaw;"##;
+        const C: char = '"'; #[pyclass(module = "survival._survival")] struct AfterChar;
         fn lifetimes<'a>(x: &'a str) -> &'a str { x }
     "###;
     let source = strip_comments_and_literals(source);

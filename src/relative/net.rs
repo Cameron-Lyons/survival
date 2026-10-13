@@ -87,7 +87,7 @@ fn validate_crude_probability_inputs(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum NetSurvivalMethod {
     EdererI,
     EdererII,
@@ -112,7 +112,7 @@ impl NetSurvivalMethod {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NetSurvivalResult {
     #[pyo3(get)]
     pub time_points: Vec<f64>,

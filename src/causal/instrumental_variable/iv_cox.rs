@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub struct IVCoxConfig {
     #[pyo3(get, set)]
@@ -29,7 +29,7 @@ impl IVCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IVCoxResult {
     #[pyo3(get)]
     pub treatment_coef: f64,

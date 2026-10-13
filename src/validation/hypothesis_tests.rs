@@ -10,7 +10,7 @@ const WTEST_TOLERANCE: f64 = 1e-9;
 #[doc = " A chi-square test statistic with its degrees of freedom and upper-tail"]
 #[doc = " p-value."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct TestResult {
     pub statistic: f64,
     pub df: usize,

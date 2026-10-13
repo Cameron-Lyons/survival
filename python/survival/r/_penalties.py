@@ -10,7 +10,6 @@ in the Rust engine.
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
@@ -33,6 +32,7 @@ from ._coerce import (
     _scalar_or_vector,
     _strata_level_sort_key,
     _strata_value_label,
+    _warn_outside_package,
 )
 from ._splines import basis_columns
 from ._types import CoxPenaltyBasis, _CovariateTerm, _PenaltyDesignTerm
@@ -134,10 +134,8 @@ def ridge(
         if not rows and not matrix and n:
             continue
         if rows and not matrix and (len(rows) > n or n % len(rows)):
-            warnings.warn(
-                "number of rows of result is not a multiple of vector length",
-                RuntimeWarning,
-                stacklevel=2,
+            _warn_outside_package(
+                "number of rows of result is not a multiple of vector length", RuntimeWarning
             )
         for col in range(width):
             columns.append([rows[row % len(rows)][col] for row in range(n)])

@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DPConfig {
     #[pyo3(get, set)]
     pub epsilon: f64,
@@ -72,7 +72,7 @@ fn generate_gaussian_noise(sigma: f64, seed: u64) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DPSurvivalResult {
     #[pyo3(get)]
     pub survival_curve: Vec<f64>,
@@ -163,7 +163,7 @@ pub fn dp_kaplan_meier(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DPCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -377,7 +377,7 @@ fn compute_fisher_information(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DPHistogramResult {
     #[pyo3(get)]
     pub counts: Vec<f64>,
@@ -482,7 +482,7 @@ pub fn dp_histogram(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LocalDPResult {
     #[pyo3(get)]
     pub perturbed_values: Vec<f64>,

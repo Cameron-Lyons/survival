@@ -46,7 +46,7 @@ impl CoxResidualType {
 #[doc = " Schoenfeld (or scaled Schoenfeld) residuals: one row per death, in"]
 #[doc = " (stratum, time) order."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SchoenfeldResiduals {
     #[doc = " Death times (the row names of R's matrix)."]
     #[pyo3(get)]

@@ -250,6 +250,16 @@ def test_survreg_control_and_init(lung, lung_weibull):
         _survreg.survreg_control(bogus=1)
     with pytest.raises(ValueError, match="use only one of"):
         _survreg.survreg_control(iter_max=1, **{"iter.max": 2})
+    listed = _survreg.survreg_control(maxiter=12, debug=1)
+    assert dict(listed) == {
+        "iter.max": 12,
+        "rel.tolerance": 1e-9,
+        "toler.chol": 1e-10,
+        "debug": 1,
+        "maxiter": 12,
+        "outer.max": 10,
+    }
+    assert r.survreg("Surv(time, status) ~ age", lung, control=listed).iter <= 12
 
     start = [6.5, 0.0, -0.5, -0.2]
     at_start = r.survreg(

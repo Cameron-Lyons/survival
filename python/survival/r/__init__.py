@@ -175,6 +175,7 @@ from ._survfit_residuals import pseudo, residuals_survfit
 from ._survpenal_lowlevel import SurvpenalFitResult, survpenal_fit
 from ._survpenal_print import SurvregPenalPrint, print_survreg_penal
 from ._survreg import (
+    SurvregControlResult,
     SurvregModel,
     dsurvreg,
     psurvreg,
@@ -353,6 +354,7 @@ __all__ = [
     "QuantileSurvfitResult",
     "ResidualsSurvfitResult",
     "SurvfitResult",
+    "SurvregControlResult",
     "SurvregModel",
     "SurvregPenalPrint",
     "TmergeFrame",

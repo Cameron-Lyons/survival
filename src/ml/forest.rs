@@ -14,7 +14,7 @@ type TreeWithOob = (TreeNode, Vec<usize>);
 type OobPrediction = (usize, Vec<f64>);
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalForestInput {
     #[pyo3(get)]
     pub x: Vec<f64>,
@@ -86,7 +86,7 @@ impl<'a> From<&'a SurvivalForestInput> for SurvivalForestData<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum SplitRule {
     LogRank,
     LogRankScore,
@@ -111,7 +111,7 @@ impl SplitRule {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalForestConfig {
     #[pyo3(get, set)]
     pub n_trees: usize,
@@ -530,7 +530,7 @@ fn fit_survival_forest_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalForest {
     trees: Vec<TreeNode>,
     unique_times: Vec<f64>,

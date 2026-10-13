@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 type PairResult = (String, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<i32>);
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MultiStateConfig {
     #[pyo3(get, set)]
@@ -49,7 +49,7 @@ impl MultiStateConfig {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct TransitionIntensityResult {
     #[pyo3(get)]
@@ -88,7 +88,7 @@ impl TransitionIntensityResult {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MultiStateResult {
     #[pyo3(get)]
@@ -458,7 +458,7 @@ fn compute_sojourn_times(
         .collect()
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct MarkovMSMResult {
     #[pyo3(get)]

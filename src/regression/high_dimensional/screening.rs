@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SISConfig {
     #[pyo3(get, set)]
     pub n_select: usize,
@@ -32,7 +32,7 @@ impl SISConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SISResult {
     #[pyo3(get)]
     pub selected_features: Vec<usize>,
@@ -209,7 +209,7 @@ pub fn sis_cox(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StabilitySelectionConfig {
     #[pyo3(get, set)]
     pub n_bootstrap: usize,
@@ -255,7 +255,7 @@ impl StabilitySelectionConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StabilitySelectionResult {
     #[pyo3(get)]
     pub selected_features: Vec<usize>,

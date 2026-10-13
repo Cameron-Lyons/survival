@@ -11,7 +11,7 @@ use ndarray::ArrayView1;
 use pyo3::prelude::*;
 
 #[doc = " The `type` argument of `residuals.survreg`."]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurvregResidType {
     #[doc = " `itrans(center of the saturated model) - itrans(eta)`."]
@@ -57,7 +57,7 @@ impl SurvregResidType {
 }
 
 #[doc = " Residuals of a `survreg` fit."]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurvregResiduals {
     #[pyo3(get)]

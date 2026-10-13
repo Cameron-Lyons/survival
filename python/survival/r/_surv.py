@@ -20,6 +20,7 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _first_argument,
     _SURV_RESPONSE_TYPES,
     _SURV_TYPES,
     _categories,
@@ -498,9 +499,12 @@ def _interval_time2(time: list[float], right: Any, status: list[int | None]) -> 
     return time2
 
 
-def is_surv(value: Any) -> bool:
-    """R's ``is.Surv``."""
+def is_surv(value: Any = _MISSING, **kwargs: Any) -> bool:
+    """R's ``is.Surv`` (R's argument name ``x`` is accepted)."""
 
+    value = _first_argument(value, kwargs, "value", "x", "is_surv")
+    if kwargs:
+        raise TypeError(f"is_surv got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     return isinstance(value, Surv)
 
 

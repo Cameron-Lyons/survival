@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(str, get_all, from_py_object)]
+#[pyclass(module = "survival._survival", str, get_all, from_py_object)]
 
 pub struct UnoCIndexResult {
     pub c_index: f64,

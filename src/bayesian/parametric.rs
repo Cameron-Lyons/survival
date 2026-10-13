@@ -12,7 +12,7 @@ type SurvivalCurveSummary = (
 );
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum BayesianDistribution {
     Weibull,
     LogNormal,
@@ -37,7 +37,7 @@ impl BayesianDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianParametricConfig {
     #[pyo3(get, set)]
     pub distribution: BayesianDistribution,
@@ -86,7 +86,7 @@ impl BayesianParametricConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BayesianParametricResult {
     #[pyo3(get)]
     pub beta_mean: Vec<f64>,

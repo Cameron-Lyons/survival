@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum CorrelationType {
     Independent,
     SharedFrailty,
@@ -27,7 +27,7 @@ impl CorrelationType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct JointCompetingRisksConfig {
     #[pyo3(get, set)]
     pub num_causes: usize,
@@ -90,7 +90,7 @@ impl JointCompetingRisksConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CauseResult {
     #[pyo3(get)]
     pub cause: usize,
@@ -109,7 +109,7 @@ pub struct CauseResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct JointCompetingRisksResult {
     #[pyo3(get)]
     pub cause_specific_results: Vec<CauseResult>,

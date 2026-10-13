@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use crate::constants::{DIVISION_FLOOR, Z_SCORE_95, normal_ci_95, same_time};
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IPCWInput {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -57,7 +57,7 @@ impl IPCWInput {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IPCWConfig {
     #[pyo3(get, set)]
     pub stabilized: bool,
@@ -92,7 +92,7 @@ pub struct IPCWTreatmentInput {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct IPCWResult {
     #[pyo3(get)]
     pub weights: Vec<f64>,

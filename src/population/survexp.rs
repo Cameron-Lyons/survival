@@ -71,8 +71,8 @@ pub struct SurvexpInput<'a> {
 #[doc = " Expected survival curves (`ntime x ngroup`) or, for the individual"]
 #[doc = " methods, one value per subject in `surv[i][0]` with empty `time` and"]
 #[doc = " `n_risk`."]
-#[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvExpResult {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -90,6 +90,12 @@ pub struct SurvExpResult {
 #[cfg(feature = "python")]
 #[pymethods]
 impl SurvExpResult {
+    #[doc = " Pickle and copy support (see `internal::pickle`)."]
+    #[cfg(feature = "python")]
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<crate::internal::pickle::Reduced<'py>> {
+        crate::internal::pickle::reduce(py, self)
+    }
+
     #[doc = " Independent writable NumPy snapshots; curve matrices are time by group."]
     fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         use numpy::IntoPyArray;

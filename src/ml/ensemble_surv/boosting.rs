@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ComponentwiseBoostingConfig {
     #[pyo3(get, set)]
     pub n_iterations: usize,
@@ -52,7 +52,7 @@ impl ComponentwiseBoostingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ComponentwiseBoostingResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

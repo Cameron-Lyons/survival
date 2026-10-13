@@ -23,7 +23,7 @@ pub enum SurvSplitResponse<'a, I> {
 
 #[doc = " The split data set; every vector has one entry per output row."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvSplitResult {
     #[doc = " Zero-based row of the input each output row came from."]
     #[pyo3(get)]

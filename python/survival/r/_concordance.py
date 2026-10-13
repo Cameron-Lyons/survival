@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import math
 import operator
-import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -31,6 +30,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_factor,
     _r_factor_levels,
+    _warn_outside_package,
 )
 from ._coxph import CoxphModel, predict_coxph
 from ._coxphms import CoxphmsModel
@@ -591,9 +591,7 @@ def _concordance_from_data(
             first.y.time,
             first.y.event,
         ):
-            warnings.warn(
-                "models do not have the same response vector", RuntimeWarning, stacklevel=3
-            )
+            _warn_outside_package("models do not have the same response vector", RuntimeWarning)
         if other.weights != first.weights:
             raise ValueError("all models must have the same weight vector")
     if any(d.cluster is not None for d in data):
@@ -785,8 +783,8 @@ def survConcordance(
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     if kwargs:
         raise TypeError(f"survConcordance got unexpected argument(s): {', '.join(sorted(kwargs))}")
-    warnings.warn(
-        "survConcordance is deprecated; use concordance instead", DeprecationWarning, stacklevel=2
+    _warn_outside_package(
+        "survConcordance is deprecated; use concordance instead", DeprecationWarning
     )
     if not isinstance(formula, str):
         raise TypeError("a formula argument is required")
@@ -826,10 +824,8 @@ def survConcordance_fit(
     ``tied.time`` and ``std(c-d)``, per stratum level (in factor order) when ``strata`` is
     given."""
 
-    warnings.warn(
-        "survConcordance.fit is deprecated; use concordancefit instead",
-        DeprecationWarning,
-        stacklevel=2,
+    _warn_outside_package(
+        "survConcordance.fit is deprecated; use concordancefit instead", DeprecationWarning
     )
     if not isinstance(y, Surv):
         raise TypeError("y must be a Surv object")

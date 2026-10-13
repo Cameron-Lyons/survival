@@ -9,7 +9,7 @@ use crate::recurrent::validation::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum FrailtyDistribution {
     Gamma,
     LogNormal,
@@ -32,7 +32,7 @@ impl FrailtyDistribution {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct JointFrailtyResult {
     #[pyo3(get)]
     pub recurrent_coef: Vec<f64>,

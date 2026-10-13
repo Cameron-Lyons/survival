@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub enum ScreeningRule {
     None,
@@ -27,7 +27,7 @@ impl ScreeningRule {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxSolverConfig {
     #[pyo3(get, set)]
     pub max_iter: usize,
@@ -92,7 +92,7 @@ impl FastCoxSolverConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxConfig {
     #[pyo3(get, set)]
     pub lambda: f64,
@@ -192,7 +192,7 @@ impl FastCoxConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxPathConfig {
     #[pyo3(get, set)]
     pub l1_ratio: f64,
@@ -262,7 +262,7 @@ impl FastCoxPathConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxCVConfig {
     #[pyo3(get, set)]
     pub l1_ratio: f64,
@@ -320,7 +320,7 @@ impl FastCoxCVConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -362,7 +362,7 @@ impl FastCoxResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct FastCoxPath {
     #[pyo3(get)]
     pub lambdas: Vec<f64>,

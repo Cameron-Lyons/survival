@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TimeDependentROCResult {
     #[pyo3(get)]
     pub times: Vec<f64>,

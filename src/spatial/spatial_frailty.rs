@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SpatialFrailtyResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -35,7 +35,7 @@ pub struct SpatialFrailtyResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum SpatialCorrelationStructure {
     CAR,
     SAR,

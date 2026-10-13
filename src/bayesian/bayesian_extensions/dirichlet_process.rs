@@ -26,7 +26,7 @@ fn sample_gamma(rng: &mut crate::internal::rng::Rng, shape: f64, scale: f64) -> 
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DirichletProcessConfig {
     #[pyo3(get, set)]
     pub concentration: f64,
@@ -62,7 +62,7 @@ impl DirichletProcessConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DirichletProcessResult {
     #[pyo3(get)]
     pub cluster_assignments: Vec<usize>,

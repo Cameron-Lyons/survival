@@ -5,7 +5,6 @@ and ``naresid`` helpers the model methods share."""
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import product
@@ -14,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from ._coerce import (
+    _warn_outside_package,
     _DEFAULT_NA_ACTION,
     _NA_REAL,
     _categories,
@@ -783,10 +783,9 @@ def _model_frame(
     cluster_values = aligned["cluster"]
     if terms.clusters:
         if cluster_values is not None:
-            warnings.warn(
+            _warn_outside_package(
                 "cluster appears both in a formula and as an argument, formula term ignored",
                 RuntimeWarning,
-                stacklevel=3,
             )
         else:
             cluster_values = _formula_cluster_values(data, terms, n)

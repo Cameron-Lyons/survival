@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ICEResult {
     #[pyo3(get)]
     pub grid_values: Vec<f64>,
@@ -35,7 +35,7 @@ impl ICEResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DICEResult {
     #[pyo3(get)]
     pub grid_values: Vec<f64>,

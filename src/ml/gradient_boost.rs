@@ -9,7 +9,7 @@ use super::input_validation::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum GBSurvLoss {
     CoxPH,
     AFT,
@@ -34,7 +34,7 @@ impl GBSurvLoss {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GradientBoostSurvivalConfig {
     #[pyo3(get, set)]
     pub n_estimators: usize,
@@ -446,7 +446,7 @@ fn predict_regression_tree(node: &RegressionTreeNode, x_row: &[f64]) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GradientBoostSurvival {
     trees: Vec<RegressionTreeNode>,
     #[pyo3(get)]

@@ -22,7 +22,7 @@ fn layer_norm_3d(x: Tensor<3>, gamma: Tensor<1>, beta: Tensor<1>, eps: f32) -> T
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct TracerConfig {
     #[pyo3(get, set)]
     pub embedding_dim: usize,

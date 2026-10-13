@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 
 #[doc = " The full (intercept-included) P-spline basis and its knots."]
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct PsplineBasis {
     #[doc = " `n x (nterm + degree)` basis rows; a missing `x` gives a `NaN` row."]
     #[pyo3(get)]

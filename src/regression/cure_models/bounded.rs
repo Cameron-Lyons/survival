@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BoundedCumulativeHazardConfig {
     #[pyo3(get, set)]
     pub distribution: CureDistribution,
@@ -27,7 +27,7 @@ impl BoundedCumulativeHazardConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BoundedCumulativeHazardResult {
     #[pyo3(get)]
     pub coef: Vec<f64>,

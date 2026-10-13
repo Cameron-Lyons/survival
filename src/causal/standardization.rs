@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use crate::constants::normal_ci_95;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GComputationResult {
     #[pyo3(get)]
     pub ate: f64,

@@ -12,12 +12,14 @@ cch, aareg, survreg, concordance, survfit, pyears); any other object raises
 from __future__ import annotations
 
 import dataclasses
+import functools
+import inspect
 import math
 import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any, cast
+from typing import Any, cast, overload
 
 import numpy as np
 
@@ -28,6 +30,7 @@ from ._coerce import (
     _DEFAULT_NA_ACTION,
     _coefficient_selection,
     _coerce_array_like,
+    _first_argument,
     _integer_scalar,
     _materialize_1d,
     _materialize_labels,
@@ -74,6 +77,7 @@ from ._formula import model_frame as _formula_model_frame
 from ._names import _make_unique
 from ._pyears import (
     RatetableMatch,
+    SummaryPyearsResult,
     SummaryRatetableResult,
     _pyears_result_frame,
     _survexp_frame,
@@ -110,6 +114,7 @@ from ._survreg import (
     vcov_survreg,
 )
 from ._types import (
+    _MISSING,
     AaregModel,
     AnovaResult,
     BasehazResult,
@@ -120,14 +125,19 @@ from ._types import (
     CoxSurvfitResult,
     CoxZphResult,
     ModelPrint,
+    NamedMatrix,
     PyearsResult,
     QuantileSurvfitResult,
     RatetablePrint,
     ResponsePrint,
+    SummaryAaregResult,
     SummaryCchResult,
+    SummaryCoxphPenalResult,
+    SummaryCoxphResult,
     SummarySurvexpResult,
     SummarySurvfitCoxmsResult,
     SummarySurvfitResult,
+    SummarySurvregResult,
     SurvdiffResult,
     SurvexpResult,
     SurvfitMultiStateResult,
@@ -139,6 +149,31 @@ from ._types import (
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
+
+
+def _r_generic(function: Any) -> Any:
+    """:func:`functools.singledispatch` for an R generic whose first argument may also be
+    passed by keyword, under R's name ``object`` or the Python name."""
+
+    dispatcher = singledispatch(function)
+    name = next(iter(inspect.signature(function).parameters))
+
+    @functools.wraps(function)
+    def generic(*args: Any, **kwargs: Any) -> Any:
+        if not args:
+            if name in kwargs and "object" in kwargs:
+                raise TypeError(f"{function.__name__}() got multiple values for argument 'object'")
+            if name not in kwargs and "object" not in kwargs:
+                raise TypeError(f"{function.__name__}() missing required argument: 'object'")
+            args = (kwargs.pop(name) if name in kwargs else kwargs.pop("object"),)
+        elif "object" in kwargs:
+            raise TypeError(f"{function.__name__}() got multiple values for argument 'object'")
+        return dispatcher.dispatch(args[0].__class__)(*args, **kwargs)
+
+    generic.register = dispatcher.register  # type: ignore[attr-defined]
+    generic.dispatch = dispatcher.dispatch  # type: ignore[attr-defined]
+    generic.registry = dispatcher.registry  # type: ignore[attr-defined]
+    return generic
 
 
 @singledispatch
@@ -179,8 +214,8 @@ def _no_method(generic: str) -> TypeError:
     return TypeError(f"{generic} requires a fitted coxph or survreg model")
 
 
-@singledispatch
-def coef(fit: Any, *, matrix: Any = False) -> Any:
+@_r_generic
+def coef(fit: Any, *, matrix: Any = False) -> list[float] | float | NamedMatrix:
     """``coef``: ``fit$coefficients`` (``NaN`` marks an aliased coefficient, like R's
     ``NA``; a survreg fit's location coefficients), or a concordance's estimate.
     ``matrix`` is ``coef.coxphms``'s: a multi-state fit's coefficients laid out like its
@@ -195,12 +230,12 @@ def _coef_fit(fit: CoxphModel | CchModel | SurvregModel, *, matrix: Any = False)
 
 
 @coef.register(CoxphmsModel)
-def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> Any:
+def _coef_coxphms(fit: CoxphmsModel, *, matrix: Any = False) -> list[float] | NamedMatrix:
     return coef_coxphms(fit, matrix=_normalize_bool_option_with_default(matrix, "matrix", False))
 
 
 @coef.register(ConcordanceResult)
-def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> Any:
+def _coef_concordance(fit: ConcordanceResult, *, matrix: Any = False) -> float | list[float]:
     return fit.concordance
 
 
@@ -223,8 +258,10 @@ def _coef_names_cox(fit: CoxphModel | CchModel, *, complete: Any | None = None) 
 coef_names.register(SurvregModel, coef_names_survreg)
 
 
-@singledispatch
-def vcov(fit: Any, *, complete: Any = True, matrix: Any = False) -> Any:
+@_r_generic
+def vcov(
+    fit: Any, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]] | dict[str, NamedMatrix] | float | None:
     """``vcov``: the robust variance when the fit used one, else the model-based one;
     a concordance's variance.  ``matrix`` is ``vcov.coxphms``'s: a multi-state fit's
     variance per transition (see :func:`survival.r._coxphms.vcov_coxphms`); other fits
@@ -246,7 +283,9 @@ def _vcov_cox(
 
 
 @vcov.register(CoxphmsModel)
-def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_coxphms(
+    fit: CoxphmsModel, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]] | dict[str, NamedMatrix]:
     return vcov_coxphms(
         fit,
         complete=_normalize_bool_option_with_default(complete, "complete", True),
@@ -255,16 +294,20 @@ def _vcov_coxphms(fit: CoxphmsModel, *, complete: Any = True, matrix: Any = Fals
 
 
 @vcov.register(SurvregModel)
-def _vcov_survreg(fit: SurvregModel, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_survreg(
+    fit: SurvregModel, *, complete: Any = True, matrix: Any = False
+) -> list[list[float]]:
     return vcov_survreg(fit, complete=complete)
 
 
 @vcov.register(ConcordanceResult)
-def _vcov_concordance(fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False) -> Any:
+def _vcov_concordance(
+    fit: ConcordanceResult, *, complete: Any = True, matrix: Any = False
+) -> float | list[list[float]] | None:
     return fit.var
 
 
-@singledispatch
+@_r_generic
 def loglik(fit: Any) -> float:
     """``logLik``: the fitted log-likelihood ``fit$loglik[2]`` (``loglik[1]`` for a null
     Cox model, as logLik.coxph.null)."""
@@ -277,7 +320,7 @@ def _loglik_fit(fit: CoxphModel | SurvregModel) -> float:
     return fit.loglik[-1]
 
 
-@singledispatch
+@_r_generic
 def nobs(fit: Any) -> int:
     """``nobs``: the number of events for a Cox model (the ``nobs`` attribute of its
     logLik), the number of observations for survreg."""
@@ -716,12 +759,13 @@ def _plain_model_frame(frame: Mapping[str, Any]) -> dict[str, list[Any]]:
     return columns
 
 
-def predict(fit: Any, newdata: Any | None = None, **kwargs: Any) -> Any:
+def predict(fit: Any = _MISSING, newdata: Any | None = None, **kwargs: Any) -> Any:
     """``predict``: see :func:`survival.r._coxph.predict_coxph` and
     :func:`survival.r._survreg.predict_survreg`.  R's ``se.fit`` and ``na.action``
     spellings are accepted. For a ``PsplineResult``, evaluate its basis on
     ``newdata`` (or R's ``newx``); omitting both returns the original basis."""
 
+    fit = _first_argument(fit, kwargs, "fit", "object", "predict")
     for dotted, name in (("se.fit", "se_fit"), ("na.action", "na_action")):
         if dotted in kwargs:
             kwargs[name] = kwargs.pop(dotted)
@@ -737,7 +781,7 @@ _predict.register(CoxphModel, predict_coxph)
 _predict.register(SurvregModel, predict_survreg)
 
 
-@singledispatch
+@_r_generic
 def fitted(fit: Any, **kwargs: Any) -> Any:
     """``fitted``: ``predict`` on the training data; for a Cox model R's
     ``fitted.coxph``, the fit's linear predictors."""
@@ -750,7 +794,7 @@ def _fitted_cox(fit: CoxphModel, **_kwargs: Any) -> list[float]:
     return fit.linear_predictors
 
 
-@singledispatch
+@_r_generic
 def residuals(fit: Any, **kwargs: Any) -> Any:
     """``residuals``: see :func:`survival.r._coxph.residuals_coxph`,
     :func:`survival.r._survreg.residuals_survreg` and
@@ -771,7 +815,7 @@ def _residuals_coxms(fit: CoxSurvfitMultiStateResult, **kwargs: Any) -> Any:
     raise TypeError("residuals are not defined for multi-state Cox curves")
 
 
-@singledispatch
+@_r_generic
 def confint(
     fit: Any, parm: Any | None = None, *, level: Any = 0.95
 ) -> list[dict[str, float | str]]:
@@ -801,30 +845,52 @@ def _confint_cox(
 confint.register(SurvregModel, confint_survreg)
 
 
-@singledispatch
-def model_summary(fit: Any, **kwargs: Any) -> Any:
-    """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
-    curve, an expected-survival result, a population rate/person-years table,
-    or merged event data."""
+@_r_generic
+def _model_summary(fit: Any, **kwargs: Any) -> Any:
 
     raise TypeError(
         "model_summary requires a fitted model, survival curve, population result, or TmergeFrame"
     )
 
 
-model_summary.register(CoxphModel, summary_coxph)
-model_summary.register(AaregModel, summary_aareg)
-model_summary.register(SurvregModel, model_summary_survreg)
-model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
-model_summary.register(PyearsResult, summary_pyears)
-model_summary.register(SurvexpResult, summary_survexp)
-model_summary.register(_core.RateTable, summary_ratetable)
-model_summary.register(TmergeFrame, summary_tmerge)
+_model_summary.register(CoxphModel, summary_coxph)
+_model_summary.register(AaregModel, summary_aareg)
+_model_summary.register(SurvregModel, model_summary_survreg)
+_model_summary.register(_SurvfitCurves | CoxSurvfitMultiStateResult, summary_survfit)
+_model_summary.register(PyearsResult, summary_pyears)
+_model_summary.register(SurvexpResult, summary_survexp)
+_model_summary.register(_core.RateTable, summary_ratetable)
+_model_summary.register(TmergeFrame, summary_tmerge)
 
 
-@model_summary.register(CchModel)
+@_model_summary.register(CchModel)
 def _model_summary_cch(fit: CchModel, **kwargs: Any) -> SummaryCchResult:
     return summary_cch(fit)
+
+
+@overload
+def model_summary(
+    fit: CoxphModel, **kwargs: Any
+) -> SummaryCoxphResult | SummaryCoxphPenalResult | CoxphModel: ...
+@overload
+def model_summary(fit: SurvregModel, **kwargs: Any) -> SummarySurvregResult: ...
+@overload
+def model_summary(fit: AaregModel, **kwargs: Any) -> SummaryAaregResult: ...
+@overload
+def model_summary(fit: CchModel, **kwargs: Any) -> SummaryCchResult: ...
+@overload
+def model_summary(fit: PyearsResult, **kwargs: Any) -> SummaryPyearsResult: ...
+@overload
+def model_summary(fit: SurvexpResult, **kwargs: Any) -> SummarySurvexpResult: ...
+@overload
+def model_summary(fit: Any, **kwargs: Any) -> Any: ...
+def model_summary(fit: Any = _MISSING, **kwargs: Any) -> Any:
+    """``summary``: R's summary of a coxph, clogit, cch, aareg or survreg fit, a survival
+    curve, an expected-survival result, a population rate/person-years table,
+    or merged event data."""
+
+    fit = _first_argument(fit, kwargs, "fit", "object", "model_summary")
+    return _model_summary(fit, **kwargs)
 
 
 def _add_optional_survfit_column(

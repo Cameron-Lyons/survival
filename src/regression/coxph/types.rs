@@ -382,7 +382,7 @@ impl CoxNewData {
 
 #[doc = " `predict(type = \"lp\" | \"risk\" | \"expected\" | \"survival\")` output."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxPrediction {
     #[pyo3(get)]
     pub fit: Vec<f64>,
@@ -406,7 +406,7 @@ impl CoxPrediction {
 
 #[doc = " `predict(type = \"terms\")` output: one column per term."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxTermsPrediction {
     #[doc = " Column count retained independently of the row count."]
     #[pyo3(get)]
@@ -423,7 +423,7 @@ pub struct CoxTermsPrediction {
 #[doc = " `basehaz(fit)`: the cumulative hazard at each event or censoring time"]
 #[doc = " per stratum, rows concatenated in stratum order."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct Basehaz {
     #[pyo3(get)]
     pub time: Vec<f64>,
@@ -437,7 +437,7 @@ pub struct Basehaz {
 #[doc = " One curve of `survfit(fit, newdata)`: `surv`, `cumhaz` and `std_err`"]
 #[doc = " have one row per time and one column per new observation."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxSurvfitCurve {
     #[doc = " Stratum code the curve belongs to."]
     #[pyo3(get)]

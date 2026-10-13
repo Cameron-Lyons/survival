@@ -1,7 +1,7 @@
 const NORMAL_CI_Z_SCORE: f64 = crate::constants::Z_SCORE_95;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct MCDropoutConfig {
     #[pyo3(get, set)]
     pub n_samples: usize,
@@ -35,7 +35,7 @@ impl MCDropoutConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct UncertaintyResult {
     #[pyo3(get)]
     pub mean_prediction: Vec<Vec<f64>>,
@@ -180,7 +180,7 @@ pub fn mc_dropout_uncertainty(predictions: Vec<Vec<Vec<f64>>>) -> PyResult<Uncer
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct EnsembleUncertaintyResult {
     #[pyo3(get)]
     pub mean_prediction: Vec<Vec<f64>>,

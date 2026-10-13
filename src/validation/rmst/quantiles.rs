@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 #[doc = " `quantile(fit, probs, conf.int)`: one row per curve, `NaN` for a"]
 #[doc = " quantile the curve does not reach (R's `NA`)."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct SurvfitCurveQuantiles {
     pub probs: Vec<f64>,
     pub quantile: Vec<Vec<f64>>,

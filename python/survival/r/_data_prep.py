@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import math
 import numbers
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -207,6 +206,15 @@ def neardate(
         raise ValueError("id1 and y1 have different lengths")
     if len(id2_values) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
+    if (
+        isinstance(nomatch, int | np.integer)
+        and not isinstance(nomatch, bool)
+        and 0 <= nomatch < len(id2_values)
+    ):
+        raise ValueError(
+            f"nomatch={nomatch} is a row of id2: rows are zero-based, so R's nomatch=0 "
+            "is ambiguous here; use None or -1"
+        )
     missing1 = _missing_flags(id1_values)
     id1_labels = [
         "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
@@ -879,7 +887,7 @@ def rttright(
                 raise ValueError("weights must be non-negative")
             casewt.append(weight)
     if mf.terms.offsets and warn_offset:
-        warnings.warn("Offset term ignored", RuntimeWarning, stacklevel=2)
+        _warn_outside_package("Offset term ignored", RuntimeWarning)
     groups = _model_strata(mf)
     strata_codes = None
     if groups is not None:
@@ -1339,7 +1347,7 @@ def _apply_tmerge_argument(
         raise ValueError(f"attempt to turn time-dependent covariate {name} into an event")
     prior = newdata.get(name)
     if kind == "tdc" and name not in tdcvar and prior is not None:
-        warnings.warn(f"replacement of variable '{name}'", stacklevel=3)
+        _warn_outside_package(f"replacement of variable '{name}'")
         prior = None
     if kind in {"event", "cumevent"} and name not in tevent:
         prior = None

@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StackingConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -42,7 +42,7 @@ impl StackingConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StackingResult {
     #[pyo3(get)]
     pub meta_coefficients: Vec<f64>,

@@ -10,7 +10,7 @@ use rayon::prelude::*;
 const SURVREG_DISTRIBUTION_ERROR: &str = "distribution must be one of weibull, exponential, rayleigh, extreme, gaussian, logistic, loggaussian, lognormal, or loglogistic";
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BootstrapResult {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,

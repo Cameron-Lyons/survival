@@ -8,7 +8,25 @@ Version 3.0 changes names, result types and module locations; numerical results
 are unchanged. [Migrating to survival 3.0](docs/migration-3.0.md) lists every
 change with its replacement.
 
+### Added
+
+- R's first-argument names are accepted as keywords: `predict`, `coef`, `vcov`,
+  `fitted`, `residuals`, `confint`, `logLik`, `nobs` and `summary` take
+  `object=`, `coxph_detail` takes `object=`, `is_surv` takes `x=`, and
+  `survfit` and `survdiff` take `formula=`.
+- `survreg_control()` reads like R's control list: `control["iter.max"]`,
+  `control["rel.tolerance"]`, ... (`SurvregControlResult`).
+- Native classes report `survival._survival` as their module, and the kernel
+  results `SurvDiffResult`, `SurvExpResult`, `PyearsResult` and `RateTable`
+  (including `survexp_us()`) pickle and copy.
+- `coef`, `vcov`, `concat_surv` and `model_summary` have precise return types.
+
 ### Fixed
+
+- `neardate(nomatch=)` refuses a value that is also a zero-based row of `id2`
+  (such as R's `nomatch=0`), which made a match and a non-match look alike.
+- Warnings raised under the model generics report the caller's line, not a
+  line inside the package.
 
 - `bprobit()`'s inverse link clamps the linear predictor at
   `±qnorm(.Machine$double.eps)`, as R's probit link does.

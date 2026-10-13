@@ -13,7 +13,7 @@ pub enum StateFigLayout {
 #[doc = " for clockwise; `offset` marks the arrows that R shifts sideways because"]
 #[doc = " the reverse arrow is drawn with the mirrored curvature."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StateFigArrow {
     #[pyo3(get)]
     pub from_state: usize,
@@ -28,7 +28,7 @@ pub struct StateFigArrow {
 #[doc = " The diagram: box centres (`x`, `y` in `[0, 1]`) and arrows, in the"]
 #[doc = " order R draws them (by destination state, then origin)."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct StateFigResult {
     #[pyo3(get)]
     pub states: Vec<String>,

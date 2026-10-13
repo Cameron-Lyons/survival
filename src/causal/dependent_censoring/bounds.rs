@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SensitivityBoundsConfig {
     #[pyo3(get, set)]
     pub gamma_range: Vec<f64>,
@@ -24,7 +24,7 @@ impl SensitivityBoundsConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SensitivityBoundsResult {
     #[pyo3(get)]
     pub gamma_values: Vec<f64>,

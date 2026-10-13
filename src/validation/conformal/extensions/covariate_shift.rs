@@ -1,7 +1,7 @@
 use super::super::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct WeightDiagnostics {
     #[pyo3(get)]
     pub effective_sample_size: f64,
@@ -16,7 +16,7 @@ pub struct WeightDiagnostics {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CovariateShiftConformalResult {
     #[pyo3(get)]
     pub lower_predictive_bound: Vec<f64>,

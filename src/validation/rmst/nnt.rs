@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 
 #[doc = " Absolute risk reduction and number needed to treat at `time_horizon`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct NNTResult {
     pub nnt: f64,
     pub nnt_ci_lower: f64,

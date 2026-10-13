@@ -7,7 +7,7 @@ fn selu_activation<const D: usize>(x: Tensor<D>) -> Tensor<D> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum Activation {
     ReLU,
     SELU,
@@ -30,7 +30,7 @@ impl Activation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DeepSurvConfig {
     #[pyo3(get, set)]
     pub hidden_layers: Vec<usize>,

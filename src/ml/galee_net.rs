@@ -13,7 +13,7 @@ use super::utils::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum UnimodalConstraint {
     SoftConstraint,
     HardConstraint,
@@ -36,7 +36,7 @@ impl UnimodalConstraint {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GALEEConfig {
     #[pyo3(get, set)]
     pub health_dim: usize,
@@ -575,7 +575,7 @@ fn extract_weights(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GALEEResult {
     #[pyo3(get)]
     pub health_trajectories: Vec<Vec<Vec<f64>>>,
@@ -586,7 +586,7 @@ pub struct GALEEResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct GALEE {
     weights: StoredWeights,
     _config: GALEEConfig,

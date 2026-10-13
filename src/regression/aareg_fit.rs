@@ -67,7 +67,7 @@ impl Default for AaregOptions {
 }
 
 #[derive(Clone, Debug)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AaregFitResult {
     #[pyo3(get)]
     pub n: Vec<usize>,

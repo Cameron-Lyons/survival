@@ -10,7 +10,6 @@ tabulation, ``match.ratetable`` and the expected-survival curves are the
 from __future__ import annotations
 
 import math
-import warnings
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -25,6 +24,7 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _warn_outside_package,
     _as_character,
     _categories,
     _coerce_array_like,
@@ -808,10 +808,9 @@ def _pyears_followup(
             1 for t, s in zip(response.time, response.event, strict=True) if t == 0 and s == 1
         )
         if nzero > 0:
-            warnings.warn(
+            _warn_outside_package(
                 f"{nzero} observations with an event and 0 follow-up time, any rate "
-                "calculations are statistically questionable",
-                stacklevel=3,
+                "calculations are statistically questionable"
             )
     elif response.type != "counting":
         raise ValueError("Only right-censored and counting process survival types are supported")
@@ -1847,7 +1846,7 @@ def survexp(
         }
         mapped.update(mf.extra)
         if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
-            warnings.warn("se.fit value ignored", stacklevel=2)
+            _warn_outside_package("se.fit value ignored")
         if method_value.startswith("individual"):
             if response is None:
                 raise ValueError("for individual survival an observation time must be given")
@@ -1900,9 +1899,9 @@ def survexp(
     if mf.n == 0:
         raise ValueError("Data set has 0 rows")
     if se_fit is not None and _normalize_bool_option(se_fit, "se.fit"):
-        warnings.warn("se.fit value ignored", stacklevel=2)
+        _warn_outside_package("se.fit value ignored")
     if mf.weights is not None and any(float(value) != 1.0 for value in mf.weights):
-        warnings.warn("weights ignored", stacklevel=2)
+        _warn_outside_package("weights ignored")
     requested = _survexp_times(times)
     response = _survexp_response(mf)
     if response is None and requested is None:

@@ -1,6 +1,6 @@
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 
 pub enum AttackType {
     FGSM,
@@ -24,7 +24,7 @@ impl AttackType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum DefenseType {
     AdversarialTraining,
     InputPreprocessing,
@@ -47,7 +47,7 @@ impl DefenseType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AdversarialAttackConfig {
     #[pyo3(get, set)]
     pub attack_type: AttackType,
@@ -91,7 +91,7 @@ impl AdversarialAttackConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AdversarialDefenseConfig {
     #[pyo3(get, set)]
     pub defense_type: DefenseType,
@@ -127,7 +127,7 @@ impl AdversarialDefenseConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AdversarialExample {
     #[pyo3(get)]
     pub original: Vec<f64>,
@@ -158,7 +158,7 @@ impl AdversarialExample {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct AdversarialAttackResult {
     #[pyo3(get)]
     pub adversarial_examples: Vec<AdversarialExample>,
@@ -184,7 +184,7 @@ impl AdversarialAttackResult {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RobustSurvivalModel {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
@@ -213,7 +213,7 @@ impl RobustSurvivalModel {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct RobustnessEvaluation {
     #[pyo3(get)]
     pub clean_accuracy: f64,

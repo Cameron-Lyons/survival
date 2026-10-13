@@ -4,7 +4,7 @@ use crate::constants::{DIVISION_FLOOR, normal_ci_95};
 use crate::internal::statistical::normal_sf;
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DoubleMLConfig {
     #[pyo3(get, set)]
     pub n_folds: usize,
@@ -187,7 +187,7 @@ fn fit_propensity_model(x: &[Vec<f64>], d: &[i32], train_idx: &[usize], trimming
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct DoubleMLResult {
     #[pyo3(get)]
     pub ate: f64,
@@ -323,7 +323,7 @@ pub fn double_ml_survival(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CATEResult {
     #[pyo3(get)]
     pub cate_estimates: Vec<f64>,

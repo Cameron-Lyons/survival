@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 
 #[doc = " Cluster membership codes."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ClusterResult {
     #[doc = " Zero-based cluster code of each observation, numbered by first"]
     #[doc = " appearance."]

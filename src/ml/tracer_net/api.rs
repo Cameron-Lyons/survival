@@ -241,7 +241,7 @@ fn fit_tracer_inner(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct Tracer {
     weights: StoredWeights,
     config: TracerConfig,

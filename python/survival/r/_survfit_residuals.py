@@ -8,12 +8,18 @@ the data to the Rust ports of ``rsurvpart1`` / ``rsurvpart2`` (``survfitresid``,
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
-from ._coerce import _NA_REAL, _float_vector, _is_bool_like, _match_string_arg, _pop_dotted_keyword
+from ._coerce import (
+    _NA_REAL,
+    _float_vector,
+    _is_bool_like,
+    _match_string_arg,
+    _pop_dotted_keyword,
+    _warn_outside_package,
+)
 from ._fit import _excluded_rows, _pad_rows
 from ._survfit import _survfit_data_from_fit, _SurvfitData
 from ._types import (
@@ -94,7 +100,7 @@ def _warn_approximate(fit: SurvfitResult | SurvfitMultiStateResult, type_: str) 
     stype, ctype = _call_codes(fit)
     hazard_based = type_ == "cumhaz" or (type_ == "pstate" and stype == 2)
     if isinstance(fit, SurvfitResult) and ctype == 2 and hazard_based:
-        warnings.warn("code for ctype=2 not yet completed, result is approximate", stacklevel=3)
+        _warn_outside_package("code for ctype=2 not yet completed, result is approximate")
 
 
 def _row_labels(frame: _SurvfitData, codes: list[int]) -> list[Any]:
@@ -344,9 +350,7 @@ def pseudo(
         if size > 0:
             ends.append(fit.time[offset - 1])
     if any(end < times[-1] for end in ends):
-        warnings.warn(
-            "requested time points are beyond the end of one or more curves", stacklevel=2
-        )
+        _warn_outside_package("requested time points are beyond the end of one or more curves")
     multistate = isinstance(fit, SurvfitMultiStateResult)
     result = _kernel_residuals(
         fit, frame, times, type_, collapse=None, weighted=None, pseudo_collapse=collapse

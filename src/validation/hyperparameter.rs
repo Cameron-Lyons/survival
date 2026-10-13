@@ -94,7 +94,7 @@ fn validate_search_config(config: &HyperparameterSearchConfig, n_obs: usize) -> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(module = "survival._survival", eq, eq_int, from_py_object)]
 pub enum SearchStrategy {
     Grid,
     Random,
@@ -113,7 +113,7 @@ impl SearchStrategy {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct HyperparameterSearchConfig {
     #[pyo3(get, set)]
     pub strategy: SearchStrategy,
@@ -155,7 +155,7 @@ impl HyperparameterSearchConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct HyperparameterResult {
     #[pyo3(get)]
     pub best_params: HyperparameterSet,
@@ -355,7 +355,7 @@ pub fn hyperparameter_search(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct BenchmarkResult {
     #[pyo3(get)]
     pub model_names: Vec<String>,
@@ -492,7 +492,7 @@ pub fn benchmark_models(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct NestedCVResult {
     #[pyo3(get)]
     pub outer_scores: Vec<f64>,

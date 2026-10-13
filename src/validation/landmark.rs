@@ -67,7 +67,7 @@ fn survival_variance(step: &KmStep) -> f64 {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LandmarkResult {
     #[pyo3(get)]
     pub landmark_time: f64,
@@ -201,7 +201,7 @@ pub(crate) fn landmark_analysis_batch_py(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct ConditionalSurvivalResult {
     #[pyo3(get)]
     pub given_time: f64,
@@ -311,7 +311,7 @@ pub(crate) fn conditional_survival_py(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct HazardRatioResult {
     #[pyo3(get)]
     pub hazard_ratio: f64,
@@ -420,7 +420,7 @@ pub(crate) fn hazard_ratio_py(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvivalAtTimeResult {
     #[pyo3(get)]
     pub time: f64,
@@ -521,7 +521,7 @@ pub(crate) fn survival_at_times_py(
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct LifeTableResult {
     #[pyo3(get)]
     pub interval_start: Vec<f64>,

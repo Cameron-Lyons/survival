@@ -11,7 +11,7 @@ fn bounded_unit_interval(input: f64, edge: f64) -> f64 {
 }
 
 #[doc = " The bounded links of `blogit.R` for one `edge` (R default 0.05)."]
-#[pyclass]
+#[pyclass(module = "survival._survival")]
 pub struct LinkFunctionParams {
     edge: f64,
 }

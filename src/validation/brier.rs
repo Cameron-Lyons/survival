@@ -23,7 +23,7 @@ pub struct BrierInput<'a> {
 
 #[doc = " Output of [`brier`]: R's `brier` object with `detail = TRUE`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object, get_all)]
+#[pyclass(module = "survival._survival", from_py_object, get_all)]
 pub struct BrierResult {
     pub times: Vec<f64>,
     pub brier: Vec<f64>,

@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 
 #[doc = " `coxph.wtest(var, b)`: one test per column of `b`."]
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CoxphWtest {
     #[doc = " `b' V^{-1} b` for each column of `b`."]
     #[pyo3(get)]

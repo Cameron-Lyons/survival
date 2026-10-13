@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
@@ -23,6 +22,7 @@ from ._coerce import (
     _encode_labels,
     _factor,
     _finite_float,
+    _first_argument,
     _float_or_nan,
     _float_vector,
     _floats_or_nan,
@@ -64,6 +64,7 @@ from ._formula import (
 from ._names import _make_unique
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv, is_na_surv
 from ._types import (
+    _MISSING,
     CoxSurvfitMultiStateResult,
     CoxSurvfitResult,
     NaAction,
@@ -266,15 +267,14 @@ def _formula_model_frame(
             raise ValueError("cluster appears as both an argument and a model term")
         if len(cluster_terms) > 1:
             raise ValueError("can not have two cluster terms")
-        warnings.warn(
+        _warn_outside_package(
             "use of cluster() in a formula is deprecated; use the 'cluster' argument to the "
             "survfit function",
             DeprecationWarning,
-            stacklevel=3,
         )
         extras["cluster"] = _formula_cluster_values(data, terms, n)
     if terms.offsets:
-        warnings.warn("Offset term ignored", stacklevel=3)
+        _warn_outside_package("Offset term ignored")
 
     columns: dict[str, Any] = {}
     for model_term in terms.model_terms:
@@ -404,7 +404,7 @@ def _influence_level(influence: Any) -> int:
 
 
 def survfit(
-    response: Any,
+    response: Any = _MISSING,
     data: Any | None = None,
     weights: Any | None = None,
     subset: Any | None = None,
@@ -454,6 +454,8 @@ def survfit(
     for ``residuals.survfit`` / ``pseudo`` whatever ``model`` says, as R re-reads it through
     ``model.frame``.
     """
+
+    response = _first_argument(response, kwargs, "response", "formula", "survfit")
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, None)
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)
@@ -767,10 +769,10 @@ def _survfitAJ(
 
     stype, ctype = _survfit_type_codes(type_, stype, ctype)
     if stype != 1 or ctype != 1:
-        warnings.warn("only stype=1, ctype=1 implimented for multi-state data", stacklevel=3)
+        _warn_outside_package("only stype=1, ctype=1 implimented for multi-state data")
     conf_int, conf_type, conf_lower = _conf_arguments(conf_int, conf_type, conf_lower)
     if conf_lower != "usual":
-        warnings.warn("conf.lower is ignored for multi-state data", stacklevel=3)
+        _warn_outside_package("conf.lower is ignored for multi-state data")
     se_fit = _logical(se_fit, "se.fit must be TRUE/FALSE")
     if robust is not None and not _logical(robust, "robust must be TRUE/FALSE"):
         raise ValueError("multi-state survfit supports only a robust variance")
@@ -788,7 +790,7 @@ def _survfitAJ(
             cluster_of.setdefault(subject, cluster) != cluster
             for subject, cluster in zip(frame.id, frame.cluster, strict=True)
         ):
-            warnings.warn("an id value appears on more than one cluster", stacklevel=3)
+            _warn_outside_package("an id value appears on more than one cluster")
     engine = _core.survfitaj(
         list(frame.y.time),
         frame.y._event_codes(),
@@ -1194,10 +1196,9 @@ def _survfit_matrix(
     curve_start = starts[0]
     if curve_start is not None:
         if start is not None and start < curve_start:
-            warnings.warn(
+            _warn_outside_package(
                 "curves have a larger start.time than the parameter; using the curves' start.time",
                 RuntimeWarning,
-                stacklevel=3,
             )
         start = curve_start if start is None else max(start, curve_start)
     if isinstance(p0, Mapping):

@@ -11,7 +11,6 @@ from __future__ import annotations
 import math
 import numbers
 import sys
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from statistics import NormalDist
@@ -31,6 +30,7 @@ from ._coerce import (
     _control_mapping,
     _cox_tie_method,
     _finite_float,
+    _first_argument,
     _float_vector,
     _integer_scalar,
     _is_bool_like,
@@ -104,6 +104,7 @@ from ._names import _make_unique
 from ._penalties import _pspline_cbase
 from ._surv import Surv
 from ._types import (
+    _MISSING,
     AnovaResult,
     BasehazResult,
     CoxPenaltyBasis,
@@ -905,10 +906,8 @@ def _coxph_fit_frame(
     cluster: list[int] | None = None
     if has_cluster:
         if not use_robust:
-            warnings.warn(
-                "cluster specified with robust=FALSE, cluster ignored",
-                RuntimeWarning,
-                stacklevel=3,
+            _warn_outside_package(
+                "cluster specified with robust=FALSE, cluster ignored", RuntimeWarning
             )
         cluster = _cluster_codes(data.cluster or [])
     elif use_robust and data.id is not None:
@@ -942,10 +941,9 @@ def _coxph_fit_frame(
     sparse_values = None
     if penalized_terms:
         if use_robust:
-            warnings.warn(
+            _warn_outside_package(
                 "the robust variance is not defined for a penalized model, option ignored",
                 RuntimeWarning,
-                stacklevel=3,
             )
             use_robust = False
         penalized = _core.coxpenal_fit(
@@ -1014,13 +1012,12 @@ def _coxph_fit_frame(
             raise ValueError(f"X matrix deemed to be singular; variable {columns}")
         if penalized is None:
             for message in _cox_fit_diagnostic_messages(fit, iter_max, eps, toler_inf):
-                warnings.warn(message, RuntimeWarning, stacklevel=3)
+                _warn_outside_package(message, RuntimeWarning)
         elif iter_max > 1 and penalized.inner_failures:
-            warnings.warn(
+            _warn_outside_package(
                 "Inner loop failed to coverge for iterations "
                 + " ".join(map(str, penalized.inner_failures)),
                 RuntimeWarning,
-                stacklevel=3,
             )
     return CoxphModel(
         fit=fit,
@@ -1375,8 +1372,8 @@ def clogit(
         if "cluster(" in rhs:
             raise ValueError("robust variance plus the exact method is not supported")
         if weights is not None:
-            warnings.warn(
-                "weights ignored: not possible for the exact method", RuntimeWarning, stacklevel=2
+            _warn_outside_package(
+                "weights ignored: not possible for the exact method", RuntimeWarning
             )
             weights = None
     if not _response_arg_columns(response):
@@ -2887,7 +2884,9 @@ def _detail_response(
     return [[begin, t, float(e)] for t, e in zip(time, status, strict=True)]
 
 
-def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxphDetailResult:
+def coxph_detail(
+    fit: Any = _MISSING, riskmat: Any = False, rorder: str = "data", **kwargs: Any
+) -> CoxphDetailResult:
     """R's ``coxph.detail``: the per-event-time pieces of the Cox partial likelihood.
 
     A multi-state fit is described on its stacked data (coxph.getdata stacks it): ``x``
@@ -2895,6 +2894,12 @@ def coxph_detail(fit: Any, riskmat: Any = False, rorder: str = "data") -> CoxphD
     stacked stratum ``"1"``, ``"2"``, ...  Unlike R, this works for models with
     ``strata()`` terms.
     """
+
+    fit = _first_argument(fit, kwargs, "fit", "object", "coxph_detail")
+    if kwargs:
+        raise TypeError(
+            f"coxph_detail got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
+        )
 
     from ._coxphms import CoxphmsModel, _stacked_strata_labels
 
@@ -3079,10 +3084,9 @@ def _anova_list(fits: Sequence[CoxphModel], test: Any) -> AnovaResult:
     responses = [fit.formula.split("~", 1)[0].strip() for fit in fits]
     keep = [idx for idx, response in enumerate(responses) if response == responses[0]]
     if len(keep) < len(fits):
-        warnings.warn(
+        _warn_outside_package(
             "Models with a different response were removed because response differs from model 1",
             RuntimeWarning,
-            stacklevel=3,
         )
         fits = [fits[idx] for idx in keep]
     if len(fits) == 1:

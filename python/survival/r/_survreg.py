@@ -12,8 +12,7 @@ calls the kernel and labels the result.
 from __future__ import annotations
 
 import math
-import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import chain
 from operator import index
@@ -50,6 +49,7 @@ from ._coerce import (
     _quantile_vector,
     _rowsum_groups,
     _scalar_or_vector,
+    _warn_outside_package,
 )
 from ._fit import (
     _empty_prediction,
@@ -437,10 +437,11 @@ def survreg_control(
     debug: Any = 0,
     outer_max: Any = 10,
     **dotted: Any,
-) -> Any:
+) -> SurvregControlResult:
     """R's ``survreg.control`` (``max_iter``/``eps``/``tol_chol`` are accepted aliases);
     ``outer.max`` bounds the outer iterations of a penalized fit and must be at least 1
-    (R does not check it), ``debug`` is accepted and unused as in R."""
+    (R does not check it), ``debug`` is accepted and unused as in R.  The result reads
+    like R's list: ``control["iter.max"]``, ``control["rel.tolerance"]``, ...."""
 
     for alias in ("rel.tolerance", "eps"):
         rel_tolerance = _pop_dotted_keyword(dotted, alias, "rel_tolerance", rel_tolerance, 1e-9)
@@ -457,22 +458,74 @@ def survreg_control(
     outer = _integer_scalar(outer_max, "outer.max")
     if outer < 1:
         raise ValueError("invalid value for outer.max")
-    return _core.SurvregControl(
+    native = _core.SurvregControl(
         iter_max=iterations,
         rel_tolerance=_finite_float(rel_tolerance, "rel.tolerance"),
         toler_chol=_finite_float(toler_chol, "toler.chol"),
         outer_max=outer,
     )
+    return SurvregControlResult(native, debug)
 
 
-def _resolve_control(control: Any | None, options: dict[str, Any]) -> Any:
+@dataclass(frozen=True)
+class SurvregControlResult(Mapping[str, Any]):
+    """R's ``survreg.control`` list: a read-only mapping with R's keys ``iter.max``,
+    ``rel.tolerance``, ``toler.chol``, ``debug``, ``maxiter`` and ``outer.max``, and the
+    same values as attributes.  ``control`` is the engine's ``SurvregControl``."""
+
+    control: _core.SurvregControl
+    debug: Any = 0
+
+    @property
+    def iter_max(self) -> int:
+        return int(self.control.iter_max)
+
+    @property
+    def maxiter(self) -> int:
+        return int(self.control.iter_max)
+
+    @property
+    def rel_tolerance(self) -> float:
+        return float(self.control.rel_tolerance)
+
+    @property
+    def toler_chol(self) -> float:
+        return float(self.control.toler_chol)
+
+    @property
+    def outer_max(self) -> int:
+        return int(self.control.outer_max)
+
+    def _values(self) -> dict[str, Any]:
+        return {
+            "iter.max": self.iter_max,
+            "rel.tolerance": self.rel_tolerance,
+            "toler.chol": self.toler_chol,
+            "debug": self.debug,
+            "maxiter": self.maxiter,
+            "outer.max": self.outer_max,
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values())
+
+    def __len__(self) -> int:
+        return 6
+
+
+def _resolve_control(control: Any | None, options: dict[str, Any]) -> _core.SurvregControl:
     if control is None:
-        return survreg_control(**options)
+        return survreg_control(**options).control
     if options:
         raise TypeError(f"unused argument(s) with control: {', '.join(sorted(options))}")
     if isinstance(control, _core.SurvregControl):
         return control
-    return survreg_control(**_control_mapping(control, "control"))
+    if isinstance(control, SurvregControlResult):
+        return control.control
+    return survreg_control(**_control_mapping(control, "control")).control
 
 
 @dataclass(frozen=True)
@@ -564,10 +617,9 @@ def _formula_frame(
         offset = _offset_vector(data, terms.offsets, n)
     if terms.clusters:
         if cluster is not None:
-            warnings.warn(
+            _warn_outside_package(
                 "cluster appears both in a formula and as an argument, formula term ignored",
                 RuntimeWarning,
-                stacklevel=3,
             )
         else:
             cluster = _formula_cluster_values(data, terms, n)
@@ -747,10 +799,8 @@ def survreg(
 
     distribution = _resolve_distribution(dist, parms)
     if distribution.scale is not None and scale_value != 0.0:
-        warnings.warn(
-            f"{distribution.name} has a fixed scale, user specified value ignored",
-            RuntimeWarning,
-            stacklevel=2,
+        _warn_outside_package(
+            f"{distribution.name} has a fixed scale, user specified value ignored", RuntimeWarning
         )
         scale_value = 0.0
     if scale_value < 0.0:
@@ -807,9 +857,7 @@ def survreg(
             nstrat=len(frame.strata_levels) or None,
         )
         if control.iter_max > 1 and not fit.converged:
-            warnings.warn(
-                "Ran out of iterations and did not converge", RuntimeWarning, stacklevel=2
-            )
+            _warn_outside_package("Ran out of iterations and did not converge", RuntimeWarning)
 
     return SurvregModel(
         fit=fit,
@@ -1400,10 +1448,8 @@ def _anova_list(fits: Sequence[SurvregModel], with_test: bool) -> AnovaResult:
     responses = [fit.formula.partition("~")[0].strip() if fit.formula else "" for fit in fits]
     keep = [response == responses[0] for response in responses]
     if not all(keep):
-        warnings.warn(
-            "Some fit objects deleted because response differs from the first model",
-            RuntimeWarning,
-            stacklevel=3,
+        _warn_outside_package(
+            "Some fit objects deleted because response differs from the first model", RuntimeWarning
         )
     fits = [fit for fit, same in zip(fits, keep, strict=True) if same]
     if len(fits) == 1:
@@ -1590,7 +1636,7 @@ def _random_sample_count(n: Any) -> int:
 
     if isinstance(value, complex | np.complexfloating):
         if value.imag != 0:
-            warnings.warn("imaginary parts discarded in coercion", RuntimeWarning, stacklevel=3)
+            _warn_outside_package("imaginary parts discarded in coercion", RuntimeWarning)
         value = value.real
     try:
         if isinstance(value, str):
@@ -1604,7 +1650,7 @@ def _random_sample_count(n: Any) -> int:
             numeric = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
         if isinstance(value, str):
-            warnings.warn("NAs introduced by coercion", RuntimeWarning, stacklevel=3)
+            _warn_outside_package("NAs introduced by coercion", RuntimeWarning)
         raise ValueError("invalid arguments") from exc
     if not math.isfinite(numeric):
         raise ValueError("invalid arguments")

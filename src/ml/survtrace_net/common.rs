@@ -15,7 +15,7 @@ fn layer_norm(x: Tensor<2>, gamma: Tensor<1>, beta: Tensor<1>, eps: f32) -> Tens
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub enum SurvTraceActivation {
     GELU,
     ReLU,
@@ -36,7 +36,7 @@ impl SurvTraceActivation {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct SurvTraceConfig {
     #[pyo3(get, set)]
     pub hidden_size: usize,

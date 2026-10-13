@@ -1,7 +1,7 @@
 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 
 pub enum CopulaType {
     Clayton,
@@ -29,7 +29,7 @@ impl CopulaType {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CopulaCensoringConfig {
     #[pyo3(get, set)]
     pub copula_type: CopulaType,
@@ -65,7 +65,7 @@ impl CopulaCensoringConfig {
 }
 
 #[derive(Debug, Clone)]
-#[pyclass(from_py_object)]
+#[pyclass(module = "survival._survival", from_py_object)]
 pub struct CopulaCensoringResult {
     #[pyo3(get)]
     pub theta: f64,
