@@ -14,7 +14,6 @@ import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from itertools import chain
 from statistics import NormalDist
 from typing import Any, Protocol
 
@@ -2338,17 +2337,16 @@ def residuals_coxph(
     elif otype == "deviance":
         values = list(engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes))
     elif otype == "partial":
-        rows = engine.partial_residuals(
+        values = engine.partial_residuals(
             assign=_active_assign(fit), weighted=weighted_value, collapse=fit_codes
         )
-        values = [list(row) for row in rows]
     else:
         method = {
             "score": engine.score_residuals,
             "dfbeta": engine.dfbeta,
             "dfbetas": engine.dfbetas,
         }[otype]
-        values = [list(row) for row in method(weighted=weighted_value, collapse=fit_codes)]
+        values = method(weighted=weighted_value, collapse=fit_codes)
     if codes is None:
         values = _pad_rows(values, excluded)
     elif padded_codes is not None:
@@ -2429,34 +2427,37 @@ def _check_interaction_margins(fit: CoxphModel) -> None:
         )
 
 
-def _curve_block(curves: list[Any], name: str) -> Any:
+def _curve_matrix(arrays: list[dict[str, Any]], name: str) -> np.ndarray | None:
     """One matrix of the curves (``surv``, ``cumhaz`` or ``std_err``) as R stores it: the
-    curves' rows end to end, ``ntime x ncurve`` rows, or a vector for one column."""
+    curves' rows end to end, ``ntime x ncurve``."""
 
-    rows = [row for curve in curves for row in getattr(curve, name)]
-    if rows and len(rows[0]) == 1:
-        return [row[0] for row in rows]
-    return rows
+    blocks = [values[name] for values in arrays]
+    if not blocks or any(block is None for block in blocks):
+        return None
+    width = max(block.shape[1] for block in blocks)
+    return np.vstack([block if len(block) else np.empty((0, width)) for block in blocks])
 
 
-def _confidence_limits(surv: Any, std_err: Any, conf_type: str, conf_int: float) -> tuple[Any, Any]:
+def _curve_block(matrix: np.ndarray) -> list[Any]:
+    """A curve matrix as nested rows, or a vector for one column."""
+
+    if matrix.ndim == 2 and matrix.shape[1] == 1:
+        return matrix[:, 0].tolist()
+    return matrix.tolist()
+
+
+def _confidence_limits(
+    surv: np.ndarray, std_err: np.ndarray, conf_type: str, conf_int: float
+) -> tuple[list[Any], list[Any]]:
     """``survfit_confint`` on the whole ``surv`` matrix at once, as R calls it (it works
     elementwise), with the limits cut back into rows."""
 
-    if not (surv and isinstance(surv[0], list)):
-        band = _core.survfit_confint(surv, std_err, True, conf_type, conf_int)
-        return band.lower, band.upper
-    width = len(surv[0])
-    band = _core.survfit_confint(
-        list(chain.from_iterable(surv)),
-        list(chain.from_iterable(std_err)),
-        True,
-        conf_type,
-        conf_int,
+    band = _core.survfit_confint(surv.ravel(), std_err.ravel(), True, conf_type, conf_int)
+    limits = band.to_arrays()
+    return (
+        _curve_block(limits["lower"].reshape(surv.shape)),
+        _curve_block(limits["upper"].reshape(surv.shape)),
     )
-    lower, upper = band.lower, band.upper
-    starts = range(0, len(lower), width)
-    return [lower[i : i + width] for i in starts], [upper[i : i + width] for i in starts]
 
 
 def _row_names(data: Any, rows: Sequence[int]) -> list[str]:
@@ -2672,11 +2673,16 @@ def survfit_coxph(
         censor=censor_value,
         start_time=start,
     )
-    surv = _curve_block(curves, "surv")
-    std_err = _curve_block(curves, "std_err") if include_se else None
+    arrays = [curve.to_arrays() for curve in curves]
+    surv_matrix = _curve_matrix(arrays, "surv")
+    std_err_matrix = _curve_matrix(arrays, "std_err") if include_se else None
+    cumhaz_matrix = _curve_matrix(arrays, "cumhaz")
+    surv = [] if surv_matrix is None else _curve_block(surv_matrix)
+    std_err = None if std_err_matrix is None else _curve_block(std_err_matrix)
+    cumhaz = [] if cumhaz_matrix is None else _curve_block(cumhaz_matrix)
     lower = upper = None
-    if include_se and conf_type_name != "none":
-        lower, upper = _confidence_limits(surv, std_err, conf_type_name, level)
+    if surv_matrix is not None and std_err_matrix is not None and conf_type_name != "none":
+        lower, upper = _confidence_limits(surv_matrix, std_err_matrix, conf_type_name, level)
     return CoxSurvfitResult(
         n=[curve.n for curve in curves],
         time=[t for curve in curves for t in curve.time],
@@ -2684,7 +2690,7 @@ def survfit_coxph(
         n_event=[v for curve in curves for v in curve.n_event],
         n_censor=[v for curve in curves for v in curve.n_censor],
         surv=surv,
-        cumhaz=_curve_block(curves, "cumhaz"),
+        cumhaz=cumhaz,
         type=fit.y.type,
         strata={name: len(curve.time) for name, curve in zip(strata_names, curves, strict=True)}
         if strata_names

@@ -98,8 +98,14 @@ def _time_column(values: Any, name: str, message: str) -> list[float]:
         if array.dtype.kind == "b":
             raise ValueError(message)
         return array.astype(np.float64).tolist()
+    raw = _materialize_1d(values, name)
+    types = set(map(type, raw))
+    if types <= {float, int}:
+        return list(map(float, raw))
+    if types <= {float, int, type(None)}:
+        return [math.nan if value is None else float(value) for value in raw]
     result: list[float] = []
-    for value in _materialize_1d(values, name):
+    for value in raw:
         if _is_missing_value(value):
             result.append(math.nan)
             continue
@@ -133,6 +139,8 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
             _warn_outside_package("Invalid status value, converted to NA")
         return codes
     raw = _materialize_1d(values, name)
+    if raw and set(map(type, raw)) <= {float, int}:
+        return _binary_status(np.asarray(raw, dtype=np.float64), name)
     if all(_is_bool_like(value) or _is_missing_value(value) for value in raw):
         return [None if _is_missing_value(value) else int(bool(value)) for value in raw]
     numeric: list[float] = []

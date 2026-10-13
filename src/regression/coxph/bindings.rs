@@ -47,6 +47,32 @@ impl CoxTermsPrediction {
     }
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl CoxSurvfitCurve {
+    #[doc = " `surv`, `cumhaz` and `std_err` as independent float64 time-by-curve matrices."]
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use crate::internal::matrix::matrix_from_rows_with_columns;
+        use numpy::IntoPyArray;
+        let width = self.surv.first().map_or(0, Vec::len);
+        let (surv, cumhaz, std_err) = py.detach(|| -> SurvivalResult<_> {
+            Ok((
+                matrix_from_rows_with_columns(&self.surv, width, "surv")?,
+                matrix_from_rows_with_columns(&self.cumhaz, width, "cumhaz")?,
+                self.std_err
+                    .as_deref()
+                    .map(|rows| matrix_from_rows_with_columns(rows, width, "std_err"))
+                    .transpose()?,
+            ))
+        })?;
+        let result = pyo3::types::PyDict::new(py);
+        result.set_item("surv", surv.into_pyarray(py))?;
+        result.set_item("cumhaz", cumhaz.into_pyarray(py))?;
+        result.set_item("std_err", std_err.map(|values| values.into_pyarray(py)))?;
+        Ok(result)
+    }
+}
+
 pub(crate) fn newdata_from_python(
     x: Option<FloatMatrix>,
     strata: Option<IntVec>,

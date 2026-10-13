@@ -134,6 +134,12 @@ benchmarks.
 - Cohort expected survival from a Cox model aggregates baselines and risks
   directly, using O(N + B + T × G) storage for N subjects, B baseline points, T
   times and G groups.
+- Sparse frailty fits accumulate each group's score, information diagonal and
+  cross terms lazily: a group's risk sum changes only when one of its members
+  enters or leaves the risk set, so its terms are flushed from running
+  (double-double) sums of the death-time weights at those moments, and only the
+  groups of tied deaths are corrected at each Efron step. An evaluation costs
+  O(n p² + G p) for G groups instead of O(d G p) for d deaths.
 - Stored sparse-frailty model matrices insert the group vector into one owned row
   snapshot, so keeping the sparse labels costs one vector rather than a copy of the
   expanded design.

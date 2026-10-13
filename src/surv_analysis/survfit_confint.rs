@@ -82,6 +82,19 @@ pub struct ConfidenceBands {
     pub upper: Vec<f64>,
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl ConfidenceBands {
+    #[doc = " The limits as independent float64 arrays."]
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let result = pyo3::types::PyDict::new(py);
+        result.set_item("lower", self.lower.clone().into_pyarray(py))?;
+        result.set_item("upper", self.upper.clone().into_pyarray(py))?;
+        Ok(result)
+    }
+}
+
 pub(crate) fn validate_conf_int(conf_int: f64) -> SurvivalResult<()> {
     if !(conf_int > 0.0 && conf_int < 1.0) {
         return Err(SurvivalError::invalid_input(
