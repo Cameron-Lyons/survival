@@ -9,13 +9,14 @@ import pytest
 from .helpers import setup_survival_import
 
 sa = setup_survival_import().surv_analysis
+survival = setup_survival_import()
 REFERENCE = json.loads((Path(__file__).parent / "fixtures/survmean_reference.json").read_text())
 
 
 @pytest.fixture(scope="module")
 def fits():
     return {
-        name: sa.SurvfitKMResult.from_stacked(
+        name: survival.kernels.SurvfitKMResult.from_stacked(
             source["time"],
             source["n_risk"],
             source["n_event"],

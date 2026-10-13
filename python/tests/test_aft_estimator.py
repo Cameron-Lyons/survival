@@ -13,7 +13,7 @@ StreamingAFTEstimator = sklearn_compat.StreamingAFTEstimator
 
 
 def _survreg(time, status, covariates, distribution):
-    return _surv.survreg_fit(
+    return survival.kernels.survreg_fit(
         _surv.SurvregData(time, [int(value) for value in status], covariates),
         _surv.SurvregDistribution(distribution),
         control=_surv.SurvregControl(iter_max=100),

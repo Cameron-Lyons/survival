@@ -178,9 +178,9 @@ def test_summary_is_the_same_with_and_without_influence():
 def test_summary_rows_leave_the_influence_matrices_out():
     engine = r.survfit("Surv(time, status) ~ g", _groups(), influence=True).engine
     for rows in (
-        sa.summary_survfit(engine),
-        sa.summary_survfit(engine, censored=True),
-        sa.summary_survfit(engine, times=[2, 5]),
+        survival.kernels.summary_survfit(engine),
+        survival.kernels.summary_survfit(engine, censored=True),
+        survival.kernels.summary_survfit(engine, times=[2, 5]),
     ):
         assert rows.influence_surv is None
         assert rows.influence_chaz is None
@@ -201,7 +201,7 @@ def test_summary_rows_leave_the_influence_matrices_out():
 def test_survmean_of_the_fit_equals_that_of_its_survfit0(rmean, start_time):
     fit = r.survfit("Surv(time, status) ~ g", _groups(), influence=True, start_time=start_time)
     plain = sa.survmean(fit.engine, 1.0, rmean)
-    with_t0 = sa.survmean(sa.survfit0(fit.engine), 1.0, rmean)
+    with_t0 = sa.survmean(survival.kernels.survfit0(fit.engine), 1.0, rmean)
     for field in ("records", "n_max", "n_start", "events", "rmean", "se_rmean", "median"):
         assert getattr(plain, field) == getattr(with_t0, field), field
     np.testing.assert_array_equal(plain.lower, with_t0.lower)

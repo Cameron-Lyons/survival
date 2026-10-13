@@ -12,7 +12,7 @@ section says otherwise. Differences from R are listed in
 | `r.survfitKM` | `survfitKM` | `surv_analysis.survfitkm` | `surv_analysis::survfitkm` |
 | `r.survreg_fit` | `survreg.fit` | `regression.survreg_fit_raw` | `regression::SurvregFitResult::fit` |
 | `r.survpenal_fit` | `survpenal.fit` | `regression.survpenal_fit_raw` | `regression::SurvpenalFitResult::fit` |
-| `r.coxsurv_fit`, `r.survfitcoxph_fit` | `coxsurv.fit`, `survfitcoxph.fit` | `surv_analysis.coxsurv_fit` | `surv_analysis::coxsurv_fit` |
+| `r.coxsurv_fit`, `r.survfitcoxph_fit` | `coxsurv.fit`, `survfitcoxph.fit` | `kernels.coxsurv_fit` | `surv_analysis::coxsurv_fit` |
 
 ## Matrix and vector inputs
 
@@ -503,4 +503,4 @@ Kalbfleisch–Prentice, Breslow or Efron, `newrisk` is required and `vartype` is
 ignored, as in R. The Rust `surv_analysis::coxsurv_fit` takes `CoxSurvData` and
 `CoxSurvNewData` with zero-based stratum indices and exposes the optional
 baseline components as `CoxSurvBaselineDetails`; the domain binding
-`surv_analysis.coxsurv_fit` exposes those codes and releases the GIL.
+`kernels.coxsurv_fit` exposes those codes and releases the GIL.

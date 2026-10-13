@@ -1,5 +1,6 @@
 """Non-parametric estimation: Kaplan-Meier / Aalen-Johansen curves (``survfitkm``,
-``survfitaj``) with their summaries, ``survdiff``, pseudo values, multi-state models."""
+``survfitaj``) and multi-state models; ``survdiff``, ``pseudo`` and the other kernels named
+like R functions are in ``survival.kernels``."""
 
 from ._binding_utils import bind_names
 
@@ -9,11 +10,9 @@ __all__ = bind_names(
         "AggregateGroups",
         "AggregateSurvfitResult",
         "GroupingFactor",
-        "aggregate_survfit",
         "AgsurvCurve",
         "cox_survfit_baseline",
         "CoxSurvRawResult",
-        "coxsurv_fit",
         "step_values_at",
         "IllnessDeathConfig",
         "IllnessDeathPrediction",
@@ -22,8 +21,6 @@ __all__ = bind_names(
         "TransitionHazard",
         "fit_illness_death",
         "predict_illness_death",
-        "SurvDiffResult",
-        "survdiff",
         "survdiff_one_sample",
         "MarkovMSMResult",
         "MultiStateConfig",
@@ -32,13 +29,10 @@ __all__ = bind_names(
         "estimate_transition_intensities",
         "fit_markov_msm",
         "fit_multi_state_model",
-        "NelsonAalenResult",
-        "nelson_aalen",
         "GEEConfig",
         "GEEResult",
         "SurvfitResid",
         "SurvfitAJResid",
-        "pseudo",
         "pseudo_aj",
         "survfitresid",
         "survfitresid_aj",
@@ -51,8 +45,6 @@ __all__ = bind_names(
         "fit_semi_markov",
         "predict_semi_markov",
         "StateFigArrow",
-        "StateFigResult",
-        "statefig",
         "SurvfitAJCounts",
         "SurvfitAJInfluence",
         "SurvfitAJResult",
@@ -68,15 +60,10 @@ __all__ = bind_names(
         "ConfidenceBands",
         "SurvfitCounts",
         "SurvfitInfluence",
-        "SurvfitKMResult",
         "SurvfitQuantiles",
         "SurvmeanTable",
         "survfitkm",
         "survfit_matrix",
-        "survfit0",
-        "survfit_confint",
-        "summary_survfit",
         "survmean",
-        "quantile_survfit",
     ],
 )

@@ -155,7 +155,7 @@ def test_declared_level_native_api(tables):
     with pytest.raises(ValueError, match="Non-unique"):
         tables["duplicate"].match_levels(0, ["male"])
     with pytest.raises(ValueError, match="Non-unique"):
-        survival.population.match_ratetable(tables["duplicate"], ["group"], [["male"]])
+        survival.kernels.match_ratetable(tables["duplicate"], ["group"], [["male"]])
 
 
 def test_ratetable_date_uses_utc_for_aware_datetimes():
@@ -171,5 +171,5 @@ def test_many_levels_and_mixed_exact_prefix_cache_entries():
     labels = [
         levels[i % 32].upper() if i % 3 else levels[i % 32].split(".")[0] for i in range(2000)
     ]
-    result = survival.population.match_ratetable(table, ["group"], [labels])
+    result = survival.kernels.match_ratetable(table, ["group"], [labels])
     assert result.r == [[float(i % 32 + 1)] for i in range(2000)]

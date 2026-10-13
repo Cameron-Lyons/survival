@@ -8,19 +8,19 @@ survival = setup_survival_import()
 
 def test_brier_validates_prediction_shape():
     time, status = [1.0, 2.0, 3.0, 4.0], [1, 0, 1, 1]
-    result = survival.validation.brier(time, status, [2.5], [[0.5, 0.5, 0.2, 0.9]])
+    result = survival.kernels.brier(time, status, [2.5], [[0.5, 0.5, 0.2, 0.9]])
     assert result.times == pytest.approx([2.5])
     assert len(result.brier) == 1
     assert 0.0 <= result.brier[0] <= 1.0
 
     with pytest.raises(ValueError, match="phat"):
-        survival.validation.brier(time, status, [2.5], [[0.5, 0.5]])
+        survival.kernels.brier(time, status, [2.5], [[0.5, 0.5]])
     with pytest.raises(ValueError, match="phat"):
-        survival.validation.brier(time, status, [2.5, 3.5], [[0.5, 0.5, 0.2, 0.9]])
+        survival.kernels.brier(time, status, [2.5, 3.5], [[0.5, 0.5, 0.2, 0.9]])
 
 
 def test_statistical_test_helpers():
-    lrt = survival.validation.lrt_test(-10.0, -12.0, 1)
+    lrt = survival._survival.lrt_test(-10.0, -12.0, 1)
     assert lrt.statistic == pytest.approx(4.0)
     assert lrt.df == 1
     assert lrt.p_value == pytest.approx(0.0455, rel=1e-3)
@@ -35,16 +35,16 @@ def test_statistical_test_helpers():
         [1.0, 2.0], [[1.0, 0.0], [0.0, 2.0]], init=[1.0, 0.0]
     ).statistic == pytest.approx(2.0)
 
-    score = survival.validation.score_test([1.0], [[2.0]])
+    score = survival._survival.score_test([1.0], [[2.0]])
     assert score.statistic == pytest.approx(0.5)
     assert score.df == 1
     assert score.p_value == pytest.approx(0.4795, rel=1e-3)
     assert score.test_name == "ScoreTest"
 
     with pytest.raises(ValueError, match="log-likelihoods must be finite"):
-        survival.validation.lrt_test(float("nan"), -12.0, 1)
+        survival._survival.lrt_test(float("nan"), -12.0, 1)
     with pytest.raises(ValueError, match="df must be positive"):
-        survival.validation.lrt_test(-10.0, -12.0, 0)
+        survival._survival.lrt_test(-10.0, -12.0, 0)
     with pytest.raises(ValueError, match="coef must not be empty"):
         survival.validation.wald_test([], [])
     with pytest.raises(ValueError, match="coef contains non-finite"):
@@ -52,11 +52,11 @@ def test_statistical_test_helpers():
     with pytest.raises(ValueError, match="var columns length mismatch"):
         survival.validation.wald_test([1.0], [[1.0, 0.0]])
     with pytest.raises(ValueError, match="var rows length mismatch"):
-        survival.validation.score_test([1.0, 2.0], [[1.0]])
+        survival._survival.score_test([1.0, 2.0], [[1.0]])
     with pytest.raises(ValueError, match="score must not be empty"):
-        survival.validation.score_test([], [])
+        survival._survival.score_test([], [])
     with pytest.raises(ValueError, match="var contains non-finite"):
-        survival.validation.score_test([1.0], [[float("nan")]])
+        survival._survival.score_test([1.0], [[float("nan")]])
 
 
 def test_meta_analysis_public_apis_and_validation():
@@ -280,7 +280,7 @@ def test_fast_cox_numpy_uses_shifted_risk_scores_for_large_offsets():
 def test_elastic_net_cox_uses_shifted_risk_scores_for_large_offsets():
     covariates = survival.core.CovariateMatrix([0.0, 0.0, 0.0], 3, 1)
     survival_data = survival.core.SurvivalData([1.0, 2.0, 3.0], [1, 0, 1])
-    input_data = survival.core.CoxRegressionInput(
+    input_data = survival.regression.CoxRegressionInput(
         covariates,
         survival_data,
         None,
@@ -467,7 +467,7 @@ def test_cox_callback_roundtrip():
             "flag": [True, False],
         }
 
-    result = survival.pybridge.cox_callback(2, [1.0, 2.0], callback)
+    result = survival._survival.cox_callback(2, [1.0, 2.0], callback)
 
     assert isinstance(result, survival.pybridge.CoxPenaltyTerms)
     assert result.coef == pytest.approx([3.0, 4.0])
@@ -485,10 +485,10 @@ def test_cox_callback_roundtrip():
             "flag": np.array([False, True]),
         }
 
-    arrays = survival.pybridge.cox_callback(3, np.array([1.0, 2.0]), numpy_callback)
+    arrays = survival._survival.cox_callback(3, np.array([1.0, 2.0]), numpy_callback)
     assert arrays.coef == pytest.approx([3.0, 6.0])
     assert arrays.penalty == pytest.approx(1.5)
     assert arrays.flag == [False, True]
 
     with pytest.raises(KeyError, match="no 'penalty' entry"):
-        survival.pybridge.cox_callback(1, [1.0], lambda coef, which: {"coef": coef})
+        survival._survival.cox_callback(1, [1.0], lambda coef, which: {"coef": coef})

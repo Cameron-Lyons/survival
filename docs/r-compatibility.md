@@ -715,7 +715,7 @@ this does not show.
   times leave the risk set in stop-time order rather than data order, and
   Efron's j-th terms are formed as `sum - j/d * deaths`. Results agree to
   rounding whenever the center does not move mid death time.
-- `regression.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
+- `kernels.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
   `agexact.fit` wrappers) follows `coxph()` rather than the bare fitters: it
   centers the offset, so `agreg.fit`'s info rescale count differs for a large
   offset (0 instead of 5 for heart with offset -750; coefficients and loglik

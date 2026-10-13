@@ -30,15 +30,15 @@ def test_calendar_cutpoints_and_positions_are_checked(kind):
     args = ([1], ["year"], [["year"]], [[1e30]], [kind], [0.1])
     with pytest.raises(ValueError, match="supported calendar range"):
         population.RateTable(*args)
-    check = population.is_ratetable(*args[:-1], n_rates=1)
+    check = survival.kernels.is_ratetable(*args[:-1], n_rates=1)
     assert not check.valid
     table = population.RateTable([1], ["year"], [["year"]], [[0]], [kind], [0.1])
     with pytest.raises(ValueError, match="supported calendar range"):
-        population.match_ratetable(table, ["year"], [[1e30]])
+        survival.kernels.match_ratetable(table, ["year"], [[1e30]])
 
 
 def test_rate_table_shape_checks_do_not_overflow():
-    check = population.is_ratetable([sys.maxsize, 3], [], [], [], [], 0)
+    check = survival.kernels.is_ratetable([sys.maxsize, 3], [], [], [], [], 0)
     assert not check.valid
     assert "ratetable dimensions are too large" in check.messages
     with pytest.raises(ValueError, match="must be positive"):
@@ -48,4 +48,4 @@ def test_rate_table_shape_checks_do_not_overflow():
 @pytest.mark.parametrize("age", [1e30, -1e30])
 def test_expected_survival_checks_derived_birth_dates(age):
     with pytest.raises(ValueError, match="supported calendar range"):
-        population.survexp(population.survexp_us(), [[age, 1, 0]], times=[1])
+        survival.kernels.survexp(survival.kernels.survexp_us(), [[age, 1, 0]], times=[1])

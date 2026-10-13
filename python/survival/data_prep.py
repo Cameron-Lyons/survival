@@ -1,4 +1,5 @@
-"""Data preparation kernels (R's ``aeqSurv``, ``cluster``, ``strata``, ``neardate``, ``tmerge``).
+"""Data preparation kernels (R's ``aeqSurv``, ``tmerge``, ``survSplit``); those named like an R
+function (``neardate``, ``tcut``, ...) are in ``survival.kernels``.
 
 All row indices returned by these bindings are zero-based.
 """
@@ -11,25 +12,16 @@ __all__ = bind_names(
         "AeqSurvResult",
         "aeq_surv",
         "ClusterResult",
-        "cluster",
         "StrataResult",
-        "strata",
-        "lvcf",
-        "neardate",
-        "nostutter",
         "RttrightResult",
-        "rttright",
         "SurvcondenseResult",
-        "survcondense",
         "SurvSplitResult",
         "survsplit",
         "TcutResult",
-        "tcut",
         "TmergeStep",
         "tmerge_step",
         "Surv2CountingResult",
         "surv2counting",
         "TotimelineResult",
-        "totimeline",
     ],
 )

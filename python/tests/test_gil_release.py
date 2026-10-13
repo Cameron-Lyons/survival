@@ -85,14 +85,16 @@ def test_survobrien_releases_the_gil():
     times = np.arange(n, dtype=float)
     events = np.ones(n, dtype=np.int32)
     columns = [np.sin(times), np.cos(times)]
-    _assert_detaches(lambda: survival.validation.survobrien(times, events, columns))
+    _assert_detaches(lambda: survival.kernels.survobrien(times, events, columns))
 
 
 def test_confidence_bands_release_the_gil():
     probabilities = np.full(2_000_000, 0.5)
     standard_errors = np.full(len(probabilities), 0.1)
     _assert_detaches(
-        lambda: sa.survfit_confint(probabilities, standard_errors, conf_type="log-log")
+        lambda: survival.kernels.survfit_confint(
+            probabilities, standard_errors, conf_type="log-log"
+        )
     )
 
 
@@ -111,12 +113,12 @@ def test_grouped_sum_releases_the_gil():
 
 def test_aggregate_multistate_numpy_input_releases_the_gil():
     values = np.random.default_rng(44).uniform(size=(20, 150_000, 3))
-    _assert_detaches(lambda: sa.aggregate_survfit(pstate=values, fun="median"))
+    _assert_detaches(lambda: survival.kernels.aggregate_survfit(pstate=values, fun="median"))
 
 
 def test_grouped_term_predictions_release_the_gil():
     time_, status, x = _cox_data(2000, p=16)
-    fit = regression.coxph_fit(time_, status, x)
+    fit = survival.kernels.coxph_fit(time_, status, x)
     newdata = np.ones((400_000, 16))
     groups = np.arange(len(newdata), dtype=np.int32) % 257
     _assert_detaches(lambda: fit.predict_terms(newdata=newdata, se_fit=True, collapse=groups))
@@ -133,15 +135,15 @@ def test_aft_constructor_releases_the_gil():
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs four cores to overlap four fits")
 def test_cox_fits_on_four_threads_overlap():
     time_, status, x = _cox_data(100_000)
-    regression.coxph_fit(time_, status, x)
+    survival.kernels.coxph_fit(time_, status, x)
 
     started = time.perf_counter()
-    sequential = [regression.coxph_fit(time_, status, x) for _ in range(4)]
+    sequential = [survival.kernels.coxph_fit(time_, status, x) for _ in range(4)]
     sequential_time = time.perf_counter() - started
 
     started = time.perf_counter()
     with ThreadPoolExecutor(4) as pool:
-        threaded = list(pool.map(lambda _: regression.coxph_fit(time_, status, x), range(4)))
+        threaded = list(pool.map(lambda _: survival.kernels.coxph_fit(time_, status, x), range(4)))
     threaded_time = time.perf_counter() - started
 
     assert all(fit.coefficients == sequential[0].coefficients for fit in threaded)
@@ -159,7 +161,7 @@ def test_finegray_preparation_releases_the_gil():
 def test_logrank_convenience_binding_releases_the_gil():
     time_, status, x = _cox_data(2_000_000)
     group = (x[:, 0] > 0).astype(np.int32)
-    _assert_detaches(lambda: survival.validation.logrank_test(time_, status, group))
+    _assert_detaches(lambda: survival.kernels.survdiff(time_, status, group))
 
 
 def test_one_sample_survdiff_releases_the_gil():
@@ -171,7 +173,7 @@ def test_one_sample_survdiff_releases_the_gil():
 def test_survmean_releases_the_gil():
     n = 2_000_000
     time_values = np.arange(1, n + 1, dtype=float)
-    fit = sa.SurvfitKMResult.from_stacked(
+    fit = survival.kernels.SurvfitKMResult.from_stacked(
         time_values,
         time_values[::-1],
         np.ones(n),
@@ -201,11 +203,11 @@ def test_rmst_comparison_releases_the_gil():
 
 def test_heavy_kernels_release_the_gil():
     time_, status, x = _cox_data(50_000)
-    fit = regression.coxph_fit(time_, status, x)
+    fit = survival.kernels.coxph_fit(time_, status, x)
     design = np.column_stack([np.ones(len(time_)), x])
     survreg_data = regression.SurvregData(time_ + 0.01, status, design)
     weibull = regression.SurvregDistribution("weibull")
-    survreg = regression.survreg_fit(survreg_data, weibull)
+    survreg = survival.kernels.survreg_fit(survreg_data, weibull)
     right = core.SurvivalData(time_, status)
     predictor = core.CovariateMatrix(x[:, 0], len(time_), 1)
     group = (x[:, 0] > 0).astype(np.int32)
@@ -218,11 +220,11 @@ def test_heavy_kernels_release_the_gil():
 
     calls = {
         "YatesPrediction.predict": lambda: yates_prediction.predict(np.linspace(-1, 1, 4096)),
-        "coxph_fit": lambda: regression.coxph_fit(time_, status, x),
+        "coxph_fit": lambda: survival.kernels.coxph_fit(time_, status, x),
         "coxph_fit_raw": lambda: regression.coxph_fit_raw(time_, status, x, resid=False),
         "CoxPHFit.dfbeta": lambda: fit.dfbeta(),
         "CoxPHFit.survfit": lambda: fit.survfit(x[:5]),
-        "coxsurv_fit": lambda: sa.coxsurv_fit(
+        "coxsurv_fit": lambda: survival.kernels.coxsurv_fit(
             np.column_stack([time_, status]),
             x,
             np.ones(len(time_)),
@@ -234,10 +236,10 @@ def test_heavy_kernels_release_the_gil():
             varmat=np.eye(2),
         ),
         "CoxPHFit.predict_survival_at": lambda: fit.predict_survival_at(np.linspace(0.0, 3.0, 128)),
-        "cox_zph": lambda: regression.cox_zph(fit),
+        "cox_zph": lambda: survival.kernels.cox_zph(fit),
         "cox_zph_smooth": lambda: regression.cox_zph_smooth(time_, x, [1.0, 1.0]),
-        "survreg_fit": lambda: regression.survreg_fit(survreg_data, weibull),
-        "survpenal_fit": lambda: regression.survpenal_fit(
+        "survreg_fit": lambda: survival.kernels.survreg_fit(survreg_data, weibull),
+        "survpenal_fit": lambda: survival.kernels.survpenal_fit(
             survreg_data,
             weibull,
             [regression.CoxPenalty.ridge(theta=1)],
@@ -254,8 +256,8 @@ def test_heavy_kernels_release_the_gil():
         ),
         "SurvregFit.predict": lambda: survreg.predict(design, "quantile", se_fit=True),
         "SurvregFit.residuals": lambda: survreg.residuals("dfbeta"),
-        "concordancefit": lambda: core.concordancefit(right, predictor),
-        "survdiff": lambda: sa.survdiff(time_, status, group),
+        "concordancefit": lambda: survival.kernels.concordancefit(right, predictor),
+        "survdiff": lambda: survival.kernels.survdiff(time_, status, group),
         "survfitaj": lambda: sa.survfitaj(aj_time, states, ["censor", "a", "b"]),
         "survfit_matrix": lambda: sa.survfit_matrix(
             [[transition_curve], [transition_curve]], [0, 1], [1, 2], ["a", "b", "c"]
@@ -272,10 +274,10 @@ def test_numpy_and_list_inputs_give_identical_cox_fits():
     time_, status, x = _cox_data(200, p=3)
     strata = (x[:, 2] > 0).astype(np.int64)
     weights = 0.5 + np.arange(200) % 3 / 2
-    from_numpy = regression.coxph_fit(
+    from_numpy = survival.kernels.coxph_fit(
         time_, status, np.asfortranarray(x), strata=strata, weights=weights
     )
-    from_lists = regression.coxph_fit(
+    from_lists = survival.kernels.coxph_fit(
         time_.tolist(),
         status.tolist(),
         x.tolist(),
@@ -321,7 +323,7 @@ def test_rate_matching_releases_the_gil():
     labels = [f"group{i:04d}" for i in range(1024)]
     table = population.RateTable([1024], ["group"], [labels], [None], [1], [0.01] * 1024)
     observations = [labels[i % 1024] for i in range(500_000)]
-    _assert_detaches(lambda: population.match_ratetable(table, ["group"], [observations]))
+    _assert_detaches(lambda: survival.kernels.match_ratetable(table, ["group"], [observations]))
 
 
 @pytest.mark.parametrize("layout", ["fortran", "strided"])
@@ -334,10 +336,10 @@ def test_numpy_and_list_inputs_give_identical_survreg_fits(layout):
         array = np.column_stack([design, x])[:, :3]
     assert not array.flags.c_contiguous
     weibull = regression.SurvregDistribution("weibull")
-    from_numpy = regression.survreg_fit(
+    from_numpy = survival.kernels.survreg_fit(
         regression.SurvregData(time_ + 0.01, status, array), weibull
     )
-    from_lists = regression.survreg_fit(
+    from_lists = survival.kernels.survreg_fit(
         regression.SurvregData((time_ + 0.01).tolist(), status.tolist(), design.tolist()),
         weibull,
     )
@@ -366,19 +368,19 @@ def test_numpy_and_list_inputs_give_identical_pyears():
     group = 1.0 + (rng.uniform(size=n) < 0.5)
     age = rng.uniform(40, 70, size=n) * 365.25
     year = rng.uniform(10957, 12949, size=n)
-    us = population.survexp_us()
+    us = survival.kernels.survexp_us()
     positions = np.array(
-        population.match_ratetable(us, ["age", "sex", "year"], [age, group, year]).r
+        survival.kernels.match_ratetable(us, ["age", "sex", "year"], [age, group, year]).r
     )
     kwargs = {"factors": [1], "dims": [2], "cuts": [[]], "ratetable": us, "scale": 365.25}
-    from_numpy = population.pyears(
+    from_numpy = survival.kernels.pyears(
         stop,
         event=event,
         categories_data=group[:, None],
         ratetable_positions=np.asfortranarray(positions),
         **kwargs,
     )
-    from_lists = population.pyears(
+    from_lists = survival.kernels.pyears(
         stop.tolist(),
         event=event.tolist(),
         categories_data=[[g] for g in group.tolist()],
@@ -391,16 +393,16 @@ def test_numpy_and_list_inputs_give_identical_pyears():
 
 def test_pyears_reads_an_empty_categories_matrix_as_no_categories():
     stop = [365.25, 1826.25, 730.5]
-    without = population.pyears(stop, event=[1.0, 0.0, 1.0])
+    without = survival.kernels.pyears(stop, event=[1.0, 0.0, 1.0])
     for empty in ([], np.empty((0, 0)), np.empty((3, 0))):
-        result = population.pyears(stop, event=[1.0, 0.0, 1.0], categories_data=empty)
+        result = survival.kernels.pyears(stop, event=[1.0, 0.0, 1.0], categories_data=empty)
         assert result.pyears == without.pyears
         assert result.event == without.event
 
 
 def test_ragged_nested_lists_are_rejected_at_the_boundary():
     with pytest.raises(ValueError, match="row 1 length mismatch"):
-        sa.aggregate_survfit(surv=[[0.9, 0.8], [0.7]])
+        survival.kernels.aggregate_survfit(surv=[[0.9, 0.8], [0.7]])
 
 
 def test_matrix_conversion_does_not_repeat_custom_float_coercion():
@@ -435,8 +437,10 @@ def test_numpy_and_list_inputs_give_identical_concordance():
     right = core.SurvivalData(time_, status)
     predictor = core.CovariateMatrix(x[:, 0], 300, 1)
     strata = (x[:, 1] > 0).astype(np.int32)
-    from_numpy = core.concordancefit(right, predictor, strata=strata, influence=1)
-    from_lists = core.concordancefit(right, predictor, strata=strata.tolist(), influence=1)
+    from_numpy = survival.kernels.concordancefit(right, predictor, strata=strata, influence=1)
+    from_lists = survival.kernels.concordancefit(
+        right, predictor, strata=strata.tolist(), influence=1
+    )
     assert from_numpy.concordance == from_lists.concordance
     assert from_numpy.count_strata == from_lists.count_strata
     assert from_numpy.var == from_lists.var

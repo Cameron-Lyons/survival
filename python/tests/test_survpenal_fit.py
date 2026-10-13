@@ -1,5 +1,5 @@
 """Penalized survreg: R's survpenal.fit (``ridge()`` and ``pspline()`` terms in
-``survreg()``) and the typed ``survival.regression.survpenal_fit``, against R 4.5.3 /
+``survreg()``) and the typed ``survival.kernels.survpenal_fit``, against R 4.5.3 /
 survival 3.8-12.
 
 The reference values below were computed with R (``survreg(...)`` on ``lung`` with the
@@ -1953,7 +1953,7 @@ def test_outer_max_is_validated(lung):
             r.survreg_control(outer_max=value)
     data = _typed_data(lung, ("age", "sex"))
     with pytest.raises(ValueError, match="invalid value for outer.max"):
-        regression.survpenal_fit(
+        survival.kernels.survpenal_fit(
             data,
             regression.SurvregDistribution("weibull"),
             [regression.CoxPenalty.ridge(theta=1.0)],
@@ -2056,7 +2056,7 @@ def _typed_data(data, columns=("age", "inst"), time="time"):
 def _typed(data, penalty, pcols, dist="weibull", **kwargs):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        return regression.survpenal_fit(
+        return survival.kernels.survpenal_fit(
             data,
             regression.SurvregDistribution(dist),
             [penalty],
@@ -2177,7 +2177,7 @@ def test_typed_sparse_frailty_before_a_pspline(lung2):
     rows = [[1.0, lung2["inst"][i], *basis[i][1:]] for i in range(len(age))]
     data = regression.SurvregData(list(lung2["time"]), [int(s) - 1 for s in lung2["status"]], rows)
     penalties = [regression.CoxPenalty.frailty(), regression.CoxPenalty.pspline(df=3.0)]
-    fit = regression.survpenal_fit(
+    fit = survival.kernels.survpenal_fit(
         data, regression.SurvregDistribution("weibull"), penalties, [[1], list(range(2, 12))]
     )
     assert all(math.isfinite(value) for value in fit.coefficients)
@@ -2187,7 +2187,7 @@ def test_typed_sparse_frailty_before_a_pspline(lung2):
 
 def test_typed_assign_disagreement_is_refused(lung2):
     with pytest.raises(ValueError, match="pcols and assign arguments disagree"):
-        regression.survpenal_fit(
+        survival.kernels.survpenal_fit(
             _typed_data(lung2),
             regression.SurvregDistribution("weibull"),
             [regression.CoxPenalty.ridge(theta=1.0)],

@@ -16,7 +16,7 @@ status = [1, 1, 0, 1, 1, 1, 0, 1]
 risk = [0.5, 0.2, 0.5, 0.9, 0.2, 0.7, 0.1, 0.9]
 
 # R's concordance(Surv(time, status) ~ risk, reverse = TRUE, influence = 1)
-fit = core.concordancefit(
+fit = kernels.concordancefit(
     core.SurvivalData(time, status),
     core.CovariateMatrix(risk, len(risk), 1),
     reverse=True,

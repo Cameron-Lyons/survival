@@ -153,7 +153,7 @@ def test_raw_and_full_model_alias_handling():
     data = survival.regression.SurvregData(y[:, 0], y[:, 1].astype(np.int32), case["x"])
     distribution = survival.regression.SurvregDistribution("gaussian")
     raw = survival.regression.survreg_fit_raw(data, distribution)
-    full = survival.regression.survreg_fit(data, distribution)
+    full = survival.kernels.survreg_fit(data, distribution)
     assert raw.coefficients[3] == 0
     assert math.isnan(full.coefficients[3])
     assert raw.var == full.variance_matrix

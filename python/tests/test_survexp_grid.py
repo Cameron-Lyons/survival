@@ -43,7 +43,7 @@ def test_requested_rate_table_grid_matches_r(case, api, table):
         "scale": case["scale"],
     }
     if api == "native":
-        result = population.survexp(
+        result = survival.kernels.survexp(
             table,
             [[age] for age in data["age"]],
             y=None if case["formula"].startswith("~") else data["time"],
@@ -79,7 +79,7 @@ def test_no_response_duplicate_grid_matches_constant_rate_mixture(api):
     table = population.RateTable([2], ["sex"], [["male", "female"]], [None], [1], [0.01, 0.03])
     times = [-0.0, 0.0, -0.0, 2.0, 2.0, np.nextafter(2.0, np.inf), 4.0, 4.0, 8.0]
     if api == "native":
-        result = population.survexp(
+        result = survival.kernels.survexp(
             table, [[1], [2], [1], [2]], group=[0, 0, 1, 1], times=times, scale=2.5
         )
     else:
@@ -104,7 +104,7 @@ def test_all_zero_requests_preserve_rows_and_empty_followup(api):
     table = population.RateTable([1], ["age"], [["0"]], [[0]], [2], [0.01])
     times = [0.0, -0.0, 0.0]
     if api == "native":
-        result = population.survexp(table, [[0]], times=times)
+        result = survival.kernels.survexp(table, [[0]], times=times)
         surv, n_risk = result.surv, result.n_risk
     else:
         result = r.survexp("~ 1", {"age": [0]}, ratetable=table, times=times)

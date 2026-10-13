@@ -155,7 +155,7 @@ def test_formula_cohorts_do_not_expand_subject_curves(monkeypatch):
 def test_fitted_expected_survival_shares_a_cold_baseline_cache_safely():
     rng = np.random.default_rng(981)
     x = rng.normal(size=(100, 2))
-    fit = survival.regression.coxph_fit(
+    fit = survival.kernels.coxph_fit(
         np.arange(1, 101, dtype=float), np.ones(100, dtype=np.int32), x
     )
 

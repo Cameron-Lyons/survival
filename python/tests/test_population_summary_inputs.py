@@ -11,13 +11,14 @@ import pytest
 from .helpers import setup_survival_import
 
 population = setup_survival_import().population
+survival = setup_survival_import()
 MAXIMUM = sys.maxsize // struct.calcsize("d")
 USIZE_MAX = 2 * sys.maxsize + 1
 OVERFLOWING = 1 << (struct.calcsize("P") * 4)
 
 
 def empty_summary(dims, **options):
-    return population.summary_pyears([], [], [], [], dims=dims, **options)
+    return survival.kernels.summary_pyears([], [], [], [], dims=dims, **options)
 
 
 @pytest.mark.parametrize("totals", [False, True])
@@ -59,7 +60,7 @@ def test_mutated_cell_lengths_are_rejected(field, totals, tcut):
     }
     inputs[field].pop()
     with pytest.raises(ValueError, match=rf"{field} must have prod\(dims\) = 2 cells"):
-        population.summary_pyears(**inputs, dims=[2], totals=totals, tcut=tcut)
+        survival.kernels.summary_pyears(**inputs, dims=[2], totals=totals, tcut=tcut)
 
 
 @pytest.mark.parametrize("totals", [False, True])
@@ -105,7 +106,7 @@ def test_zero_product_does_not_multiply_unused_addressable_extents(totals):
 
 @pytest.mark.parametrize("totals", [False, True])
 def test_empty_dimensions_keep_single_cell_convention(totals):
-    result = population.summary_pyears(
+    result = survival.kernels.summary_pyears(
         [5.0],
         [2.0],
         [1.0],
@@ -191,7 +192,7 @@ def test_margins_match_hand_sums_and_closed_form_zero_event_limits(
         51,
     ]
     margins = [False, False, True, False, False, True, False, False, True, True, True, True]
-    result = population.summary_pyears(
+    result = survival.kernels.summary_pyears(
         [10.0 * n for n in range(1, cells + 1)],
         list(range(1, cells + 1)),
         list(range(cells)),

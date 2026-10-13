@@ -85,7 +85,7 @@ pub use landmark::{
     SurvivalAtTimeResult, conditional_survival_py, hazard_ratio_py, landmark_analysis_batch_py,
     landmark_analysis_py, life_table_py, survival_at_times_py,
 };
-pub use logrank::{LogRankResult, logrank_test, logrank_test_py};
+pub use logrank::{LogRankResult, logrank_test};
 pub use meta_analysis::{
     MetaAnalysisConfig, MetaAnalysisResult, MetaForestPlotData, PublicationBiasResult,
     generate_forest_plot_data, publication_bias_tests, survival_meta_analysis,

@@ -9,41 +9,41 @@ population = survival.population
 
 
 def test_cipoisson_matches_r():
-    exact = survival.validation.cipoisson([5], time=[10.0], p=[0.95])
+    exact = survival.kernels.cipoisson([5], time=[10.0], p=[0.95])
     assert isinstance(exact, survival.validation.CipoissonResult)
     assert exact.lower == pytest.approx([0.1623486], abs=1e-6)
     assert exact.upper == pytest.approx([1.1668332], abs=1e-6)
 
-    ninety = survival.validation.cipoisson([20], time=[4.0], p=[0.90])
+    ninety = survival.kernels.cipoisson([20], time=[4.0], p=[0.90])
     assert (ninety.lower[0], ninety.upper[0]) == pytest.approx((3.313663, 7.265505), abs=1e-6)
-    zero = survival.validation.cipoisson([0], time=[10.0])
+    zero = survival.kernels.cipoisson([0], time=[10.0])
     assert (zero.lower[0], zero.upper[0]) == pytest.approx((0.0, 0.3688879), abs=1e-6)
 
-    anscombe = survival.validation.cipoisson([5], time=[10.0], p=[0.95], method="anscombe")
+    anscombe = survival.kernels.cipoisson([5], time=[10.0], p=[0.95], method="anscombe")
     assert (anscombe.lower[0], anscombe.upper[0]) == pytest.approx((0.1507881, 1.1586004), abs=1e-6)
-    assert survival.validation.cipoisson([5], method="a").lower == pytest.approx(
-        survival.validation.cipoisson([5], time=[1.0], method="anscombe").lower
+    assert survival.kernels.cipoisson([5], method="a").lower == pytest.approx(
+        survival.kernels.cipoisson([5], time=[1.0], method="anscombe").lower
     )
 
-    vector = survival.validation.cipoisson([0, 5, 20], time=[1.0, 2.0, 10.0])
+    vector = survival.kernels.cipoisson([0, 5, 20], time=[1.0, 2.0, 10.0])
     assert vector.lower == pytest.approx([0.0, 0.81174319505921044, 1.22165195854039443])
     assert vector.upper == pytest.approx(
         [3.68887945411393536, 5.83416603966133351, 3.08883779026745930]
     )
 
     with pytest.raises(ValueError, match="method"):
-        survival.validation.cipoisson([1], time=[1.0], method="")
+        survival.kernels.cipoisson([1], time=[1.0], method="")
 
 
 def test_cipoisson_supports_r_numeric_edge_cases():
-    zero_level = survival.validation.cipoisson([1.2], time=[2.0], p=[0.0])
+    zero_level = survival.kernels.cipoisson([1.2], time=[2.0], p=[0.0])
     assert (zero_level.lower[0], zero_level.upper[0]) == pytest.approx(
         (0.443968106737396, 0.938570591679505)
     )
-    full_level = survival.validation.cipoisson([1.2], time=[1.0], p=[1.0])
+    full_level = survival.kernels.cipoisson([1.2], time=[1.0], p=[1.0])
     assert full_level.lower[0] == 0.0
     assert math.isinf(full_level.upper[0])
-    nonpositive = survival.validation.cipoisson([1.2], time=[0.0])
+    nonpositive = survival.kernels.cipoisson([1.2], time=[0.0])
     assert all(math.isnan(value) for value in (nonpositive.lower[0], nonpositive.upper[0]))
 
 
@@ -271,7 +271,7 @@ def test_finegray():
     extend = [True, True, False, False]
     keep = [True, True, True, True]
 
-    result = survival.regression.finegray(
+    result = survival.kernels.finegray(
         tstart=tstart,
         tstop=tstop,
         ctime=ctime,
@@ -296,18 +296,18 @@ def test_finegray():
 
 def test_finegray_validates_public_inputs():
     with pytest.raises(ValueError, match="tstop length"):
-        survival.regression.finegray([0.0], [], [], [], [True], [])
+        survival.kernels.finegray([0.0], [], [], [], [True], [])
 
     with pytest.raises(ValueError, match="exceeds tstop"):
-        survival.regression.finegray([2.0], [1.0], [], [], [True], [])
+        survival.kernels.finegray([2.0], [1.0], [], [], [True], [])
 
     with pytest.raises(ValueError, match="ctime must be sorted"):
-        survival.regression.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
+        survival.kernels.finegray([0.0], [1.0], [2.0, 1.0], [1.0, 1.0], [True], [True, True])
 
     with pytest.raises(ValueError, match="cprob must contain values"):
-        survival.regression.finegray([0.0], [1.0], [1.0], [-0.1], [True], [True])
+        survival.kernels.finegray([0.0], [1.0], [1.0], [-0.1], [True], [True])
 
-    harmless_zero = survival.regression.finegray(
+    harmless_zero = survival.kernels.finegray(
         [0.0, 0.0],
         [1.0, 3.0],
         [1.0, 2.0, 3.0],
@@ -319,7 +319,7 @@ def test_finegray_validates_public_inputs():
     assert harmless_zero.wt == pytest.approx([1.0, 0.5, 0.0, 1.0])
 
     with pytest.raises(ValueError, match="probability is zero"):
-        survival.regression.finegray(
+        survival.kernels.finegray(
             [0.0],
             [2.0],
             [1.0, 2.0, 3.0],
@@ -376,13 +376,13 @@ def test_finegray_regression_and_cif_validate_public_inputs():
 
 def _lung_like_positions(us):
     """R: match.ratetable of ages 50/60 (in days), sex 1/2 and two dates against survexp.us."""
-    return population.match_ratetable(
+    return survival.kernels.match_ratetable(
         us, ["age", "sex", "year"], [[18262.5, 21915.0], [1.0, 2.0], [10957.0, 12949.0]]
     )
 
 
 def test_reference_ratetables_match_r():
-    us = population.survexp_us()
+    us = survival.kernels.survexp_us()
 
     assert isinstance(us, population.RateTable)
     assert us.dims == [110, 2, 81]
@@ -404,21 +404,23 @@ def test_reference_ratetables_match_r():
     assert us.rate([200, 0, 0]) is None
     assert "Rate table with 3 dimensions" in str(us)
 
-    mn = population.survexp_mn()
-    usr = population.survexp_usr()
+    mn = survival.kernels.survexp_mn()
+    usr = survival.kernels.survexp_usr()
     assert mn.dims == [110, 2, 51]
     assert usr.dims == [110, 2, 2, 81]
     assert usr.dimid == ["age", "sex", "race", "year"]
     assert mn.rate([50, 0, 30]) == pytest.approx(1.1783374031503476e-05)
     assert usr.rate([50, 0, 0, 60]) == pytest.approx(1.3916210970949556e-05)
 
-    check = population.is_ratetable(
+    check = survival.kernels.is_ratetable(
         us.dims, us.dimid, us.dimnames, us.cutpoints, us.type_codes(), len(us.rates)
     )
     assert isinstance(check, population.RatetableCheck)
     assert check.valid is True
     assert check.messages == []
-    bad = population.is_ratetable(us.dims, us.dimid, us.dimnames, us.cutpoints, us.type_codes(), 5)
+    bad = survival.kernels.is_ratetable(
+        us.dims, us.dimid, us.dimnames, us.cutpoints, us.type_codes(), 5
+    )
     assert bad.valid is False
     assert bad.messages == ["length of the data does not match prod(dim)"]
 
@@ -440,7 +442,9 @@ def test_ratetable_construction_and_lookup():
     assert table.rate([2, 0]) is None
     assert "sex has levels of: male female" in str(table)
 
-    expected = population.survexp(table, [[10 * 365.25, 1.0], [60 * 365.25, 2.0]], times=[365.25])
+    expected = survival.kernels.survexp(
+        table, [[10 * 365.25, 1.0], [60 * 365.25, 2.0]], times=[365.25]
+    )
     assert expected.surv[0][0] == pytest.approx(
         (math.exp(-0.001 * 365.25) + math.exp(-0.0015 * 365.25)) / 2
     )
@@ -464,7 +468,7 @@ def test_ratetable_date_roundtrip_matches_r():
 
 
 def test_match_ratetable_and_survexp_match_r():
-    us = population.survexp_us()
+    us = survival.kernels.survexp_us()
     matched = _lung_like_positions(us)
 
     assert isinstance(matched, population.MatchRatetableResult)
@@ -473,8 +477,8 @@ def test_match_ratetable_and_survexp_match_r():
     assert matched.cutpoints[0][:3] == pytest.approx([0.0, 365.25, 730.5])
 
     times = [365.25, 1826.25]
-    ederer = population.survexp(us, matched.r, times=times)
-    assert isinstance(ederer, population.SurvExpResult)
+    ederer = survival.kernels.survexp(us, matched.r, times=times)
+    assert isinstance(ederer, survival.kernels.SurvExpResult)
     assert ederer.time == pytest.approx(times)
     assert [row[0] for row in ederer.surv] == pytest.approx(
         [0.99356310877379650, 0.96348172772454077]
@@ -483,36 +487,40 @@ def test_match_ratetable_and_survexp_match_r():
     assert ederer.method == "Ederer"
 
     follow_up = [365.25, 1826.25]
-    hakulinen = population.survexp(us, matched.r, y=follow_up, times=times, method="hakulinen")
+    hakulinen = survival.kernels.survexp(
+        us, matched.r, y=follow_up, times=times, method="hakulinen"
+    )
     assert [row[0] for row in hakulinen.surv] == pytest.approx(
         [0.99356310877379650, 0.95988097015776463]
     )
-    conditional = population.survexp(us, matched.r, y=follow_up, times=times, method="conditional")
+    conditional = survival.kernels.survexp(
+        us, matched.r, y=follow_up, times=times, method="conditional"
+    )
     assert [row[0] for row in conditional.surv] == pytest.approx(
         [0.99356278426562006, 0.95988065665052946]
     )
     assert [row[0] for row in conditional.n_risk] == pytest.approx([2.0, 1.0])
 
-    individual_s = population.survexp(us, matched.r, y=follow_up, method="individual.s")
+    individual_s = survival.kernels.survexp(us, matched.r, y=follow_up, method="individual.s")
     assert [row[0] for row in individual_s.surv] == pytest.approx(
         [0.99436612720451900, 0.95910517433409759]
     )
-    individual_h = population.survexp(us, matched.r, y=follow_up, method="individual.h")
+    individual_h = survival.kernels.survexp(us, matched.r, y=follow_up, method="individual.h")
     assert [row[0] for row in individual_h.surv] == pytest.approx(
         [0.0056498029171802994, 0.0417545392736305143]
     )
 
     with pytest.raises(ValueError, match="method must be"):
-        population.survexp(us, matched.r, times=times, method="bad")
+        survival.kernels.survexp(us, matched.r, times=times, method="bad")
     with pytest.raises(ValueError, match="The variable sex is out of range"):
-        population.survexp(us, [[109 * 365.25, 5.0, 18262.0]], times=[0.0, 100.0])
+        survival.kernels.survexp(us, [[109 * 365.25, 5.0, 18262.0]], times=[0.0, 100.0])
 
 
 def test_pyears_and_summary_match_r():
-    us = population.survexp_us()
+    us = survival.kernels.survexp_us()
     matched = _lung_like_positions(us)
 
-    result = population.pyears(
+    result = survival.kernels.pyears(
         [365.25, 1826.25],
         event=[1.0, 0.0],
         factors=[1],
@@ -523,7 +531,7 @@ def test_pyears_and_summary_match_r():
         ratetable_positions=matched.r,
         scale=365.25,
     )
-    assert isinstance(result, population.PyearsResult)
+    assert isinstance(result, survival.kernels.PyearsResult)
     assert result.pyears == pytest.approx([1.0, 5.0])
     assert result.n == pytest.approx([1.0, 1.0])
     assert result.event == pytest.approx([1.0, 0.0])
@@ -532,7 +540,7 @@ def test_pyears_and_summary_match_r():
     assert result.dims == [2]
     assert result.observations == 2
 
-    by_age = population.pyears(
+    by_age = survival.kernels.pyears(
         [365.25, 1826.25],
         event=[1.0, 0.0],
         factors=[0, 1],
@@ -547,7 +555,7 @@ def test_pyears_and_summary_match_r():
     assert by_age.expected is None
     assert by_age.dims == [2, 2]
 
-    summary = population.summary_pyears(
+    summary = survival.kernels.summary_pyears(
         result.pyears,
         result.n,
         result.event,
@@ -560,7 +568,7 @@ def test_pyears_and_summary_match_r():
         rr=True,
         ci_rr=True,
     )
-    assert isinstance(summary, population.PyearsSummary)
+    assert isinstance(summary, survival.kernels.PyearsSummary)
     assert (summary.dims, summary.observations) == ([2], 2)
     assert summary.rate == pytest.approx([1.0, 0.0])
     assert summary.ci_r_lower == pytest.approx([0.025317807984289897, 0.0])
@@ -571,7 +579,7 @@ def test_pyears_and_summary_match_r():
     assert summary.total_events == pytest.approx(1.0)
     assert summary.total_pyears == pytest.approx(6.0)
 
-    by_age_summary = population.summary_pyears(
+    by_age_summary = survival.kernels.summary_pyears(
         by_age.pyears, by_age.n, by_age.event, dims=by_age.dims, tcut=True, rate=True, ci_r=True
     )
     assert by_age_summary.ci_r_lower == pytest.approx(
@@ -583,6 +591,8 @@ def test_pyears_and_summary_match_r():
     assert by_age_summary.rr is None
 
     with pytest.raises(ValueError, match="categories_data must be"):
-        population.pyears([1.0, 2.0], factors=[1], dims=[2], cuts=[[]], categories_data=[[1.0]])
+        survival.kernels.pyears(
+            [1.0, 2.0], factors=[1], dims=[2], cuts=[[]], categories_data=[[1.0]]
+        )
     with pytest.raises(ValueError, match="must be given together"):
-        population.pyears([1.0, 2.0], categories_data=[[], []], ratetable=us)
+        survival.kernels.pyears([1.0, 2.0], categories_data=[[], []], ratetable=us)

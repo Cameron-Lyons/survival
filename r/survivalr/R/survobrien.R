@@ -59,7 +59,7 @@ survobrien <- function(formula, data, subset, na.action, transform) {
       match(value, sort(unique(value), na.last = NA))
     } else as.numeric(value)
   }) else list()
-  expansion <- .validation_attr("survobrien")(
+  expansion <- .kernels_attr("survobrien")(
     time = as.numeric(response[, ncol(response) - 1L]),
     status = as.integer(response[, ncol(response)]),
     continuous = unname(continuous),

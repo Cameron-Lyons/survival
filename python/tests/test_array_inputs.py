@@ -67,13 +67,13 @@ def test_survfitkm_unaligned_vectors_and_noncanonical_boolean_status(status_dtyp
 @pytest.mark.parametrize("selection", [slice(None), slice(None, None, -1), slice(None, None, 2)])
 def test_unaligned_matrices_for_curve_aggregation_and_yates(selection):
     matrix = _unaligned_array([[1.0, 0.0], [1.0, 2.0], [1.0, 4.0]])[selection]
-    actual = survival.surv_analysis.aggregate_survfit(surv=matrix, fun="median")
-    expected = survival.surv_analysis.aggregate_survfit(surv=np.array(matrix), fun="median")
+    actual = survival.kernels.aggregate_survfit(surv=matrix, fun="median")
+    expected = survival.kernels.aggregate_survfit(surv=np.array(matrix), fun="median")
     assert actual.surv == expected.surv
 
     variance = _unaligned_array([[1.0, 0.25], [0.25, 2.0]])
-    actual_yates = survival.validation.yates(matrix, [1.0, 0.5], variance)
-    expected_yates = survival.validation.yates(np.array(matrix), [1.0, 0.5], np.array(variance))
+    actual_yates = survival.kernels.yates(matrix, [1.0, 0.5], variance)
+    expected_yates = survival.kernels.yates(np.array(matrix), [1.0, 0.5], np.array(variance))
     assert actual_yates.cmat == expected_yates.cmat
     assert actual_yates.mvar == expected_yates.mvar
     assert [row.pmm for row in actual_yates.estimate] == pytest.approx(
@@ -92,10 +92,10 @@ def test_finegray_normalizes_numpy_boolean_storage_and_unaligned_numeric_flags()
         (extend[::-1], keep[::-1]),
         (_unaligned_array(extend, np.int32), _unaligned_array(keep)),
     ]:
-        actual = survival.regression.finegray(
+        actual = survival.kernels.finegray(
             [0, 0, 0], [1, 2, 3], [1, 2, 3, 4], [1, 0.8, 0.6, 0.4], *flags
         )
-        expected = survival.regression.finegray(
+        expected = survival.kernels.finegray(
             [0, 0, 0],
             [1, 2, 3],
             [1, 2, 3, 4],
@@ -125,8 +125,8 @@ def test_aggregate_survfit_pstate_numpy_layouts_and_dtypes(dtype, layout):
         values = np.broadcast_to(values[:1], (4, 5, 3))
     by = [survival.surv_analysis.GroupingFactor([0, 1, 0, 1, 0], ["a", "b"])]
     for fun in ["mean", "median", "min", "max"]:
-        actual = survival.surv_analysis.aggregate_survfit(pstate=values, by=by, fun=fun)
-        reference = survival.surv_analysis.aggregate_survfit(
+        actual = survival.kernels.aggregate_survfit(pstate=values, by=by, fun=fun)
+        reference = survival.kernels.aggregate_survfit(
             pstate=values.astype(float).tolist(), by=by, fun=fun
         )
         np.testing.assert_allclose(actual.pstate, reference.pstate, rtol=0, atol=1e-14)
@@ -143,7 +143,7 @@ def test_aggregate_survfit_pstate_unaligned_storage_and_array_protocol():
             return np.array(values, dtype=dtype, copy=copy)
 
     for input_ in [values, ArrayProtocol()]:
-        result = survival.surv_analysis.aggregate_survfit(pstate=input_, fun="median")
+        result = survival.kernels.aggregate_survfit(pstate=input_, fun="median")
         np.testing.assert_allclose(result.pstate, np.median(values, axis=1)[:, None])
 
 
@@ -162,17 +162,17 @@ def test_aggregate_survfit_pstate_rejects_wrong_dimensions_and_ragged_rows(
     values, message, error_type
 ):
     with pytest.raises(error_type, match=message):
-        survival.surv_analysis.aggregate_survfit(pstate=values)
+        survival.kernels.aggregate_survfit(pstate=values)
 
 
 def test_aggregate_survfit_pstate_preserves_empty_sequence_and_array_shapes():
     for values in [[], [[], []], np.empty((2, 0, 3))]:
         with pytest.raises(ValueError, match="data.*margin"):
-            survival.surv_analysis.aggregate_survfit(pstate=values)
-    empty_times = survival.surv_analysis.aggregate_survfit(pstate=np.empty((0, 3, 2)))
+            survival.kernels.aggregate_survfit(pstate=values)
+    empty_times = survival.kernels.aggregate_survfit(pstate=np.empty((0, 3, 2)))
     assert empty_times.pstate == []
     for values in [[[[], []]], np.empty((1, 2, 0))]:
-        empty_states = survival.surv_analysis.aggregate_survfit(pstate=values)
+        empty_states = survival.kernels.aggregate_survfit(pstate=values)
         assert empty_states.pstate == [[[]]]
 
 
@@ -184,7 +184,7 @@ def test_survfitkm_with_numpy():
     assert strided.surv == pytest.approx([2 / 3, 2 / 3, 2 / 3])
 
 
-@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+@pytest.mark.parametrize("estimator", ["survfitkm"])
 def test_survival_curve_status_must_be_integral(estimator):
     fit = getattr(survival.surv_analysis, estimator)
     result = fit(np.array(_KM_TIME), np.array(_KM_STATUS, dtype=float))
@@ -195,7 +195,7 @@ def test_survival_curve_status_must_be_integral(estimator):
         fit(_KM_TIME, np.array([1, 2**40, 0, 1, 0]))
 
 
-@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+@pytest.mark.parametrize("estimator", ["survfitkm"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_survival_curve_strided_weighted_arrays(estimator, dtype):
     fit = getattr(survival.surv_analysis, estimator)
@@ -206,15 +206,11 @@ def test_survival_curve_strided_weighted_arrays(estimator, dtype):
         weights=np.array(_KM_WEIGHTS, dtype=dtype)[::-1],
     )
     assert actual.time == expected.time
-    if estimator == "survfitkm":
-        assert actual.surv == pytest.approx(expected.surv)
-        assert actual.std_err == pytest.approx(expected.std_err)
-    else:
-        assert actual.cumulative_hazard == pytest.approx(expected.cumulative_hazard)
-        assert actual.variance == pytest.approx(expected.variance)
+    assert actual.surv == pytest.approx(expected.surv)
+    assert actual.std_err == pytest.approx(expected.std_err)
 
 
-@pytest.mark.parametrize("estimator", ["survfitkm", "nelson_aalen"])
+@pytest.mark.parametrize("estimator", ["survfitkm"])
 def test_survival_curve_rejects_matrix_inputs(estimator):
     with pytest.raises(TypeError, match="dimension"):
         getattr(survival.surv_analysis, estimator)(np.array([_KM_TIME]), _KM_STATUS)
@@ -245,32 +241,27 @@ def test_logrank_with_lists():
     time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
     status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
-    result = survival.validation.logrank_test(time_list, status_list, group_list)
-    assert hasattr(result, "statistic")
-    assert hasattr(result, "p_value")
+    result = survival.kernels.survdiff(time_list, status_list, group_list)
+    assert hasattr(result, "chisq")
+    assert hasattr(result, "pvalue")
 
 
-def test_logrank_accepts_rho_keyword():
+def test_survdiff_rho_changes_the_weights():
     time_list = [1.0, 2.0, 3.0, 4.0, 5.0, 1.5, 2.5, 3.5, 4.5, 5.5]
     status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
 
-    logrank = survival.validation.logrank_test(time_list, status_list, group_list)
-    peto = survival.validation.logrank_test(time_list, status_list, group_list, rho=1.0)
+    logrank = survival.kernels.survdiff(time_list, status_list, group_list)
+    peto = survival.kernels.survdiff(time_list, status_list, group_list, rho=1.0)
 
-    assert logrank.rho == pytest.approx(0.0)
-    assert peto.rho == pytest.approx(1.0)
-    assert peto.statistic != pytest.approx(logrank.statistic)
-    assert peto.statistic == pytest.approx(
-        survival.surv_analysis.survdiff(time_list, status_list, group_list, rho=1.0).chisq
-    )
+    assert peto.chisq != pytest.approx(logrank.chisq)
 
 
 @pytest.mark.parametrize("rho", [0.0, 1.0])
 @pytest.mark.parametrize("timefix", [False, True])
 @pytest.mark.parametrize("counting", [False, True])
 @pytest.mark.parametrize("stratified", [False, True])
-def test_logrank_owned_inputs_preserve_optional_arguments(rho, timefix, counting, stratified):
+def test_survdiff_leaves_array_inputs_unchanged(rho, timefix, counting, stratified):
     time = np.array([1, 2, 2 + 5e-9, 3, 4, 4 + 5e-9, 5, 6, 7, 8, 9, 10])
     status = np.array([1, 1, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0], dtype=np.int32)
     group = np.array([9, 4, -2, 4, 9, -2, 4, -2, 9, 4, -2, 9], dtype=np.int32)
@@ -279,20 +270,20 @@ def test_logrank_owned_inputs_preserve_optional_arguments(rho, timefix, counting
     before = [
         None if value is None else value.copy() for value in (time, status, group, start, strata)
     ]
-    actual = survival.validation.logrank_test(
-        time, status, group, rho=rho, timefix=timefix, entry_times=start, strata=strata
-    )
-    expected = survival.surv_analysis.survdiff(
+    from_arrays = survival.kernels.survdiff(
         time, status, group, rho=rho, timefix=timefix, start=start, strata=strata
     )
-    assert actual.groups == expected.group_codes
-    np.testing.assert_array_equal(actual.observed, np.sum(expected.obs, axis=1))
-    np.testing.assert_array_equal(actual.expected, np.sum(expected.exp, axis=1))
-    np.testing.assert_array_equal(actual.variance, expected.var)
-    assert actual.statistic == expected.chisq
-    assert actual.p_value == expected.pvalue
-    assert actual.df == expected.df
-    assert actual.rho == rho
+    from_lists = survival.kernels.survdiff(
+        time.tolist(),
+        status.tolist(),
+        group.tolist(),
+        rho=rho,
+        timefix=timefix,
+        start=None if start is None else start.tolist(),
+        strata=None if strata is None else strata.tolist(),
+    )
+    assert from_arrays.chisq == from_lists.chisq
+    assert from_arrays.obs == from_lists.obs
     for value, original in zip((time, status, group, start, strata), before, strict=True):
         if value is not None:
             np.testing.assert_array_equal(value, original)
@@ -305,8 +296,8 @@ def test_logrank_with_numpy():
     time_np = np.array(time_list)
     status_np = np.array(status_list, dtype=np.int32)
     group_np = np.array(group_list, dtype=np.int32)
-    result = survival.validation.logrank_test(time_np, status_np, group_np)
-    assert hasattr(result, "statistic")
+    result = survival.kernels.survdiff(time_np, status_np, group_np)
+    assert hasattr(result, "chisq")
 
 
 def test_logrank_with_numpy_int64():
@@ -316,8 +307,8 @@ def test_logrank_with_numpy_int64():
     time_np = np.array(time_list)
     status_np64 = np.array(status_list, dtype=np.int64)
     group_np64 = np.array(group_list, dtype=np.int64)
-    result = survival.validation.logrank_test(time_np, status_np64, group_np64)
-    assert hasattr(result, "statistic")
+    result = survival.kernels.survdiff(time_np, status_np64, group_np64)
+    assert hasattr(result, "chisq")
 
 
 def test_logrank_with_strided_numpy_arrays():
@@ -325,9 +316,9 @@ def test_logrank_with_strided_numpy_arrays():
     status = np.array([1, -1, 1, -1, 0, -1, 1, -1, 0, -1], dtype=np.int32)
     group = np.array([0, -1, 0, -1, 1, -1, 1, -1, 1, -1], dtype=np.int64)
 
-    result = survival.validation.logrank_test(time[::2], status[::2], group[::2])
+    result = survival.kernels.survdiff(time[::2], status[::2], group[::2])
 
-    assert hasattr(result, "statistic")
+    assert hasattr(result, "chisq")
 
 
 @pytest.mark.skipif(not HAS_PANDAS, reason="pandas not installed")
@@ -336,8 +327,8 @@ def test_logrank_with_pandas():
     status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
     df = pd.DataFrame({"time": time_list, "status": status_list, "group": group_list})
-    result = survival.validation.logrank_test(df["time"], df["status"], df["group"])
-    assert hasattr(result, "statistic")
+    result = survival.kernels.survdiff(df["time"], df["status"], df["group"])
+    assert hasattr(result, "chisq")
 
 
 @pytest.mark.skipif(not HAS_POLARS, reason="polars not installed")
@@ -346,8 +337,8 @@ def test_logrank_with_polars():
     status_list = [1, 1, 0, 1, 0, 1, 1, 1, 0, 1]
     group_list = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
     df = pl.DataFrame({"time": time_list, "status": status_list, "group": group_list})
-    result = survival.validation.logrank_test(df["time"], df["status"], df["group"])
-    assert hasattr(result, "statistic")
+    result = survival.kernels.survdiff(df["time"], df["status"], df["group"])
+    assert hasattr(result, "chisq")
 
 
 def test_cv_cox_concordance_with_lists():

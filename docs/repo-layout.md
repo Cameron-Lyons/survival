@@ -179,12 +179,12 @@ exactly one module):
 - `datasets`, `data_prep` (0-based row indices everywhere), `core` (the typed
   inputs `SurvivalData`/`CountingProcessData`/`CovariateMatrix`/`Weights`,
   `concordancefit`, the spline bases and the Cox residual kernels)
-- `regression` (`coxph_fit` -> `CoxPHFit`, `survreg_fit` -> `SurvregFit`,
-  `cox_zph`, `coxph_detail`, `cch_fit`, ...), `surv_analysis` (`survfitkm`,
-  `survfitaj`, `survdiff`, summaries and pseudo values), `validation`,
-  `residuals` (`coxmart`/`agmart`; model residuals are methods of the fits)
-- `population` (`RateTable`, `match_ratetable`, `pyears`, `survexp`),
-  `pybridge` (`cox_callback`), `interval` (`turnbull`), `monitoring`, `ml`
+- `kernels`: every core kernel, including those named like an R function
+  (`coxph_fit`, `survreg_fit`, `survdiff`, `pyears`, `survexp`, `agmart`, ...)
+- `regression` (`CoxPHFit`, `SurvregFit`, `cch_fit`, ...), `surv_analysis`
+  (`survfitkm`, `survfitaj`, multi-state models), `validation`, `population`
+  (`RateTable`), `pybridge` (the R bridge's hooks), `interval` (`turnbull`),
+  `monitoring`, `ml`
 - `bayesian`, `causal`, `joint`, `interpretability`, `spatial`, and related domains
 - `r`: the R-style API (`Surv`, `survfit`, `survdiff`, `coxph`, `clogit`,
   `survreg`, their generics and R's other exports); the package root re-exports
@@ -257,7 +257,7 @@ Preferred usage is module-oriented:
 from survival import datasets, regression, validation
 
 lung = datasets.load_lung()
-fit = regression.survreg_fit(...)
+fit = kernels.survreg_fit(...)
 rmst = validation.rmst(...)
 ```
 

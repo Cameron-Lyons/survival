@@ -97,7 +97,9 @@ def test_residuals_survfit_collapse_without_weights_matches_r():
         "id": [1, 1, 2, 2, 3, 3, 4],
         "t1": [0, 2, 0, 1, 0, 3, 0],
         "t2": [2, 5, 1, 4, 3, 6, 4],
-        "ev": r._coerce._r_factor(["b", "a", "b", "censor", "b", "censor", "a"], ["censor", "a", "b"]),
+        "ev": r._coerce._r_factor(
+            ["b", "a", "b", "censor", "b", "censor", "a"], ["censor", "a", "b"]
+        ),
     }
     multi = r.survfit_residuals(
         r.survfit("Surv(t1, t2, ev) ~ 1", states, id="id"), times=[2, 4], collapse=True

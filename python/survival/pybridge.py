@@ -12,7 +12,6 @@ __all__ = bind_names(
         "CoxPenaltyTerms",
         "_survpenal_fit_from_state",
         "_unpickle",
-        "cox_callback",
     ],
 )
 

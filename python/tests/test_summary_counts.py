@@ -66,7 +66,7 @@ def test_native_summary_accepts_strided_numpy_times(kind, dtype, fits):
 
     def call(values):
         if kind == "km":
-            return survival.surv_analysis.summary_survfit(fit.engine, times=values, dosum=False)
+            return survival.kernels.summary_survfit(fit.engine, times=values, dosum=False)
         return fit.engine.summary(times=values, dosum=False)
 
     actual = call(times)

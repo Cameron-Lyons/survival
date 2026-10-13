@@ -3,7 +3,7 @@
   times <- sort(unique(times))
   n_times <- length(times)
   n_groups <- max(group)
-  raw <- .population_attr("survexp")(
+  raw <- .kernels_attr("survexp")(
     ratetable = .as_python_ratetable(ratetable),
     positions = expected_data,
     y = array(as.numeric(followup)),
@@ -56,7 +56,7 @@
     if (anyNA(new_strata)) stop("New data set has strata levels not found in the original", call. = FALSE)
     baselines <- lapply(split(seq_len(nrow(train_y)), train_strata), function(rows) {
       if (!length(rows)) return(list(time = numeric(), cumhaz = numeric()))
-      curve <- .survival_analysis_attr("cox_survfit_baseline")(
+      curve <- .kernels_attr("cox_survfit_baseline")(
         unclass(train_y[rows, , drop = FALSE]), matrix(0, length(rows), 0L),
         array(input$weights[rows]), array(input$risk[rows]),
         if (fit$method == "efron") 3L else 2L, if (fit$method == "efron") 3L else 2L)
@@ -70,7 +70,7 @@
       for (s in unique(new_strata)) {
         rows <- which(new_strata == s)
         baseline <- baselines[[s]]
-        at <- function(time) .as_numeric_vector(.survival_analysis_attr("step_values_at")(
+        at <- function(time) .as_numeric_vector(.kernels_attr("step_values_at")(
           as.list(baseline$time), as.list(baseline$cumhaz), as.list(as.numeric(time)), 0))
         hazard <- at(prediction_y[rows, ncol(prediction_y) - 1L])
         if (ncol(prediction_y) == 3L) hazard <- hazard - at(prediction_y[rows, 1L])
@@ -78,7 +78,7 @@
       }
       return(if (method == "individual.h") value else exp(-value))
     }
-    raw <- .population_attr("survexp_cox_prepared")(
+    raw <- .kernels_attr("survexp_cox_prepared")(
       array(unlist(lapply(baselines, `[[`, "time"))), array(unlist(lapply(baselines, `[[`, "cumhaz"))),
       array(vapply(baselines, function(b) length(b$time), integer(1))), array(new_risk),
       array(new_strata - 1L), array(as.integer(groups) - 1L), array(as.numeric(weights)),

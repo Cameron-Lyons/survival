@@ -295,7 +295,7 @@
   scale <- .as_finite_scalar(scale, "scale", positive = TRUE)
   n <- length(followup$stop)
   groups <- if (length(categories$dims)) as.character(seq_len(prod(categories$dims))) else "(all)"
-  raw <- do.call(.population_attr("pyears"), .compact_null(list(
+  raw <- do.call(.kernels_attr("pyears"), .compact_null(list(
     stop = array(followup$stop),
     start = if (is.null(followup$start)) NULL else array(followup$start),
     event = if (is.null(followup$event)) NULL else array(followup$event),

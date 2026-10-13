@@ -118,17 +118,17 @@ def test_coxcount2_matches_r_risk_set_expansion():
 def test_coxscore2_matches_r_score_residuals():
     data, covariates, score, _ = _lung30()
 
-    efron = core.coxscore2(data, covariates, score, ties="efron")
-    breslow = core.coxscore2(data, covariates, score, ties="breslow")
+    efron = survival._survival.coxscore2(data, covariates, score, ties="efron")
+    breslow = survival._survival.coxscore2(data, covariates, score, ties="breslow")
 
     assert len(efron) == 30
     np.testing.assert_allclose(efron[:6], _LUNG30_SCORE_HEAD, rtol=1e-9)
     np.testing.assert_allclose(breslow, efron)
 
     with pytest.raises(ValueError, match='ties must be "breslow" or "efron"'):
-        core.coxscore2(data, covariates, score, ties="exact")
+        survival._survival.coxscore2(data, covariates, score, ties="exact")
     with pytest.raises(ValueError, match="score contains negative value"):
-        core.coxscore2(data, covariates, [-1.0] + score[1:])
+        survival._survival.coxscore2(data, covariates, [-1.0] + score[1:])
 
 
 def test_schoenfeld_residuals_match_r():
@@ -149,8 +149,8 @@ def test_schoenfeld_residuals_match_r():
 
 def test_coxmart_matches_r_martingale_residuals():
     data, _, score, _ = _lung30()
-    residuals = survival.residuals.coxmart(
-        core.CoxMartInput(data, score, core.Weights.unit(30), [0] * 30)
+    residuals = survival._survival.coxmart(
+        survival._survival.CoxMartInput(data, score, core.Weights.unit(30), [0] * 30)
     )
 
     assert residuals[:3] == pytest.approx(_LUNG30_MARTINGALE_HEAD, rel=1e-9)
@@ -168,9 +168,9 @@ def test_counting_process_kernels_match_r():
     score = [math.exp(coef * value) for value in x]
     covariates = core.CovariateMatrix(x, 8, 1)
 
-    score_residuals = core.agscore3(counting, covariates, score)
-    schoenfeld = core.schoenfeld_residuals_counting(counting, covariates, score)
-    martingale = survival.residuals.agmart(
+    score_residuals = survival._survival.agscore3(counting, covariates, score)
+    schoenfeld = survival._survival.schoenfeld_residuals_counting(counting, covariates, score)
+    martingale = survival.kernels.agmart(
         survival.core.AndersenGillInput(counting, score, core.Weights.unit(8), [0] * 8)
     )
 
@@ -211,7 +211,7 @@ def test_concordancefit_matches_r_concordance():
     data, _, _, age = _lung30()
     x = core.CovariateMatrix(age, 30, 1)
 
-    fit = core.concordancefit(data, x)
+    fit = survival.kernels.concordancefit(data, x)
     assert fit.concordance == pytest.approx([0.54147465437788023])
     counts = fit.count[0]
     assert (counts.concordant, counts.discordant, counts.tied_x) == (223.0, 187.0, 24.0)
@@ -221,20 +221,20 @@ def test_concordancefit_matches_r_concordance():
     assert fit.dfbeta is None
     assert fit.count_strata is None
 
-    reversed_fit = core.concordancefit(data, x, reverse=True, timewt="S")
+    reversed_fit = survival.kernels.concordancefit(data, x, reverse=True, timewt="S")
     assert reversed_fit.concordance == pytest.approx([0.45852534562211977])
     assert reversed_fit.count[0].concordant == pytest.approx(187.0)
     assert reversed_fit.count[0].discordant == pytest.approx(223.0)
     assert reversed_fit.var[0] == pytest.approx([0.0047245346852800843])
 
-    with_influence = core.concordancefit(data, x, influence=1, ranks=True)
+    with_influence = survival.kernels.concordancefit(data, x, influence=1, ranks=True)
     assert len(with_influence.dfbeta) == 30
     assert len(with_influence.ranks[0].time) == sum(data.status)
 
     with pytest.raises(ValueError, match="timewt must be one of"):
-        core.concordancefit(data, x, timewt="bogus")
+        survival.kernels.concordancefit(data, x, timewt="bogus")
     with pytest.raises(ValueError, match="y length mismatch"):
-        core.concordancefit(data, core.CovariateMatrix(age + [1.0], 31, 1))
+        survival.kernels.concordancefit(data, core.CovariateMatrix(age + [1.0], 31, 1))
 
 
 def test_concordancefit_counting_matches_r_concordance():
@@ -256,7 +256,7 @@ def test_concordancefit_counting_matches_r_concordance():
 def test_nsk_matches_r_natural_spline_basis():
     x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
 
-    result = core.nsk(x, df=3)
+    result = survival.kernels.nsk(x, df=3)
 
     assert result.knots == pytest.approx([4.333333333333333, 6.6666666666666661])
     assert result.boundary_knots == pytest.approx((1.45, 9.5499999999999989))

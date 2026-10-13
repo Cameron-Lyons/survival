@@ -67,7 +67,7 @@
                "without the lower order effect"), call. = FALSE)
   }
   p <- ncol(input$x)
-  raw <- .survival_analysis_attr("coxsurv_fit")(
+  raw <- .kernels_attr("coxsurv_fit")(
     y = unclass(input$y), x = input$x, weights = array(input$weights), risk = array(input$risk),
     strata = array(rep(0L, nrow(input$y))), nstrata = 1L,
     x2 = matrix(as.numeric(fit$means), 1L, p), risk2 = array(1),
@@ -79,7 +79,7 @@
     n.event = value("n_event"), n.censor = value("n_censor"), surv = value("surv"),
     cumhaz = value("cumhaz"), std.err = value("std_err"), logse = TRUE)
   result$std.chaz <- result$std.err
-  band <- .survival_analysis_attr("survfit_confint")(
+  band <- .kernels_attr("survfit_confint")(
     as.list(result$surv), as.list(result$std.err), logse = TRUE, conf_type = "log", conf_int = .95)
   result$lower <- .as_numeric_vector(band$lower)
   result$upper <- .as_numeric_vector(band$upper)
