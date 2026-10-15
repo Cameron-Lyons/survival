@@ -27,6 +27,7 @@ jobs:
   miri:
     name: Miri (Undefined Behavior)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -34,13 +35,19 @@ jobs:
       - name: Install Rust nightly with Miri
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: miri
+          components: miri, rust-src
 
-      - name: Run Miri on tests
-        run: cargo +nightly miri test --lib 2>&1 | head -500
+      - name: Prepare Miri sysroot
+        run: cargo +nightly miri setup
+
+      # The full library suite runs natively in CI; interpret shared core helpers here.
+      - name: Run Miri on core helper tests
+        shell: bash
+        run: >-
+          cargo +nightly miri test --locked --lib --no-default-features internal:: -- --test-threads=1
         env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-        continue-on-error: true
+          # R reference assertions require host precision rather than injected rounding errors.
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-no-extra-rounding-error
 
   dependency-review:
     name: Dependency Review
