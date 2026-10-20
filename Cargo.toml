@@ -67,7 +67,7 @@ serde_json = { version = "1.0.150", features = ["float_roundtrip"] }
 divan = "0.1.21"
 
 [build-dependencies]
-pyo3-build-config = { version = "0.29.0", features = ["resolve-config"], optional = true }
+pyo3-build-config = { version = "0.30.1", features = ["resolve-config"], optional = true }
 
 [[bench]]
 name = "survival_benchmarks"
