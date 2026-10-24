@@ -1,8 +1,7 @@
 name: Code Coverage
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
