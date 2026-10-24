@@ -25,6 +25,9 @@ jobs:
   semver:
     uses: ./.github/workflows/semver.yml
   benchmarks:
+    permissions:
+      contents: read
+      pull-requests: write
     uses: ./.github/workflows/bench.yml
     secrets: inherit
   veto:
