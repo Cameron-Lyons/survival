@@ -45,7 +45,7 @@ Issues = "https://github.com/Cameron-Lyons/survival/issues"
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"]
 dev = [
-  "pre-commit==4.6.2",
+  "pre-commit==4.7.0",
   "ruff==0.17.0",
   "mypy==2.4.0",
 ]
