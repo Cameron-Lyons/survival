@@ -18,11 +18,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version 0.22.1
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.9
 
       - name: Run security audit
-        run: cargo audit
+        # Match cargo-audit's warning policy for maintenance notices while
+        # continuing to fail on vulnerabilities in any enabled dependency.
+        run: cargo deny --locked check advisories --warn unmaintained
 
   miri:
     name: Miri (Undefined Behavior)
