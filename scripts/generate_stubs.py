@@ -75,7 +75,9 @@ PARAM_OVERRIDES: dict[str, dict[str, str]] = {
         "surv": "ArrayLike | None",
         "pstate": "ArrayLike | None",
         "by": "Sequence[GroupingFactor] | None",
-        "fun": "str | Callable[[NDArray[np.float64]], float | np.number[Any] | NDArray[Any]] | None",
+        "fun": (
+            "str | Callable[[NDArray[np.float64]], float | np.number[Any] | NDArray[Any]] | None"
+        ),
     },
     "cox_zph": {"fit": "CoxPHFit | CoxpenalFit", "transform": "str | Sequence[float] | None"},
     "neardate": {

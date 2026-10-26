@@ -1,0 +1,8 @@
+# Audit dependencies reachable through every public feature, on every target.
+# Cargo.lock also contains optional backend dependencies that none of this
+# crate's features enable (for example Burn's deprecated LibTorch backend).
+[graph]
+all-features = true
+
+[advisories]
+ignore = []
