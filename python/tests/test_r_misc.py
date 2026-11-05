@@ -512,14 +512,14 @@ def test_statefig_matches_r_layouts():
     assert row.states == ["A", "B", "C"]
     expected_row_positions = [(0.25, 0.5), (0.75, 0.75), (0.75, 0.25)]
     assert len(row.positions) == len(expected_row_positions)
-    for actual, expected in zip(row.positions, expected_row_positions):
+    for actual, expected in zip(row.positions, expected_row_positions, strict=True):
         assert actual == pytest.approx(expected)
     assert [(arrow.from_state, arrow.to_state) for arrow in row.arrows] == [(0, 1), (0, 2), (1, 2)]
 
     column = r.statefig([[1], [2]], {"A": [0, 1, 1], "B": [0, 0, 1], "C": [0, 0, 0]})
     expected_column_positions = [(0.5, 0.75), (0.25, 0.25), (0.75, 0.25)]
     assert len(column.positions) == len(expected_column_positions)
-    for actual, expected in zip(column.positions, expected_column_positions):
+    for actual, expected in zip(column.positions, expected_column_positions, strict=True):
         assert actual == pytest.approx(expected)
 
     coordinates = r.statefig([[0.2, 0.7], [0.8, 0.3]], [[0, 1], [0, 0]], states=["a", "b"])
