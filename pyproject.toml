@@ -53,7 +53,7 @@ test = [
   "matplotlib>=3.8",
   "pytest==9.2.0",
   "pytest-cov==7.1.0",
-  "pandas==3.1.0",
+  "pandas==3.1.1",
   "polars==2.1.0",
 ]
 
