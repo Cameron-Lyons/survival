@@ -34,11 +34,15 @@ The interfaces themselves are described in the topic guides:
 
 ## API coverage
 
-The exported API inventory covers all 80 exports in stock survival 3.8-12.
+The exported API inventory covers all 80 exports recorded from stock survival
+3.8-11, with `survfit.formula` provided by the formula path of `survfit`.
 That inventory checks entry points; the independent references and deliberate
-differences below describe the tested argument and numerical behavior. R's
-`uspop2` population array (age by sex by year, 2000–2020) is the one data object
-that is not shipped.
+differences below describe the tested argument and numerical behavior. The data
+inventory covers all 56 R data names: 50 data frames and two aliases, three rate
+tables, and the `uspop2` population projections. Every `uspop2` count and axis label
+is checked against stock R, together with the age-group standardization example
+from its help page. CI regenerates these package inventories and projections
+with `scripts/generate_uspop2_reference.R --check`.
 
 ## Deliberate fixes of R defects
 
@@ -128,9 +132,30 @@ alongside the corrected oracle.
 - **Exact counting-process fits with a large common offset**: R's front end
   rejects a common offset of +1,000; the port fits it, giving the fit obtained
   after removing the common shift.
-- **coxph.detail**: a stratum whose largest linear predictor lies beyond ±200
-  has its risk scores shifted by it; R computes `exp(lp)` and overflows. The
-  outputs agree wherever R's are finite.
+- **Large stratum offsets**: the port retains each stratum's offset origin
+  separately from its smaller covariate effects. Fitting, martingale and score
+  residuals and subject survival probabilities therefore agree with the
+  unshifted model even for opposite stratum offsets of ±1e308. This retained
+  state survives copying and current-version serialization. Event-free data
+  return unit survival and zero expected counts without exponentiating risks.
+- **Large coefficient terms and changing risk sets**: the port evaluates
+  covariate differences before multiplying by large coefficients. Risk totals
+  retain the compensated predictor origin separately from their relative mass,
+  so equal-risk multiplicities and case weights survive within-stratum shifts
+  near 1e16 and beyond. Exact ties normalize each subset size by its largest
+  possible product before accumulating probabilities. Fitting, diagnostics,
+  new-data predictions and current-version serialization share these scales.
+- **coxph.detail**: extreme risk sets use normalized means and covariances;
+  R computes `exp(lp)` and overflows. Absolute baseline hazards and weighted
+  risk totals may still overflow or underflow when that is their true scale.
+- **Fitted Kalbfleisch–Prentice point estimates**: R computes a baseline survival
+  increment before raising it to a subject's risk. It can round to zero or one,
+  and tied deaths use a fixed-resolution root solve. For two equal-risk rows,
+  one death and common LP −7, stock 3.8-11 returns 0 instead of 0.5; with
+  two deaths among four equal-risk rows at LP 20 it returns 0.4971078884.
+  The port computes log survival increments and returns 0.5 in both cases.
+  It retains R's separate, scale-dependent `vartype=1` variance formula.
+  The raw `agsurv` kernel retains its reference arithmetic.
 - **predict(type = "expected" | "survival") with new-data offsets**: the port
   uses `chaz * exp(x beta + offset)`; R's `predict.coxph` computes
   `chaz * (exp(x beta) + offset)` (`newrisk <- exp(newx %*% coef) + newoffset`).
@@ -159,6 +184,12 @@ alongside the corrected oracle.
 
 ### Penalized Cox models (`coxpenal.fit`)
 
+- **Extreme predictor scales**: when large offsets or coefficient contributions
+  require the compensated risk path, the port uses those risks consistently for
+  likelihoods, information, residuals and predictions. R's `coxsafe.c` clips
+  predictors to [-200, 22]. The port retains that ordinary kernel arithmetic
+  outside its extreme-scale fallback, while the fallback preserves finite
+  likelihood differences such as -1e16 instead of clipping them to -22.
 - **Hazard between strata**: `coxfit5_c` never resets the hazard at a stratum
   boundary, so R's martingale residuals of a stratified penalized fit
   (`pspline(age, df = 3) + strata(sex)`) are wrong after the first stratum.
@@ -908,6 +939,20 @@ this does not show.
 
 ### Results and labels
 
+- `lvcf` preserves factor levels and returns an unordered factor, and `nostutter`
+  returns a factor with the censoring level first, as in R. Python factor labels
+  retain their original numeric types. `nostutter` keeps its successful behavior
+  for empty input, unused levels, states without repeats and `single=True`;
+  stock survival 3.8-11 errors on these cases. The independently generated
+  `data_prep_labels_reference.json` records those errors and the intended factors.
+- `neardate` matches factor labels even when the two vectors declare different
+  level sets; R's final factor comparison errors. Results always have one entry
+  per query, including all-unmatched cases where stock R can recycle to the
+  reference length. Numeric/character and logical/character ID matching uses
+  R's character coercion, including its rounded numeric labels. Numeric `None`
+  and floating `NaN` form distinct `NA` and `NaN` match groups. Character matching
+  converts numeric `NaN` to the literal label `"NaN"`; factor comparisons retain
+  R's missing-result behavior.
 - `survfit.matrix` supports omitted `p0`, unstratified curves and empty event
   grids (R 3.8-12 errors on these inputs). A start parameter earlier than the
   curves' shared `start_time` warns and uses the latter; R warns but still uses
@@ -1070,6 +1115,12 @@ this does not show.
   trajectories by the training stratum labels.
 - AFT distribution queries forward Python `RuntimeWarning` and `UserWarning` as
   R warnings; other callback warning categories go to Python's warning hook.
+- Mixed `NA`/`NaN` arithmetic in AFT distribution queries can return either
+  missing kind across platforms. R's `help("NA", package = "base")` states
+  "either might result (which may depend on the R platform)";
+  `help("is.finite", package = "base")` also identifies compiler reordering
+  as a cause. Differential checks retain exact missing kinds for unambiguous
+  positions and compare `is.na`, values, warnings and errors at every position.
 - `survivalr::yates` consumes R's global random stream and ignores
   `options$seed`, while Python's `r.yates` uses a per-call seed. The R wrapper
   does not support `trend`, stratified survival prediction, multi-state Cox

@@ -1,3 +1,5 @@
+mod log_kp;
+
 use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
@@ -276,7 +278,7 @@ pub fn agsurv(
     data.validate()?;
     data.validate_values()?;
     let rows: Vec<usize> = (0..data.stop.len()).collect();
-    Ok(agsurv_of_rows(data, &rows, survtype, vartype))
+    Ok(agsurv_of_rows(data, &rows, survtype, vartype, None, None))
 }
 
 pub fn agsurv_rows(
@@ -291,7 +293,53 @@ pub fn agsurv_rows(
             "agsurv: row {row} is out of range"
         )));
     }
-    Ok(agsurv_of_rows(data, rows, survtype, vartype))
+    Ok(agsurv_of_rows(data, rows, survtype, vartype, None, None))
+}
+
+/// Fitted curves retry with the log sweep if removing future entrants loses
+/// precision in an event risk set. Raw public agsurv keeps its original sums.
+pub(crate) fn agsurv_rows_checked(
+    data: &AgsurvData<'_>,
+    rows: &[usize],
+    survtype: CoxSurvType,
+    vartype: CoxSurvType,
+) -> SurvivalResult<Option<AgsurvCurve>> {
+    data.validate()?;
+    if let Some(&row) = rows.iter().find(|&&row| row >= data.stop.len()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "agsurv: row {row} is out of range"
+        )));
+    }
+    let mut stable = true;
+    let curve = agsurv_of_rows(data, rows, survtype, vartype, None, Some(&mut stable));
+    Ok(stable.then_some(curve))
+}
+
+/// Fitted-only K-P path: keep ordinary hazard/variance arithmetic, replacing
+/// the rounded survival root with retained log increments. None asks the caller
+/// to use the active log-risk sweep when counting-set subtraction is unsafe.
+pub(crate) fn agsurv_rows_log_kp(
+    data: &AgsurvData<'_>,
+    rows: &[usize],
+    log_risk: &[f64],
+) -> SurvivalResult<Option<(AgsurvCurve, Vec<f64>)>> {
+    data.validate()?;
+    if let Some(&row) = rows.iter().find(|&&row| row >= data.stop.len()) {
+        return Err(SurvivalError::invalid_input(format!(
+            "agsurv: row {row} is out of range"
+        )));
+    }
+    let mut logs = None;
+    let mut stable = true;
+    let curve = agsurv_of_rows(
+        data,
+        rows,
+        CoxSurvType::KalbfleischPrentice,
+        CoxSurvType::KalbfleischPrentice,
+        Some((log_risk, &mut logs)),
+        Some(&mut stable),
+    );
+    Ok(logs.filter(|_| stable).map(|logs| (curve, logs)))
 }
 
 fn agsurv_of_rows(
@@ -299,6 +347,8 @@ fn agsurv_of_rows(
     rows: &[usize],
     survtype: CoxSurvType,
     vartype: CoxSurvType,
+    log_kp: Option<(&[f64], &mut Option<Vec<f64>>)>,
+    mut stable: Option<&mut bool>,
 ) -> AgsurvCurve {
     let n = rows.len();
     let nvar = data.x.ncols();
@@ -357,7 +407,14 @@ fn agsurv_of_rows(
         for (g, &t) in time.iter().enumerate() {
             let indx = group_index(&etime, t);
             if indx < etime.len() {
+                let before = nrisk[g];
                 nrisk[g] -= esum[indx];
+                if let Some(stable) = stable.as_deref_mut()
+                    && n_event[g] > 0.0
+                    && nrisk[g] <= before * 1e-6
+                {
+                    *stable = false;
+                }
                 irisk[g] -= ewt[indx];
                 for k in 0..nvar {
                     xsum[(g, k)] -= xout[(indx, k)];
@@ -373,6 +430,18 @@ fn agsurv_of_rows(
             .filter(|&i| data.status[i] == 1)
             .collect();
         deaths.sort_by(|&a, &b| data.stop[a].total_cmp(&data.stop[b]).then(a.cmp(&b)));
+        if let Some((log_risk, output)) = log_kp {
+            if stable.as_deref().is_some_and(|value| !*value) {
+                return vec![1.0; ntime];
+            }
+            *output = log_kp::increments(
+                data, rows, &deaths, &time, &ndeath, &nrisk, &erisk, log_risk,
+            );
+            return output.as_ref().map_or_else(
+                || vec![1.0; ntime],
+                |logs| logs.iter().map(|log| (-log.exp()).exp()).collect(),
+            );
+        }
         let risk: Vec<f64> = deaths.iter().map(|&i| data.risk[i]).collect();
         let weights: Vec<f64> = deaths.iter().map(|&i| data.weights[i]).collect();
         agsurv4(&ndeath, &risk, &weights, &nrisk)
@@ -534,6 +603,35 @@ pub(crate) fn expand_curve_validated(
     risk2: &[f64],
     varmat: Option<&Array2<f64>>,
 ) -> SurvivalResult<CoxSurvCurve> {
+    expand_curve_impl(curve, survtype, x2, risk2, varmat, None)
+}
+
+pub(crate) fn expand_curve_log_kp(
+    curve: &AgsurvCurve,
+    x2: ArrayView2<'_, f64>,
+    risk2: &[f64],
+    log_risk: &[f64],
+    log_kp: &[f64],
+    varmat: Option<&Array2<f64>>,
+) -> SurvivalResult<CoxSurvCurve> {
+    expand_curve_impl(
+        curve,
+        CoxSurvType::KalbfleischPrentice,
+        x2,
+        risk2,
+        varmat,
+        Some((log_kp, log_risk)),
+    )
+}
+
+fn expand_curve_impl(
+    curve: &AgsurvCurve,
+    survtype: CoxSurvType,
+    x2: ArrayView2<'_, f64>,
+    risk2: &[f64],
+    varmat: Option<&Array2<f64>>,
+    log_kp: Option<(&[f64], &[f64])>,
+) -> SurvivalResult<CoxSurvCurve> {
     let m = x2.nrows();
     let nvar = curve.xbar.ncols();
     if x2.ncols() != nvar {
@@ -548,14 +646,45 @@ pub(crate) fn expand_curve_validated(
         ));
     }
     let ntime = curve.time.len();
-    let base_surv = baseline_survival(curve, survtype)?;
+    let base_surv = if let Some((increments, _)) = log_kp {
+        let mut total = f64::NEG_INFINITY;
+        increments
+            .iter()
+            .map(|&log| {
+                total = if total == f64::NEG_INFINITY {
+                    log
+                } else if log == f64::NEG_INFINITY {
+                    total
+                } else if total == f64::INFINITY || log == f64::INFINITY {
+                    f64::INFINITY
+                } else {
+                    total.max(log) + (-(total - log).abs()).exp().ln_1p()
+                };
+                total
+            })
+            .collect()
+    } else {
+        baseline_survival(curve, survtype)?
+    };
     let mut surv = Array2::zeros((ntime, m));
     let mut cumhaz = Array2::zeros((ntime, m));
     let mut std_err = varmat.map(|_| Array2::zeros((ntime, m)));
     let mut variance = varmat.map(|v| CurveVariance::new(v, nvar)).transpose()?;
     for i in 0..m {
         for g in 0..ntime {
-            surv[(g, i)] = base_surv[g].powf(risk2[i]);
+            surv[(g, i)] = if let Some((_, log_risk)) = log_kp {
+                if log_risk[i].is_nan() {
+                    log_risk[i]
+                } else if base_surv[g] == f64::INFINITY {
+                    0.0
+                } else if base_surv[g] == f64::NEG_INFINITY {
+                    1.0
+                } else {
+                    (-(base_surv[g] + log_risk[i]).exp()).exp()
+                }
+            } else {
+                base_surv[g].powf(risk2[i])
+            };
             cumhaz[(g, i)] = curve.cumhaz[g] * risk2[i];
         }
         if let (Some(variance), Some(std_err)) = (variance.as_mut(), std_err.as_mut()) {

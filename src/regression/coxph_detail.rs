@@ -1,7 +1,12 @@
 use crate::core::risk_sweep::StratumSweep;
+use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
+use crate::internal::validation::{validate_binary_i32, validate_finite, validate_positive};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::CoxPHFit;
+use crate::regression::log_risk_sweep::{LogMoments, LogRiskSweep, needs_log_risk};
+use crate::regression::log_scale::LogScale;
+use ndarray::Array2;
 use pyo3::prelude::*;
 
 #[doc = " `coxph.detail(fit)`: one entry per unique death time."]
@@ -54,11 +59,56 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
             "Detailed output is not available for the exact method",
         ));
     }
+    fit.check_prediction_dimensions()?;
+    for (values, name) in [
+        (fit.time.as_slice(), "fit time"),
+        (fit.weights.as_slice(), "fit weights"),
+        (fit.linear_predictors.as_slice(), "fit linear predictors"),
+        (fit.means.as_slice(), "fit means"),
+    ] {
+        validate_finite(values, name)?;
+    }
+    validate_positive(&fit.weights, "fit weights")?;
+    validate_binary_i32(&fit.status, "fit status")?;
+    if fit.x.iter().any(|value| !value.is_finite()) {
+        return Err(SurvivalError::invalid_input(
+            "fit design contains non-finite values",
+        ));
+    }
+    if let Some(entry) = &fit.entry {
+        validate_finite(entry, "fit entry")?;
+        validate_intervals(entry, &fit.time)?;
+    }
+    for (&(start, end), &code) in fit.sorted.bounds.iter().zip(&fit.sorted.codes) {
+        let rows = &fit.sorted.order[start..end];
+        if rows
+            .windows(2)
+            .any(|pair| fit.time[pair[0]] > fit.time[pair[1]])
+        {
+            return Err(SurvivalError::invalid_input(
+                "fit times no longer match the stored row order",
+            ));
+        }
+        if fit
+            .strata
+            .as_ref()
+            .is_some_and(|strata| rows.iter().any(|&row| strata[row] != code))
+        {
+            return Err(SurvivalError::invalid_input(
+                "fit strata no longer match the stored row order",
+            ));
+        }
+    }
     let nvar = fit.nvar();
     let efron = fit.method == TieMethod::Efron;
     let mut x = fit.x.clone();
     for (mut column, &center) in x.columns_mut().into_iter().zip(&fit.means) {
         column -= center;
+    }
+    if fit.diagnostic_risk_scales().is_some()
+        || needs_log_risk(&fit.linear_predictors, &fit.weights)
+    {
+        return log_detail(fit, riskmat, &x);
     }
     let mut risk = vec![0.0; fit.n];
     let shift: Vec<f64> = fit
@@ -193,11 +243,161 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
     })
 }
 
+fn log_detail(fit: &CoxPHFit, riskmat: bool, x: &Array2<f64>) -> SurvivalResult<CoxphDetail> {
+    let p = fit.nvar();
+    let lp = fit.diagnostic_predictors();
+    let scales = fit.diagnostic_risk_scales();
+    let origins = fit.diagnostic_origin_scales();
+    let mut detail = CoxphDetail {
+        time: Vec::new(),
+        nevent: Vec::new(),
+        nrisk: Vec::new(),
+        hazard: Vec::new(),
+        varhaz: Vec::new(),
+        wtrisk: Vec::new(),
+        nevent_wt: Vec::new(),
+        means: Vec::new(),
+        score: Vec::new(),
+        imat: Vec::new(),
+        strata: fit.strata.as_ref().map(|_| Vec::new()),
+        riskmat: None,
+    };
+    let mut codes = Vec::new();
+    for (stratum, &(start, end)) in fit.sorted.bounds.iter().enumerate() {
+        let rows = &fit.sorted.order[start..end];
+        let origin = origins.map_or_else(|| LogScale::from_log(0.), |values| values[stratum]);
+        let sweep = LogRiskSweep {
+            stop: &fit.time,
+            entry: fit.entry.as_deref(),
+            status: &fit.status,
+            x: x.view(),
+            weights: &fit.weights,
+            log_risk: lp,
+            rows,
+        };
+        let callback = |event: crate::regression::log_risk_sweep::LogRiskTime<'_>| {
+            let d = event.deaths.len();
+            if d == 0 {
+                return Ok(());
+            }
+            let meanwt = event.death_weight / d as f64;
+            let mut hazard = LogMoments::new(0);
+            let mut variance = LogMoments::new_with_degree(0, 2.0);
+            let mut mean = vec![0.; p];
+            let mut score: Vec<f64> = (0..p)
+                .map(|j| {
+                    event
+                        .deaths
+                        .iter()
+                        .map(|&row| fit.weights[row] * x[(row, j)])
+                        .sum()
+                })
+                .collect();
+            let mut info = Array2::zeros((p, p));
+            let mut covariance = Array2::zeros((p, p));
+            let mut xbar = vec![0.; p];
+            for step in 0..d {
+                let step = if fit.method.is_efron() { step } else { 0 };
+                let increment = event
+                    .efron_denom(step)
+                    .reciprocal(event.log_death_weight - (d as f64).ln());
+                if increment.origin.is_nan()
+                    || increment.origin_correction.is_nan()
+                    || increment.log_mass.is_nan()
+                {
+                    return Err(SurvivalError::computation("Cox detail hazard is undefined"));
+                }
+                hazard.add(increment, &[]);
+                variance.add(
+                    LogScale::new_parts(
+                        increment.origin,
+                        increment.origin_correction,
+                        2. * increment.log_mass,
+                    ),
+                    &[],
+                );
+                event.efron_mean(step, &mut xbar);
+                event.efron_covariance(step, &mut covariance);
+                for i in 0..p {
+                    mean[i] += (fit.means[i] + xbar[i]) / d as f64;
+                    score[i] -= meanwt * xbar[i];
+                    for j in 0..p {
+                        info[(i, j)] += meanwt * covariance[(i, j)];
+                    }
+                }
+            }
+            if mean
+                .iter()
+                .chain(&score)
+                .chain(info.iter())
+                .any(|value| !value.is_finite())
+            {
+                return Err(SurvivalError::computation(
+                    "Cox detail moments are not finite",
+                ));
+            }
+            detail.time.push(event.time);
+            detail.nevent.push(d);
+            detail.nrisk.push(event.nrisk);
+            let inverse_origin =
+                LogScale::new_parts(-origin.origin, -origin.origin_correction, -origin.log_mass);
+            detail
+                .hazard
+                .push(hazard.weight.exp_at_scale(inverse_origin));
+            detail
+                .varhaz
+                .push(variance.weight.exp_at_scale_degree(inverse_origin, 2.));
+            detail.wtrisk.push(event.denom.exp_at_scale(origin));
+            detail.nevent_wt.push(event.death_weight);
+            detail.means.push(mean);
+            detail.score.push(score);
+            detail
+                .imat
+                .push(info.rows().into_iter().map(|row| row.to_vec()).collect());
+            codes.push(fit.sorted.codes[stratum]);
+            Ok(())
+        };
+        if let Some(scales) = scales {
+            sweep.for_each_time_with_covariance_scales(scales, callback)?;
+        } else {
+            sweep.for_each_time_with_covariance(callback)?;
+        }
+    }
+    if riskmat {
+        detail.riskmat = Some(
+            (0..fit.n)
+                .map(|row| {
+                    detail
+                        .time
+                        .iter()
+                        .zip(&codes)
+                        .map(|(&time, &code)| {
+                            i32::from(
+                                fit.strata.as_ref().is_none_or(|strata| strata[row] == code)
+                                    && fit.entry.as_ref().is_none_or(|entry| entry[row] < time)
+                                    && fit.time[row] >= time,
+                            )
+                        })
+                        .collect()
+                })
+                .collect(),
+        );
+    }
+    if let Some(strata) = &mut detail.strata {
+        *strata = codes;
+    }
+    Ok(detail)
+}
+
 #[doc = " `coxph.detail(fit, riskmat)` on a fitted model."]
 #[pyfunction(name = "coxph_detail")]
 #[pyo3(signature = (fit, riskmat = false))]
-pub(crate) fn coxph_detail_py(fit: &CoxPHFit, riskmat: bool) -> PyResult<CoxphDetail> {
-    Ok(coxph_detail(fit, riskmat)?)
+pub(crate) fn coxph_detail_py(
+    py: Python<'_>,
+    fit: &CoxPHFit,
+    riskmat: bool,
+) -> PyResult<CoxphDetail> {
+    Ok(py.detach(|| coxph_detail(fit, riskmat))?)
 }
 
 #[cfg(test)]

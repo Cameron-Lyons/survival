@@ -1,5 +1,6 @@
 use super::*;
 use crate::datasets::*;
+use crate::population::{Uspop2Data, load_uspop2_py};
 
 macro_rules! register_functions {
     ($m:expr, $( $function:ident ),+ $(,)?) => {
@@ -8,6 +9,8 @@ macro_rules! register_functions {
 }
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Uspop2Data>()?;
+    m.add_function(wrap_pyfunction!(load_uspop2_py, m)?)?;
     register_functions!(
         m,
         load_aml,

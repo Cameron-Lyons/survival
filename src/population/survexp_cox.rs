@@ -21,6 +21,28 @@ pub fn survexp_cox_prepared(
     times: Option<&[f64]>,
     method: &str,
 ) -> SurvivalResult<SurvExpResult> {
+    survexp_cox_evaluated(
+        baselines, risk, strata, group, weights, y, times, method, None,
+    )
+}
+
+/// Optional per-subject evaluator returns cumulative hazard now, before this
+/// event, and the log hazard increment. This keeps fitted extreme-risk models
+/// on the same cohort grid and validation path as ordinary prepared baselines.
+type CoxEventEvaluator<'a> = dyn Fn(usize, usize, usize) -> (f64, f64, f64) + 'a;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn survexp_cox_evaluated(
+    baselines: &[CoxExpectedBaseline],
+    risk: &[f64],
+    strata: &[usize],
+    group: &[usize],
+    weights: &[f64],
+    y: Option<&[f64]>,
+    times: Option<&[f64]>,
+    method: &str,
+    evaluator: Option<&CoxEventEvaluator<'_>>,
+) -> SurvivalResult<SurvExpResult> {
     let n = risk.len();
     if n == 0 {
         return Err(SurvivalError::invalid_input("Data set has 0 rows"));
@@ -106,6 +128,7 @@ pub fn survexp_cox_prepared(
     let mut surv = Vec::with_capacity(requested.len());
     let mut n_risk = Vec::with_capacity(requested.len());
     let mut positions = vec![0; baselines.len()];
+    let mut previous_positions = positions.clone();
     let mut current_h = vec![0.0; baselines.len()];
     let mut previous_h = current_h.clone();
     let mut current_s = vec![1.0; baselines.len()];
@@ -120,6 +143,7 @@ pub fn survexp_cox_prepared(
         if output == requested.len() {
             break;
         }
+        previous_positions.copy_from_slice(&positions);
         previous_h.copy_from_slice(&current_h);
         previous_s.copy_from_slice(&current_s);
         for (s, baseline) in baselines.iter().enumerate() {
@@ -131,13 +155,37 @@ pub fn survexp_cox_prepared(
                 current_s[s] = (-current_h[s]).exp();
             }
         }
-        numerator.fill(0.0);
-        denominator.fill(0.0);
+        numerator.fill(if evaluator.is_some() && method != "ederer" {
+            f64::NEG_INFINITY
+        } else {
+            0.0
+        });
+        denominator.fill(if evaluator.is_some() && method != "ederer" {
+            f64::NEG_INFINITY
+        } else {
+            0.0
+        });
         at_risk.fill(0.0);
         for i in 0..n {
             let g = group[i];
             let s = strata[i];
-            if method == "ederer" {
+            if let Some(evaluate) = evaluator {
+                let (hazard, previous, log_increment) =
+                    evaluate(i, previous_positions[s], positions[s]);
+                if method == "ederer" {
+                    numerator[g] += weights[i] * (-hazard).exp();
+                    denominator[g] += weights[i];
+                    at_risk[g] += 1.0;
+                } else if y.unwrap()[i] >= time {
+                    let log_weight =
+                        weights[i].ln() - if method == "hakulinen" { previous } else { 0.0 };
+                    if log_weight != f64::NEG_INFINITY {
+                        numerator[g] = log_sum(numerator[g], log_weight + log_increment);
+                        denominator[g] = log_sum(denominator[g], log_weight);
+                    }
+                    at_risk[g] += 1.0;
+                }
+            } else if method == "ederer" {
                 numerator[g] += weights[i] * current_s[s].powf(risk[i]);
                 denominator[g] += weights[i];
                 at_risk[g] += 1.0;
@@ -165,8 +213,20 @@ pub fn survexp_cox_prepared(
         for g in 0..groups {
             survival[g] = if method == "ederer" {
                 numerator[g] / denominator[g]
+            } else if evaluator.is_some()
+                && method == "hakulinen"
+                && denominator[g] == f64::NEG_INFINITY
+                && survival[g] == 0.0
+            {
+                // Once every cohort survival is numerically zero, subsequent
+                // conditional survival weights must not turn extinction into NaN.
+                0.0
             } else {
-                cumulative[g] += numerator[g] / denominator[g];
+                cumulative[g] += if evaluator.is_some() {
+                    (numerator[g] - denominator[g]).exp()
+                } else {
+                    numerator[g] / denominator[g]
+                };
                 (-cumulative[g]).exp()
             };
         }
@@ -195,6 +255,19 @@ pub fn survexp_cox_prepared(
         }
         .into(),
     })
+}
+
+fn log_sum(a: f64, b: f64) -> f64 {
+    if a == f64::NEG_INFINITY {
+        return b;
+    }
+    if b == f64::NEG_INFINITY {
+        return a;
+    }
+    if a == f64::INFINITY || b == f64::INFINITY {
+        return f64::INFINITY;
+    }
+    a.max(b) + (-(a - b).abs()).exp().ln_1p()
 }
 
 #[doc = " Numeric entry point for baselines prepared outside a fitted Rust model."]

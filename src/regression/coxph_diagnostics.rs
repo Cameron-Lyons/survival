@@ -1,9 +1,12 @@
-use crate::core::coxscho::coxscho;
-use crate::core::strata_order::rowsum;
+use crate::core::coxscho::{CoxschoResiduals, coxscho};
+use crate::core::strata_order::{rowsum, stratum_groups};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
+use crate::regression::log_risk_sweep::{LogMomentTree, LogMoments, LogRiskSweep, needs_log_risk};
+use crate::regression::log_scale::LogScale;
 use crate::residuals::agmart::agmart_rows;
 use crate::residuals::coxmart::coxmart_rows;
+use crate::residuals::martingale_log::{martingale_log_predictors, martingale_log_scales};
 use crate::scoring::agscore3::agscore3_rows;
 use crate::scoring::coxscore2::coxscore2_rows;
 use ndarray::Array2;
@@ -87,10 +90,21 @@ impl CoxPHFit {
     }
 }
 
-pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
-    let risk = risk_scores(lp);
+pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Vec<f64>> {
     let strata = fit.kernel_strata();
-    match &fit.entry {
+    if needs_log_risk(lp, &fit.weights) {
+        return martingale_log_predictors(
+            fit.entry.as_deref(),
+            &fit.time,
+            &fit.status,
+            lp,
+            &fit.weights,
+            &strata,
+            fit.method,
+        );
+    }
+    let risk = risk_scores(lp);
+    Ok(match &fit.entry {
         Some(entry) => agmart_rows(
             entry,
             &fit.time,
@@ -109,11 +123,29 @@ pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> Vec<f64> {
             &strata,
             fit.method,
         ),
-    }
+    })
+}
+
+pub(crate) fn martingale_residuals_at_scales(
+    fit: &CoxPHFit,
+    scales: &[LogScale],
+) -> SurvivalResult<Vec<f64>> {
+    martingale_log_scales(
+        fit.entry.as_deref(),
+        &fit.time,
+        &fit.status,
+        scales,
+        &fit.weights,
+        &fit.kernel_strata(),
+        fit.method,
+    )
 }
 
 pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Array2<f64>> {
     fit.method.reject_exact("score")?;
+    if needs_log_risk(lp, &fit.weights) {
+        return log_diagnostics(fit, lp, None, true).map(|(score, _)| score);
+    }
     let risk = risk_scores(lp);
     let strata = fit.kernel_strata();
     Ok(match &fit.entry {
@@ -137,6 +169,135 @@ pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<A
             fit.method,
         ),
     })
+}
+
+pub(crate) fn score_residuals_at_scales(
+    fit: &CoxPHFit,
+    scales: &[LogScale],
+) -> SurvivalResult<Array2<f64>> {
+    fit.method.reject_exact("score")?;
+    log_diagnostics(fit, &fit.linear_predictors, Some(scales), true).map(|(score, _)| score)
+}
+
+/// Extreme-log-risk diagnostics. Interval queries avoid cancellation between
+/// cumulative integrals on either side of a subject's entry or exit time.
+fn log_diagnostics(
+    fit: &CoxPHFit,
+    lp: &[f64],
+    scales: Option<&[LogScale]>,
+    with_score: bool,
+) -> SurvivalResult<(Array2<f64>, CoxschoResiduals)> {
+    let p = fit.nvar();
+    let mut scores = Array2::zeros((if with_score { fit.n } else { 0 }, p));
+    let mut schoenfeld = CoxschoResiduals {
+        time: Vec::new(),
+        index: Vec::new(),
+        strata: Vec::new(),
+        residuals: Vec::new(),
+    };
+    for (label, rows) in stratum_groups(&fit.kernel_strata()) {
+        let sweep = LogRiskSweep {
+            stop: &fit.time,
+            entry: fit.entry.as_deref(),
+            status: &fit.status,
+            x: fit.x.view(),
+            weights: &fit.weights,
+            log_risk: lp,
+            rows: &rows,
+        };
+        let mut times = Vec::new();
+        let mut hazards = Vec::new();
+        let mut event_hazards = Vec::new();
+        let callback = |event: crate::regression::log_risk_sweep::LogRiskTime<'_>| {
+            if event.deaths.is_empty() {
+                return Ok(());
+            }
+            let steps = if fit.method.is_efron() {
+                event.deaths.len()
+            } else {
+                1
+            };
+            let mut mean = vec![0.0; p];
+            let mut average_mean = vec![0.0; p];
+            let mut hazard = LogMoments::new(p);
+            let mut event_hazard = LogMoments::new(p);
+            for step in 0..steps {
+                event.efron_mean(step, &mut mean);
+                for (average, value) in average_mean.iter_mut().zip(&mean) {
+                    *average += value / steps as f64;
+                }
+                if with_score {
+                    let increment = event
+                        .efron_denom(step)
+                        .reciprocal(event.log_death_weight - (steps as f64).ln());
+                    hazard.add(increment, &mean);
+                    event_hazard.add(
+                        increment.shifted((-(step as f64 / event.deaths.len() as f64)).ln_1p()),
+                        &mean,
+                    );
+                }
+            }
+            for &row in event.deaths {
+                let residuals: Vec<f64> =
+                    (0..p).map(|j| fit.x[(row, j)] - average_mean[j]).collect();
+                if !residuals.iter().all(|value| value.is_finite()) {
+                    return Err(SurvivalError::computation(
+                        "Schoenfeld residual is not finite",
+                    ));
+                }
+                if with_score {
+                    for j in 0..p {
+                        scores[(row, j)] = residuals[j];
+                    }
+                }
+                schoenfeld.time.push(event.time);
+                schoenfeld.index.push(row);
+                schoenfeld.strata.push(label);
+                schoenfeld.residuals.push(residuals);
+            }
+            if with_score {
+                times.push(event.time);
+                hazards.push(hazard);
+                event_hazards.push(event_hazard);
+            }
+            Ok(())
+        };
+        if let Some(scales) = scales {
+            sweep.for_each_time_scales(scales, callback)?;
+        } else {
+            sweep.for_each_time(callback)?;
+        }
+        if with_score {
+            let mut integrals = LogMomentTree::new(times.len(), p);
+            for (index, hazard) in hazards.iter().enumerate() {
+                integrals.set(index, hazard.weight, &hazard.mean);
+            }
+            for &row in &rows {
+                let first = fit
+                    .entry
+                    .as_ref()
+                    .map_or(0, |entry| times.partition_point(|&time| time <= entry[row]));
+                let end = times.partition_point(|&time| time <= fit.time[row]);
+                let exposure = if fit.status[row] == 1 {
+                    let mut exposure = integrals.range(first, end - 1);
+                    exposure.add(event_hazards[end - 1].weight, &event_hazards[end - 1].mean);
+                    exposure
+                } else {
+                    integrals.range(first, end)
+                };
+                let predictor =
+                    scales.map_or_else(|| LogScale::from_log(lp[row]), |values| values[row]);
+                let count = exposure.weight.exp_at_scale(predictor);
+                for (j, mean) in exposure.mean.iter().enumerate() {
+                    scores[(row, j)] += count * (*mean - fit.x[(row, j)]);
+                    if !scores[(row, j)].is_finite() {
+                        return Err(SurvivalError::computation("score residual is not finite"));
+                    }
+                }
+            }
+        }
+    }
+    Ok((scores, schoenfeld))
 }
 
 pub(crate) fn collapse_rows(
@@ -191,6 +352,21 @@ impl CoxPHFit {
         ))
     }
 
+    pub(crate) fn dfbeta_matrix_scales(
+        &self,
+        scales: &[LogScale],
+        weighted: bool,
+        collapse: Option<&[i32]>,
+    ) -> SurvivalResult<Array2<f64>> {
+        let vv = self.naive_var.as_ref().unwrap_or(&self.var);
+        let dfbeta = score_residuals_at_scales(self, scales)?.dot(vv);
+        Ok(collapse_rows(
+            &dfbeta,
+            self.case_weights(weighted),
+            collapse,
+        ))
+    }
+
     pub fn martingale_residuals(
         &self,
         weighted: bool,
@@ -228,8 +404,12 @@ impl CoxPHFit {
         collapse: Option<&[i32]>,
     ) -> SurvivalResult<Array2<f64>> {
         self.check_collapse(collapse)?;
+        let scores = match self.diagnostic_risk_scales() {
+            Some(scales) => score_residuals_at_scales(self, scales)?,
+            None => score_residuals_at(self, self.diagnostic_predictors())?,
+        };
         Ok(collapse_rows(
-            &score_residuals_at(self, &self.linear_predictors)?,
+            &scores,
             self.case_weights(weighted),
             collapse,
         ))
@@ -237,7 +417,10 @@ impl CoxPHFit {
 
     pub fn dfbeta(&self, weighted: bool, collapse: Option<&[i32]>) -> SurvivalResult<Array2<f64>> {
         self.check_collapse(collapse)?;
-        self.dfbeta_matrix(&self.linear_predictors, weighted, collapse)
+        match self.diagnostic_risk_scales() {
+            Some(scales) => self.dfbeta_matrix_scales(scales, weighted, collapse),
+            None => self.dfbeta_matrix(self.diagnostic_predictors(), weighted, collapse),
+        }
     }
 
     pub fn dfbetas(&self, weighted: bool, collapse: Option<&[i32]>) -> SurvivalResult<Array2<f64>> {
@@ -252,18 +435,24 @@ impl CoxPHFit {
 
     pub fn schoenfeld_residuals(&self, weighted: bool) -> SurvivalResult<SchoenfeldResiduals> {
         self.method.reject_exact("schoenfeld")?;
-        let risk = risk_scores(&self.linear_predictors);
+        let lp = self.diagnostic_predictors();
         let strata = self.kernel_strata();
-        let mut kernel = coxscho(
-            self.entry.as_deref(),
-            &self.time,
-            &self.status,
-            self.x.view(),
-            &risk,
-            &self.weights,
-            &strata,
-            self.method,
-        );
+        let scales = self.diagnostic_risk_scales();
+        let mut kernel = if scales.is_some() || needs_log_risk(lp, &self.weights) {
+            log_diagnostics(self, lp, scales, false)?.1
+        } else {
+            let risk = risk_scores(lp);
+            coxscho(
+                self.entry.as_deref(),
+                &self.time,
+                &self.status,
+                self.x.view(),
+                &risk,
+                &self.weights,
+                &strata,
+                self.method,
+            )
+        };
         if weighted {
             for (row, &index) in kernel.residuals.iter_mut().zip(&kernel.index) {
                 for value in row.iter_mut() {

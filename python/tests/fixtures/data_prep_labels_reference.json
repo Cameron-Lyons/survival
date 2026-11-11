@@ -1,0 +1,3590 @@
+{
+  "metadata": {
+    "generator": "scripts/generate_data_prep_labels_reference.R",
+    "r_version": "4.6.2",
+    "survival_version": "3.8.11"
+  },
+  "neardate": [
+    {
+      "name": "numeric_character_after_sentinel",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, -1]
+    },
+    {
+      "name": "numeric_character_after_default",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, null]
+    },
+    {
+      "name": "numeric_character_prior_sentinel",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1, 2]
+    },
+    {
+      "name": "numeric_character_prior_default",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, 2]
+    },
+    {
+      "name": "character_numeric_after_sentinel",
+      "id1": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, -1]
+    },
+    {
+      "name": "character_numeric_after_default",
+      "id1": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, null]
+    },
+    {
+      "name": "character_numeric_prior_sentinel",
+      "id1": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1, 2]
+    },
+    {
+      "name": "character_numeric_prior_default",
+      "id1": {
+        "values": ["1", "2", "1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, 2]
+    },
+    {
+      "name": "logical_character_after_sentinel",
+      "id1": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, -1]
+    },
+    {
+      "name": "logical_character_after_default",
+      "id1": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, null]
+    },
+    {
+      "name": "logical_character_prior_sentinel",
+      "id1": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, -1, 2]
+    },
+    {
+      "name": "logical_character_prior_default",
+      "id1": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, null, 2]
+    },
+    {
+      "name": "character_logical_after_sentinel",
+      "id1": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, -1]
+    },
+    {
+      "name": "character_logical_after_default",
+      "id1": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, null]
+    },
+    {
+      "name": "character_logical_prior_sentinel",
+      "id1": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, -1, 2]
+    },
+    {
+      "name": "character_logical_prior_default",
+      "id1": {
+        "values": ["TRUE", "FALSE", "TRUE"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, false, true],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 1, 4],
+      "y2": [2, 2, 3],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, null, 2]
+    },
+    {
+      "name": "logical_integer_character_after_sentinel",
+      "id1": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_integer_character_after_default",
+      "id1": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_integer_character_prior_sentinel",
+      "id1": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "logical_integer_character_prior_default",
+      "id1": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_logical_integer_after_sentinel",
+      "id1": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_integer_after_default",
+      "id1": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_integer_prior_sentinel",
+      "id1": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "character_logical_integer_prior_default",
+      "id1": {
+        "values": ["1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "logical_double_character_after_sentinel",
+      "id1": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_double_character_after_default",
+      "id1": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_double_character_prior_sentinel",
+      "id1": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "logical_double_character_prior_default",
+      "id1": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_logical_double_after_sentinel",
+      "id1": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_double_after_default",
+      "id1": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_double_prior_sentinel",
+      "id1": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "character_logical_double_prior_default",
+      "id1": {
+        "values": ["1", "2.5"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "logical_nan_character_after_sentinel",
+      "id1": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_nan_character_after_default",
+      "id1": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "logical_nan_character_prior_sentinel",
+      "id1": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "logical_nan_character_prior_default",
+      "id1": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_logical_nan_after_sentinel",
+      "id1": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_nan_after_default",
+      "id1": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_logical_nan_prior_sentinel",
+      "id1": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "character_logical_nan_prior_default",
+      "id1": {
+        "values": ["1", "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "logical_na_character_after_sentinel",
+      "id1": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, null]
+    },
+    {
+      "name": "logical_na_character_after_default",
+      "id1": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, null]
+    },
+    {
+      "name": "logical_na_character_prior_sentinel",
+      "id1": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null]
+    },
+    {
+      "name": "logical_na_character_prior_default",
+      "id1": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_logical_na_after_sentinel",
+      "id1": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, null]
+    },
+    {
+      "name": "character_logical_na_after_default",
+      "id1": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, null]
+    },
+    {
+      "name": "character_logical_na_prior_sentinel",
+      "id1": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null]
+    },
+    {
+      "name": "character_logical_na_prior_default",
+      "id1": {
+        "values": ["TRUE", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [true, null],
+        "kind": "logical",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "mixed_character_labels_after_sentinel",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, 2]
+    },
+    {
+      "name": "mixed_character_labels_after_default",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, 2]
+    },
+    {
+      "name": "mixed_character_labels_prior_sentinel",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1, -1]
+    },
+    {
+      "name": "mixed_character_labels_prior_default",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null]
+    },
+    {
+      "name": "character_mixed_labels_after_sentinel",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, 2]
+    },
+    {
+      "name": "character_mixed_labels_after_default",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, 2]
+    },
+    {
+      "name": "character_mixed_labels_prior_sentinel",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1, -1]
+    },
+    {
+      "name": "character_mixed_labels_prior_default",
+      "id1": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["TRUE", "1.5", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1],
+      "y2": [2, 2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null]
+    },
+    {
+      "name": "integer_double_character_after_sentinel",
+      "id1": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "integer_double_character_after_default",
+      "id1": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "integer_double_character_prior_sentinel",
+      "id1": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "integer_double_character_prior_default",
+      "id1": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_integer_double_after_sentinel",
+      "id1": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_integer_double_after_default",
+      "id1": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "character_integer_double_prior_sentinel",
+      "id1": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "character_integer_double_prior_default",
+      "id1": {
+        "values": ["1e+09", "0.1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [1000000000, 0.10000000000000001],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_numeric_after_sentinel",
+      "id1": {
+        "values": ["2", "1", "2"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 3],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [1, 0, -1]
+    },
+    {
+      "name": "factor_numeric_after_default",
+      "id1": {
+        "values": ["2", "1", "2"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 3],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [1, 0, null]
+    },
+    {
+      "name": "factor_numeric_prior_sentinel",
+      "id1": {
+        "values": ["2", "1", "2"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 3],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, 0, 1]
+    },
+    {
+      "name": "factor_numeric_prior_default",
+      "id1": {
+        "values": ["2", "1", "2"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [1, 2, 3],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 0, 1]
+    },
+    {
+      "name": "numeric_factor_after_sentinel",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [1, 0, -1]
+    },
+    {
+      "name": "numeric_factor_after_default",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [1, 0, null]
+    },
+    {
+      "name": "numeric_factor_prior_sentinel",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, 0, 2]
+    },
+    {
+      "name": "numeric_factor_prior_default",
+      "id1": {
+        "values": [1, 2, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1"],
+        "kind": "factor",
+        "levels": ["2", "1", "3"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 0, 2]
+    },
+    {
+      "name": "factors_after_sentinel",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "unused", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [1, 0, -1]
+    },
+    {
+      "name": "factors_after_default",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "unused", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [1, 0, null]
+    },
+    {
+      "name": "factors_prior_sentinel",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "unused", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, 0, 2]
+    },
+    {
+      "name": "factors_prior_default",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "unused", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 0, 2]
+    },
+    {
+      "name": "different_factor_levels_after_sentinel",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": "level sets of factors are different",
+      "expected": [1, 0, -1]
+    },
+    {
+      "name": "different_factor_levels_after_default",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": "level sets of factors are different",
+      "expected": [1, 0, null]
+    },
+    {
+      "name": "different_factor_levels_prior_sentinel",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": "level sets of factors are different",
+      "expected": [-1, 0, 2]
+    },
+    {
+      "name": "different_factor_levels_prior_default",
+      "id1": {
+        "values": ["b", "a", "b"],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b", "b"],
+        "kind": "factor",
+        "levels": ["a", "b"],
+        "ordered": false
+      },
+      "y1": [1, 2, 5],
+      "y2": [2, 3, 4],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": "level sets of factors are different",
+      "expected": [null, 0, 2]
+    },
+    {
+      "name": "decimals_after_sentinel",
+      "id1": {
+        "values": [0.10000000000000001, 9.9999999999999995e-08, 1e+20, -0],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["0.1", "1e-07", "1e+20", "0"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1, 1],
+      "y2": [2, 2, 2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1, 2, 3]
+    },
+    {
+      "name": "decimals_after_default",
+      "id1": {
+        "values": [0.10000000000000001, 9.9999999999999995e-08, 1e+20, -0],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["0.1", "1e-07", "1e+20", "0"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1, 1],
+      "y2": [2, 2, 2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1, 2, 3]
+    },
+    {
+      "name": "decimals_prior_sentinel",
+      "id1": {
+        "values": [0.10000000000000001, 9.9999999999999995e-08, 1e+20, -0],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["0.1", "1e-07", "1e+20", "0"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1, 1],
+      "y2": [2, 2, 2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1, -1, -1]
+    },
+    {
+      "name": "decimals_prior_default",
+      "id1": {
+        "values": [0.10000000000000001, 9.9999999999999995e-08, 1e+20, -0],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["0.1", "1e-07", "1e+20", "0"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 1, 1],
+      "y2": [2, 2, 2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null, null]
+    },
+    {
+      "name": "integer_labels_after_sentinel",
+      "id1": {
+        "values": [1000000000, 12],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1000000000", "12"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "integer_labels_after_default",
+      "id1": {
+        "values": [1000000000, 12],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1000000000", "12"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, 1]
+    },
+    {
+      "name": "integer_labels_prior_sentinel",
+      "id1": {
+        "values": [1000000000, 12],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1000000000", "12"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "integer_labels_prior_default",
+      "id1": {
+        "values": [1000000000, 12],
+        "kind": "integer",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1000000000", "12"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "duplicates_after_sentinel",
+      "id1": {
+        "values": [1, 2, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 2, 3, 3],
+      "y2": [2, 2, 2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [1, 0, -1, -1]
+    },
+    {
+      "name": "duplicates_after_default",
+      "id1": {
+        "values": [1, 2, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 2, 3, 3],
+      "y2": [2, 2, 2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [1, 0, null, null]
+    },
+    {
+      "name": "duplicates_prior_sentinel",
+      "id1": {
+        "values": [1, 2, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 2, 3, 3],
+      "y2": [2, 2, 2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [2, 3, 2, 3]
+    },
+    {
+      "name": "duplicates_prior_default",
+      "id1": {
+        "values": [1, 2, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["2", "1", "1", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 2, 3, 3],
+      "y2": [2, 2, 2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [2, 3, 2, 3]
+    },
+    {
+      "name": "missing_cross_types_after_sentinel",
+      "id1": {
+        "values": [null, null, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, "1", "2", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1, 2],
+      "y2": [1, 2, null, 3],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null, 1, 3]
+    },
+    {
+      "name": "missing_cross_types_after_default",
+      "id1": {
+        "values": [null, null, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, "1", "2", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1, 2],
+      "y2": [1, 2, null, 3],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, 1, 3]
+    },
+    {
+      "name": "missing_cross_types_prior_sentinel",
+      "id1": {
+        "values": [null, null, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, "1", "2", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1, 2],
+      "y2": [1, 2, null, 3],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null, null, -1]
+    },
+    {
+      "name": "missing_cross_types_prior_default",
+      "id1": {
+        "values": [null, null, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, "1", "2", "2"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1, 2],
+      "y2": [1, 2, null, 3],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null, null]
+    },
+    {
+      "name": "missing_numeric_after_sentinel",
+      "id1": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1],
+      "y2": [1, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null, 1]
+    },
+    {
+      "name": "missing_numeric_after_default",
+      "id1": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1],
+      "y2": [1, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, 1]
+    },
+    {
+      "name": "missing_numeric_prior_sentinel",
+      "id1": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1],
+      "y2": [1, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null, null]
+    },
+    {
+      "name": "missing_numeric_prior_default",
+      "id1": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [null, 1, 1],
+      "y2": [1, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_na_after_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "numeric_na_nan_to_na_after_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_na_prior_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_na_prior_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_nan_after_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_nan_after_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "numeric_na_nan_to_nan_prior_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, -1]
+    },
+    {
+      "name": "numeric_na_nan_to_nan_prior_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "y1": [2, 0],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "repeated_numeric_missing_after_sentinel",
+      "id1": {
+        "values": [null, null, null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true, false, true, false]
+      },
+      "id2": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false, false]
+      },
+      "y1": [0, 0, 2, 2, 1],
+      "y2": [1, 1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null, null, null, 2]
+    },
+    {
+      "name": "repeated_numeric_missing_after_default",
+      "id1": {
+        "values": [null, null, null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true, false, true, false]
+      },
+      "id2": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false, false]
+      },
+      "y1": [0, 0, 2, 2, 1],
+      "y2": [1, 1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null, null, 2]
+    },
+    {
+      "name": "repeated_numeric_missing_prior_sentinel",
+      "id1": {
+        "values": [null, null, null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true, false, true, false]
+      },
+      "id2": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false, false]
+      },
+      "y1": [0, 0, 2, 2, 1],
+      "y2": [1, 1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null, null, null, 2]
+    },
+    {
+      "name": "repeated_numeric_missing_prior_default",
+      "id1": {
+        "values": [null, null, null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true, false, true, false]
+      },
+      "id2": {
+        "values": [null, null, 1],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false, false]
+      },
+      "y1": [0, 0, 2, 2, 1],
+      "y2": [1, 1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null, null, null, 2]
+    },
+    {
+      "name": "nan_to_character_after_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, 1]
+    },
+    {
+      "name": "nan_to_character_after_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 1]
+    },
+    {
+      "name": "nan_to_character_prior_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "nan_to_character_prior_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_to_nan_after_sentinel",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, 1]
+    },
+    {
+      "name": "character_to_nan_after_default",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 1]
+    },
+    {
+      "name": "character_to_nan_prior_sentinel",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "character_to_nan_prior_default",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "nan_to_factor_after_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "nan_to_factor_after_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "nan_to_factor_prior_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "nan_to_factor_prior_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "id2": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_to_nan_after_sentinel",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_to_nan_after_default",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_to_nan_prior_sentinel",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_to_nan_prior_default",
+      "id1": {
+        "values": [null, "NaN"],
+        "kind": "factor",
+        "levels": ["NaN", "unused"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [false, true]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_na_sentinels_after_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "factor",
+        "levels": ["NaN"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, null]
+    },
+    {
+      "name": "factor_na_sentinels_after_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "factor",
+        "levels": ["NaN"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "factor_na_sentinels_prior_sentinel",
+      "id1": {
+        "values": [null, null],
+        "kind": "factor",
+        "levels": ["NaN"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [null, -1]
+    },
+    {
+      "name": "factor_na_sentinels_prior_default",
+      "id1": {
+        "values": [null, null],
+        "kind": "factor",
+        "levels": ["NaN"],
+        "ordered": false
+      },
+      "id2": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true, false]
+      },
+      "y1": [2, 0],
+      "y2": [1, 1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, null]
+    },
+    {
+      "name": "unmatched_nan_after_sentinel",
+      "id1": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1],
+      "y2": [1],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "unmatched_nan_after_default",
+      "id1": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1],
+      "y2": [1],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "unmatched_nan_prior_sentinel",
+      "id1": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "unmatched_nan_prior_default",
+      "id1": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false,
+        "nan": [true]
+      },
+      "id2": {
+        "values": [null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1],
+      "y2": [1],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "rounded_numeric_after_sentinel",
+      "id1": {
+        "values": [1, 1.0000000000000011, 1, 1.0000000000000011],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 3, 3],
+      "y2": [2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [0, -1, -1, -1]
+    },
+    {
+      "name": "rounded_numeric_after_default",
+      "id1": {
+        "values": [1, 1.0000000000000011, 1, 1.0000000000000011],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 3, 3],
+      "y2": [2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [0, null, null, null]
+    },
+    {
+      "name": "rounded_numeric_prior_sentinel",
+      "id1": {
+        "values": [1, 1.0000000000000011, 1, 1.0000000000000011],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 3, 3],
+      "y2": [2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": [-1, 0, 0, 0]
+    },
+    {
+      "name": "rounded_numeric_prior_default",
+      "id1": {
+        "values": [1, 1.0000000000000011, 1, 1.0000000000000011],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["1"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1, 3, 3],
+      "y2": [2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": [null, 0, 0, 0]
+    },
+    {
+      "name": "no_matching_ids_after_sentinel",
+      "id1": {
+        "values": [1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "no_matching_ids_after_default",
+      "id1": {
+        "values": [1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "after",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "no_matching_ids_prior_sentinel",
+      "id1": {
+        "values": [1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": -1,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    },
+    {
+      "name": "no_matching_ids_prior_default",
+      "id1": {
+        "values": [1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "id2": {
+        "values": ["a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "y1": [1, 1],
+      "y2": [2, 2],
+      "best": "prior",
+      "nomatch": null,
+      "stock_error": null,
+      "expected": {
+        "error": "No valid entries in data set 2"
+      }
+    }
+  ],
+  "lvcf": [
+    {
+      "name": "declared_order",
+      "id": [1, 1, 2, 2],
+      "x": {
+        "values": ["b", null, "a", null],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": false
+      },
+      "time": null,
+      "expected": {
+        "values": ["b", "b", "a", "a"],
+        "levels": ["b", "a", "unused"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "unused"],
+          "matrix": [
+            [1, 0],
+            [2, 0],
+            [3, 1],
+            [4, 1]
+          ]
+        }
+      }
+    },
+    {
+      "name": "ordered_factor",
+      "id": [1, 1, 2, 2],
+      "x": {
+        "values": ["b", null, "a", null],
+        "kind": "factor",
+        "levels": ["b", "a", "unused"],
+        "ordered": true
+      },
+      "time": null,
+      "expected": {
+        "values": ["b", "b", "a", "a"],
+        "levels": ["b", "a", "unused"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "unused"],
+          "matrix": [
+            [1, 0],
+            [2, 0],
+            [3, 1],
+            [4, 1]
+          ]
+        }
+      }
+    },
+    {
+      "name": "missing_initial",
+      "id": [1, 1, 1, 2, 2],
+      "x": {
+        "values": [null, "yes", null, null, "no"],
+        "kind": "factor",
+        "levels": ["no", "yes", "unused"],
+        "ordered": false
+      },
+      "time": null,
+      "expected": {
+        "values": [null, "yes", "yes", null, "no"],
+        "levels": ["no", "yes", "unused"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["yes", "unused"],
+          "matrix": [
+            [1, null],
+            [2, 1],
+            [3, 1],
+            [4, null],
+            [5, 0]
+          ]
+        }
+      }
+    },
+    {
+      "name": "numeric_levels",
+      "id": [1, 1, 1, 2],
+      "x": {
+        "values": [null, "1", null, "0"],
+        "kind": "factor",
+        "levels": ["0", "1", "2"],
+        "ordered": false
+      },
+      "time": null,
+      "expected": {
+        "values": [null, "1", "1", "0"],
+        "levels": ["0", "1", "2"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["1", "2"],
+          "matrix": [
+            [1, null],
+            [2, 1],
+            [3, 1],
+            [4, 0]
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty_factor",
+      "id": [],
+      "x": {
+        "values": [],
+        "kind": "factor",
+        "levels": ["censor", "event"],
+        "ordered": false
+      },
+      "time": null,
+      "expected": {
+        "values": [],
+        "levels": ["censor", "event"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["event"],
+          "matrix": []
+        }
+      }
+    },
+    {
+      "name": "time_order",
+      "id": [2, 1, 2, 1, 2, 1],
+      "x": {
+        "values": [null, "yes", null, null, "no", null],
+        "kind": "factor",
+        "levels": ["no", "yes"],
+        "ordered": false
+      },
+      "time": [null, 2, 1, null, 2, 1],
+      "expected": {
+        "values": ["no", "yes", null, "yes", "no", null],
+        "levels": ["no", "yes"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["yes"],
+          "matrix": [
+            [1, 0],
+            [2, 1],
+            [3, null],
+            [4, 1],
+            [5, 0],
+            [6, null]
+          ]
+        }
+      }
+    }
+  ],
+  "nostutter": [
+    {
+      "name": "numeric",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": [0, 1, 1, 2],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["0", "1", "0", "2"],
+        "levels": ["0", "1", "2"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["1", "2"],
+          "matrix": [
+            [1, 0],
+            [2, 1],
+            [3, 0],
+            [4, 2]
+          ]
+        }
+      }
+    },
+    {
+      "name": "character",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": ["censor", "b", "b", "a"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": "censor",
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["censor", "b", "censor", "a"],
+        "levels": ["censor", "a", "b"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "b"],
+          "matrix": [
+            [1, 0],
+            [2, 2],
+            [3, 0],
+            [4, 1]
+          ]
+        }
+      }
+    },
+    {
+      "name": "factor_order",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": ["censor", "b", "b", "a"],
+        "kind": "factor",
+        "levels": ["censor", "b", "a"],
+        "ordered": false
+      },
+      "censor": "censor",
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["censor", "b", "censor", "a"],
+        "levels": ["censor", "b", "a"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["b", "a"],
+          "matrix": [
+            [1, 0],
+            [2, 1],
+            [3, 0],
+            [4, 2]
+          ]
+        }
+      }
+    },
+    {
+      "name": "ordered_factor",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": ["censor", "b", "b", "a"],
+        "kind": "factor",
+        "levels": ["censor", "b", "a"],
+        "ordered": true
+      },
+      "censor": "censor",
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["censor", "b", "censor", "a"],
+        "levels": ["censor", "b", "a"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["b", "a"],
+          "matrix": [
+            [1, 0],
+            [2, 1],
+            [3, 0],
+            [4, 2]
+          ]
+        }
+      }
+    },
+    {
+      "name": "censor_existing",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": ["b", "b", "a", "a"],
+        "kind": "factor",
+        "levels": ["b", "a"],
+        "ordered": false
+      },
+      "censor": "a",
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["b", "a", "a", "a"],
+        "levels": ["a", "b"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["b"],
+          "matrix": [
+            [1, 1],
+            [2, 0],
+            [3, 0],
+            [4, 0]
+          ]
+        }
+      }
+    },
+    {
+      "name": "missing",
+      "id": [1, 1, 1, 1, 1],
+      "x": {
+        "values": [null, "b", "b", "a", null],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": [null, "b", "0", "a", null],
+        "levels": ["0", "a", "b"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "b"],
+          "matrix": [
+            [1, null],
+            [2, 2],
+            [3, 0],
+            [4, 1],
+            [5, null]
+          ]
+        }
+      }
+    },
+    {
+      "name": "all_missing",
+      "id": [1, 1],
+      "x": {
+        "values": [null, null],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": [null, null],
+        "levels": ["0"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": [],
+          "matrix": [
+            [1, null],
+            [2, null]
+          ]
+        }
+      }
+    },
+    {
+      "name": "decimal",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": [0.25, 0.25, 0.5, 0.5],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": null,
+      "expected": {
+        "values": ["0.25", "0", "0.5", "0"],
+        "levels": ["0", "0.25", "0.5"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["0.25", "0.5"],
+          "matrix": [
+            [1, 1],
+            [2, 0],
+            [3, 2],
+            [4, 0]
+          ]
+        }
+      }
+    },
+    {
+      "name": "no_repeats",
+      "id": [1, 1],
+      "x": {
+        "values": ["a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": "invalid 'labels'; length 3 should be 1 or 2",
+      "expected": {
+        "values": ["a", "b"],
+        "levels": ["0", "a", "b"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "b"],
+          "matrix": [
+            [1, 1],
+            [2, 2]
+          ]
+        }
+      }
+    },
+    {
+      "name": "unused_levels",
+      "id": [1, 1, 1, 1],
+      "x": {
+        "values": ["b", "b", "a", "a"],
+        "kind": "factor",
+        "levels": ["censor", "b", "a", "unused"],
+        "ordered": false
+      },
+      "censor": "censor",
+      "single": false,
+      "stock_error": "invalid 'labels'; length 4 should be 1 or 3",
+      "expected": {
+        "values": ["b", "censor", "a", "censor"],
+        "levels": ["censor", "b", "a", "unused"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["b", "a", "unused"],
+          "matrix": [
+            [1, 1],
+            [2, 0],
+            [3, 2],
+            [4, 0]
+          ]
+        }
+      }
+    },
+    {
+      "name": "single",
+      "id": [1, 1, 1, 1, 2, 2, 2],
+      "x": {
+        "values": ["a", "b", "a", "c", "a", "a", "b"],
+        "kind": "character",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": true,
+      "stock_error": "object 'uses' not found",
+      "expected": {
+        "values": ["a", "b", "0", "c", "a", "0", "b"],
+        "levels": ["0", "a", "b", "c"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": ["a", "b", "c"],
+          "matrix": [
+            [1, 1],
+            [2, 2],
+            [3, 0],
+            [4, 3],
+            [5, 1],
+            [6, 0],
+            [7, 2]
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty",
+      "id": [],
+      "x": {
+        "values": [],
+        "kind": "double",
+        "levels": null,
+        "ordered": false
+      },
+      "censor": 0,
+      "single": false,
+      "stock_error": "missing value where TRUE/FALSE needed",
+      "expected": {
+        "values": [],
+        "levels": ["0"],
+        "ordered": false,
+        "response": {
+          "type": "mright",
+          "states": [],
+          "matrix": []
+        }
+      }
+    }
+  ]
+}

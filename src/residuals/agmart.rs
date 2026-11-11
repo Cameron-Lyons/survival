@@ -1,7 +1,9 @@
 use crate::core::strata_order::stratum_groups;
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{AndersenGillInput, CountingProcessData, Weights};
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_length, validate_non_negative,
+};
 use crate::regression::TieMethod;
 
 pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
@@ -14,6 +16,7 @@ pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Ve
     validate_binary_i32(&input.counting.event, "event")?;
     validate_length(n, input.score.len(), "score")?;
     validate_finite(&input.score, "score")?;
+    validate_non_negative(&input.score, "score")?;
     if let Some(weights) = &input.weights {
         validate_length(n, weights.values.len(), "weights")?;
         Weights::validate_values(&weights.values)?;
@@ -23,6 +26,17 @@ pub fn agmart(input: &AndersenGillInput, method: TieMethod) -> SurvivalResult<Ve
     }
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
+    if super::martingale_log::needs_log_space(&input.score, &weights) {
+        return super::martingale_log::martingale_log(
+            Some(&input.counting.start),
+            &input.counting.stop,
+            &input.counting.event,
+            &input.score,
+            &weights,
+            &strata,
+            method,
+        );
+    }
     Ok(agmart_rows(
         &input.counting.start,
         &input.counting.stop,

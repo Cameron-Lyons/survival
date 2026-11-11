@@ -1,4 +1,6 @@
 use crate::core::strata_order::validate_intervals;
+#[cfg(feature = "python")]
+use crate::internal::numpy_utils::FloatVec;
 use crate::internal::validation::{
     validate_equal_len, validate_finite, validate_length, validate_matrix_shape,
     validate_non_empty, validate_non_negative,
@@ -88,11 +90,26 @@ pub struct CovariateMatrix {
     pub n_vars: usize,
 }
 
+#[cfg(feature = "python")]
+fn covariate_values(values: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    if values.is_exact_instance_of::<numpy::PyUntypedArray>()
+        && values.cast::<numpy::PyArray1<f64>>().is_ok()
+    {
+        values.extract::<FloatVec>().map(FloatVec::into_inner)
+    } else {
+        values.extract()
+    }
+}
+
 #[pymethods]
 impl CovariateMatrix {
     #[new]
     #[pyo3(signature = (values, n_obs, n_vars))]
-    pub fn new(values: Vec<f64>, n_obs: usize, n_vars: usize) -> PyResult<Self> {
+    pub fn new(
+        #[pyo3(from_py_with = covariate_values)] values: Vec<f64>,
+        n_obs: usize,
+        n_vars: usize,
+    ) -> PyResult<Self> {
         Ok(Self::try_new(values, n_obs, n_vars)?)
     }
 

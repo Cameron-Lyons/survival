@@ -124,6 +124,19 @@ def test_grouped_term_predictions_release_the_gil():
     _assert_detaches(lambda: fit.predict_terms(newdata=newdata, se_fit=True, collapse=groups))
 
 
+def test_cox_detail_releases_the_gil():
+    time_, status, x = _cox_data(50_000, p=12)
+    fit = survival.kernels.coxph_fit(time_, status, x, iter_max=0)
+    _assert_detaches(lambda: survival.kernels.coxph_detail(fit))
+
+
+def test_rttright_releases_the_gil():
+    rng = np.random.default_rng(42)
+    times = rng.exponential(size=200_000).tolist()
+    status = rng.integers(0, 2, size=len(times)).tolist()
+    _assert_detaches(lambda: survival.kernels.rttright(times, status, times=[0.5, 1.0, 2.0]))
+
+
 def test_aft_constructor_releases_the_gil():
     n = 500_000
     x = np.ones((n, 8))

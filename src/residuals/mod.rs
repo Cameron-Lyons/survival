@@ -1,5 +1,6 @@
 pub mod agmart;
 pub mod coxmart;
+pub(crate) mod martingale_log;
 pub(crate) mod survreg_resid;
 
 pub use crate::regression::TieMethod;

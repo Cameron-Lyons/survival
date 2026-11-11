@@ -193,7 +193,17 @@ def concordancefit(
     if y.type in {"mright", "mcounting"}:
         raise ValueError("multiple state survival is not supported")
     n = len(y)
-    if _is_matrix(x):
+    values: np.ndarray | list[float]
+    array = _numeric_ndarray(x, ndim=2)
+    if array is not None:
+        nrow, nvar = array.shape
+        if nrow == 0:
+            raise ValueError("x must not be empty")
+        if nvar == 0:
+            raise ValueError("x must have at least one column")
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            values = np.asarray(array, dtype=float).ravel(order="C")
+    elif _is_matrix(x):
         rows = _as_matrix_rows(x, "x", allow_empty_columns=False)
         nrow, nvar = len(rows), len(rows[0])
         values = [value for row in rows for value in row]
@@ -348,7 +358,7 @@ def _concordance_frame(formula: str, data: Any, **arguments: Any) -> _ModelFrame
     lhs, sep, rhs = formula.partition("~")
     if sep and not _is_surv_response(lhs.strip()):
         formula = f"Surv({lhs.strip()}) ~ {rhs.strip()}"
-    frame = _model_frame(formula, data, **arguments)
+    frame = _model_frame(formula, data, as_array=True, **arguments)
     if frame.terms.offsets:
         raise ValueError("Offset terms not allowed")
     if not frame.names:

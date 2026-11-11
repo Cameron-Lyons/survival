@@ -1,7 +1,13 @@
 use crate::error::SurvivalResult;
+use crate::regression::log_scale::LogScale;
 use crate::regression::penalized::cholesky3::{chinv3, cholesky3, chsolve3, finish_factors};
 use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use ndarray::Array2;
+use std::sync::OnceLock;
+
+mod stable;
+#[cfg(test)]
+mod stable_tests;
 
 fn coxsafe(x: f64) -> f64 {
     x.clamp(-200.0, 22.0)
@@ -42,6 +48,10 @@ pub(super) struct Kernel {
     nvar: usize,
     nf: usize,
     covar: Array2<f64>,
+    covar_bounds: Vec<f64>,
+    predictor_anchors: OnceLock<Vec<usize>>,
+    unsafe_offsets: bool,
+    stable_score: Option<Vec<LogScale>>,
     means: Vec<f64>,
     weights: Vec<f64>,
     offset: Vec<f64>,
@@ -79,6 +89,7 @@ pub(super) struct KernelData<'a> {
     pub nfrail: usize,
     pub efron: bool,
     pub docenter: &'a [bool],
+    pub unsafe_offsets: bool,
 }
 
 impl Kernel {
@@ -163,6 +174,12 @@ impl Kernel {
             n,
             nvar,
             nf,
+            covar_bounds: (0..nvar)
+                .map(|j| covar.column(j).iter().map(|x| x.abs()).fold(0.0, f64::max))
+                .collect(),
+            predictor_anchors: OnceLock::new(),
+            unsafe_offsets: data.unsafe_offsets,
+            stable_score: None,
             covar,
             means,
             weights: data.weights.to_vec(),
@@ -205,13 +222,21 @@ impl Kernel {
         coxsafe(zbeta)
     }
 
-    pub(super) fn initial_loglik(&self, beta: &[f64]) -> f64 {
+    pub(super) fn initial_loglik(&self, beta: &[f64]) -> SurvivalResult<f64> {
         let no_frailty = vec![0.0; self.nf];
-        if self.start.is_some() {
+        if self.needs_stable(beta, &no_frailty) {
+            let mut u = vec![0.0; self.nf + self.nvar];
+            let mut jmat = Array2::zeros((self.nvar, self.nf + self.nvar));
+            let mut fdiag = vec![0.0; self.nf + self.nvar];
+            return self
+                .evaluate_stable(beta, &no_frailty, &mut u, &mut jmat, &mut fdiag)
+                .map(|(loglik, _)| loglik);
+        }
+        Ok(if self.start.is_some() {
             self.initial_loglik_counting(beta, &no_frailty)
         } else {
             self.initial_loglik_right(beta, &no_frailty)
-        }
+        })
     }
 
     fn initial_loglik_right(&self, beta: &[f64], fbeta: &[f64]) -> f64 {
@@ -603,15 +628,21 @@ impl Kernel {
         u: &mut [f64],
         jmat: &mut Array2<f64>,
         fdiag: &mut [f64],
-    ) -> f64 {
+    ) -> SurvivalResult<f64> {
         u.fill(0.0);
         jmat.fill(0.0);
         fdiag[..self.nf].fill(0.0);
-        if self.start.is_some() {
+        if self.needs_stable(beta, fbeta) {
+            let (loglik, scores) = self.evaluate_stable(beta, fbeta, u, jmat, fdiag)?;
+            self.stable_score = Some(scores);
+            return Ok(loglik);
+        }
+        self.stable_score = None;
+        Ok(if self.start.is_some() {
             self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
         } else {
             self.evaluate_right(beta, fbeta, u, jmat, fdiag)
-        }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -638,7 +669,7 @@ impl Kernel {
         let mut iter = 0;
         let mut flag;
         loop {
-            newlk = self.evaluate(beta, fbeta, &mut u, &mut jmat, &mut fdiag);
+            newlk = self.evaluate(beta, fbeta, &mut u, &mut jmat, &mut fdiag)?;
 
             if shape.sparse {
                 let terms = callback.call(1, fbeta)?;
@@ -733,7 +764,10 @@ impl Kernel {
         })
     }
 
-    pub(super) fn expected_events(&self) -> Vec<f64> {
+    pub(super) fn expected_events(&self) -> SurvivalResult<Vec<f64>> {
+        if let Some(scores) = &self.stable_score {
+            return self.stable_expected_events(scores);
+        }
         let n = self.n;
         let mut expect = vec![0.0; n];
         let mut hazard_jump = vec![0.0; n];
@@ -796,7 +830,7 @@ impl Kernel {
                 istrat -= 1;
             }
         }
-        expect
+        Ok(expect)
     }
 }
 

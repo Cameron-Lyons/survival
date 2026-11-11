@@ -1647,6 +1647,50 @@ mod tmerge_bench {
     }
 }
 
+mod rttright_bench {
+    use super::*;
+    use survival::data_prep::{RttrightInput, rttright};
+
+    fn stratified(bencher: divan::Bencher, n: usize, sparse: bool) {
+        let (time, _, status) = generate_survival_data(n);
+        let strata: Vec<usize> = (0..n)
+            .map(|row| {
+                if sparse {
+                    usize::MAX - row % 10
+                } else {
+                    row % 10
+                }
+            })
+            .collect();
+        bencher.bench_local(|| {
+            black_box(
+                rttright::<usize>(RttrightInput {
+                    start: None,
+                    time: &time,
+                    status: &status,
+                    strata: Some(&strata),
+                    weights: None,
+                    id: None,
+                    times: Some(&[10.0, 100.0, 1000.0]),
+                    timefix: false,
+                    renorm: true,
+                })
+                .expect("benchmark redistribution inputs should be valid"),
+            )
+        });
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn compact_labels(bencher: divan::Bencher, n: usize) {
+        stratified(bencher, n, false);
+    }
+
+    #[divan::bench(args = [1_000, 10_000, 100_000])]
+    fn sparse_labels(bencher: divan::Bencher, n: usize) {
+        stratified(bencher, n, true);
+    }
+}
+
 mod surv2counting_bench {
     use super::*;
     use survival::data_prep::{Repeated, surv2counting};

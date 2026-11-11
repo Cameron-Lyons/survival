@@ -1,14 +1,41 @@
-"""What a type checker sees of ``survival.r`` (checked by mypy in CI, not collected by pytest).
+"""Public API types (checked by mypy in CI, not collected by pytest).
 
 ``survival.r`` ships no stub, so its inline annotations are the typed surface; these
 ``assert_type`` calls fail the lint workflow's mypy step when a public return type
-regresses to ``Any`` or to the wrong class.
+regresses to ``Any`` or to the wrong class. ``survival.kernels`` re-exports the
+native signatures and result classes from the generated extension stub.
 """
 
 from typing import Any, assert_type
 
 import numpy as np
-from survival import _survival, r
+from survival import _survival, datasets, kernels, r
+
+
+def _check_population_dataset_types() -> None:
+    assert_type(datasets.load_lung(), dict[str, list[Any]])
+    assert_type(datasets.load_veteran(), dict[str, list[Any]])
+    population = datasets.load_uspop2()
+    assert_type(population, datasets.Uspop2Data)
+    assert_type(population.counts, np.ndarray[tuple[Any, ...], np.dtype[np.int32]])
+    assert_type(population.dimnames, list[list[str]])
+    assert_type(population.shape, tuple[int, int, int])
+
+
+def _check_kernel_types(time: list[float], status: list[int], x: list[list[float]]) -> None:
+    fit = kernels.coxph_fit(time, status, x)
+    assert_type(fit, kernels.CoxPHFit)
+    assert_type(kernels.coxph_detail(fit), kernels.CoxphDetail)
+    assert_type(kernels.survfitkm(time, status), kernels.SurvfitKMResult)
+    data = kernels.SurvregData(time, status, x)
+    distribution = kernels.SurvregDistribution("weibull")
+    assert_type(kernels.survreg_fit(data, distribution), kernels.SurvregFit)
+    y = kernels.SurvivalData(time, status)
+    risk = kernels.CovariateMatrix(time, len(time), 1)
+    assert_type(kernels.concordancefit(y, risk), kernels.ConcordanceFit)
+    array_risk = kernels.CovariateMatrix(np.asarray(time), len(time), 1)
+    assert_type(array_risk, kernels.CovariateMatrix)
+    assert_type(kernels.concordancefit(y, array_risk), kernels.ConcordanceFit)
 
 
 def _check_yates_prediction_types() -> None:

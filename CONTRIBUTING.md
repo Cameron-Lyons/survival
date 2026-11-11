@@ -119,7 +119,9 @@ interpreter that must be able to import NumPy, so point PyO3 at the project
 venv):
 
 ```sh
-PYO3_PYTHON=$PWD/.venv/bin/python PATH=$PWD/.venv/bin:$PATH cargo test --lib --features python,ml
+PYO3_PYTHON=$PWD/.venv/bin/python PATH=$PWD/.venv/bin:$PATH \
+  PYTHONPATH=$("$PWD/.venv/bin/python" -c 'import site; print(site.getsitepackages()[0])') \
+  cargo test --lib --features python,ml
 uv run --with maturin maturin develop --features python,ml
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 ```
@@ -166,13 +168,14 @@ cargo test --lib --all-features
 cargo bench -- --test
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 python3 scripts/generate_binding_manifest.py --check
 ```
 
-The type check covers the native binding stubs, all `survival.r` modules (including
-unannotated function bodies), and assertions about public return types. The facade
+The type check covers the native binding stubs, public kernel and dataset
+re-exports, all `survival.r` modules (including unannotated function bodies), and
+assertions about public return types. The facade
 uses inline annotations; its nullable responses and vector/matrix result shapes
 must be narrowed before calling native routines.
 
@@ -195,7 +198,7 @@ themselves unavailable rather than pretending to execute.
 When adding, removing, or renaming a PyO3 binding:
 
 1. Register the function or class under `src/api/python/`.
-2. Regenerate the binding manifest:
+2. Regenerate the binding manifest and the kernel/dataset type exports:
 
    ```sh
    python3 scripts/generate_binding_manifest.py
@@ -203,8 +206,9 @@ When adding, removing, or renaming a PyO3 binding:
 
 3. Add the symbol to exactly one domain module's `bind_names` list in
    `python/survival/*.py` (every registered binding is bound by one module) and
-   regenerate the manifest again, since its `MODULE_BINDINGS` section is derived
-   from those lists.
+   regenerate the manifest again, since its `MODULE_BINDINGS` section and
+   `kernels.pyi`/`datasets.pyi` are derived from those lists. These stubs re-export
+   the extension's types; signatures are maintained in `_survival.pyi` only.
 4. Rebuild the extension with `--features extension-module,ml` and regenerate
    `python/survival/_survival.pyi`:
 

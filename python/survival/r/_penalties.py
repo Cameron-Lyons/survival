@@ -428,6 +428,8 @@ def _fit_frailty(
         kwargs.setdefault("distribution", kind.split(".", 1)[1])
     kwargs.setdefault("sparse", len(groups) > 5)
     penalty = _frailty_penalty(len(x), **kwargs)
+    if not penalty.sparse and len(groups) < 2:
+        raise ValueError("not enough degrees of freedom to define contrasts")
     if term.call is None:
         raise ValueError("a penalty term must have a function call")
     distribution = penalty.distribution

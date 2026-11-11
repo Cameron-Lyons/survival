@@ -13,6 +13,13 @@ use super::exact_ties::{
 
 mod workspace;
 use workspace::EvaluationWorkspace;
+mod log_risk;
+mod precision;
+mod predictors;
+pub(crate) use predictors::{
+    add_predictor_parts, bounds_need_anchor, covariate_anchor_needed, predictor_bound_needs_anchor,
+    relative_covariate_scale,
+};
 
 #[doc = " Tie handling of the partial likelihood (R's `coxph(ties = )`), shared by"]
 #[doc = " the fitters and by every residual kernel of the package.  The C kernels"]
@@ -284,6 +291,9 @@ impl<'a> CoxFitBuilder<'a> {
             },
         };
 
+        let large_offset = offset
+            .iter()
+            .any(|o| o.abs() > predictors::PREDICTOR_PRECISION_LIMIT);
         let mut fit = CoxFit {
             data: CoxData {
                 time,
@@ -293,6 +303,8 @@ impl<'a> CoxFitBuilder<'a> {
                 offset,
                 weights,
                 efron: self.method == TieMethod::Efron,
+                predictor_bounds: vec![0.0; nvar],
+                large_offset,
             },
             fitter,
             max_iter: self.max_iter,
@@ -415,6 +427,8 @@ struct CoxData {
     offset: Array1<f64>,
     weights: Array1<f64>,
     efron: bool,
+    predictor_bounds: Vec<f64>,
+    large_offset: bool,
 }
 
 pub(crate) struct CoxFit {
@@ -667,6 +681,9 @@ impl CoxData {
         u: &mut [f64],
         imat: &mut Array2<f64>,
     ) -> f64 {
+        if self.needs_paired_predictors(beta) {
+            return self.coxfit6_log(beta, u, imat);
+        }
         let row = self.rows();
         let EvaluationWorkspace {
             eta,
@@ -688,6 +705,13 @@ impl CoxData {
                 person -= 1;
                 let (weight, x) = (self.weights[person], row(person));
                 let risk = eta[person].exp() * weight;
+                if !(1e-100..=1e100).contains(&risk) {
+                    // Keep the ordinary sweep bit-for-bit unchanged. Restart in
+                    // log space before an extreme risk spoils its running sums.
+                    u.fill(0.0);
+                    imat.fill(0.0);
+                    return self.coxfit6_log(beta, u, imat);
+                }
                 risk_set.add(weight, risk, x);
                 if self.status[person] != 0 {
                     tied.add(weight, risk, x);
@@ -716,6 +740,9 @@ impl CoxData {
         u: &mut [f64],
         imat: &mut Array2<f64>,
     ) -> SurvivalResult<f64> {
+        if self.needs_paired_predictors(beta) {
+            return self.agfit4_scales(beta, walk, u, imat);
+        }
         let EvaluationWorkspace {
             eta, risk, tied, ..
         } = workspace;
@@ -818,6 +845,16 @@ impl CoxData {
     }
 
     fn coxexact(&self, beta: &[f64], u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
+        if self.needs_paired_predictors(beta) {
+            let entry = vec![f64::NEG_INFINITY; self.time.len()];
+            let walk = AgWalk::new(
+                &entry,
+                self.time.as_slice().expect("contiguous"),
+                self.status.as_slice().expect("contiguous"),
+                self.stratum_end.as_slice().expect("contiguous"),
+            );
+            return self.exact_scales(beta, &walk, u, imat);
+        }
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
         let row = self.rows();
         let mut loglik = 0.0;
@@ -908,6 +945,9 @@ impl CoxData {
     }
 
     fn agexact(&self, beta: &[f64], walk: &AgWalk, u: &mut [f64], imat: &mut Array2<f64>) -> f64 {
+        if self.needs_paired_predictors(beta) {
+            return self.exact_scales(beta, walk, u, imat);
+        }
         let (linear_predictors, log_risk) = self.exact_predictors(beta);
         let mut loglik = 0.0;
         let mut death_indices = Vec::new();
@@ -1013,6 +1053,7 @@ impl CoxFit {
         let CoxData {
             ref mut covar,
             ref weights,
+            ref mut predictor_bounds,
             ..
         } = self.data;
         let fitter = &self.fitter;
@@ -1022,6 +1063,7 @@ impl CoxFit {
             if !scale_column {
                 self.means[i] = 0.0;
                 self.scale[i] = 1.0;
+                predictor_bounds[i] = covar.column(i).iter().map(|x| x.abs()).fold(0.0, f64::max);
                 continue;
             }
             let plain_mean = covar.column(i).sum() / nused as f64;
@@ -1055,7 +1097,13 @@ impl CoxFit {
                 }
                 Fitter::Agexact { .. } => 1.0,
             };
-            covar.column_mut(i).mapv_inplace(|value| value * scale);
+            let mut bound = 0.0_f64;
+            covar.column_mut(i).mapv_inplace(|value| {
+                let value = value * scale;
+                bound = bound.max(value.abs());
+                value
+            });
+            predictor_bounds[i] = bound;
             self.scale[i] = scale;
         }
         for (beta, &scale) in self.beta.iter_mut().zip(&self.scale) {

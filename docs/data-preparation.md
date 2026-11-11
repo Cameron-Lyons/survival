@@ -59,8 +59,15 @@ reference row with the same identifier on or after (`best="after"`) or on or
 before (`best="prior"`) the query date; unambiguous prefixes are accepted.
 Python rows are zero-based and R facade rows one-based. Tied reference dates
 select the first original row for `after` and the last for `prior`. Missing query
-dates give `nomatch`, missing identifiers stay missing, and reference rows with
-missing dates are discarded.
+dates give `nomatch`, and reference rows with missing dates are discarded. Missing
+identifiers yield missing when R compares them with a candidate; a query without
+a candidate yields `nomatch`.
+
+Numeric identifiers distinguish `None` (R's `NA`) from floating `NaN`, including
+their separate match groups. Lists and object arrays preserve that distinction;
+a floating array that has already converted both to `NaN` cannot recover it.
+Masked and nullable missing entries represent `NA`. When matching against
+character IDs, numeric `NaN` becomes the label `"NaN"`, following R's coercion.
 
 ```python
 r.neardate([1], [1, 1], ["3"], ["2", "10"])
@@ -76,6 +83,11 @@ r.neardate([1], [1, 1], ["10"], ["10", "10"], best="prior")
   common character type, as R's `c(y1, y2)` does; mixed character and NumPy float
   inputs format numbers as equivalent Python floats. Factor dates raise R's
   `y1 and y2 must be sortable` error.
+- Identifiers use R's common matching type. Numbers match their character labels,
+  logical values match `"TRUE"` and `"FALSE"`, and factor identifiers use their
+  labels. Numeric identifier arrays keep the native array path. Distinct numeric
+  query identifiers that share R's rounded character label retain R's separate
+  query groups.
 - Calendar values are ranked together with exact integer time keys, keeping NumPy
   units down to attoseconds and pandas subsecond precision. Python dates and naive
   datetimes are taken as UTC; aware datetimes use their absolute instant. `NaT`
@@ -103,6 +115,29 @@ The default `first=True` sets an unknown first observation to zero for logical a
 binary numeric columns; other numeric, character and factor columns keep unknown
 first observations, also for pandas categoricals and R factors with numeric or
 logical levels. Inputs are not modified.
+
+Factor inputs return an unordered `Factor` with all declared levels in their
+original order, including unused levels, as in R. This preserves the censoring
+level and event states when the result is passed to `Surv`.
+
+## Removing repeated states
+
+`r.nostutter(id, x, censor=0)` replaces adjacent repeated states within a subject
+with the censoring value. `single=True` also suppresses states already observed
+for that subject. The result is an unordered `Factor` whose first level is
+`censor`, followed by the input factor's levels or the sorted observed levels.
+Numeric input values retain their Python numeric labels.
+
+```python
+states = r.nostutter([1, 1, 1, 1], [0, 1, 1, 2])
+# Factor([0, 1, 0, 2], levels=[0, 1, 2])
+r.Surv([1, 2, 3, 4], states).type
+# 'mright'
+```
+
+Empty inputs, unused factor levels, states without repeats and `single=True`
+remain supported where stock R can fail. The exact stock errors and intended
+factor results are recorded in the data-preparation label reference fixture.
 
 ## Fine–Gray expansion
 

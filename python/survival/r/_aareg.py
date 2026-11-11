@@ -214,7 +214,9 @@ def summary_aareg(
     for k in range(nvar):
         ctx = _cumsum([row[k] for row in tx])
         tempwt = sum(twt[i][k] * times[i] ** 2 for i in range(ntime))
-        slope.append(sum(c * t for c, t in zip(ctx, times, strict=True)) / tempwt)
+        numerator = sum(c * t for c, t in zip(ctx, times, strict=True))
+        with np.errstate(all="ignore"):
+            slope.append(float(np.divide(numerator, tempwt)))
     if maxtime is not None or fit.test != test_name:
         test_stat = [sum(row[k] for row in tx) for k in range(nvar)]
         test_var = [[sum(row[j] * row[k] for row in tx) for k in range(nvar)] for j in range(nvar)]
