@@ -177,7 +177,7 @@ fn direct(model: &CoxPHFit) -> DirectResiduals {
     }
 }
 
-fn check_definition(model: &CoxPHFit) {
+fn check_risk_definition(model: &CoxPHFit) {
     let DirectResiduals {
         martingale,
         score,
@@ -203,6 +203,10 @@ fn check_definition(model: &CoxPHFit) {
             close(weighted[(i, j)], score[(i, j)] * model.weights[i]);
         }
     }
+}
+
+fn check_definition(model: &CoxPHFit) {
+    check_risk_definition(model);
     for values in [
         model.dfbeta(true, None).unwrap(),
         model.dfbetas(true, None).unwrap(),
@@ -322,6 +326,144 @@ fn dynamic_huge_risk_origins_preserve_weights_and_residual_integrals() {
                     &fit.dfbetas(true, None).unwrap(),
                     &base.dfbetas(true, None).unwrap(),
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn common_entry_diagnostics_keep_small_early_expected_counts() {
+    for method in [TieMethod::Breslow, TieMethod::Efron] {
+        for counting in [false, true] {
+            let data = CoxphData::try_new(
+                vec![1., 1., 1., 2., 3.],
+                counting.then_some(vec![0.; 5]),
+                vec![1, 0, 0, 1, 0],
+                array![[-1.], [0.5], [1.], [-0.5], [0.2]],
+                None,
+                None,
+                Some(vec![0., 0., 0., -100., 1e-10_f64.ln()]),
+            )
+            .unwrap();
+            let model = CoxPHFit::fit(
+                data,
+                CoxphOptions {
+                    method,
+                    init: Some(vec![0.]),
+                    iter_max: 0,
+                    robust: Some(false),
+                    ..CoxphOptions::default()
+                },
+            )
+            .unwrap();
+            let expected = 1. / (3. + 1e-10 + (-100_f64).exp());
+            close(model.residuals[0], 1. - expected);
+            close(model.residuals[1], -expected);
+            close(model.residuals[2], -expected);
+            // A tiny expected count rounds the later event's martingale to
+            // one, where the existing deviance reconstruction is infinite.
+            check_risk_definition(&model);
+        }
+    }
+}
+
+#[test]
+fn common_entry_score_moments_keep_large_constant_design_exactly_zero() {
+    for counting in [false, true] {
+        for n in [8, 12] {
+            let data = CoxphData::try_new(
+                (1..=n).map(|time| time as f64).collect(),
+                counting.then_some(vec![0.; n]),
+                (0..n).map(|row| i32::from(row < n - 3)).collect(),
+                Array2::from_elem((n, 1), 1e16),
+                None,
+                None,
+                Some(
+                    (0..n)
+                        .map(|row| if row < n - 3 { -100. } else { 0. })
+                        .collect(),
+                ),
+            )
+            .unwrap();
+            let model = CoxPHFit::fit(
+                data,
+                CoxphOptions {
+                    init: Some(vec![0.]),
+                    iter_max: 0,
+                    robust: Some(false),
+                    ..CoxphOptions::default()
+                },
+            )
+            .unwrap();
+            assert!(
+                model
+                    .score_residuals(false, None)
+                    .unwrap()
+                    .iter()
+                    .all(|&score| score == 0.)
+            );
+            assert!(
+                model
+                    .schoenfeld_residuals(false)
+                    .unwrap()
+                    .residuals
+                    .iter()
+                    .flatten()
+                    .all(|&score| score == 0.)
+            );
+        }
+    }
+}
+
+#[test]
+fn common_entry_weighted_tied_and_stratified_diagnostics_match_definition() {
+    for method in [TieMethod::Breslow, TieMethod::Efron] {
+        for counting in [false, true] {
+            for stratified in [false, true] {
+                let rows: Vec<_> = (0..12).rev().collect();
+                let stop = [1., 1., 2., 3., 3., 4.];
+                let status = [1, 1, 0, 1, 1, 0];
+                let weights = [0.5, 2., 1.5, 3., 1., 2.];
+                let values = [
+                    [-1., 0.2],
+                    [0.5, -0.5],
+                    [1., 0.3],
+                    [-0.5, 1.2],
+                    [0.2, -0.9],
+                    [0.7, 0.4],
+                ];
+                let data = CoxphData::try_new(
+                    rows.iter().map(|&row| stop[row % 6]).collect(),
+                    counting.then_some(vec![0.; 12]),
+                    rows.iter().map(|&row| status[row % 6]).collect(),
+                    Array2::from_shape_fn((12, 2), |(i, j)| values[rows[i] % 6][j]),
+                    Some(rows.iter().map(|&row| weights[row % 6]).collect()),
+                    stratified.then(|| {
+                        rows.iter()
+                            .map(|&row| if row < 6 { -4 } else { 19 })
+                            .collect()
+                    }),
+                    Some(
+                        rows.iter()
+                            .map(|&row| if status[row % 6] == 1 { -100. } else { 0. })
+                            .collect(),
+                    ),
+                )
+                .unwrap();
+                let model = CoxPHFit::fit(
+                    data,
+                    CoxphOptions {
+                        method,
+                        init: Some(vec![0.2, -0.1]),
+                        iter_max: 0,
+                        robust: Some(false),
+                        ..CoxphOptions::default()
+                    },
+                )
+                .unwrap();
+                // Only two distinct censor covariates carry representable
+                // information, so standardized residuals can be undefined.
+                check_risk_definition(&model);
             }
         }
     }

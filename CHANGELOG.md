@@ -30,6 +30,9 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Performance
 
+- Stable Cox diagnostics use additive risk sweeps and hazard prefixes when all
+  rows enter before follow-up, avoiding repeated tree updates in case-cohort
+  fits while retaining protection against cancellation.
 - `survreg` formula fits build an owned NumPy design directly, avoiding Python
   row lists while preserving the public representation of retained matrices.
 - `concordancefit` passes numeric NumPy predictor matrices directly to the native

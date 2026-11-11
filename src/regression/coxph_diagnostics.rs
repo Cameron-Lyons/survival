@@ -2,7 +2,9 @@ use crate::core::coxscho::{CoxschoResiduals, coxscho};
 use crate::core::strata_order::{rowsum, stratum_groups};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
-use crate::regression::log_risk_sweep::{LogMomentTree, LogMoments, LogRiskSweep, needs_log_risk};
+use crate::regression::log_risk_sweep::{
+    LogMomentTree, LogMoments, LogRiskSweep, has_common_entry, needs_log_risk,
+};
 use crate::regression::log_scale::LogScale;
 use crate::residuals::agmart::agmart_rows;
 use crate::residuals::coxmart::coxmart_rows;
@@ -268,23 +270,39 @@ fn log_diagnostics(
             sweep.for_each_time(callback)?;
         }
         if with_score {
-            let mut integrals = LogMomentTree::new(times.len(), p);
-            for (index, hazard) in hazards.iter().enumerate() {
-                integrals.set(index, hazard.weight, &hazard.mean);
-            }
+            let common_entry = has_common_entry(&rows, &fit.time, fit.entry.as_deref());
+            let prefixes = common_entry.then(|| {
+                let mut total = LogMoments::new(p);
+                let mut prefixes = Vec::with_capacity(hazards.len() + 1);
+                prefixes.push(total.clone());
+                for hazard in &hazards {
+                    total.add(hazard.weight, &hazard.mean);
+                    prefixes.push(total.clone());
+                }
+                prefixes
+            });
+            let integrals = (!common_entry).then(|| {
+                let mut integrals = LogMomentTree::new(times.len(), p);
+                for (index, hazard) in hazards.iter().enumerate() {
+                    integrals.set(index, hazard.weight, &hazard.mean);
+                }
+                integrals
+            });
             for &row in &rows {
                 let first = fit
                     .entry
                     .as_ref()
                     .map_or(0, |entry| times.partition_point(|&time| time <= entry[row]));
                 let end = times.partition_point(|&time| time <= fit.time[row]);
-                let exposure = if fit.status[row] == 1 {
-                    let mut exposure = integrals.range(first, end - 1);
-                    exposure.add(event_hazards[end - 1].weight, &event_hazards[end - 1].mean);
-                    exposure
-                } else {
-                    integrals.range(first, end)
+                let before = if fit.status[row] == 1 { end - 1 } else { end };
+                let mut exposure = match (&prefixes, &integrals) {
+                    (Some(prefixes), _) => prefixes[before].clone(),
+                    (_, Some(integrals)) => integrals.range(first, before),
+                    _ => unreachable!("one integral representation is present"),
                 };
+                if fit.status[row] == 1 {
+                    exposure.add(event_hazards[end - 1].weight, &event_hazards[end - 1].mean);
+                }
                 let predictor =
                     scales.map_or_else(|| LogScale::from_log(lp[row]), |values| values[row]);
                 let count = exposure.weight.exp_at_scale(predictor);

@@ -51,6 +51,11 @@ complete fits. Run once with `--row-design-reference --output before`, then with
 owned-array path on the same native extension. The comparison requires identical
 designs, coefficients, covariance, likelihoods, scales, predictions and residuals.
 
+`benches/python/bench_case_cohort.py` uses the Prentice and Borgan I inputs from
+the Rust benchmarks. Save a previous release with `--extension`, then use
+`--compare` to check coefficients, covariance, phase-two variance, martingales
+and Borgan score contributions alongside the complete-call timings.
+
 ## Current characteristics
 
 - Native bindings copy NumPy arrays once into owned Rust buffers (any dtype,
@@ -120,12 +125,16 @@ designs, coefficients, covariance, likelihoods, scales, predictions and residual
 - Extreme right-censored Breslow/Efron evaluations use normalized risk moments
   in a reverse-time sweep, retaining O(n p²) work and O(p²) moment scratch space
   alongside the O(n) predictors.
-  Extreme diagnostics and curves use trees for active risk sets and hazard intervals,
-  preserving late small contributions without subtracting rounded cumulative
-  totals. Covariance trees are built only for detail and proportional-hazards
-  diagnostics that require them. Interval trees are built on the first range
-  query; full curve expansion does not build them. Ordinary fits retain their
-  existing arithmetic.
+  When every row enters before the earliest stop, extreme risk moments use a
+  reverse additive sweep. Martingale and score diagnostics use forward hazard
+  prefixes, avoiding cancellation and repeated tree updates in case-cohort fits.
+  Additive accumulation takes O(n (p + 1)) work and retained storage; sorting
+  and score interval lookup retain O(n log n) work.
+  Delayed-entry intervals and covariance requests retain trees for active risk
+  sets. Covariance trees are built only for detail and proportional-hazards
+  diagnostics that require them. Curve interval trees are built on the first
+  range query; full curve expansion does not build them. Ordinary fits retain
+  their existing arithmetic.
 - Covariate and offset origins are retained when their scale would lose small
   effects. Each risk total separates the compensated predictor from the relative
   mass, preserving multiplicities without changing tree complexity.

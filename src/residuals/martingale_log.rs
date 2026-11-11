@@ -1,7 +1,10 @@
 use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::TieMethod;
+use crate::regression::log_risk_sweep::has_common_entry;
 use crate::regression::log_scale::LogScale;
+
+mod common_entry;
 
 pub(super) fn needs_log_space(score: &[f64], weights: &[f64]) -> bool {
     score.iter().zip(weights).any(|(&risk, &weight)| {
@@ -122,6 +125,20 @@ pub(crate) fn martingale_log_scales(
             .collect();
         let mut by_stop: Vec<usize> = (0..rows.len()).collect();
         by_stop.sort_by(|&left, &right| stop[rows[left]].total_cmp(&stop[rows[right]]));
+        if has_common_entry(&rows, stop, start) {
+            common_entry::martingale(
+                &rows,
+                &by_stop,
+                &log_risk,
+                stop,
+                status,
+                log_score,
+                weights,
+                method,
+                &mut residuals,
+            )?;
+            continue;
+        }
         let by_start = start.map(|start| {
             let mut order: Vec<usize> = (0..rows.len()).collect();
             order.sort_by(|&left, &right| start[rows[left]].total_cmp(&start[rows[right]]));

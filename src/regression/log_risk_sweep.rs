@@ -10,6 +10,9 @@ use crate::regression::exact_ties::{ExactRiskAccumulator, ExactRiskTree};
 use crate::regression::log_scale::LogScale;
 use ndarray::{Array2, ArrayView2};
 
+mod common_entry;
+pub(crate) use common_entry::has_common_entry;
+
 pub(crate) fn needs_log_risk(lp: &[f64], weights: &[f64]) -> bool {
     let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
     let (mut min_weight, mut max_weight) = (f64::INFINITY, 0.0_f64);
@@ -304,6 +307,10 @@ impl LogRiskSweep<'_> {
         let p = self.x.ncols();
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| self.stop[self.rows[a]].total_cmp(&self.stop[self.rows[b]]));
+        let log_risk = self.validated_log_risks(scales)?;
+        if !covariance && has_common_entry(self.rows, self.stop, self.entry) {
+            return self.walk_common_entry(&order, &log_risk, callback);
+        }
         let by_start = self.entry.map(|entry| {
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_by(|&a, &b| entry[self.rows[a]].total_cmp(&entry[self.rows[b]]));
@@ -318,23 +325,7 @@ impl LogRiskSweep<'_> {
             .collect();
         let covariance_x = covariance.then(|| Array2::from_shape_fn((n, p), |(i, j)| x[i][j]));
         let mut covariance_tree = covariance.then(|| ExactRiskTree::new(0, n, p));
-        let mut log_risk = Vec::with_capacity(n);
         for (position, &row) in self.rows.iter().enumerate() {
-            let predictor = scales.map_or_else(
-                || LogScale::from_log(self.log_risk[row]),
-                |values| values[row],
-            );
-            if !predictor.origin.is_finite()
-                || !predictor.origin_correction.is_finite()
-                || !predictor.log_mass.is_finite()
-                || !self.weights[row].is_finite()
-                || self.weights[row] < 0.0
-            {
-                return Err(SurvivalError::invalid_input(
-                    "Cox log risks and weights must be finite, with nonnegative weights",
-                ));
-            }
-            log_risk.push(predictor.shifted(self.weights[row].ln()));
             if self.entry.is_none() {
                 risk.set(position, log_risk[position], &x[position]);
                 weight.set(position, LogScale::from_log(self.weights[row].ln()), &[]);
@@ -458,6 +449,29 @@ impl LogRiskSweep<'_> {
             first = end;
         }
         Ok(())
+    }
+
+    fn validated_log_risks(&self, scales: Option<&[LogScale]>) -> SurvivalResult<Vec<LogScale>> {
+        self.rows
+            .iter()
+            .map(|&row| {
+                let predictor = scales.map_or_else(
+                    || LogScale::from_log(self.log_risk[row]),
+                    |values| values[row],
+                );
+                if !predictor.origin.is_finite()
+                    || !predictor.origin_correction.is_finite()
+                    || !predictor.log_mass.is_finite()
+                    || !self.weights[row].is_finite()
+                    || self.weights[row] < 0.0
+                {
+                    return Err(SurvivalError::invalid_input(
+                        "Cox log risks and weights must be finite, with nonnegative weights",
+                    ));
+                }
+                Ok(predictor.shifted(self.weights[row].ln()))
+            })
+            .collect()
     }
 }
 
