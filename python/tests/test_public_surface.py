@@ -8,6 +8,7 @@ reference values were computed with R 4.5.3 and survival 3.8-12.
 
 import importlib
 import inspect
+import json
 import math
 import typing
 from pathlib import Path
@@ -240,6 +241,7 @@ R_EXPORTS = [
     "psurvreg",
     "pyears",
     "qsurvreg",
+    "ratetable",
     "ratetableDate",
     "ridge",
     "royston",
@@ -257,6 +259,7 @@ R_EXPORTS = [
     "survexp",
     "survfit",
     "survfit_confint",
+    "survfit.formula",
     "survfit0",
     "survfitcoxph.fit",
     "survfitKM",
@@ -284,7 +287,18 @@ R_FITTERS = {
     "survpenal_fit",
     "survreg_fit",
 }
-R_SPELLINGS = {"format.Surv": "format_surv", "is.na.Surv": "is_na_surv", "is.Surv": "is_surv"}
+R_SPELLINGS = {
+    "format.Surv": "format_surv",
+    "is.na.Surv": "is_na_surv",
+    "is.Surv": "is_surv",
+    "survfit.formula": "survfit",
+}
+
+
+def test_r_export_inventory_matches_recorded_stock_namespace():
+    reference = json.loads((Path(__file__).parent / "fixtures/uspop2_reference.json").read_text())
+    assert len(R_EXPORTS) == len(set(R_EXPORTS)) == 80
+    assert sorted(R_EXPORTS) == reference["namespace_exports"]
 
 
 def test_r_namespace_exports_are_available_from_the_root():

@@ -1,13 +1,134 @@
 use ndarray::{Array2, ArrayView2};
 
+use super::log_scale::LogScale;
+
 pub(crate) struct ExactTiedMoments {
     pub log_denom: f64,
     pub mean: Vec<f64>,
     pub covariance: Array2<f64>,
 }
 
+/// Exact subset moments normalized by the largest possible subset product.
+/// Individual reference risks stay separate so their huge origins never need
+/// to be summed, multiplied by the death count, or subsequently subtracted.
+pub(crate) struct ExactTiedScaleMoments {
+    reference: Vec<LogScale>,
+    pub log_relative_denom: f64,
+    pub mean: Vec<f64>,
+    pub covariance: Array2<f64>,
+}
+
+impl ExactTiedScaleMoments {
+    pub fn log_likelihood(&self, deaths: &[LogScale]) -> f64 {
+        debug_assert_eq!(deaths.len(), self.reference.len());
+        let mut deaths = deaths.to_vec();
+        deaths.sort_by(|a, b| b.ratio_log(*a).total_cmp(&0.0));
+        deaths
+            .iter()
+            .zip(&self.reference)
+            .fold(-self.log_relative_denom, |total, (&death, &reference)| {
+                total + death.ratio_log(reference)
+            })
+    }
+}
+
+pub(crate) fn exact_tied_moments_scales(
+    risk_indices: &[usize],
+    deaths: usize,
+    risk: &[LogScale],
+    covar: &Array2<f64>,
+) -> ExactTiedScaleMoments {
+    debug_assert!(deaths <= risk_indices.len());
+    let mut ranked = risk_indices.to_vec();
+    ranked.sort_by(|&a, &b| risk[b].ratio_log(risk[a]).total_cmp(&0.0));
+    let reference = ranked[..deaths].iter().map(|&row| risk[row]).collect();
+    let complementary = deaths > ranked.len() / 2;
+    let subset_size = if complementary {
+        ranked.reverse();
+        ranked.len() - deaths
+    } else {
+        deaths
+    };
+    let nvar = covar.ncols();
+    let states = subset_size + 1;
+    let square = nvar * nvar;
+    let mut log_denoms = vec![f64::NEG_INFINITY; states];
+    let mut means = vec![0.0; states * nvar];
+    let mut covariances = vec![0.0; states * square];
+    let mut delta = vec![0.0; nvar];
+    log_denoms[0] = 0.0;
+
+    for (seen, &person) in ranked.iter().enumerate() {
+        for size in (1..=subset_size.min(seen + 1)).rev() {
+            // State k uses the product of the k greatest risks as its origin.
+            // Appending a row to k-1 therefore requires just one risk ratio.
+            // With complementary subsets, these are reciprocal risks.
+            let relative = if complementary {
+                risk[ranked[size - 1]].ratio_log(risk[person])
+            } else {
+                risk[person].ratio_log(risk[ranked[size - 1]])
+            };
+            let added = log_denoms[size - 1] + relative;
+            if added == f64::NEG_INFINITY {
+                if complementary {
+                    for variable in 0..nvar {
+                        means[size * nvar + variable] += covar[(person, variable)];
+                    }
+                }
+                continue;
+            }
+            let (total, a, b) = log_weighted_mix(log_denoms[size], added);
+            let current_mean = size * nvar;
+            let previous_mean = (size - 1) * nvar;
+            for variable in 0..nvar {
+                let x = covar[(person, variable)];
+                let existing = means[current_mean + variable] + if complementary { x } else { 0.0 };
+                let added = means[previous_mean + variable] + if complementary { 0.0 } else { x };
+                delta[variable] = added - existing;
+            }
+            for row in 0..nvar {
+                for column in 0..nvar {
+                    let current = size * square + row * nvar + column;
+                    let previous = (size - 1) * square + row * nvar + column;
+                    covariances[current] = a * covariances[current]
+                        + b * covariances[previous]
+                        + a * b * delta[row] * delta[column];
+                }
+            }
+            for variable in 0..nvar {
+                let x = covar[(person, variable)];
+                means[current_mean + variable] = if a >= b {
+                    means[current_mean + variable]
+                        + if complementary { x } else { 0.0 }
+                        + b * delta[variable]
+                } else {
+                    means[previous_mean + variable] + if complementary { 0.0 } else { x }
+                        - a * delta[variable]
+                };
+            }
+            log_denoms[size] = total;
+        }
+        if complementary {
+            for variable in 0..nvar {
+                means[variable] += covar[(person, variable)];
+            }
+        }
+    }
+    ExactTiedScaleMoments {
+        reference,
+        log_relative_denom: log_denoms[subset_size],
+        mean: means[subset_size * nvar..(subset_size + 1) * nvar].to_vec(),
+        covariance: Array2::from_shape_vec(
+            (nvar, nvar),
+            covariances[subset_size * square..(subset_size + 1) * square].to_vec(),
+        )
+        .expect("one subset covariance matrix"),
+    }
+}
+
 pub(crate) struct ExactRiskAccumulator {
     pub log_denom: f64,
+    pub weight: LogScale,
     pub mean: Vec<f64>,
     pub covariance: Array2<f64>,
     delta: Vec<f64>,
@@ -17,6 +138,7 @@ impl ExactRiskAccumulator {
     pub fn new(nvar: usize) -> Self {
         Self {
             log_denom: f64::NEG_INFINITY,
+            weight: LogScale::EMPTY,
             mean: vec![0.0; nvar],
             covariance: Array2::zeros((nvar, nvar)),
             delta: vec![0.0; nvar],
@@ -25,21 +147,29 @@ impl ExactRiskAccumulator {
 
     pub fn clear(&mut self) {
         self.log_denom = f64::NEG_INFINITY;
+        self.weight = LogScale::EMPTY;
         self.mean.fill(0.0);
         self.covariance.fill(0.0);
     }
 
     pub fn add(&mut self, person: usize, log_weight: f64, covar: &Array2<f64>) {
-        if self.log_denom == f64::NEG_INFINITY {
-            self.log_denom = log_weight;
+        self.add_scale(person, LogScale::from_log(log_weight), covar);
+    }
+
+    pub fn add_scale(&mut self, person: usize, weight: LogScale, covar: &Array2<f64>) {
+        if weight.is_zero() {
+            return;
+        }
+        if self.weight.is_zero() {
+            self.weight = weight;
+            self.log_denom = weight.log_value();
             for variable in 0..self.mean.len() {
                 self.mean[variable] = covar[(person, variable)];
             }
             return;
         }
 
-        let (total_log_weight, existing_fraction, added_fraction) =
-            log_weighted_mix(self.log_denom, log_weight);
+        let (total_log_weight, existing_fraction, added_fraction) = self.weight.mix(weight);
         for (variable, difference) in self.delta.iter_mut().enumerate() {
             *difference = covar[(person, variable)] - self.mean[variable];
         }
@@ -56,7 +186,8 @@ impl ExactRiskAccumulator {
                 covar[(person, variable)] - existing_fraction * difference
             };
         }
-        self.log_denom = total_log_weight;
+        self.weight = total_log_weight;
+        self.log_denom = self.weight.log_value();
     }
 }
 
@@ -67,7 +198,7 @@ pub(crate) struct ExactRiskTree {
     leaf_base: usize,
     dirty: Vec<bool>,
     pending: Vec<usize>,
-    log_denoms: Vec<f64>,
+    weights: Vec<LogScale>,
     means: Vec<f64>,
     covariances: Vec<f64>,
     scratch: ExactRiskAccumulator,
@@ -87,7 +218,7 @@ impl ExactRiskTree {
             leaf_base,
             dirty: vec![false; blocks],
             pending: Vec::new(),
-            log_denoms: vec![f64::NEG_INFINITY; nodes],
+            weights: vec![LogScale::EMPTY; nodes],
             means: vec![0.0; nodes * nvar],
             covariances: vec![0.0; nodes * nvar * nvar],
             scratch: ExactRiskAccumulator::new(nvar),
@@ -122,6 +253,14 @@ impl ExactRiskTree {
     }
 
     pub fn refresh(&mut self, log_risk: &[f64], covar: &Array2<f64>) {
+        self.refresh_with(|row| LogScale::from_log(log_risk[row]), covar);
+    }
+
+    pub fn refresh_scales(&mut self, risk: &[LogScale], covar: &Array2<f64>) {
+        self.refresh_with(|row| risk[row], covar);
+    }
+
+    fn refresh_with(&mut self, risk: impl Fn(usize) -> LogScale, covar: &Array2<f64>) {
         let nvar = self.scratch.mean.len();
         let square = nvar * nvar;
         while let Some(block) = self.pending.pop() {
@@ -132,11 +271,11 @@ impl ExactRiskTree {
             for position in start..end {
                 if self.active[position] {
                     let row = self.first_row + position;
-                    self.scratch.add(row, log_risk[row], covar);
+                    self.scratch.add_scale(row, risk(row), covar);
                 }
             }
             let mut node = self.leaf_base + block;
-            self.log_denoms[node] = self.scratch.log_denom;
+            self.weights[node] = self.scratch.weight;
             self.means[node * nvar..(node + 1) * nvar].copy_from_slice(&self.scratch.mean);
             self.covariances[node * square..(node + 1) * square]
                 .copy_from_slice(self.scratch.covariance.as_slice().expect("standard layout"));
@@ -151,22 +290,21 @@ impl ExactRiskTree {
         let (left, right) = (2 * node, 2 * node + 1);
         let nvar = self.scratch.mean.len();
         let square = nvar * nvar;
-        if self.log_denoms[left] == f64::NEG_INFINITY || self.log_denoms[right] == f64::NEG_INFINITY
-        {
-            let source = if self.log_denoms[left] == f64::NEG_INFINITY {
+        if self.weights[left].is_zero() || self.weights[right].is_zero() {
+            let source = if self.weights[left].is_zero() {
                 right
             } else {
                 left
             };
-            self.log_denoms[node] = self.log_denoms[source];
+            self.weights[node] = self.weights[source];
             self.means
                 .copy_within(source * nvar..(source + 1) * nvar, node * nvar);
             self.covariances
                 .copy_within(source * square..(source + 1) * square, node * square);
             return;
         }
-        let (total, a, b) = log_weighted_mix(self.log_denoms[left], self.log_denoms[right]);
-        self.log_denoms[node] = total;
+        let (total, a, b) = self.weights[left].mix(self.weights[right]);
+        self.weights[node] = total;
         for i in 0..nvar {
             self.scratch.delta[i] = self.means[right * nvar + i] - self.means[left * nvar + i];
             self.means[node * nvar + i] = if a >= b {
@@ -186,7 +324,11 @@ impl ExactRiskTree {
     }
 
     pub fn log_denom(&self) -> f64 {
-        self.log_denoms[1]
+        self.weights[1].log_value()
+    }
+
+    pub fn weight(&self) -> LogScale {
+        self.weights[1]
     }
 
     pub fn mean(&self) -> &[f64] {
@@ -1034,5 +1176,123 @@ mod tests {
         assert_close(tree.log_denom(), 1_000.0 + 40.0_f64.ln(), 1e-11);
         assert!(tree.mean().is_empty());
         assert_eq!(tree.covariance().dim(), (0, 0));
+    }
+
+    #[test]
+    fn paired_risk_moments_keep_weights_and_multiplicity_at_large_origins() {
+        let covar = Array2::from_shape_vec((3, 1), vec![0.0, 1.0, 4.0]).unwrap();
+        for origin in [-1e308, -1e16, 1e16, 1e308] {
+            let risk = [
+                LogScale::new(origin, 0.0),
+                LogScale::new(origin, 3.0_f64.ln()),
+                LogScale::new(origin, 2.0_f64.ln()),
+            ];
+            let expected_mean = 11.0 / 6.0;
+            let expected_variance = 35.0 / 6.0 - expected_mean * expected_mean;
+            for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+                let mut accumulator = ExactRiskAccumulator::new(1);
+                for row in order {
+                    accumulator.add_scale(row, risk[row], &covar);
+                }
+                assert_close(accumulator.weight.log_mass, 6.0_f64.ln(), 1e-14);
+                assert_close(accumulator.mean[0], expected_mean, 1e-14);
+                assert_close(accumulator.covariance[(0, 0)], expected_variance, 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_paired_subsets_keep_small_contributions_with_huge_common_origins() {
+        let covar = Array2::from_shape_vec(
+            (5, 2),
+            vec![0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 3.0, -1.0, -1.0, 2.0],
+        )
+        .unwrap();
+        let small = [0.1, -0.3, 0.7, 0.2, -0.1];
+        let rows = [0, 1, 2, 3, 4];
+        for deaths in 1..=5 {
+            let expected = exact_tied_moments(&rows, deaths, &small, &covar);
+            for origin in [-1e308, -1e16, 1e16, 1e308] {
+                let risks = small.map(|value| LogScale::new(origin, value));
+                let actual = exact_tied_moments_scales(&rows, deaths, &risks, &covar);
+                let expected_ll = small[..deaths].iter().sum::<f64>() - expected.log_denom;
+                assert_close(actual.log_likelihood(&risks[..deaths]), expected_ll, 1e-13);
+                for row in 0..2 {
+                    assert_close(actual.mean[row], expected.mean[row], 1e-13);
+                    for column in 0..2 {
+                        assert_close(
+                            actual.covariance[(row, column)],
+                            expected.covariance[(row, column)],
+                            1e-13,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_paired_subsets_preserve_ties_across_opposite_extreme_origins() {
+        // The two high-risk rows must be selected. One of three low-risk rows
+        // is then selected with probabilities 1/6, 2/6, and 3/6.
+        let covar = Array2::from_shape_vec((5, 1), vec![1.0, 2.0, 0.0, 1.0, 4.0]).unwrap();
+        let expected_mean: f64 = 3.0 + 14.0 / 6.0;
+        let expected_variance: f64 = 50.0 / 6.0 - (14.0_f64 / 6.0).powi(2);
+        for origin in [1e16, 1e308] {
+            let risks = [
+                LogScale::new(origin, 0.1),
+                LogScale::new(origin, 0.2),
+                LogScale::new(-origin, 0.0),
+                LogScale::new(-origin, 2.0_f64.ln()),
+                LogScale::new(-origin, 3.0_f64.ln()),
+            ];
+            for rows in [[0, 1, 2, 3, 4], [4, 3, 2, 1, 0]] {
+                let moments = exact_tied_moments_scales(&rows, 3, &risks, &covar);
+                assert_close(moments.mean[0], expected_mean, 1e-13);
+                assert_close(moments.covariance[(0, 0)], expected_variance, 1e-13);
+                for (row, probability) in [(2, 1.0 / 6.0), (3, 2.0 / 6.0), (4, 0.5)] {
+                    assert_close(
+                        moments
+                            .log_likelihood(&[risks[0], risks[row], risks[1]])
+                            .exp(),
+                        probability,
+                        1e-14,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paired_risk_tree_preserves_new_risk_sets_after_large_origin_changes() {
+        let n = 65;
+        let covar = Array2::from_shape_fn((n, 1), |(row, _)| row as f64);
+        for huge in [-1e308, -1e16, 1e16, 1e308] {
+            let mut risks = vec![LogScale::from_log(0.0); n];
+            for row in [32, 48, 64] {
+                risks[row] = LogScale::from_log(huge);
+            }
+            let mut tree = ExactRiskTree::new(0, n, 1);
+            for rows in [[0, 16, 31], [32, 48, 64], [0, 16, 31]] {
+                for row in rows {
+                    tree.set_active(row, true);
+                }
+                tree.refresh_scales(&risks, &covar);
+                let mean = rows.iter().map(|&row| row as f64).sum::<f64>() / 3.0;
+                let variance = rows
+                    .iter()
+                    .map(|&row| (row as f64 - mean).powi(2))
+                    .sum::<f64>()
+                    / 3.0;
+                assert_close(tree.weight().log_mass, 3.0_f64.ln(), 1e-14);
+                assert_close(tree.mean()[0], mean, 1e-13);
+                assert_close(tree.covariance()[(0, 0)], variance, 1e-12);
+                for row in rows {
+                    tree.set_active(row, false);
+                }
+                tree.refresh_scales(&risks, &covar);
+                assert!(tree.weight().is_zero());
+            }
+        }
     }
 }

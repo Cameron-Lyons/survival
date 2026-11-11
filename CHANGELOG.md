@@ -4,12 +4,19 @@
 
 ### Breaking changes
 
-Version 3.0 changes names, result types and module locations; numerical results
-are unchanged. [Migrating to survival 3.0](docs/migration-3.0.md) lists every
-change with its replacement.
+Version 3.0 changes names, result types and module locations.
+[Migrating to survival 3.0](docs/migration-3.0.md) lists each API change with its
+replacement. Numerical corrections are described under Fixed below.
 
 ### Added
 
+- `survival.datasets.load_uspop2()` provides R's complete US population
+  projections, with all age, sex and year labels, owned NumPy count arrays and
+  copy/pickle support. Rust exposes the same data through `population::uspop2`.
+- `survival.datasets` has generated type declarations, and stock-R checks cover
+  the complete exported namespace and dataset inventory.
+- `survival.kernels` has generated type declarations for its native functions and
+  result classes, sharing the extension's signatures.
 - R's first-argument names are accepted as keywords: `predict`, `coef`, `vcov`,
   `fitted`, `residuals`, `confint`, `logLik`, `nobs` and `summary` take
   `object=`, `coxph_detail` takes `object=`, `is_surv` takes `x=`, and
@@ -23,11 +30,50 @@ change with its replacement.
 
 ### Performance
 
+- Stable Cox diagnostics use additive risk sweeps and hazard prefixes when all
+  rows enter before follow-up, avoiding repeated tree updates in case-cohort
+  fits while retaining protection against cancellation.
+- `survreg` formula fits build an owned NumPy design directly, avoiding Python
+  row lists while preserving the public representation of retained matrices.
+- `concordancefit` passes numeric NumPy predictor matrices directly to the native
+  matrix constructor, avoiding nested lists and per-element Python conversions.
+  Numeric `concordance` formulas use the same array preparation path.
+- `coxph_detail` and `rttright` release the GIL during their native computations.
 - `neardate` with integer id arrays passes them to the kernel without per-element
   conversion: 100,000 rows take 9 ms instead of 34 ms (R: 10 ms).
 
 ### Fixed
 
+- Cox fits retain covariate and offset origins separately from relative risk
+  totals. Large constant coefficients, changing risk-set scales and compensated
+  predictor corrections preserve small effects and weighted tie multiplicities.
+  Residuals, diagnostics, survival curves, expected counts and cohort predictions
+  share the retained scale, including after copying or pickling.
+- Cox risk-set fallbacks preserve small late risk sets and avoid overflowing
+  exponentials. Kalbfleisch–Prentice curves keep survival increments in log
+  scale, and event-free curves avoid evaluating irrelevant extreme risks.
+- Penalized Cox fits use consistent extreme risks for fitting and post-fit
+  calculations; sparse frailty corrections avoid repeated work across tied deaths.
+- Dense frailty formulas reject a single observed group consistently with the
+  standalone constructor and R, while explicit sparse fits remain supported.
+- `neardate` matches numeric and logical identifiers against their R character
+  labels, including factor identifiers, distinct `NA`/`NaN` match groups and
+  rounded numeric labels.
+- The R bridge preserves `neardate`'s missing-identifier results separately from
+  unmatched queries, including with a custom `nomatch` value.
+- `lvcf` preserves factor levels, and `nostutter` returns a factor with the
+  censoring level first, so downstream `Surv` calls retain multi-state events.
+- Raw `coxmart` and `agmart` residuals handle extreme finite risks and weights
+  without overflowing or losing later small risk sets. Negative risks and
+  positive-weight events with zero risk-set denominators raise errors.
+- Aalen summaries restricted to events at time zero retain the valid coefficient
+  tests and return undefined (`NaN`) slopes, as R does, instead of dividing by zero.
+- `rttright` groups observed strata instead of allocating by the largest label;
+  sparse labels, including the maximum Rust `usize`, no longer overflow or cause
+  excessive allocation.
+- The Rust `coxph_detail` entry point validates modified fitted-model dimensions,
+  values and stored row ordering before constructing risk sets.
+- The Python lockfile matches the current development and test dependency pins.
 - `neardate(nomatch=)` refuses a value that is also a zero-based row of `id2`
   (such as R's `nomatch=0`), which made a match and a non-match look alike.
 - Warnings raised under the model generics report the caller's line, not a

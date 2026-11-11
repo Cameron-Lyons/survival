@@ -1,3 +1,8 @@
+use super::scaling::add_predictor_parts;
+use super::scaling::{
+    RiskPredictors, predictor_origin_scales, predictor_origins, predictor_ranks, predictor_scales,
+    stable_mean,
+};
 use super::{CoxPHFit, CoxphData, CoxphOptions, SortedRows};
 use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::core::SurvResponse;
@@ -6,7 +11,8 @@ use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::{CoxFitBuilder, CoxFitResults, TieMethod};
 use crate::regression::coxph_diagnostics::{
-    collapse_rows, martingale_residuals_at, score_residuals_at,
+    collapse_rows, martingale_residuals_at, martingale_residuals_at_scales, score_residuals_at,
+    score_residuals_at_scales,
 };
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use ndarray::{Array2, ArrayView2};
@@ -19,11 +25,45 @@ pub(super) fn crossprod(rows: &Array2<f64>) -> Array2<f64> {
 pub(crate) fn centre_offset(offset: Option<&[f64]>, n: usize) -> (Vec<f64>, f64) {
     match offset {
         Some(offset) if offset.iter().any(|&value| value != 0.0) => {
-            let mean = offset.iter().sum::<f64>() / n as f64;
+            let mean = stable_mean(offset);
             (offset.iter().map(|value| value - mean).collect(), mean)
         }
         _ => (vec![0.0; n], 0.0),
     }
+}
+
+/// Per-stratum centering is used only for unsafe offset scales. Its absolute
+/// origins are retained separately so small covariate effects survive restoration.
+pub(crate) fn centre_offset_by_stratum(
+    offset: Option<&[f64]>,
+    n: usize,
+    strata: Option<&[i32]>,
+) -> (Vec<f64>, f64, Option<Vec<f64>>) {
+    let Some(offset) = offset.filter(|values| values.iter().any(|v| v.abs() > 200.0)) else {
+        let (values, center) = centre_offset(offset, n);
+        return (values, center, None);
+    };
+    let overall = stable_mean(offset);
+    let groups = strata.map_or_else(
+        || vec![(0, (0..n).collect())],
+        crate::core::strata_order::stratum_groups,
+    );
+    let mut centered = vec![0.0; n];
+    let mut centers = Vec::with_capacity(groups.len());
+    for (_, rows) in groups {
+        let values: Vec<f64> = rows.iter().map(|&i| offset[i]).collect();
+        let proposed = stable_mean(&values);
+        let center = if values.iter().any(|value| !(*value - proposed).is_finite()) {
+            0.0
+        } else {
+            proposed
+        };
+        for i in rows {
+            centered[i] = offset[i] - center;
+        }
+        centers.push(center);
+    }
+    (centered, overall, Some(centers))
 }
 
 pub(crate) fn nocenter_columns(x: &Array2<f64>, values: Option<&[f64]>) -> Vec<bool> {
@@ -54,6 +94,7 @@ pub(crate) struct FittedCox {
     pub first: Vec<f64>,
     pub linear_predictors: Vec<f64>,
     pub offset_mean: f64,
+    pub retained: Option<RiskPredictors>,
     pub residuals: Option<Vec<f64>>,
     pub wald_test: f64,
 }
@@ -109,10 +150,12 @@ impl CoxPHFit {
         let n = data.n();
         let nvar = data.x.ncols();
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
-        let (centred_offset, offset_mean) = centre_offset(data.offset.as_deref(), n);
         if nevent == 0 {
+            let (centred_offset, _) = centre_offset(data.offset.as_deref(), n);
             return Ok(Self::without_events(data, centred_offset, &options));
         }
+        let (centred_offset, offset_mean, offset_centers) =
+            centre_offset_by_stratum(data.offset.as_deref(), n, data.strata.as_deref());
         let (results, nocenter) = fit_cox_engine(&data, &options, Some(&centred_offset), false)?;
 
         let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
@@ -123,7 +166,7 @@ impl CoxPHFit {
             .zip(&results.means)
             .map(|(b, m)| b * m)
             .sum();
-        let linear_predictors: Vec<f64> = (0..n)
+        let mut linear_predictors: Vec<f64> = (0..n)
             .map(|i| {
                 data.x
                     .row(i)
@@ -135,6 +178,34 @@ impl CoxPHFit {
                     - center
             })
             .collect();
+        let sorted = SortedRows::new(results.order, data.strata.as_deref());
+        let retained = predictor_origins(
+            data.x.view(),
+            &coefficients,
+            &sorted,
+            offset_centers.is_some(),
+        )
+        .map(|origins| {
+            let scales = predictor_scales(
+                data.x.view(),
+                &coefficients,
+                &results.means,
+                &offset,
+                &sorted,
+                &origins,
+            );
+            let public_origins = predictor_origin_scales(&origins, &results.means, &coefficients);
+            let public = scales
+                .iter()
+                .enumerate()
+                .map(|(i, &value)| {
+                    add_predictor_parts(value, public_origins[sorted.stratum_index[i]]).log_value()
+                })
+                .collect();
+            let retained = RiskPredictors::new(origins, scales, public_origins, public);
+            linear_predictors = retained.values.clone();
+            retained
+        });
         let rank = results.info.map_or(results.flag, |info| info[0]);
         let exact = options.method == TieMethod::Exact;
         if (exact || options.iter_max > 0) && i64::from(rank) < nvar as i64 {
@@ -144,12 +215,14 @@ impl CoxPHFit {
                 }
             }
         }
-        let sorted = SortedRows::new(results.order, data.strata.as_deref());
+        let ranks = retained
+            .as_ref()
+            .map(|saved| predictor_ranks(&saved.scales, &sorted));
         let concordance = fit_concordance(
             &data.time,
             data.entry.as_deref(),
             &data.status,
-            &linear_predictors,
+            ranks.as_deref().unwrap_or(&linear_predictors),
             &weights,
             data.strata.as_deref(),
             options.cluster.as_deref(),
@@ -184,9 +257,14 @@ impl CoxPHFit {
             cluster: options.cluster,
             concordance,
             sorted,
+            risk_predictors: None,
             curves: OnceLock::new(),
         };
-        fit.residuals = martingale_residuals_at(&fit, &fit.linear_predictors);
+        fit.residuals = if let Some(saved) = &retained {
+            martingale_residuals_at_scales(&fit, &saved.scales)?
+        } else {
+            martingale_residuals_at(&fit, &fit.linear_predictors)?
+        };
 
         let robust = options.robust.unwrap_or(fit.cluster.is_some());
         if !robust {
@@ -203,7 +281,11 @@ impl CoxPHFit {
                 .clone()
                 .unwrap_or_else(|| (0..n as i32).collect());
             fit.naive_var = Some(fit.var.clone());
-            let dfbeta = fit.dfbeta_matrix(&fit.linear_predictors, true, Some(&cluster))?;
+            let dfbeta = if let Some(saved) = &retained {
+                fit.dfbeta_matrix_scales(&saved.scales, true, Some(&cluster))?
+            } else {
+                fit.dfbeta_matrix(&fit.linear_predictors, true, Some(&cluster))?
+            };
             fit.var = crossprod(&dfbeta);
             let lp0: Vec<f64> = match &options.init {
                 Some(init) => (0..n)
@@ -211,7 +293,23 @@ impl CoxPHFit {
                     .collect(),
                 None => vec![0.0; n],
             };
-            let scores = score_residuals_at(&fit, &lp0)?;
+            let scores = if let Some(init) = &options.init {
+                if let Some(origins) = predictor_origins(fit.x.view(), init, &fit.sorted, false) {
+                    let scales = predictor_scales(
+                        fit.x.view(),
+                        init,
+                        &fit.means,
+                        &vec![0.0; n],
+                        &fit.sorted,
+                        &origins,
+                    );
+                    score_residuals_at_scales(&fit, &scales)?
+                } else {
+                    score_residuals_at(&fit, &lp0)?
+                }
+            } else {
+                score_residuals_at(&fit, &lp0)?
+            };
             let scores = collapse_rows(&scores, Some(&fit.weights), Some(&cluster));
             let u: Vec<f64> = (0..nvar).map(|j| scores.column(j).sum()).collect();
             let u_matrix = Array2::from_shape_vec((nvar, 1), u)
@@ -227,7 +325,11 @@ impl CoxPHFit {
             .map(|(i, b)| b - options.init.as_ref().map_or(0.0, |init| init[i]))
             .collect();
         fit.wald_test = wald_statistic(&fit.var, &shift, options.toler_chol)?;
-        add_offset_mean(&mut fit.linear_predictors, offset_mean);
+        if let Some(saved) = retained {
+            fit.restore_retained_predictors(saved);
+        } else {
+            add_offset_mean(&mut fit.linear_predictors, offset_mean);
+        }
         Ok(fit)
     }
 
@@ -283,6 +385,7 @@ impl CoxPHFit {
             offset: data.offset.unwrap_or_else(|| vec![0.0; n]),
             cluster: None,
             concordance,
+            risk_predictors: None,
             curves: OnceLock::new(),
         }
     }
@@ -294,11 +397,16 @@ impl CoxPHFit {
     ) -> SurvivalResult<Self> {
         let n = data.n();
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
+        let sorted = SortedRows::by_time(&data.time, data.strata.as_deref());
+        let ranks = fitted
+            .retained
+            .as_ref()
+            .map(|saved| predictor_ranks(&saved.scales, &sorted));
         let concordance = fit_concordance(
             &data.time,
             data.entry.as_deref(),
             &data.status,
-            &fitted.linear_predictors,
+            ranks.as_deref().unwrap_or(&fitted.linear_predictors),
             &weights,
             data.strata.as_deref(),
             cluster,
@@ -321,7 +429,7 @@ impl CoxPHFit {
             n,
             nevent: data.status.iter().filter(|&&s| s == 1).count(),
             method: fitted.method,
-            sorted: SortedRows::by_time(&data.time, data.strata.as_deref()),
+            sorted,
             time: data.time,
             entry: data.entry,
             status: data.status,
@@ -332,13 +440,22 @@ impl CoxPHFit {
             nocenter: fitted.nocenter,
             cluster: None,
             concordance,
+            risk_predictors: None,
             curves: OnceLock::new(),
         };
-        fit.residuals = match fitted.residuals {
-            Some(residuals) => residuals,
-            None => martingale_residuals_at(&fit, &fit.linear_predictors),
+        fit.residuals = if let Some(saved) = &fitted.retained {
+            martingale_residuals_at_scales(&fit, &saved.scales)?
+        } else {
+            match fitted.residuals {
+                Some(residuals) => residuals,
+                None => martingale_residuals_at(&fit, &fit.linear_predictors)?,
+            }
         };
-        add_offset_mean(&mut fit.linear_predictors, fitted.offset_mean);
+        if let Some(saved) = fitted.retained {
+            fit.restore_retained_predictors(saved);
+        } else {
+            add_offset_mean(&mut fit.linear_predictors, fitted.offset_mean);
+        }
         Ok(fit)
     }
 }

@@ -1,10 +1,10 @@
+use super::log_curves::CachedCurves;
 use crate::concordance::ConcordanceFit;
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::strata_order::{grouped_sum, order_within_strata, validate_intervals};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::TieMethod;
-use crate::surv_analysis::agsurv::AgsurvCurve;
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -258,8 +258,9 @@ pub struct CoxPHFit {
     #[pyo3(get)]
     pub concordance: ConcordanceFit,
     pub(crate) sorted: SortedRows,
+    pub(crate) risk_predictors: Option<super::scaling::RiskPredictors>,
     #[serde(skip)]
-    pub(super) curves: OnceLock<Vec<AgsurvCurve>>,
+    pub(super) curves: OnceLock<CachedCurves>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

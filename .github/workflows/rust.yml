@@ -330,6 +330,9 @@ jobs:
           cat("survival", installed, "installed\n")
         shell: Rscript {0}
 
+      - name: Check population projections and exported/data inventories against stock R
+        run: Rscript scripts/generate_uspop2_reference.R --check
+
       - name: Keep the committed fixtures
         run: cp -r test/r/fixtures "$RUNNER_TEMP/committed-fixtures"
 

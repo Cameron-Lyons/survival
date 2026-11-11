@@ -236,7 +236,7 @@ fn counting_scratch_resets_when_switching_recentred_and_fast_paths() {
 }
 
 #[test]
-fn rejected_nonfinite_and_overflow_trials_do_not_contaminate_next_evaluation() {
+fn extreme_and_nonfinite_trials_do_not_contaminate_next_evaluation() {
     for method in [TieMethod::Breslow, TieMethod::Efron] {
         for counting in [false, true] {
             let mut builder = CoxFitBuilder::new(
@@ -253,19 +253,35 @@ fn rejected_nonfinite_and_overflow_trials_do_not_contaminate_next_evaluation() {
             let addresses = workspace_addresses(&fit);
             let score = fit.u.clone();
             let information = fit.imat.clone();
-            let rejected = fit.evaluate(&[100_000.0]);
+            let extreme = fit.evaluate(&[100_000.0]);
             if counting {
                 assert_eq!(
-                    rejected.unwrap_err().to_string(),
+                    extreme.unwrap_err().to_string(),
                     "exp overflow due to covariates"
                 );
             } else {
-                assert!(!rejected.unwrap().is_finite());
+                // Centering and scaling give x=(-1.5, 0, 1.5). At this beta
+                // the last row has probability one in every risk set, so
+                // event log likelihoods are (-300000, -150000, 0), score
+                // contributions are (-3, -1.5, 0), and all variances are zero.
+                assert_eq!(extreme.unwrap(), -450_000.0);
+                assert_eq!(fit.u, [-4.5]);
+                assert_eq!(fit.imat, Array2::<f64>::zeros((1, 1)));
             }
             assert_eq!(fit.evaluate(&[0.2]).unwrap().to_bits(), loglik.to_bits());
             assert_eq!(fit.u, score);
             assert_eq!(fit.imat, information);
             assert_eq!(workspace_addresses(&fit), addresses);
+
+            for beta in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                if let Ok(value) = fit.evaluate(&[beta]) {
+                    assert!(!value.is_finite());
+                }
+                assert_eq!(fit.evaluate(&[0.2]).unwrap().to_bits(), loglik.to_bits());
+                assert_eq!(fit.u, score);
+                assert_eq!(fit.imat, information);
+                assert_eq!(workspace_addresses(&fit), addresses);
+            }
         }
     }
 }

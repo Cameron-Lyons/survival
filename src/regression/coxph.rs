@@ -1,7 +1,9 @@
 mod bindings;
 mod curves;
 mod fitting;
+mod log_curves;
 mod prediction;
+mod scaling;
 mod types;
 
 pub use bindings::coxph_fit;
@@ -13,10 +15,11 @@ pub use types::{
 pub(crate) use bindings::newdata_from_python;
 #[cfg(test)]
 pub(crate) use fitting::linear_predictor_concordance;
-pub(crate) use fitting::{
-    FittedCox, add_offset_mean, centre_offset, fit_cox_engine, nocenter_columns,
-};
+pub(crate) use fitting::{FittedCox, centre_offset_by_stratum, fit_cox_engine, nocenter_columns};
 pub(crate) use prediction::{default_assign, validate_assign};
+pub(crate) use scaling::{
+    RiskPredictors, predictor_origin_scales, predictor_origins, predictor_scales,
+};
 pub(crate) use types::SortedRows;
 
 #[cfg(test)]

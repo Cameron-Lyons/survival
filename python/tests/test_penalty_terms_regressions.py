@@ -14,6 +14,7 @@ import warnings
 import pytest
 
 from .helpers import setup_survival_import
+from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
@@ -151,6 +152,69 @@ def test_frailty_groups_are_the_levels_before_subset():
             -0.205633530076152,
         ]
     )
+
+
+def _single_group_data(factor=False):
+    # Stock R survival 3.8-12: an unused declared factor level does not count
+    # towards the two observed levels needed to construct a dense basis.
+    return {
+        "time": [1, 2, 2, 3, 4, 5, 6, 7],
+        "event": [1, 1, 1, 0, 1, 0, 1, 0],
+        "x": [-0.8, 0.3, 1.2, -0.2, 0.7, -1.1, 0.5, 1.5],
+        "g": RFactor(["a"] * 8, ["unused", "a"]) if factor else ["a"] * 8,
+    }
+
+
+@pytest.mark.parametrize("family", ["gamma", "gaussian", "t"])
+@pytest.mark.parametrize("qualified", [False, True], ids=["frailty", "family-function"])
+@pytest.mark.parametrize("sparse", ["", ", sparse = FALSE"], ids=["default", "dense"])
+@pytest.mark.parametrize("factor", [False, True], ids=["character", "unused-factor-level"])
+def test_dense_formula_frailty_requires_two_observed_groups(family, qualified, sparse, factor):
+    data = _single_group_data(factor)
+    term = f"frailty.{family}(g" if qualified else f'frailty(g, distribution = "{family}"'
+    message = "not enough degrees of freedom to define contrasts"
+    with pytest.raises(ValueError, match=message):
+        _coxph(f"Surv(time, event) ~ x + {term}, theta = 0.4{sparse})", data)
+    with pytest.raises(ValueError, match=message):
+        r.frailty(data["g"], distribution=family, sparse=None if sparse == "" else False)
+
+
+@pytest.mark.parametrize("family", ["gamma", "gaussian", "t"])
+@pytest.mark.parametrize("factor", [False, True], ids=["character", "unused-factor-level"])
+def test_sparse_formula_frailty_accepts_one_observed_group(family, factor):
+    fit = _coxph(
+        f'Surv(time, event) ~ x + frailty(g, distribution = "{family}", '
+        "theta = 0.4, sparse = TRUE)",
+        _single_group_data(factor),
+        iter_max=1,
+        outer_max=1,
+    )
+    # All three families agree with this fixed-theta, single-group stock R fit.
+    assert fit.coefficient_names == ("x",)
+    assert fit.coefficients == approx([-0.165632523510723])
+    assert fit.frail == approx([0.0])
+    assert fit.loglik == approx([-7.89655270164304, -7.85303104375619])
+
+
+@pytest.mark.parametrize("removal", ["subset", "na.omit"])
+def test_dense_frailty_checks_groups_before_row_removal(removal):
+    data = _single_group_data()
+    data["g"] = RFactor(["a"] * 4 + ["b"] * 4, ["b", "unused", "a"])
+    if removal == "na.omit":
+        data["x"][4:] = [math.nan] * 4
+    fit = _coxph(
+        'Surv(time, event) ~ x + frailty(g, distribution = "gaussian", '
+        "theta = 0.4, sparse = FALSE)",
+        data,
+        subset=[True] * 4 + [False] * 4 if removal == "subset" else None,
+        na_action="na.omit",
+        iter_max=1,
+        outer_max=1,
+    )
+    assert fit.coefficient_names == ("x", "gauss:b", "gauss:a")
+    assert fit.coefficients == approx([-0.111175448755067, 0.0, 0.0])
+    assert fit.loglik == approx([-4.09964016488314, -3.17056624955142])
+    assert fit.n == 4
 
 
 @pytest.mark.parametrize(

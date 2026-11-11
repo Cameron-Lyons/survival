@@ -1,8 +1,13 @@
+use super::scaling::{
+    PredictionRisks, PredictorOrigin, add_predictor_parts, relative_covariate_scale,
+};
 use super::{CoxNewData, CoxPHFit, CoxPrediction, CoxTermsPrediction, PredictReference};
 use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::step_at;
 use crate::internal::validation::validate_length;
+use crate::regression::cox_optimizer::predictor_bound_needs_anchor;
+use crate::regression::log_scale::LogScale;
 use crate::surv_analysis::agsurv::{
     AgsurvCurve, IntegratedCurve, cum_xbar_at, cumhaz_at, integrate_curve,
 };
@@ -20,7 +25,7 @@ impl CoxPHFit {
             .collect()
     }
 
-    pub(super) fn check_prediction_dimensions(&self) -> SurvivalResult<()> {
+    pub(crate) fn check_prediction_dimensions(&self) -> SurvivalResult<()> {
         for (name, length) in [
             ("fit time", self.time.len()),
             ("fit status", self.status.len()),
@@ -83,24 +88,76 @@ impl CoxPHFit {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn prediction_risks(
         &self,
         x: ArrayView2<'_, f64>,
         offset: Option<&[f64]>,
     ) -> Vec<f64> {
+        self.prediction_log_risks_at(
+            x,
+            offset,
+            &[PredictorOrigin::reference(self.offset_mean())],
+            None,
+        )
+        .risks()
+    }
+
+    pub(super) fn prediction_log_risks_at(
+        &self,
+        x: ArrayView2<'_, f64>,
+        offset: Option<&[f64]>,
+        origins: &[PredictorOrigin],
+        strata: Option<&[i32]>,
+    ) -> PredictionRisks {
         let coefficients = self.coefficients_or_zero();
         let coef = ArrayView1::from(&coefficients);
-        let offset_mean = self.offset_mean();
+        let max_beta = coefficients.iter().map(|b| b.abs()).fold(0.0, f64::max);
         let mut centered = Array1::<f64>::zeros(self.nvar());
-        x.outer_iter()
-            .enumerate()
-            .map(|(i, row)| {
-                for ((target, &value), &mean) in centered.iter_mut().zip(row).zip(&self.means) {
-                    *target = value - mean;
+        let mut scalar = Vec::with_capacity(x.nrows());
+        let mut scaled: Option<Vec<LogScale>> = None;
+        for (i, row) in x.outer_iter().enumerate() {
+            let origin_index = strata.map_or(0, |codes| {
+                self.sorted.position_of(codes[i]).expect("strata checked")
+            });
+            let origin = &origins[origin_index];
+            let anchor = origin.covariates.as_deref().unwrap_or(&self.means);
+            let mut unsafe_covariate = false;
+            for ((target, &value), &mean) in centered.iter_mut().zip(row).zip(anchor) {
+                *target = value - mean;
+                unsafe_covariate |= predictor_bound_needs_anchor(target.abs() * max_beta);
+            }
+            let value = offset.map_or(0.0, |values| values[i]);
+            if origin.covariates.is_some()
+                || value.abs() > 200.0
+                || origin.offset.abs() > 200.0
+                || unsafe_covariate
+            {
+                let cov = relative_covariate_scale(row, anchor, &coefficients);
+                let value = add_predictor_parts(
+                    add_predictor_parts(
+                        LogScale::from_log(value),
+                        LogScale::from_log(-origin.offset),
+                    ),
+                    cov,
+                );
+                scaled
+                    .get_or_insert_with(|| {
+                        let mut values = Vec::with_capacity(x.nrows());
+                        values.extend(scalar.drain(..).map(LogScale::from_log));
+                        values
+                    })
+                    .push(value);
+            } else {
+                let value = centered.dot(&coef) + value - origin.offset;
+                if let Some(scaled) = &mut scaled {
+                    scaled.push(LogScale::from_log(value));
+                } else {
+                    scalar.push(value);
                 }
-                (centered.dot(&coef) + offset.map_or(0.0, |values| values[i]) - offset_mean).exp()
-            })
-            .collect()
+            }
+        }
+        scaled.map_or_else(|| PredictionRisks::Scalar(scalar), PredictionRisks::Scaled)
     }
 
     fn stratum_means(&self) -> Vec<Vec<f64>> {
@@ -135,7 +192,7 @@ impl CoxPHFit {
         training_offset: bool,
     ) -> SurvivalResult<(Array2<f64>, Vec<f64>)> {
         let offset_mean = if training_offset {
-            self.offset.iter().sum::<f64>() / self.n as f64
+            super::scaling::stable_mean(&self.offset)
         } else {
             0.0
         };
@@ -201,10 +258,33 @@ impl CoxPHFit {
         }
         let (newx, offset) = self.prediction_rows(newdata, reference, training_x)?;
         let coef = self.coefficients_or_zero();
+        let mut zero_anchor = None;
         let fit: Vec<f64> = newx
             .outer_iter()
             .zip(&offset)
-            .map(|(row, o)| row.iter().zip(&coef).map(|(x, b)| x * b).sum::<f64>() + o)
+            .map(|(row, o)| {
+                let mut unsafe_scale = o.abs() > 200.0;
+                let ordinary = row
+                    .iter()
+                    .zip(&coef)
+                    .map(|(x, b)| {
+                        let term = x * b;
+                        unsafe_scale |= predictor_bound_needs_anchor(term.abs());
+                        term
+                    })
+                    .sum::<f64>()
+                    + o;
+                if unsafe_scale {
+                    let anchor = zero_anchor.get_or_insert_with(|| vec![0.0; self.nvar()]);
+                    add_predictor_parts(
+                        relative_covariate_scale(row, anchor, &coef),
+                        LogScale::from_log(*o),
+                    )
+                    .log_value()
+                } else {
+                    ordinary
+                }
+            })
             .collect();
         let se_fit = se_fit.then(|| {
             newx.outer_iter()
@@ -336,20 +416,27 @@ impl CoxPHFit {
             if !se_fit {
                 return Ok(CoxPrediction { fit, se_fit: None });
             }
-            let offset_mean = self.offset_mean();
-            let risk: Vec<f64> = self
-                .linear_predictors
-                .iter()
-                .map(|lp| (lp - offset_mean).exp())
-                .collect();
-            let se = self.expected_se(
-                self.x.view(),
-                Some(&self.means),
-                &risk,
-                &self.sorted.stratum_index,
-                self.entry.as_deref(),
-                &self.time,
-            )?;
+            let curves = self.baseline_curves()?;
+            let log_risk = self.training_prediction_risks(&curves.origins);
+            let risk = log_risk.risks();
+            let se = if log_risk.needs_logs(curves.stable) {
+                self.expected_se_log(
+                    self.x.view(),
+                    &log_risk.as_scales(),
+                    &self.sorted.stratum_index,
+                    self.entry.as_deref(),
+                    &self.time,
+                )?
+            } else {
+                self.expected_se(
+                    self.x.view(),
+                    Some(&self.means),
+                    &risk,
+                    &self.sorted.stratum_index,
+                    self.entry.as_deref(),
+                    &self.time,
+                )?
+            };
             return Ok(CoxPrediction {
                 fit,
                 se_fit: Some(se),
@@ -371,8 +458,15 @@ impl CoxPHFit {
                 "New data has a different survival type than the model",
             ));
         }
-        let risk2 = self.prediction_risks(newdata.x.view(), newdata.offset.as_deref());
         let curves = self.baseline_curves()?;
+        let log_risk = self.prediction_log_risks_at(
+            newdata.x.view(),
+            newdata.offset.as_deref(),
+            &curves.origins,
+            newdata.strata.as_deref(),
+        );
+        let risk2 = log_risk.risks();
+        let stable = log_risk.needs_logs(curves.stable);
         let stratum_index: Vec<usize> = match &newdata.strata {
             Some(strata) => strata
                 .iter()
@@ -383,6 +477,18 @@ impl CoxPHFit {
         let fit: Vec<f64> = (0..newdata.nrows())
             .map(|i| {
                 let curve = &curves[stratum_index[i]];
+                if stable {
+                    let first = newdata
+                        .entry
+                        .as_ref()
+                        .map_or(0, |entry| curve.time.partition_point(|&t| t <= entry[i]));
+                    let end = curve.time.partition_point(|&t| t <= new_time[i]);
+                    return curves.logs()[stratum_index[i]].range_hazard(
+                        first,
+                        end,
+                        log_risk.scale(i),
+                    );
+                }
                 let stop = cumhaz_at(curve, new_time[i]);
                 let start = newdata
                     .entry
@@ -391,7 +497,15 @@ impl CoxPHFit {
                 (stop - start) * risk2[i]
             })
             .collect();
-        let se = if se_fit {
+        let se = if se_fit && stable {
+            Some(self.expected_se_log(
+                newdata.x.view(),
+                &log_risk.as_scales(),
+                &stratum_index,
+                newdata.entry.as_deref(),
+                new_time,
+            )?)
+        } else if se_fit {
             Some(self.expected_se(
                 newdata.x.view(),
                 Some(&self.means),
@@ -404,6 +518,31 @@ impl CoxPHFit {
             None
         };
         Ok(CoxPrediction { fit, se_fit: se })
+    }
+
+    fn expected_se_log(
+        &self,
+        x: ArrayView2<'_, f64>,
+        log_risk: &[LogScale],
+        strata: &[usize],
+        entry: Option<&[f64]>,
+        time: &[f64],
+    ) -> SurvivalResult<Vec<f64>> {
+        let curves = self.baseline_curves()?;
+        Ok((0..time.len())
+            .map(|i| {
+                let curve = &curves[strata[i]];
+                let first = entry.map_or(0, |entry| curve.time.partition_point(|&t| t <= entry[i]));
+                let end = curve.time.partition_point(|&t| t <= time[i]);
+                let centered: Vec<f64> = x
+                    .row(i)
+                    .iter()
+                    .zip(&self.means)
+                    .map(|(x, m)| x - m)
+                    .collect();
+                curves.logs()[strata[i]].expected_se(first, end, log_risk[i], &centered, &self.var)
+            })
+            .collect())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -453,9 +592,12 @@ impl CoxPHFit {
     ) -> SurvivalResult<CoxPrediction> {
         let expected = self.predict_expected(newdata, se_fit)?;
         let fit: Vec<f64> = expected.fit.iter().map(|e| (-e).exp()).collect();
-        let se_fit = expected
-            .se_fit
-            .map(|se| se.iter().zip(&fit).map(|(s, p)| s * p).collect());
+        let se_fit = expected.se_fit.map(|se| {
+            se.iter()
+                .zip(&fit)
+                .map(|(s, p)| if *p == 0.0 { 0.0 } else { s * p })
+                .collect()
+        });
         Ok(CoxPrediction { fit, se_fit })
     }
 

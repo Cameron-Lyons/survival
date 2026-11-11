@@ -2453,18 +2453,26 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   python_na <- function(values) {
     lapply(as.numeric(values), function(value) if (is.na(value)) NULL else value)
   }
+  python_ids <- function(values) {
+    if (is.factor(values)) return(.as_python_factor(values))
+    lapply(values, function(value) {
+      if (is.na(value) && !is.nan(value)) reticulate::py_none() else value
+    })
+  }
   indices <- .call_r_api(
     "neardate",
-    as.list(id1),
-    as.list(id2),
+    python_ids(id1),
+    python_ids(id2),
     python_na(y1),
     python_na(y2),
-    best = best
+    best = best,
+    nomatch = -1L
   )
-  matched <- !vapply(indices, is.null, logical(1))
+  missing <- vapply(indices, is.null, logical(1))
+  matched <- vapply(indices, function(value) !is.null(value) && value >= 0L, logical(1))
   values <- rep(nomatch, length(indices))
+  values[missing] <- NA_integer_
   values[matched] <- as.integer(unlist(indices[matched], use.names = FALSE)) + 1L
-  values[is.na(id1)] <- NA_integer_
   values
 }
 

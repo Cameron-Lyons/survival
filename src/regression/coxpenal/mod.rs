@@ -15,12 +15,16 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::validate_finite;
-use crate::regression::cox_optimizer::TieMethod;
+use crate::regression::cox_optimizer::{
+    TieMethod, add_predictor_parts, predictor_bound_needs_anchor,
+};
 use crate::regression::coxph::{
-    Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, CoxphData, FittedCox, SurvfitOptions,
-    add_offset_mean, centre_offset, newdata_from_python, nocenter_columns,
+    Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, CoxphData, FittedCox, RiskPredictors,
+    SortedRows, SurvfitOptions, centre_offset_by_stratum, newdata_from_python, nocenter_columns,
+    predictor_origin_scales, predictor_origins, predictor_scales,
 };
 use crate::regression::coxph_wtest::wald_statistic;
+use crate::regression::log_scale::LogScale;
 use crate::regression::penalized::df::{DfInput, TermDf, coxpenal_df};
 use crate::regression::penalized::terms::{
     Composer, PenaltyCallback, build_term_states, closest_saved, drop_sparse_column, histories,
@@ -152,7 +156,8 @@ impl CoxpenalFit {
         let nevent = data.status.iter().filter(|&&s| s == 1).count();
         let n_eff = nevent as f64;
         let weights = data.weights.clone().unwrap_or_else(|| vec![1.0; n]);
-        let (offset, offset_mean) = centre_offset(data.offset.as_deref(), n);
+        let (offset, offset_mean, offset_centers) =
+            centre_offset_by_stratum(data.offset.as_deref(), n, data.strata.as_deref());
         let eps2 = options.eps.sqrt();
 
         let (pterms, sparse_term, shape) = penalty_shape(&model_terms);
@@ -197,6 +202,7 @@ impl CoxpenalFit {
             x: &xx,
             weights: &weights,
             offset: &offset,
+            unsafe_offsets: offset_centers.is_some(),
             strata: data.strata.as_deref(),
             frail: frailx.as_deref(),
             nfrail,
@@ -205,7 +211,7 @@ impl CoxpenalFit {
         });
         let means = kernel.means().to_vec();
 
-        let mut loglik0 = kernel.initial_loglik(&init);
+        let mut loglik0 = kernel.initial_loglik(&init)?;
         if shape.dense {
             let mut beta = init.clone();
             loglik0 += composer.call(2, &mut beta)?.penalty;
@@ -347,20 +353,76 @@ impl CoxpenalFit {
             .map(|b| if b.is_nan() { 0.0 } else { *b })
             .collect();
 
-        let residuals = data.entry.is_none().then(|| {
-            let expected = kernel.expected_events();
-            data.status
-                .iter()
-                .zip(&expected)
-                .map(|(&s, e)| f64::from(s) - e)
-                .collect()
-        });
+        let residuals = if data.entry.is_none() {
+            let expected = kernel.expected_events()?;
+            Some(
+                data.status
+                    .iter()
+                    .zip(&expected)
+                    .map(|(&s, e)| f64::from(s) - e)
+                    .collect(),
+            )
+        } else {
+            None
+        };
         let shift: Vec<f64> = coef_or_zero
             .iter()
             .enumerate()
             .map(|(i, b)| b - options.init.as_ref().map_or(0.0, |init| init[i]))
             .collect();
         let wald_test = wald_statistic(&dftemp.var, &shift, options.toler_chol)?;
+
+        let sorted = SortedRows::by_time(&data.time, data.strata.as_deref());
+        let mut dense_retained = None;
+        let retain_offset_or_frailty = offset_centers.is_some()
+            || fbeta
+                .iter()
+                .any(|value| predictor_bound_needs_anchor(value.abs()));
+        let retained =
+            predictor_origins(xx.view(), &beta, &sorted, retain_offset_or_frailty).map(|origins| {
+                let original_offset = data.offset.clone().unwrap_or_else(|| vec![0.0; n]);
+                let dense = predictor_scales(
+                    xx.view(),
+                    &beta,
+                    &means,
+                    &original_offset,
+                    &sorted,
+                    &origins,
+                );
+                let origin_scales = predictor_origin_scales(&origins, &means, &beta);
+                let public = |values: &[LogScale]| {
+                    values
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &value)| {
+                            add_predictor_parts(value, origin_scales[sorted.stratum_index[i]])
+                                .log_value()
+                        })
+                        .collect()
+                };
+                if lp_no_frailty.is_some() {
+                    dense_retained = Some(RiskPredictors::new(
+                        origins.clone(),
+                        dense.clone(),
+                        origin_scales.clone(),
+                        public(&dense),
+                    ));
+                }
+                let scales = if let Some(frail) = &frailx {
+                    dense
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &value)| {
+                            add_predictor_parts(value, LogScale::from_log(fbeta[frail[i]]))
+                        })
+                        .collect()
+                } else {
+                    dense
+                };
+                let public_values = public(&scales);
+                RiskPredictors::new(origins, scales, origin_scales, public_values)
+            });
+        let lp = retained.as_ref().map_or(lp, |saved| saved.values.clone());
 
         let coxph = CoxPHFit::from_fitted(
             CoxphData { x: xx, ..data },
@@ -376,15 +438,22 @@ impl CoxpenalFit {
                 first: coxfit.u[nfrail..].to_vec(),
                 linear_predictors: lp,
                 offset_mean,
+                retained,
                 residuals,
                 wald_test,
             },
             options.cluster.as_deref(),
         )?;
-        let curve_fit = lp_no_frailty.map(|mut lp| {
-            add_offset_mean(&mut lp, offset_mean);
+        let curve_fit = lp_no_frailty.map(|lp| {
             let mut curve = coxph.clone();
             curve.linear_predictors = lp;
+            if let Some(saved) = dense_retained {
+                curve.restore_retained_predictors(saved);
+            } else {
+                for value in &mut curve.linear_predictors {
+                    *value += offset_mean;
+                }
+            }
             curve
         });
 

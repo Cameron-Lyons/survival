@@ -3,6 +3,7 @@ use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 
 pub struct RttrightInput<'a, I> {
     pub start: Option<&'a [f64]>,
@@ -187,12 +188,16 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     let censor: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] == 0).collect();
     let has_weight: Vec<bool> = (0..n).map(|i| last[i] && input.status[i] > 0).collect();
 
-    let stratum_of = |i: usize| input.strata.map_or(0, |s| s[i]);
-    let n_strata = (0..n).map(stratum_of).max().map_or(0, |s| s + 1);
-    let mut stratum_rows = vec![Vec::new(); n_strata];
-    for i in 0..n {
-        stratum_rows[stratum_of(i)].push(i);
-    }
+    let stratum_rows: Vec<Vec<usize>> = match input.strata {
+        Some(strata) => {
+            let mut groups = BTreeMap::<usize, Vec<usize>>::new();
+            for (row, &label) in strata.iter().enumerate() {
+                groups.entry(label).or_default().push(row);
+            }
+            groups.into_values().collect()
+        }
+        None => vec![(0..n).collect()],
+    };
     if input.renorm {
         let mut counted_in = vec![usize::MAX; subjects.as_ref().map_or(0, |(_, k)| *k)];
         for (s, rows) in stratum_rows.iter().enumerate() {
@@ -260,6 +265,7 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
 #[pyo3(signature = (time, status, start=None, strata=None, weights=None, id=None, times=None, timefix=true, renorm=true))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rttright_py(
+    py: Python<'_>,
     time: Vec<f64>,
     status: Vec<i32>,
     start: Option<Vec<f64>>,
@@ -275,16 +281,18 @@ pub(crate) fn rttright_py(
             "id must not contain missing values",
         ));
     }
-    Ok(rttright(RttrightInput {
-        start: start.as_deref(),
-        time: &time,
-        status: &status,
-        strata: strata.as_deref(),
-        weights: weights.as_deref(),
-        id: id.as_deref(),
-        times: times.as_deref(),
-        timefix,
-        renorm,
+    Ok(py.detach(|| {
+        rttright(RttrightInput {
+            start: start.as_deref(),
+            time: &time,
+            status: &status,
+            strata: strata.as_deref(),
+            weights: weights.as_deref(),
+            id: id.as_deref(),
+            times: times.as_deref(),
+            timefix,
+            renorm,
+        })
     })?)
 }
 

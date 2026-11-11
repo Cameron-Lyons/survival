@@ -74,7 +74,7 @@ from ._formula import (
     _column_source,
     _data_row_count,
     _data_row_labels,
-    _design_rows_from_spec,
+    _design_array_from_spec,
     _design_term_name,
     _design_term_output_names,
     _EvaluatedModelFrame,
@@ -533,7 +533,7 @@ class _SurvregFrame:
     """What R's ``model.frame`` + ``model.matrix`` step yields inside ``survreg``."""
 
     response: Surv
-    x: list[list[float]]
+    x: np.ndarray | list[list[float]]
     names: tuple[str, ...]
     design: _FormulaDesign | None = None
     assign: tuple[int, ...] = ()
@@ -638,7 +638,7 @@ def _formula_frame(
     assign, term_labels, strata_term = _term_structure(design, model_terms)
     return _SurvregFrame(
         response=response,
-        x=_design_rows_from_spec(data, design, n),
+        x=_design_array_from_spec(data, design, n),
         names=tuple(_design_output_names(design)),
         design=design,
         assign=assign,
@@ -794,7 +794,12 @@ def survreg(
         raise ValueError("start-stop type Surv objects are not supported")
     if response.type in {"mright", "mcounting"}:
         raise ValueError("multi-state survival is not supported")
-    if not all(map(math.isfinite, chain.from_iterable(frame.x))):
+    finite_design = (
+        bool(np.isfinite(frame.x).all())
+        if isinstance(frame.x, np.ndarray)
+        else all(map(math.isfinite, chain.from_iterable(frame.x)))
+    )
+    if not finite_design:
         raise ValueError("data contains an infinite predictor")
 
     distribution = _resolve_distribution(dist, parms)
@@ -870,7 +875,7 @@ def survreg(
         design=frame.design,
         weights=frame.weights,
         cluster=frame.cluster if fit.naive_variance_matrix is not None else None,
-        x=frame.x if keep_x else None,
+        x=(frame.x.tolist() if isinstance(frame.x, np.ndarray) else frame.x) if keep_x else None,
         y=_left_censored_zero_bounds(response, distribution) if keep_y else None,
         model=frame.model,
         score=list(fit.score if penalized is None else penalized.score) if keep_score else None,

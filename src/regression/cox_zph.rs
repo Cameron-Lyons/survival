@@ -8,6 +8,7 @@ use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
+use crate::regression::log_risk_sweep::{LogRiskSweep, needs_log_risk};
 use ndarray::{Array2, Axis, s};
 #[cfg(feature = "python")]
 use pyo3::Borrowed;
@@ -153,10 +154,21 @@ struct ZphKernel {
     used: Array2<f64>,
 }
 
-fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> ZphKernel {
+fn zph_kernel(
+    fit: &CoxPHFit,
+    gtime: &[f64],
+    eta: &[f64],
+    keep: &[usize],
+) -> SurvivalResult<ZphKernel> {
     let nvar = keep.len();
     let efron = fit.method == TieMethod::Efron;
-    let risk: Vec<f64> = eta.iter().map(|value| value.exp()).collect();
+    let scales = fit.diagnostic_risk_scales();
+    let stable = scales.is_some() || needs_log_risk(eta, &fit.weights);
+    let risk: Vec<f64> = if stable {
+        Vec::new()
+    } else {
+        eta.iter().map(|value| value.exp()).collect()
+    };
     let nstrata = fit.sorted.nstrata();
     let mut x = Array2::zeros((fit.n, nvar));
     for (k, &column) in keep.iter().enumerate() {
@@ -184,6 +196,65 @@ fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> Zph
     for stratum in 0..nstrata {
         let (start, end) = fit.sorted.bounds[stratum];
         let rows = &fit.sorted.order[start..end];
+        if stable {
+            let sweep = LogRiskSweep {
+                stop: &fit.time,
+                entry: fit.entry.as_deref(),
+                status: &fit.status,
+                x: x.view(),
+                weights: &fit.weights,
+                log_risk: eta,
+                rows,
+            };
+            let callback = |event: crate::regression::log_risk_sweep::LogRiskTime<'_>| {
+                let d = event.deaths.len();
+                if d == 0 {
+                    return Ok(());
+                }
+                let timewt = gtime[event.deaths[0]];
+                for &row in event.deaths {
+                    for i in 0..nvar {
+                        let value = fit.weights[row] * x[(row, i)];
+                        u[i] += value;
+                        u[i + nvar] += timewt * value;
+                    }
+                }
+                let steps = if efron { d } else { 1 };
+                let wtave = event.death_weight / steps as f64;
+                let mut mean = vec![0.; nvar];
+                let mut xbar = vec![0.; nvar];
+                let mut covariance = Array2::zeros((nvar, nvar));
+                for step in 0..steps {
+                    event.efron_mean(step, &mut xbar);
+                    event.efron_covariance(step, &mut covariance);
+                    for i in 0..nvar {
+                        mean[i] += xbar[i] / steps as f64;
+                        u[i] -= wtave * xbar[i];
+                        u[i + nvar] -= timewt * wtave * xbar[i];
+                        for j in 0..=i {
+                            let value = wtave * covariance[(i, j)];
+                            imat[(j, i)] += value;
+                            imat[(j, i + nvar)] += value * timewt;
+                            imat[(j + nvar, i + nvar)] += value * timewt * timewt;
+                        }
+                    }
+                }
+                let residual =
+                    |row: usize| (row, (0..nvar).map(|i| x[(row, i)] - mean[i]).collect());
+                if fit.entry.is_some() {
+                    schoen_rows.extend(event.deaths.iter().rev().map(|&row| residual(row)));
+                } else {
+                    schoen_rows.extend(event.deaths.iter().map(|&row| residual(row)));
+                }
+                Ok(())
+            };
+            if let Some(scales) = scales {
+                sweep.for_each_time_with_covariance_scales(scales, callback)?;
+            } else {
+                sweep.for_each_time_with_covariance(callback)?;
+            }
+            continue;
+        }
         let sweep = StratumSweep {
             stop: &fit.time,
             entry: fit.entry.as_deref(),
@@ -258,13 +329,23 @@ fn zph_kernel(fit: &CoxPHFit, gtime: &[f64], eta: &[f64], keep: &[usize]) -> Zph
             .collect(),
     )
     .expect("one row per death");
-    ZphKernel {
+    if stable
+        && u.iter()
+            .chain(imat.iter())
+            .chain(schoen.iter())
+            .any(|value| !value.is_finite())
+    {
+        return Err(SurvivalError::computation(
+            "Cox proportional-hazards diagnostic moments are not finite",
+        ));
+    }
+    Ok(ZphKernel {
         u,
         imat,
         schoen,
         death_rows,
         used,
-    }
+    })
 }
 
 fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
@@ -389,12 +470,16 @@ pub fn cox_zph<'a>(
         .collect();
     let nterm = assign.len();
 
-    let mean_lp = fit.linear_predictors.iter().sum::<f64>() / fit.n as f64;
-    let eta: Vec<f64> = fit
-        .linear_predictors
-        .iter()
-        .map(|lp| lp - mean_lp)
-        .collect();
+    let predictors = fit.diagnostic_predictors();
+    let eta: Vec<f64> =
+        if fit.diagnostic_risk_scales().is_some() || needs_log_risk(predictors, &fit.weights) {
+            // Each active risk set supplies its own scale. Global centering can
+            // overflow, or erase small differences, before that sweep begins.
+            predictors.to_vec()
+        } else {
+            let mean_lp = predictors.iter().sum::<f64>() / fit.n as f64;
+            predictors.iter().map(|lp| lp - mean_lp).collect()
+        };
     let ttimes: Vec<f64> = match transform {
         ZphTransform::Identity => fit.time.clone(),
         ZphTransform::Rank => rank_average(&fit.time),
@@ -420,7 +505,7 @@ pub fn cox_zph<'a>(
         / nevent as f64;
     let gtime: Vec<f64> = ttimes.iter().map(|t| t - event_mean).collect();
 
-    let kernel = zph_kernel(fit, &gtime, &eta, &keep);
+    let kernel = zph_kernel(fit, &gtime, &eta, &keep)?;
     let mut imatr = kernel.imat;
     if let Some(tmat) = &tmat {
         for block in [s![..nvar, ..nvar], s![nvar.., nvar..]] {

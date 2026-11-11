@@ -109,9 +109,9 @@ jobs:
       - name: Lint code
         run: uv run --no-sync ruff check python/ test/
 
-      - name: Type check stubs and R-style facade
+      - name: Type check stubs, public kernels and R-style facade
         run: >-
-          uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi
+          uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi
           python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py
           --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 

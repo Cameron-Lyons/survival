@@ -12,7 +12,8 @@ tests live in `python/tests/`, and Rust tests live next to the code they cover
   them (`python/tests/test_r_fixtures.py`, `src/tests/r_fixtures.rs`). See
   `r/README.md` for the schema, the `KNOWN_FAILURES` burndown lists, and how
   to regenerate. The `r-fixture-stability` CI job regenerates the fixtures with
-  the pinned `survival` version and fails on any diff.
+  the pinned `survival` version and compares numerical values at relative
+  tolerance `1e-9` and absolute tolerance `1e-12`; other values must match exactly.
 - `concordance1.py` is a one-off manual smoke script kept for ad hoc debugging.
 
 The historical `legacy-rust/` reference scripts were never compiled by

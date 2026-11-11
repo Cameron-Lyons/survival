@@ -8,6 +8,7 @@ pub(crate) mod survexp;
 pub(crate) mod survexp_cox;
 pub(crate) mod survexp_fit;
 pub(crate) mod survexp_summary;
+mod uspop2;
 
 pub(crate) use match_ratetable::match_ratetable_py;
 pub use match_ratetable::{
@@ -30,7 +31,9 @@ pub use ratetable_data::{
 pub(crate) use survexp::survexp_py;
 pub use survexp::{SurvExpResult, SurvexpInput, SurvexpMethod, survexp};
 pub use survexp_cox::{CoxExpectedBaseline, survexp_cox, survexp_cox_prepared};
-pub(crate) use survexp_cox::{survexp_cox_prepared_py, survexp_cox_py};
+pub(crate) use survexp_cox::{survexp_cox_evaluated, survexp_cox_prepared_py, survexp_cox_py};
 pub use survexp_fit::{SurvexpFit, survexp_fit};
 pub use survexp_summary::summary_survexp;
 pub(crate) use survexp_summary::summary_survexp_py;
+pub(crate) use uspop2::load_uspop2_py;
+pub use uspop2::{Uspop2Data, uspop2};

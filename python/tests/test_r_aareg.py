@@ -1,5 +1,7 @@
 """``survival.r.aareg`` Aalen additive regression against R survival 3.8.11 (``ovarian``)."""
 
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -89,6 +91,26 @@ def test_summary_aareg_matches_r(ovarian):
     assert summary["df"] == 2
     assert summary["n"] == [26, 12, 12]
     assert r.model_summary(fit, test="nrisk")["chisq"] == approx(6.05609402409755, rel=1e-6)
+
+
+@pytest.mark.parametrize("test", ["aalen", "nrisk"])
+def test_summary_at_zero_time_matches_r(test):
+    """R survival 3.8-11 reports undefined slopes while retaining the valid tests."""
+    data = {
+        "time": [0, 0, 1, 2, 3, 4],
+        "status": [1, 1, 1, 0, 0, 0],
+        "x": [0, 1, 0, 1, 0, 1],
+    }
+    fit = r.aareg("Surv(time, status) ~ x", data, nmin=1)
+    summary = r.model_summary(fit, maxtime=0, test=test)
+    assert all(math.isnan(row["slope"]) for row in summary.table)
+    scale = 1 / 6 if test == "aalen" else 1
+    assert [row["coef"] for row in summary.table] == approx([scale, 0.0])
+    assert [row["se(coef)"] for row in summary.table] == approx([scale, math.sqrt(2) * scale])
+    assert [row["z"] for row in summary.table] == approx([1.0, 0.0])
+    assert [row["p"] for row in summary.table] == approx([0.317310507862914, 1.0])
+    assert summary.chisq == 0.0
+    assert summary.n == [6, 1, 2]
 
 
 def test_aareg_options(ovarian):

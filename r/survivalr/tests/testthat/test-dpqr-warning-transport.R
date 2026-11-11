@@ -8,6 +8,31 @@
   list(value=value,warnings=messages,error=error)
 }
 
+.dpqr_unambiguous_missing_kind <- function(kind, distribution, query, mean, scale) {
+  # Track NA/NaN origins through the actual arithmetic recycling stages. R's
+  # ?NA permits either result when an operation combines the two missing kinds.
+  origins <- function(x) ifelse(is.nan(x), 2L, ifelse(is.na(x), 1L, 0L))
+  combine <- function(x, y) {
+    if (!length(x) || !length(y)) return(integer())
+    n <- max(length(x), length(y))
+    bitwOr(rep_len(x, n), rep_len(y, n))
+  }
+  query <- origins(query)
+  mean <- origins(mean)
+  scale <- origins(scale)
+  if (kind == "qsurvreg") {
+    result <- combine(combine(query, scale), mean)
+  } else {
+    result <- combine(combine(query, mean), scale)
+    if (kind == "dsurvreg") {
+      if (distribution %in% c("lognormal", "weibull", "exponential", "rayleigh", "loglogistic"))
+        result <- combine(result, query)
+      result <- combine(result, scale)
+    }
+  }
+  result != 3L
+}
+
 test_that("DPQR numeric transport preserves empty operands and missing kinds", {
   skip_if_not_installed("survival")
   skip_if_not_installed("reticulate")
@@ -29,10 +54,40 @@ test_that("DPQR numeric transport preserves empty operands and missing kinds", {
             expect_identical(observed$error,expected$error,info=label)
             expect_equal(observed$value,expected$value,tolerance=2e-12,info=label)
             expect_identical(is.na(observed$value),is.na(expected$value),info=label)
-            expect_identical(is.nan(observed$value),is.nan(expected$value),info=label)
+            defined <- .dpqr_unambiguous_missing_kind(kind,distribution,values,mean,scale)
+            expect_identical(is.nan(observed$value)[defined],is.nan(expected$value)[defined],info=label)
             expect_identical(observed$warnings,expected$warnings,info=label)
           }
     }
+  }
+})
+
+test_that("DPQR missing-kind comparison excludes only mixed arithmetic positions", {
+  expect_identical(.dpqr_unambiguous_missing_kind(
+    "dsurvreg", "gaussian", c(NA_real_, NaN), 0, 1), c(TRUE, TRUE))
+  expect_identical(.dpqr_unambiguous_missing_kind(
+    "dsurvreg", "gaussian", c(NA_real_, NaN, .25), c(0, NA_real_), c(NaN, 1)),
+    c(FALSE, FALSE, TRUE))
+  expect_identical(.dpqr_unambiguous_missing_kind(
+    "qsurvreg", "gaussian", c(NA_real_, NaN), c(NaN, NA_real_), rep(1, 3)),
+    c(FALSE, FALSE, FALSE))
+})
+
+test_that("DPQR keeps standalone NA and NaN distinct in every numeric argument", {
+  skip_if_not_installed("survival")
+  skip_if_not_installed("reticulate")
+  skip_if_not(reticulate::py_module_available("survival"))
+  for (kind in c("dsurvreg", "psurvreg", "qsurvreg")) for (argument in seq_len(3)) {
+    args <- list(.25, mean=0, scale=1, distribution="gaussian")
+    args[[argument]] <- c(NA_real_, NaN, .25)
+    expected <- .dpqr_warning_capture(do.call(get(kind,asNamespace("survival")),args))
+    observed <- .dpqr_warning_capture(do.call(get(kind,asNamespace("survivalr")),args))
+    label <- paste(kind, argument)
+    expect_identical(observed$error, expected$error, info=label)
+    expect_equal(observed$value, expected$value, tolerance=2e-12, info=label)
+    expect_identical(is.na(observed$value), is.na(expected$value), info=label)
+    expect_identical(is.nan(observed$value), is.nan(expected$value), info=label)
+    expect_identical(observed$warnings, expected$warnings, info=label)
   }
 })
 

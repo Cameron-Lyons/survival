@@ -4,8 +4,9 @@ Version 3.0 makes the breaking clean-ups collected in the 3.0 plan: one R API at
 the package root and in `survival.r`, the raw native kernels in
 `survival.kernels`, R's names and meanings for result components, and a Rust
 crate whose public API is its typed functions rather than its Python bindings.
-Numerical results are unchanged; only names, result types and module locations
-move.
+The API changes below cover names, result types and module locations. Numerical
+corrections included in this release are described in the
+[changelog](../CHANGELOG.md) and [R compatibility guide](r-compatibility.md).
 
 Each section below lists what changed and what to write instead.
 
@@ -85,9 +86,10 @@ is still R's "Argument ... not matched".
 Result classes follow one rule: the R function's name with each dotted part
 capitalized, then `Result`, or `Model` for a fitted model. `CoxSurvFitResult`
 (the `coxsurv.fit` result) and `CoxSurvfitResult` (`survfit.coxph`) differed
-only in case; the first is now `CoxsurvRawResult`. The classes are the same, so
-only imports, annotations and `isinstance` checks change, and pickles made by
-2.x still load.
+only in case; the first is now `CoxsurvRawResult`. The classes retain private
+aliases for the old names, so saved Python class references still resolve.
+This does not guarantee compatibility of embedded native fitted state across
+package versions; see the [serialization requirements](r-bridge.md#model-persistence).
 
 | 2.x | 3.0 |
 | --- | --- |

@@ -1,7 +1,9 @@
 use crate::core::strata_order::{last_of_run, order_within_strata};
 use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::{CoxMartInput, SurvivalData, Weights};
-use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
+use crate::internal::validation::{
+    validate_binary_i32, validate_finite, validate_length, validate_non_negative,
+};
 use crate::regression::TieMethod;
 
 pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f64>> {
@@ -10,6 +12,7 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     validate_binary_i32(&input.survival.status, "status")?;
     validate_length(n, input.score.len(), "score")?;
     validate_finite(&input.score, "score")?;
+    validate_non_negative(&input.score, "score")?;
     if let Some(weights) = &input.weights {
         validate_length(n, weights.values.len(), "weights")?;
         Weights::validate_values(&weights.values)?;
@@ -20,6 +23,17 @@ pub fn coxmart(input: &CoxMartInput, method: TieMethod) -> SurvivalResult<Vec<f6
     let weights = input.weights_or_unit_cow();
     let strata = input.strata_or_default_cow();
     let time = &input.survival.time;
+    if super::martingale_log::needs_log_space(&input.score, &weights) {
+        return super::martingale_log::martingale_log(
+            None,
+            time,
+            &input.survival.status,
+            &input.score,
+            &weights,
+            &strata,
+            method,
+        );
+    }
     let order = order_within_strata(&strata, |a, b| time[a].total_cmp(&time[b]));
     Ok(coxmart_rows(
         &order,

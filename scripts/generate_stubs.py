@@ -71,6 +71,7 @@ def _imports(body: str) -> str:
 RETURN_OVERRIDES: dict[str, str] = {}
 
 PARAM_OVERRIDES: dict[str, dict[str, str]] = {
+    "CovariateMatrix.__init__": {"values": "ArrayLike"},
     "aggregate_survfit": {
         "surv": "ArrayLike | None",
         "pstate": "ArrayLike | None",
@@ -249,6 +250,8 @@ def _parse_fn(source: str, pos: int) -> tuple[RustFn | None, int]:
         j = where.end()
     params: list[tuple[str, str]] = []
     for part in _split_top_level(raw_params):
+        _, start = _read_attributes(part, 0)
+        part = part[start:]
         if re.match(r"^(&\s*(mut\s+)?)?(mut\s+)?self$", part) or re.match(
             r"^(mut\s+)?self\s*:", part
         ):
@@ -735,7 +738,7 @@ def _render_function(name, obj, rust_fn, class_names, missing_types) -> str:
         param.annotation = PARAM_OVERRIDES.get(name, {}).get(param.name, param.annotation)
     if name in RETURN_OVERRIDES:
         ret = RETURN_OVERRIDES[name]
-    elif name.startswith("load_"):
+    elif name.startswith("load_") and (rust_fn is None or "PyDict" in rust_fn.ret):
         ret = "dict[str, list[Any]]"
     elif rust_fn is not None:
         ret = rust_to_python(rust_fn.ret, class_names, "return", None)
@@ -761,6 +764,10 @@ def _render_class(name, cls, rust_cls, class_names, missing_types) -> str:
     if init_text is not None:
         params = parse_text_signature(init_text)
         _annotate(params, rust_cls.new if rust_cls else None, class_names, name)
+        for param in params:
+            param.annotation = PARAM_OVERRIDES.get(f"{name}.__init__", {}).get(
+                param.name, param.annotation
+            )
         members.append(_format_def("__init__", params, "None", "    ", [], "self"))
 
     dunders: list[str] = []

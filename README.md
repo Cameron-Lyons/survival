@@ -905,7 +905,9 @@ statistic and probability.
 
 ### Built-in Datasets
 
-The library includes 33 classic survival analysis datasets:
+The library includes all 50 data frames shipped by R's `survival`, plus the
+`cancer` and `leukemia` aliases, its three rate tables and the `uspop2` population
+projections.
 
 ```python
 from survival import datasets
@@ -922,7 +924,7 @@ aml = datasets.load_aml()
 veteran = datasets.load_veteran()
 ```
 
-Datasets are returned as column-oriented dictionaries that map each column name,
+Data frames are returned as column-oriented dictionaries that map each column name,
 in R's column order, to a list of values, so they can be passed straight to the
 formula functions or to `pandas.DataFrame`/`polars.DataFrame`.
 
@@ -945,6 +947,13 @@ dates), logical -> `bool`, `NA` -> `None`):
 The US, US-by-race and Minnesota population rate tables (`survexp.us`,
 `survexp.usr`, `survexp.mn`) are shipped as R's exact tables; see
 `survival.population`.
+
+`datasets.load_uspop2()` returns a `Uspop2Data` with an int32 `counts` array of
+shape `(101, 2, 21)` and `dimnames` in age, sex and year order. The ages are
+0–100 (100 includes older ages), sexes are male/female, and years are 2000–2020.
+These are the Census Bureau's 2008 population projections. Each load owns its
+data; each `counts` access returns an independent mutable NumPy snapshot.
+Rust callers use `survival::population::uspop2()` for the typed array and labels.
 
 Rate-table expected survival selects dense requested-time grids with a forward
 scan, retaining duplicate requests and follow-up breakpoints. Expected cumulative
@@ -1190,7 +1199,7 @@ Format and lint:
 cargo fmt
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 ```
 
 The codebase is organized with:

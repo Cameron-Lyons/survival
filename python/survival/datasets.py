@@ -1,7 +1,9 @@
-"""R survival's data sets as dictionaries of columns.
+"""R survival's data sets as dictionaries of columns or a labeled population array.
 
 Factor columns are :class:`~survival.r.Factor` lists that carry R's level order,
 so models fitted on them use R's reference levels.
+``load_uspop2`` returns a ``Uspop2Data`` record with an integer ``counts`` array
+and ``dimnames`` for its age, sex and year axes.
 """
 
 from functools import wraps
@@ -64,6 +66,8 @@ __all__ = bind_names(
         "load_veteran",
         "load_cancer",
         "load_leukemia",
+        "Uspop2Data",
+        "load_uspop2",
     ],
 )
 

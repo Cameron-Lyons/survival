@@ -21,6 +21,8 @@ pub(crate) mod finegray_expand;
 pub(crate) mod functional_survival;
 pub(crate) mod high_dimensional;
 pub(crate) mod joint_competing;
+pub(crate) mod log_risk_sweep;
+pub(crate) mod log_scale;
 pub(crate) mod longitudinal_survival;
 pub(crate) mod parametric_survival;
 pub(crate) mod penalized;

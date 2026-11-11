@@ -5,6 +5,7 @@ Every row index returned by these bindings is zero-based.
 """
 
 import math
+import struct
 
 import pytest
 
@@ -240,6 +241,19 @@ def test_rttright_matches_r():
 
     with pytest.raises(ValueError, match="length"):
         survival.kernels.rttright(time, status[:-1])
+
+
+@pytest.mark.parametrize("renorm", [False, True])
+def test_rttright_sparse_stratum_labels(renorm):
+    max_usize = (1 << (8 * struct.calcsize("P"))) - 1
+    result = survival.kernels.rttright(
+        [1.0, 2.0, 2.0, 3.0, 4.0],
+        [1, 0, 1, 0, 1],
+        strata=[max_usize, max_usize, 7, 7, 7],
+        renorm=renorm,
+    )
+    expected = [0.5, 0.0, 1 / 3, 0.0, 2 / 3] if renorm else [1.0, 0.0, 1.0, 0.0, 2.0]
+    assert [row[0] for row in result.weights] == pytest.approx(expected)
 
 
 def test_surv2counting_and_totimeline():

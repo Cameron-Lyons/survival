@@ -701,6 +701,14 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     )
 
 
+def _offset_mean(values: list[float]) -> float:
+    total = sum(values)
+    if math.isfinite(total):
+        return total / len(values)
+    scale = max(abs(value) for value in values)
+    return max(-1.0, min(1.0, sum(value / scale for value in values) / len(values))) * scale
+
+
 def _check_init(
     init: Any, x: list[list[float]] | np.ndarray, offset: list[float] | None
 ) -> list[float]:
@@ -716,7 +724,7 @@ def _check_init(
     n = len(x)
     means = [sum(row[col] for row in x) / n for col in range(nvar)] if n else []
     center = sum(mean * value for mean, value in zip(means, values, strict=True))
-    offset_mean = sum(offset) / n if offset is not None else 0.0
+    offset_mean = _offset_mean(offset) if offset is not None else 0.0
     risks = []
     for idx, row in enumerate(x):
         eta = sum(a * b for a, b in zip(row, values, strict=True)) - center
@@ -839,7 +847,7 @@ def _cox_fit_diagnostic_messages(
             lp_max = max(fit.linear_predictors)
             if offset_centered:
                 offset = list(fit.offset)
-                lp_max -= sum(offset) / len(offset)
+                lp_max -= _offset_mean(offset)
             if lp_max > 500 or any(not math.isfinite(value) for value in infs):
                 messages.append("one or more coefficients may be infinite")
             return messages

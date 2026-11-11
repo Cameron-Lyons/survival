@@ -40,6 +40,22 @@ calls and check their outputs before timing. The first three can save results wi
 `--extension` loads a saved native library for the prediction and AFT input
 benchmarks.
 
+`benches/python/bench_concordance_inputs.py` measures complete concordance calls
+for numeric formulas, row lists and NumPy matrix layouts. It saves medians and
+result fingerprints with `--output` and checks all outputs with `--compare`.
+Input construction and disposal of the previous result are outside the timings.
+
+`benches/python/bench_formula_aft_fit.py` measures AFT formula preparation and
+complete fits. Run once with `--row-design-reference --output before`, then with
+`--compare before.npz --output after` to compare row-list preparation with the
+owned-array path on the same native extension. The comparison requires identical
+designs, coefficients, covariance, likelihoods, scales, predictions and residuals.
+
+`benches/python/bench_case_cohort.py` uses the Prentice and Borgan I inputs from
+the Rust benchmarks. Save a previous release with `--extension`, then use
+`--compare` to check coefficients, covariance, phase-two variance, martingales
+and Borgan score contributions alongside the complete-call timings.
+
 ## Current characteristics
 
 - Native bindings copy NumPy arrays once into owned Rust buffers (any dtype,
@@ -106,6 +122,37 @@ benchmarks.
 
 ### Cox models
 
+- Extreme right-censored Breslow/Efron evaluations use normalized risk moments
+  in a reverse-time sweep, retaining O(n p²) work and O(p²) moment scratch space
+  alongside the O(n) predictors.
+  When every row enters before the earliest stop, extreme risk moments use a
+  reverse additive sweep. Martingale and score diagnostics use forward hazard
+  prefixes, avoiding cancellation and repeated tree updates in case-cohort fits.
+  Additive accumulation takes O(n (p + 1)) work and retained storage; sorting
+  and score interval lookup retain O(n log n) work.
+  Delayed-entry intervals and covariance requests retain trees for active risk
+  sets. Covariance trees are built only for detail and proportional-hazards
+  diagnostics that require them. Curve interval trees are built on the first
+  range query; full curve expansion does not build them. Ordinary fits retain
+  their existing arithmetic.
+- Covariate and offset origins are retained when their scale would lose small
+  effects. Each risk total separates the compensated predictor from the relative
+  mass, preserving multiplicities without changing tree complexity.
+  Prediction combines relative risk and baseline hazard before
+  exponentiating. Kalbfleisch–Prentice curves keep log survival increments;
+  single deaths and equal-risk ties have a closed-form increment, while
+  heterogeneous ties use a scalar root solve. Ordinary K-P inputs reuse the
+  ordinary risk sums, with a log-sweep fallback when entry subtraction loses
+  the active risk set.
+- Exact ties at extreme predictor scales normalize each subset state by the
+  product of its largest risks. For r active rows and k = min(d, r - d), this
+  fallback uses O(r log r + r k p²) work and O(r + k p²) storage. Event likelihoods
+  cancel each selected predictor against its reference before summing.
+- Penalized fits use the same risk representation for extreme predictors.
+  Sparse frailty groups integrate score and information updates only when their
+  active risks change, using hazard interval queries. Efron ties accumulate block
+  moments and visit each affected group once, avoiding a loop over every group for
+  each tied death and a dense matrix of frailty indicators.
 - Breslow and Efron evaluations reuse predictor, risk and risk-set buffers for
   every trial coefficient vector. Exact ties use a subset dynamic program with
   `k + 1` states, `k = min(d, n - d)` for d deaths among n at risk, computing the
@@ -150,6 +197,9 @@ benchmarks.
 
 ### AFT models
 
+- Formula designs are built as owned contiguous NumPy arrays, avoiding Python
+  row lists and per-element conversion at the native boundary. Retained model
+  matrices (`x=True`) still expose the existing list representation.
 - Built-in families select their scalar kernels once per likelihood evaluation and
   allocate no endpoint or density buffers; callback families use workspace linear
   in the number of rows plus interval endpoints, and the Python adapter reacquires
@@ -159,10 +209,21 @@ benchmarks.
 
 ### Other routines
 
+- Raw Cox and Andersen–Gill martingale residuals use logarithmic risk-set sums
+  for extreme or zero risks and weights. Range sums of log-hazard increments
+  preserve small contributions after large ones, including disjoint entry/exit
+  intervals. This fallback costs O(n log n); ordinary inputs retain the existing
+  arithmetic.
 - Concordance prepares each stratum's outcome buffers, entry order and time
   multipliers once for all predictors; each predictor keeps its own rank tree, so
   several predictors cost much less than separate calls while one predictor costs
   the same.
+- Numeric NumPy concordance matrices pass through a typed native constructor,
+  avoiding a nested Python list and its per-element conversions. Contiguous,
+  strided and Fortran-ordered arrays retain the same row and column order.
+- Redistribution-to-the-right weights group observed strata, with storage
+  proportional to the rows and observed groups instead of the largest label.
+  The native redistribution and Cox detail computations release the GIL.
 - Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order
   without a separate curve fit; `rho=0` allocates no weights.
 - Rate-table matching folds table labels once and indexes exact matches; a small

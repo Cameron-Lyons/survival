@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import numbers
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -25,6 +26,7 @@ from ._coerce import (
     _as_character,
     _categories,
     _DEFAULT_NA_ACTION,
+    _factor_levels,
     _finite_float,
     _float_vector,
     _floats_or_nan,
@@ -150,6 +152,29 @@ def _neardate_integer_ids(values: Any) -> np.ndarray | None:
     return values.astype(np.int64, copy=False)
 
 
+def _neardate_labels(values: Any, name: str) -> list[Any]:
+    # Extension arrays may export NA as float NaN through to_numpy(); their
+    # list conversion retains the declared missing scalar and numeric NaNs.
+    if hasattr(getattr(values, "dtype", None), "na_value") and hasattr(values, "tolist"):
+        values = values.tolist()
+    return _materialize_labels(values, name)
+
+
+def _neardate_promote_numeric(values: list[Any]) -> list[Any]:
+    """R promotes each numeric vector before matching it against character IDs."""
+
+    if any(isinstance(value, float | np.floating) for value in values):
+        return [
+            float(value)
+            if isinstance(value, bool | int | float | np.bool_ | np.integer | np.floating)
+            else value
+            for value in values
+        ]
+    if any(isinstance(value, int | np.integer) and not _is_bool_like(value) for value in values):
+        return [int(value) if _is_bool_like(value) else value for value in values]
+    return values
+
+
 def _neardate_date_vectors(
     y1: Any, y2: Any
 ) -> tuple[list[float] | np.ndarray, list[float] | np.ndarray]:
@@ -232,6 +257,60 @@ def _neardate_integers(
     return [nomatch if m is None else rows2[m] for m in matched]
 
 
+def _neardate_ordered_matches(
+    query_ids: list[Any],
+    query_labels: list[Any],
+    reference_labels: list[Any],
+    missing_query: list[bool],
+    missing_reference: list[bool],
+    query_dates: list[float] | np.ndarray,
+    reference_dates: list[float] | np.ndarray,
+    best: str,
+    nomatch: int | None,
+) -> list[int | None]:
+    """R's first-match groups when missing IDs or rounded labels cross group boundaries."""
+    groups: dict[Any, int] = {}
+    first: dict[Any, int] = {}
+    codes = []
+    for row, (value, label) in enumerate(zip(query_ids, query_labels, strict=True)):
+        code = groups.setdefault(value, row)
+        codes.append(code)
+        first.setdefault(label, code)
+    ordered = sorted(
+        (first[label], float(date_value), row)
+        for row, (label, date_value) in enumerate(
+            zip(reference_labels, reference_dates, strict=True)
+        )
+        if label in first and not math.isnan(date_value)
+    )
+    if not ordered:
+        raise ValueError("No valid entries in data set 2")
+    result: list[int | None] = []
+    for code, label, date_value, missing in zip(
+        codes, query_labels, query_dates, missing_query, strict=True
+    ):
+        if math.isnan(date_value):
+            result.append(nomatch)
+            continue
+        position = (
+            bisect_left(ordered, (code, date_value, -1))
+            if best == "after"
+            else bisect_right(ordered, (code, date_value, len(reference_labels))) - 1
+        )
+        if position < 0 or position >= len(ordered):
+            result.append(nomatch)
+            continue
+        row = ordered[position][2]
+        result.append(
+            None
+            if missing or missing_reference[row]
+            else row
+            if label == reference_labels[row]
+            else nomatch
+        )
+    return result
+
+
 def neardate(
     id1: Any,
     id2: Any,
@@ -253,8 +332,8 @@ def neardate(
     integer1, integer2 = _neardate_integer_ids(id1), _neardate_integer_ids(id2)
     if integer1 is not None and integer2 is not None:
         return _neardate_integers(integer1, integer2, y1, y2, best_value, nomatch)
-    id1_values = _materialize_labels(id1, "id1")
-    id2_values = _materialize_labels(id2, "id2")
+    id1_values = _neardate_labels(id1, "id1")
+    id2_values = _neardate_labels(id2, "id2")
     y1_values, y2_values = _neardate_date_vectors(y1, y2)
     if len(id1_values) != len(y1_values):
         raise ValueError("id1 and y1 have different lengths")
@@ -262,13 +341,89 @@ def neardate(
         raise ValueError("id2 and y2 have different lengths")
     _check_nomatch(nomatch, len(id2_values))
     missing1 = _missing_flags(id1_values)
+    missing2 = _missing_flags(id2_values)
+    factor1, factor2 = _categories(id1) is not None, _categories(id2) is not None
+    dtype1, dtype2 = (getattr(getattr(ids, "dtype", None), "type", None) for ids in (id1, id2))
+    string1 = isinstance(dtype1, type) and issubclass(dtype1, str)
+    string2 = isinstance(dtype2, type) and issubclass(dtype2, str)
+    character1 = factor1 or string1 or any(isinstance(v, str) for v in id1_values)
+    character2 = factor2 or string2 or any(isinstance(v, str) for v in id2_values)
+    character = character1 or character2
+    if character:
+        # c(TRUE, 1.5) first becomes c(1, 1.5), but c(TRUE, 1.5, "a")
+        # becomes character directly and retains the logical label "TRUE".
+        if not character1:
+            id1_values = _neardate_promote_numeric(id1_values)
+        if not character2:
+            id2_values = _neardate_promote_numeric(id2_values)
+    # R's numeric NA and NaN have separate match groups. Categorical/string
+    # containers use their NaN sentinel for NA; an actual numeric NaN becomes
+    # the nonmissing label "NaN" when the common matching type is character.
+    nan1, nan2 = (
+        [
+            not (factor or string) and isinstance(v, float | np.floating) and math.isnan(v)
+            for v in values
+        ]
+        for values, factor, string in (
+            (id1_values, factor1, string1),
+            (id2_values, factor2, string2),
+        )
+    )
+    labels: dict[tuple[type, Any], str] = {}
+
+    def label(value: Any, missing: bool, nan: bool) -> Any:
+        if nan:
+            return "NaN" if character else "\x00NaN"
+        if missing:
+            return "\x00NA"
+        if not character or isinstance(value, str):
+            return value
+        key = (type(value), value)
+        if key not in labels:
+            labels[key] = _as_character(value)
+        return labels[key]
+
     id1_labels = [
-        "\x00NA" if missing else value for value, missing in zip(id1_values, missing1, strict=True)
+        label(value, missing, nan)
+        for value, missing, nan in zip(id1_values, missing1, nan1, strict=True)
     ]
     id2_labels = [
-        "\x00NA" if missing else value
-        for value, missing in zip(id2_values, _missing_flags(id2_values), strict=True)
+        label(value, missing, nan)
+        for value, missing, nan in zip(id2_values, missing2, nan2, strict=True)
     ]
+    query_ids = (
+        id1_labels
+        if character1
+        else [
+            label if missing else value
+            for value, label, missing in zip(id1_values, id1_labels, missing1, strict=True)
+        ]
+    )
+    if character:
+        # Ops.factor restores NA for a numeric NaN after comparing character
+        # labels, whereas an ordinary character comparison keeps "NaN".
+        if character1 or not (factor1 or factor2):
+            missing1 = [missing and not nan for missing, nan in zip(missing1, nan1, strict=True)]
+        if character2 or not (factor1 or factor2):
+            missing2 = [missing and not nan for missing, nan in zip(missing2, nan2, strict=True)]
+    if (
+        any(missing1)
+        or any(missing2)
+        or character
+        and not character1
+        and len(set(query_ids)) != len(set(id1_labels))
+    ):
+        return _neardate_ordered_matches(
+            query_ids,
+            id1_labels,
+            id2_labels,
+            missing1,
+            missing2,
+            y1_values,
+            y2_values,
+            best_value,
+            nomatch,
+        )
     y2_array = np.asarray(y2_values, dtype=np.float64)
     keep2 = ~np.isnan(y2_array)
     complete = bool(keep2.all())
@@ -280,12 +435,9 @@ def neardate(
         best_value,
     )
     rows2 = None if complete else np.flatnonzero(keep2).tolist()
-    if rows2 is None and not any(missing1):
+    if rows2 is None:
         return [nomatch if match is None else match for match in matched]
-    return [
-        None if missing else nomatch if match is None else match if rows2 is None else rows2[match]
-        for match, missing in zip(matched, missing1, strict=True)
-    ]
+    return [nomatch if match is None else rows2[match] for match in matched]
 
 
 def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[Any]:
@@ -293,7 +445,8 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
 
     With ``first`` (R's default) a missing first observation of a logical or 0/1
     variable becomes ``False``/``0`` before the values are carried forward.
-    Factor-valued columns keep their unknown initial levels. Supplied times are
+    Factor-valued columns keep their levels and unknown initial values, returning
+    an unordered ``Factor`` as R does. Supplied times are
     ordered within each subject with missing times last; results retain input order.
     """
 
@@ -321,11 +474,17 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
             if logical or binary:
                 for row in initial_missing:
                     values[row] = False if logical else 0
-    return [values[row] for row in source]
+    result = [values[row] for row in source]
+    levels = _categories(x)
+    return result if levels is None else Factor(result, levels)
 
 
-def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[Any]:
-    """R's ``nostutter``: repeated adjacent states within an ``id`` become ``censor``."""
+def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> Factor:
+    """R's ``nostutter``: repeated adjacent states within an ``id`` become ``censor``.
+
+    Returns an unordered ``Factor`` with ``censor`` as its first level, preserving
+    existing factor levels so ``Surv`` reads the result as a multi-state response.
+    """
 
     id_values = _materialize_labels(id, "id")
     values = _materialize_1d(x, "x")
@@ -340,7 +499,16 @@ def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> list[An
         raise ValueError("invalid variable type")
     states = [None if _is_missing_value(value) else _as_character(value) for value in values]
     replaced = _core.nostutter(id_values, states, _as_character(censor), bool(single))
-    return [censor if flag else value for flag, value in zip(replaced, values, strict=True)]
+    levels: dict[str, Any] = {}
+    declared = _categories(x)
+    source_levels = _factor_levels(values, "x") if declared is None else declared
+    for value in [censor, *source_levels]:
+        levels.setdefault(_as_character(value), value)
+    result = [
+        censor if flag else None if _is_missing_value(value) else levels[_as_character(value)]
+        for flag, value in zip(replaced, values, strict=True)
+    ]
+    return Factor(result, list(levels.values()))
 
 
 _SurvT = TypeVar("_SurvT", Surv, Surv2)
