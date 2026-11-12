@@ -1213,7 +1213,7 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         return _penalty_arguments(term.call)[0]
     if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
-        return [basis_arguments(term.call)[0]]
+        return _expression_columns(basis_arguments(term.call)[0])
     if term.arithmetic is not None:
         return _expression_columns(term.arithmetic)
     return [term.column]
@@ -1420,11 +1420,25 @@ def _frame_variables(terms: _FormulaTerms) -> list[_CovariateTerm]:
     ]
 
 
+def _evaluated_variable(term: _CovariateTerm) -> _CovariateTerm:
+    if term.special in {"offset", "cluster"}:
+        term = replace(term, special=None)
+    if (
+        term.arithmetic is not None
+        and term.call is not None
+        and term.call.split("(", 1)[0] in BASIS_FUNCTIONS
+    ):
+        # Cache the argument, not the basis matrix. Its rows must survive subset
+        # and omission, including expressions such as scale(x) and NA^0.
+        return replace(term, call=None, categorical=False)
+    return term
+
+
 def _evaluated_variables(variables: Iterable[_CovariateTerm]) -> list[_CovariateTerm]:
     return list(
         dict.fromkeys(
-            replace(term, special=None) if term.special in {"offset", "cluster"} else term
-            for term in variables
+            term
+            for term in map(_evaluated_variable, variables)
             if term.strata is None
             and (
                 _is_cut_call(term.call)
@@ -1558,12 +1572,7 @@ def _formula_missing_rows(
     if computed:
         raw.difference_update(_covariate_columns(computed))
         keys = set(computed)
-        ordinary = [
-            term
-            for term in variables
-            if (replace(term, special=None) if term.special in {"offset", "cluster"} else term)
-            not in keys
-        ]
+        ordinary = [term for term in variables if _evaluated_variable(term) not in keys]
         raw.update(set(_covariate_columns(ordinary)) & set(columns))
         raw.update(required)
     sources = [(name, _column_source(data, name)) for name in columns if name in raw]
@@ -2203,8 +2212,15 @@ def _fit_single_design_term(
         levels = _mstate_categories(_column_source(full_data, columns[0]))
         return fit_penalty(term, columns, penalty_values, options, levels)
     if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
-        column, options = basis_arguments(term.call)
-        return fit_basis(term, column, _column(full_data, column), options)
+        _expression, options = basis_arguments(term.call)
+        columns = _covariate_term_columns(term)
+        full_n = len(_column(full_data, columns[0]))
+        values = (
+            _numeric_variable(full_data, _evaluated_variable(term), full_n)
+            if term.arithmetic
+            else _column(full_data, columns[0])
+        )
+        return fit_basis(term, columns, values, options)
     if not (
         term.categorical
         or term.transform
@@ -2458,7 +2474,12 @@ def _single_design_columns(
             return list(matrix.T)
         return [list(column) for column in zip(*rows, strict=True)]
     if isinstance(spec, _PenaltyDesignTerm):
-        penalty_values = {column: _column(data, column) for column in spec.columns}
+        if spec.basis is not None and spec.term.arithmetic is not None:
+            penalty_values = {
+                spec.columns[0]: _numeric_variable(data, _evaluated_variable(spec.term), n)
+            }
+        else:
+            penalty_values = {column: _column(data, column) for column in spec.columns}
         if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
             raise ValueError("formula columns must have the same length as the Surv response")
         if allow_missing and spec.kind == "ridge":

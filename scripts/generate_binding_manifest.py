@@ -26,7 +26,7 @@ ADD_CLASS_RE = re.compile(rf"add_class\s*::\s*<\s*({IDENT})\s*>")
 PYFUNCTION_NAME_RE = re.compile(
     rf"#\s*\[\s*pyfunction\s*\(\s*name\s*=\s*\"(?P<export>[^\"]+)\"\s*\)\s*\]\s*"
     rf"(?:#\s*\[[^\]]+\]\s*)*"
-    rf"(?:pub(?:\([^)]*\))?\s+)?fn\s+(?P<ident>{IDENT})\s*\(",
+    rf"(?:pub(?:\([^)]*\))?\s+)?fn\s+(?P<ident>{IDENT})\s*(?:<[^>]*>\s*)?\(",
     re.DOTALL,
 )
 REGISTER_MACRO_RE = re.compile(

@@ -185,6 +185,13 @@ arrays and data frames are unaffected.
   (`Prentice`, `SelfPrentice`, `LinYing`, `IBorgan`, `IIBorgan`;
   `CchMethod::parse` reads R's names). `CchData::stratum` is required by the
   Borgan methods.
+- **Multistate Cox functions take typed inputs.**
+  `regression::coxphms_fit(&CoxphmsData, &CoxphmsDesign, CoxphOptions)` returns
+  `CoxphmsFit`, with named fitted-model, stacked-design and shared-baseline fields.
+  `surv_analysis::coxphms_curves(&CoxphmsCurveData, &CoxphmsNewData,
+  &CoxphmsCurveOptions)` returns owned state-probability and transition-hazard
+  arrays plus the count grid. Both work without the `python` feature and validate
+  inputs before indexing. The Python kernel signatures are unchanged.
 - **`agexact` is removed.** `AgexactFit`, `AgexactOptions` and `agexact_fit` are
   gone; `CoxphFitResult::fit` with `TieMethod::Exact` fits the same model. The
   Python kernel `survival.regression.agexact` is removed too; use

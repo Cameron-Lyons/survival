@@ -137,7 +137,7 @@ jobs:
           from importlib.metadata import version
 
           import survival
-          import survival.r_api
+          import survival.r
           from survival import _survival
 
           assert survival.__version__ == version("survival") == os.environ["RELEASE_VERSION"]

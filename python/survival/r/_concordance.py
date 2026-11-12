@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 import operator
 from collections.abc import Iterator, Sequence
+from copy import copy
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -38,9 +39,13 @@ from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import (
     _column_source,
     _data_column_names,
+    _data_row_count,
+    _data_row_labels,
     _design_rows_from_spec,
     _formula_name,
-    _response_arg_columns,
+    _formula_response_spec,
+    _FormulaRows,
+    _prepare_formula_inputs,
     _response_arg_values,
     _strata_specs,
     model_frame,
@@ -321,15 +326,20 @@ def _orderable_response(data: Any, lhs: str) -> tuple[Any, str]:
 
     A numeric response is kept.  A logical response, or an ordered or two-level factor
     (a factor column, or ``factor(x)``), becomes R's ``as.numeric`` of it; any other
-    response is R's error.  A coerced expression goes in the column ``(response)``, and
-    the columns it reads are dropped so that a ``.`` leaves them out, as R's does.
+    response is R's error. Keep the original columns available to explicit predictors
+    and arguments; the numeric response expression retains its source dependencies,
+    so the formula parser excludes them from ``.`` without removing the columns.
     """
 
     columns = _data_column_names(data)
     if columns is None:
         return data, lhs
     name, _quoted = _formula_name(lhs)
-    source = _column_source(data, name) if name in columns else _response_arg_values(data, lhs)
+    source = (
+        _column_source(data, name)
+        if name in columns
+        else _response_arg_values(data, lhs, _data_row_count(data, f"{lhs} ~ 1"))
+    )
     if _categories(source) is not None or lhs.startswith(("factor(", "as.factor(")):
         codes, levels = _factor(source, name)
         if not _is_ordered(source) and len(levels) != 2:
@@ -343,11 +353,21 @@ def _orderable_response(data: Any, lhs: str) -> tuple[Any, str]:
         if not present or not all(_is_bool_like(label) for label in present):
             return data, lhs
         values = [None if _is_missing_value(label) else float(label) for label in labels]
-    if name in columns:
-        return {**{key: _column_source(data, key) for key in columns}, name: values}, lhs
-    reads = set(_response_arg_columns(lhs))
-    kept = {key: _column_source(data, key) for key in columns if key not in reads}
-    return {**kept, "(response)": values}, "`(response)`"
+    response = f"as.numeric({lhs})"
+    if isinstance(data, _FormulaRows):
+        prepared = copy(data)
+        prepared.strata_cache = dict(data.strata_cache)
+        prepared.variable_cache = dict(data.variable_cache)
+    else:
+        prepared = _FormulaRows(
+            {key: _column_source(data, key) for key in columns},
+            len(values),
+            _data_row_labels(data, len(values)),
+        )
+    # The response was evaluated before subset/omission, as in R. Reuse it so
+    # expression warnings and stateful inputs are not evaluated a second time.
+    prepared.response_cache = (_formula_response_spec(f"Surv({response}) ~ 1"), Surv(values))
+    return prepared, response
 
 
 def _concordance_frame(formula: str, data: Any, **arguments: Any) -> _ModelFrame:
@@ -385,6 +405,10 @@ def _concordance_formula(
     frame_formula = formula
     lhs, sep, rhs = formula.partition("~")
     if sep and not _is_surv_response(lhs.strip()):
+        data, supplied = _prepare_formula_inputs(
+            data, subset=subset, weights=weights, cluster=cluster
+        )
+        subset, weights, cluster = (supplied[name] for name in ("subset", "weights", "cluster"))
         data, response = _orderable_response(data, lhs.strip())
         frame_formula = f"{response} ~ {rhs.strip()}"
         options = {**options, "timewt": "n"}

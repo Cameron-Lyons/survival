@@ -450,20 +450,22 @@ fn prepare_stratum(
     };
 
     let mut sort_stop: Vec<usize> = (0..n).collect();
+    // All times and predictors were validated above. Use numeric equality for
+    // signed zeros, as the sweep does: censors at either zero must precede all
+    // deaths at that time, and equal predictors retain their input tie order.
     sort_stop.sort_by(|&a, &b| {
         stop[b]
-            .total_cmp(&stop[a])
+            .partial_cmp(&stop[a])
+            .unwrap()
             .then_with(|| status[a].cmp(&status[b]))
-            .then_with(|| risk[a].total_cmp(&risk[b]))
+            .then_with(|| risk[a].partial_cmp(&risk[b]).unwrap())
     });
     let mut predictor_ties = Vec::new();
     let mut first = 0;
     while first < n {
         let row = sort_stop[first];
         let mut end = first + 1;
-        while end < n
-            && stop[row].total_cmp(&stop[sort_stop[end]]).is_eq()
-            && status[row] == status[sort_stop[end]]
+        while end < n && stop[row] == stop[sort_stop[end]] && status[row] == status[sort_stop[end]]
         {
             end += 1;
         }
@@ -474,7 +476,7 @@ fn prepare_stratum(
     }
     let sort_start: Option<Vec<usize>> = start.as_ref().map(|start| {
         let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
+        order.sort_by(|&a, &b| start[b].partial_cmp(&start[a]).unwrap());
         order
     });
     let death_times = if ranks {
@@ -571,8 +573,12 @@ fn docount(
     } else {
         let mut order = prepared.sort_stop.clone();
         for group in &prepared.predictor_ties {
-            order[group.clone()]
-                .sort_unstable_by(|&a, &b| risk[a].total_cmp(&risk[b]).then_with(|| a.cmp(&b)));
+            order[group.clone()].sort_unstable_by(|&a, &b| {
+                risk[a]
+                    .partial_cmp(&risk[b])
+                    .unwrap()
+                    .then_with(|| a.cmp(&b))
+            });
         }
         Cow::Owned(order)
     };
@@ -732,6 +738,147 @@ mod tests {
         }
         assert_eq!(ranks.timewt, vec![8.0, 7.0, 5.0, 4.0, 4.0, 1.0]);
         assert_eq!(ranks.casewt, vec![1.0; 6]);
+    }
+
+    #[test]
+    fn signed_zero_event_and_censor_times_match_stock_r() {
+        // R survival 3.8-12 concordancefit(Surv(c(0, -0, 1), c(1, 0, 1)),
+        // matrix(1:3, ncol=1), influence=3, ranks=TRUE).
+        for timefix in [false, true] {
+            let out = fit(
+                &[0.0, -0.0, 1.0],
+                &[1, 0, 1],
+                &[1.0, 2.0, 3.0],
+                &ConcordanceOptions {
+                    timefix,
+                    influence: 3,
+                    ranks: true,
+                    ..ConcordanceOptions::default()
+                },
+            );
+            assert_counts(&out.count[0], [2.0, 0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(out.concordance, [1.0]);
+            assert_eq!(out.var, Some(vec![vec![0.0]]));
+            assert_close(out.cvar.as_ref().unwrap()[0], 1.0 / 6.0);
+            assert_eq!(out.dfbeta, Some(vec![vec![0.0]; 3]));
+            assert_eq!(
+                out.influence,
+                Some(vec![vec![
+                    vec![2.0, 0.0, 0.0, 0.0, 0.0],
+                    vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                    vec![1.0, 0.0, 0.0, 0.0, 0.0],
+                ]]),
+            );
+            let ranks = &out.ranks.as_ref().unwrap()[0];
+            assert_eq!(ranks.time, [0.0, 1.0]);
+            assert_close(ranks.rank[0], 2.0 / 3.0);
+            assert_eq!(ranks.rank[1], 0.0);
+            assert_eq!(ranks.timewt, [3.0, 1.0]);
+            assert_eq!(ranks.casewt, [1.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn signed_zero_times_preserve_joint_predictors_and_counting_process_results() {
+        let stop = [0.0, -0.0, 0.0, -0.0, 1.0, 2.0, 3.0, 3.0];
+        let canonical = [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0];
+        let status = [1, 1, 1, 1, 1, 0, 1, 1];
+        let start = [-1.0, -1.0, -1.0, -1.0, -1.0, -0.0, 1.0, 0.0];
+        let x = ndarray::arr2(&[
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [2.0, 1.0],
+            [3.0, 0.0],
+            [1.0, 2.0],
+            [0.0, 1.0],
+            [2.0, 0.0],
+            [1.0, 1.0],
+        ]);
+        let weights = [1.0, 0.5, 1.5, 1.0, 2.0, 0.0, 3.0, 1.0];
+        for counting in [false, true] {
+            for timewt in [
+                TimeWeight::N,
+                TimeWeight::S,
+                TimeWeight::SOverG,
+                TimeWeight::NOverG2,
+                TimeWeight::I,
+            ] {
+                if counting && matches!(timewt, TimeWeight::SOverG | TimeWeight::NOverG2) {
+                    continue;
+                }
+                for std_err in [false, true] {
+                    for timefix in [false, true] {
+                        let options = ConcordanceOptions {
+                            timewt,
+                            timefix,
+                            std_err,
+                            influence: 3,
+                            ranks: true,
+                            ..ConcordanceOptions::default()
+                        };
+                        let evaluate = |stop: &[f64]| {
+                            let right = right(stop, &status);
+                            let intervals = CountingProcessData::try_new(
+                                start.to_vec(),
+                                stop.to_vec(),
+                                status.to_vec(),
+                            )
+                            .unwrap();
+                            concordancefit(
+                                if counting {
+                                    SurvResponse::Counting(&intervals)
+                                } else {
+                                    SurvResponse::Right(&right)
+                                },
+                                x.view(),
+                                Some(&weights),
+                                None,
+                                Some(&[0, 0, 1, 1, 2, 2, 3, 3]),
+                                &options,
+                            )
+                            .unwrap()
+                        };
+                        let actual = evaluate(&stop);
+                        let expected = evaluate(&canonical);
+                        assert_eq!(
+                            actual.count, expected.count,
+                            "{counting} {timewt:?} {std_err} {timefix}"
+                        );
+                        assert_eq!(actual.concordance, expected.concordance);
+                        assert_eq!(actual.var, expected.var);
+                        assert_eq!(actual.cvar, expected.cvar);
+                        assert_eq!(actual.dfbeta, expected.dfbeta);
+                        assert_eq!(actual.influence, expected.influence);
+                        assert_eq!(actual.ranks, expected.ranks);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn signed_zero_predictors_keep_stock_r_rank_row_order() {
+        // For tied event times and equal predictors, R reverses the stable
+        // input order when it emits ranks, independently of the zero sign.
+        let data = right(&[1.0, 1.0, 2.0], &[1, 1, 1]);
+        let x = ndarray::arr2(&[[0.0, 0.0], [-0.0, 0.0], [1.0, 1.0]]);
+        let out = concordancefit(
+            SurvResponse::Right(&data),
+            x.view(),
+            Some(&[1.0, 2.0, 1.0]),
+            None,
+            None,
+            &ConcordanceOptions {
+                ranks: true,
+                ..ConcordanceOptions::default()
+            },
+        )
+        .unwrap();
+        for ranks in out.ranks.unwrap() {
+            assert_eq!(ranks.casewt, [2.0, 1.0, 1.0]);
+            assert_eq!(ranks.rank, [0.25, 0.25, 0.0]);
+            assert_eq!(ranks.timewt, [4.0, 4.0, 1.0]);
+        }
     }
 
     #[test]

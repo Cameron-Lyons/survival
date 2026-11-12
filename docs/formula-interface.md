@@ -104,12 +104,15 @@ The matrix bases `ns(x, df, knots, intercept, Boundary.knots)`,
 `poly(x, degree, raw)` and `nsk(x, df, knots, intercept, b, Boundary.knots)` are
 terms of their own, named like R's columns (`ns(age, df = 3)1`, …), and
 `scale(x, center, scale)` is a numeric term. A basis is evaluated on all rows of
-its data column before `subset` and missing-row removal, as `model.frame` does,
+its input expression before `subset` and missing-row removal, as `model.frame` does,
 so its knots are R's. New data reuse the fitted knots, boundary and polynomial
 coefficients, as R's `makepredictcall` arranges, and `bs()` extrapolates beyond
-the boundary with R's warning. The basis argument must be a data column
-(`ns(log(age), 3)` needs the transformed column in the data); `ns_basis` and
-`bs_basis` in `survival.core` compute the bases directly.
+the boundary with R's warning. Inputs can be columns or supported numeric
+expressions, including `ns(log(age), 3)`, `bs(age / 10, df=3)`,
+`poly(log(age), 2)` and `nsk(age + sex, df=3)`. Expressions such as `scale(age)`
+are evaluated before selecting rows, and are evaluated on the full new-data
+frame before prediction omission. `ns_basis` and `bs_basis` in `survival.core`
+compute the bases directly.
 
 A character result is a factor with sorted levels, so
 `ifelse(age > 60, "old", "young")` gives the column
@@ -206,6 +209,11 @@ numeric-looking labels stay categorical rather than becoming a continuous
 predictor. The literal label `"NA"`, including one produced by
 `strata(..., na_group=True, shortlabel=True)`, is a valid event-state label and
 stays distinct from a missing value; blank state labels are invalid.
+
+The same input object can supply multiple columns, including a one-shot iterator:
+`values = iter(["a", "b", "a"]); strata(values, values)` groups both copies.
+Each source is read and factor-coded once per call; later calls still see
+changes to reusable inputs such as lists and arrays.
 
 Several separate `strata()` terms are recombined after row selection, so only
 observed combinations remain; a single `strata(a, b)` term keeps its combinations

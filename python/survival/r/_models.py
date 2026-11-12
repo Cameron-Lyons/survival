@@ -90,6 +90,7 @@ from ._surv_summary_print import SurvivalTablePrint
 from ._survfit import (
     _derived_survfit,
     _engine_of,
+    _summary_coxms_frame,
     _summary_survfit_frame,
     median_surv,
     median_survfit,
@@ -971,32 +972,6 @@ def _survfit_multistate_frame(result: SurvfitMultiStateResult) -> dict[str, list
                 name for name, count in result.strata.items() for _ in range(count)
             )
         frame["state"].extend([state] * row_count)
-    return frame
-
-
-def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, list[Any]]:
-    """``summary(fit, data.frame = TRUE)`` of multi-state Cox curves
-    (summary.survfitms.R): the (time, stratum) rows vary fastest, then the newdata
-    rows, then the states; the counts repeat for every newdata row."""
-
-    nt, nd, ns = summary.pstate.shape
-    per_state = nd * nt
-
-    def counts(values: list[list[float]]) -> list[float]:
-        return [float(values[t][s]) for s in range(ns) for _ in range(nd) for t in range(nt)]
-
-    frame: dict[str, list[Any]] = {
-        "time": list(summary.time) * (nd * ns),
-        "n.risk": counts(summary.n_risk),
-        "n.event": counts(summary.n_event),
-        "n.censor": counts(summary.n_censor),
-        "pstate": summary.pstate.ravel(order="F").tolist(),
-    }
-    if summary.strata is not None:
-        frame["strata"] = list(summary.strata) * (nd * ns)
-    frame["state"] = [state for state in summary.states for _ in range(per_state)]
-    for name, values in (summary.newdata or {}).items():
-        frame[name] = [values[i] for _ in range(ns) for i in range(nd) for _ in range(nt)]
     return frame
 
 

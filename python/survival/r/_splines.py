@@ -1,6 +1,6 @@
 """R's matrix-valued basis terms ``ns()``, ``bs()``, ``poly()`` and ``nsk()``.
 
-A term is evaluated on its data column before ``subset`` and ``na.action``, as
+A term is evaluated on its input expression before ``subset`` and ``na.action``, as
 ``model.frame`` does, and keeps the knots, boundary and polynomial coefficients that
 R's ``makepredictcall`` methods store, so new data reuse the fitted basis.
 """
@@ -28,15 +28,14 @@ _BASIS_FORMALS = {
 
 
 def basis_arguments(call: str) -> tuple[str, dict[str, Any]]:
-    """The data column and literal options of a basis call, matched as R matches them."""
+    """The input expression and literal options, matched as R matches them."""
 
     from ._formula import (
-        _formula_name,
+        _expression_columns,
         _formula_response_parts,
         _literal_vector,
         _match_arguments,
         _parse_formula_literal,
-        _unsupported_formula_name,
     )
 
     function, _sep, inner = call.partition("(")
@@ -45,9 +44,9 @@ def basis_arguments(call: str) -> tuple[str, dict[str, Any]]:
     )
     if "x" not in arguments:
         raise ValueError(f"{function}() requires a variable")
-    column, quoted = _formula_name(arguments.pop("x"))
-    if _unsupported_formula_name(column, quoted):
-        raise ValueError(f"{function}() requires a data column; transform the column in the data")
+    expression = arguments.pop("x")
+    if not _expression_columns(expression):
+        raise ValueError(f"{function}() requires a data column")
     options: dict[str, Any] = {}
     for name, value in arguments.items():
         if value == "NULL":
@@ -58,7 +57,7 @@ def basis_arguments(call: str) -> tuple[str, dict[str, Any]]:
         except ValueError:
             values = _literal_vector(value)
             options[name] = values[0] if len(values) == 1 else values
-    return column, options
+    return expression, options
 
 
 def _count(value: Any, name: str) -> int | None:
@@ -138,7 +137,7 @@ def _native(result: Any) -> np.ndarray:
 
 
 def fit_basis(
-    term: _CovariateTerm, column: str, values: Sequence[Any], options: dict[str, Any]
+    term: _CovariateTerm, columns: Sequence[str], values: Sequence[Any], options: dict[str, Any]
 ) -> _PenaltyDesignTerm:
     """Evaluate a basis call on all of its column's *values*."""
 
@@ -193,7 +192,7 @@ def fit_basis(
     names = tuple(f"{label}{j}" for j in range(1, matrix.shape[1] + 1))
     return _PenaltyDesignTerm(
         term,
-        (column,),
+        tuple(columns),
         names,
         None,
         degree,

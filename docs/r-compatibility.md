@@ -461,6 +461,11 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
 
 ### Survival curves
 
+- Multi-state summary data frames omit missing confidence components; stock R
+  errors when standard errors are present but confidence bounds are absent.
+  Cox frames retain the original name of a single new-data column, which R can
+  replace with its internal subsetting expression. Empty frames retain their
+  column schema.
 - Formula `cluster()` terms select robust-variance groups and warn about the
   deprecated syntax, following the intended `survfit.formula` branch. R 3.8-12
   reuses model-frame terms that have no special-term metadata, so the branch
@@ -852,8 +857,7 @@ this does not show.
   [Formula interface](formula-interface.md#r-functions-in-terms)); other calls
   are refused. `pmin()`/`pmax()` refuse character arguments, `c()` refuses
   factors, and `factor(exclude = NULL)` is refused; R accepts all three.
-- `ns()`, `bs()`, `poly()` and `nsk()` take a data column, not an expression,
-  and `poly()` takes one variable and no `coefs`. `ns()` and `bs()` move interior
+- `poly()` takes one numeric input and no `coefs`. `ns()` and `bs()` move interior
   knots that coincide with a boundary knot as R does, without R's warning.
   `scale()` is recomputed on new data, as in R.
 - Python `subset` is zero-based and accepts integer positions or a full-length
@@ -903,9 +907,6 @@ this does not show.
 - `survobrien` keeps plain string columns untransformed like factors (a Python
   list has no factor/character distinction; R ≥ 4 rank-transforms a character
   vector).
-- A logical or factor response expression in `concordance` is evaluated into a
-  column, and the data columns it reads are removed before the model frame; a
-  right-hand side, weights or cluster argument naming one of them fails.
 - `clogit`'s response is named `Surv(rep(1, length(case)), case)` in the model
   frame (R: `Surv(1 + 0 * case, case)`).
 - `start.time` in `survfit(coxfit)` must be finite; R also accepts -Inf and Inf.

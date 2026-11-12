@@ -178,7 +178,6 @@ def test_native_bases_match_r():
 @pytest.mark.parametrize(
     ("rhs", "message"),
     [
-        ("ns(log(age), 3)", "requires a data column"),
         ("I(ns(age, 3))", "matrix term"),
         ("poly(meal.cal, 2)", "missing values are not allowed in 'poly'"),
         ("poly(age, 2, coefs = 1)", "coefs"),

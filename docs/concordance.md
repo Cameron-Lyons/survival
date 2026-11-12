@@ -9,7 +9,7 @@ Differences from R are listed in
 ## Direct calls
 
 ```python
-from survival import core
+from survival import core, kernels
 
 time = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]
 status = [1, 1, 0, 1, 1, 1, 0, 1]
@@ -50,6 +50,11 @@ fit = kernels.concordancefit(
   order; plain logical and character vectors are refused.
 - Iterator cluster and strata columns are read once; declared categories keep
   their order, and unused categories never add influence rows.
+- Logical and ordered or two-level factor response expressions retain their
+  source columns for explicit predictors, weights and clusters. Formula `.`
+  excludes response dependencies, following R's model-frame rules.
+  Python retains predictor labels for scalar results and omits backticks around
+  quoted source-column labels; the numerical results follow R.
 - With several predictors, the first predictor sets the risk-sum accumulation
   order, so other columns can differ from separate single-predictor calls by
   rounding. Equal predictor values keep their original observation order,

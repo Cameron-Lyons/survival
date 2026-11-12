@@ -72,7 +72,10 @@ pub use coxph_lowlevel::CoxphFitResult;
 pub(crate) use coxph_lowlevel::coxph_fit_raw;
 pub(crate) use coxph_wtest::coxph_wtest_py;
 pub use coxph_wtest::{CoxphWtest, wald_tests};
-pub use coxphms::coxphms_fit;
+pub(crate) use coxphms::coxphms_fit_py;
+pub use coxphms::{
+    CoxphmsData, CoxphmsDesign, CoxphmsFit, CoxphmsShare, CoxphmsStack, coxphms_fit,
+};
 pub use cure_models::{
     BoundedCumulativeHazardConfig, BoundedCumulativeHazardResult, CureDistribution,
     CureModelComparisonResult, LinkFunction, MixtureCureConfig, MixtureCureResult,

@@ -57,7 +57,10 @@ pub use survfit_aj_summary::{
 pub(crate) use survfit_confint::survfit_confint_py;
 pub use survfit_confint::{ConfLower, ConfType, ConfidenceBands, survfit_confint};
 #[cfg(feature = "python")]
-pub use survfit_coxphms::coxphms_curves;
+pub(crate) use survfit_coxphms::coxphms_curves_py;
+pub use survfit_coxphms::{
+    CoxphmsCurveData, CoxphmsCurveOptions, CoxphmsCurves, CoxphmsNewData, coxphms_curves,
+};
 pub(crate) use survfit_matrix::survfit_matrix_py;
 pub use survfit_matrix::{SurvfitMatrixMethod, SurvfitMatrixTransition, survfit_matrix};
 pub use survfit_summary::{

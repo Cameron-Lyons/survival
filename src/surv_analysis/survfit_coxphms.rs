@@ -1,20 +1,239 @@
 use ndarray::{Array2, Array3, ArrayView2};
 use rayon::prelude::*;
 
+use super::survfit_confint::ConfType;
+use super::survfitaj::{SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, survfitaj};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::expm::survexpm;
 use crate::internal::sorting::ordered_subset;
-use crate::internal::validation::validate_length;
-use crate::regression::coxphms::MsDesign;
+use crate::internal::validation::{validate_finite, validate_length};
+use crate::regression::coxphms::{CoxphmsData, CoxphmsDesign};
 #[cfg(feature = "python")]
 use {
-    super::survfit_confint::ConfType,
-    super::survfitaj::{SurvfitAJData, SurvfitAJOptions, SurvfitAJResult, survfitaj},
     crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec},
     crate::regression::coxphms::{ms_design, to_index},
     numpy::PyArray3,
     pyo3::prelude::*,
 };
+
+/// Unstacked training observations and fitted effects for multistate Cox curves.
+///
+/// `states` names the one-based state codes of the observations and transition
+/// design. `strata` groups output curves by user strata (not the stacked model's
+/// transition strata). `beta` follows the coefficient codes in `design.cmap`;
+/// aliased coefficients must be replaced by zero. `means` has one value per
+/// unstacked covariate. For proportional-baseline effects represented by
+/// `share_scale`, zero their coefficient entries in `beta`, as R does.
+pub struct CoxphmsCurveData<'a> {
+    pub observations: &'a CoxphmsData,
+    pub design: &'a CoxphmsDesign,
+    pub states: &'a [String],
+    pub strata: Option<&'a [i32]>,
+    pub beta: &'a [f64],
+    pub means: &'a [f64],
+    pub share_scale: Option<&'a [f64]>,
+}
+
+/// One constant covariate/offset vector per requested prediction.
+/// Individual time-varying covariate paths are not supported for multistate Cox.
+pub struct CoxphmsNewData<'a> {
+    pub x: ArrayView2<'a, f64>,
+    pub offset: Option<&'a [f64]>,
+}
+
+/// Multistate curve controls. Defaults use matrix exponentials (`stype=2`) and
+/// Breslow increments (`ctype=1`); `ctype=2` selects the Efron tie correction.
+/// Curves have no standard errors, matching R's multistate Cox method.
+#[derive(Debug, Clone)]
+pub struct CoxphmsCurveOptions {
+    pub stype: u8,
+    pub ctype: u8,
+    pub start_time: Option<f64>,
+    pub p0: Option<Vec<f64>>,
+    pub time0: bool,
+}
+
+impl Default for CoxphmsCurveOptions {
+    fn default() -> Self {
+        Self {
+            stype: 2,
+            ctype: 1,
+            start_time: None,
+            p0: None,
+            time0: false,
+        }
+    }
+}
+
+/// Cox predictions on the reporting grid prepared by Aalen–Johansen.
+///
+/// `baseline` supplies the stacked time grid, observation counts, state labels,
+/// initial distributions and stratum ranges. Its empirical Aalen–Johansen
+/// probabilities are not the Cox predictions: read `pstate` and `cumhaz` here.
+/// These owned arrays have axes `(time, prediction row, state)` and
+/// `(time, prediction row, transition)` respectively; transitions follow `cmap`.
+#[derive(Debug, Clone)]
+pub struct CoxphmsCurves {
+    pub baseline: SurvfitAJResult,
+    pub pstate: Array3<f64>,
+    pub cumhaz: Array3<f64>,
+}
+
+/// Compute multistate Cox curves using the same numerical driver as Python.
+/// Inputs are revalidated before indexing; no Python runtime or objects are used.
+pub fn coxphms_curves(
+    data: &CoxphmsCurveData<'_>,
+    newdata: &CoxphmsNewData<'_>,
+    options: &CoxphmsCurveOptions,
+) -> SurvivalResult<CoxphmsCurves> {
+    let observations = data.observations;
+    let design = data.design;
+    observations.validate(design)?;
+    let n = observations.time.len();
+    let nstate = data.states.len();
+    let unique: std::collections::HashSet<&str> = data.states.iter().map(String::as_str).collect();
+    if nstate == 0 || nstate > i32::MAX as usize || unique.len() != nstate || unique.contains("") {
+        return Err(SurvivalError::invalid_input(
+            "states must have distinct, non-empty names",
+        ));
+    }
+    if observations
+        .istate
+        .iter()
+        .chain(&design.from)
+        .chain(&design.to)
+        .any(|&state| state == 0 || state > nstate)
+        || observations.endpoint.iter().any(|&state| state > nstate)
+    {
+        return Err(SurvivalError::invalid_input(
+            "state codes must name one of the states",
+        ));
+    }
+    if let Some(strata) = data.strata {
+        validate_length(n, strata.len(), "strata")?;
+    }
+    validate_length(design.nx, data.means.len(), "means")?;
+    validate_finite(data.means, "means")?;
+    if data.beta.len() < design.ncoef() {
+        return Err(SurvivalError::invalid_input(
+            "beta needs a value per coefficient of cmap",
+        ));
+    }
+    validate_finite(data.beta, "beta")?;
+    if let Some(scale) = data.share_scale {
+        validate_length(design.ntrans(), scale.len(), "share_scale")?;
+        validate_finite(scale, "share_scale")?;
+        if scale.iter().any(|&value| value <= 0.0) {
+            return Err(SurvivalError::invalid_input("share_scale must be positive"));
+        }
+    }
+    validate_length(design.nx, newdata.x.ncols(), "newx columns")?;
+    if newdata.x.iter().any(|value| !value.is_finite()) {
+        return Err(SurvivalError::invalid_input("newx must be finite"));
+    }
+    if let Some(offset) = newdata.offset {
+        validate_length(newdata.x.nrows(), offset.len(), "newoffset")?;
+        validate_finite(offset, "newoffset")?;
+    }
+    if !(1..=2).contains(&options.stype) || !(1..=2).contains(&options.ctype) {
+        return Err(SurvivalError::invalid_input(
+            "stype and ctype must be 1 or 2",
+        ));
+    }
+    let weights = observations.weights.clone().unwrap_or_else(|| vec![1.0; n]);
+    let offset = observations.offset.clone().unwrap_or_else(|| vec![0.0; n]);
+    let newoffset = newdata
+        .offset
+        .map_or_else(|| vec![0.0; newdata.x.nrows()], <[f64]>::to_vec);
+    let aj_data = SurvfitAJData::try_new(
+        observations.entry.clone(),
+        observations.time.clone(),
+        observations
+            .endpoint
+            .iter()
+            .map(|&state| state as i32)
+            .collect(),
+        data.states.to_vec(),
+        Some(weights.clone()),
+        data.strata.map(<[i32]>::to_vec),
+        Some(
+            observations
+                .id
+                .iter()
+                .map(|&code| i64::from(code))
+                .collect(),
+        ),
+        Some(
+            observations
+                .istate
+                .iter()
+                .map(|&state| data.states[state - 1].clone())
+                .collect(),
+        ),
+        Some(data.states.to_vec()),
+        None,
+    )?;
+    let aj_options = SurvfitAJOptions {
+        se_fit: false,
+        conf_type: ConfType::None,
+        start_time: options.start_time,
+        p0: options.p0.clone(),
+        time0: options.time0,
+        timefix: false,
+        ..SurvfitAJOptions::default()
+    };
+    let baseline = survfitaj(&aj_data, &aj_options)?;
+    let curve_of = match (data.strata, &baseline.strata_codes) {
+        (Some(codes), Some(fitted)) => {
+            let positions: std::collections::HashMap<i32, usize> = fitted
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, code)| (code, index))
+                .collect();
+            codes
+                .iter()
+                .map(|code| positions.get(code).copied())
+                .collect()
+        }
+        _ => vec![Some(0); n],
+    };
+    let ranges = baseline.curve_ranges();
+    let times: Vec<Vec<f64>> = ranges
+        .iter()
+        .map(|range| baseline.time[range.clone()].to_vec())
+        .collect();
+    let curve_data = CoxmsCurveData {
+        start: observations.entry.as_deref(),
+        time: &observations.time,
+        endpoint: &observations.endpoint,
+        istate: &observations.istate,
+        weights: &weights,
+        offset: &offset,
+        strata: &curve_of,
+        nstrata: ranges.len(),
+        x: observations.x.view(),
+        design,
+        strata_term_codes: &observations.strata_terms,
+        beta: data.beta,
+        means: data.means,
+        share_scale: data.share_scale,
+    };
+    let curves = coxms_curves(
+        &curve_data,
+        &times,
+        &baseline.p0,
+        newdata.x,
+        &newoffset,
+        options.stype,
+        options.ctype,
+    )?;
+    Ok(CoxphmsCurves {
+        baseline,
+        pstate: curves.pstate.permuted_axes([1, 0, 2]),
+        cumhaz: curves.cumhaz.permuted_axes([1, 0, 2]),
+    })
+}
 
 pub(crate) struct CoxmsCurveData<'a> {
     pub start: Option<&'a [f64]>,
@@ -26,7 +245,7 @@ pub(crate) struct CoxmsCurveData<'a> {
     pub strata: &'a [Option<usize>],
     pub nstrata: usize,
     pub x: ArrayView2<'a, f64>,
-    pub design: &'a MsDesign,
+    pub design: &'a CoxphmsDesign,
     pub strata_term_codes: &'a [Vec<i32>],
     pub beta: &'a [f64],
     pub means: &'a [f64],
@@ -382,9 +601,9 @@ pub(crate) fn coxms_curves(
 #[cfg(feature = "python")]
 #[allow(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
-#[pyfunction]
+#[pyfunction(name = "coxphms_curves")]
 #[pyo3(signature = (time, endpoint, istate, x, cmap, cmap_nrow, baseline, trans_from, trans_to, id, states, beta, means, newx, stype, ctype, entry=None, weights=None, offset=None, strata=None, strata_terms=None, strata_use=None, share_scale=None, newoffset=None, start_time=None, p0=None, time0=false))]
-pub fn coxphms_curves<'py>(
+pub(crate) fn coxphms_curves_py<'py>(
     py: Python<'py>,
     time: FloatVec,
     endpoint: IntVec,
@@ -433,89 +652,45 @@ pub fn coxphms_curves<'py>(
         strata_use,
         strata_terms.len(),
     )?;
-    let endpoint = to_index(endpoint, "endpoint")?;
-    let istate = to_index(istate, "istate")?;
-    let n = time.len();
-    if let Some(&bad) = istate.iter().find(|&&s| s == 0 || s > states.len()) {
-        return Err(SurvivalError::invalid_input(format!(
-            "istate code {bad} does not name one of the states"
-        ))
-        .into());
-    }
-    let x = x.into_inner();
-    let newx = newx.into_inner();
-    let newoffset = newoffset.map_or_else(|| vec![0.0; newx.nrows()], |v| v.into_inner());
-    let weights = weights.map_or_else(|| vec![1.0; n], |v| v.into_inner());
-    let offset = offset.map_or_else(|| vec![0.0; n], |v| v.into_inner());
-    let strata = strata.map(IntVec::into_inner);
-    let data = SurvfitAJData::try_new(
-        entry.as_ref().map(|entry| entry.to_vec()),
-        time.to_vec(),
-        endpoint.iter().map(|&state| state as i32).collect(),
-        states.clone(),
-        Some(weights.clone()),
-        strata.clone(),
-        Some(id.iter().map(|&code| i64::from(code)).collect()),
-        Some(istate.iter().map(|&s| states[s - 1].clone()).collect()),
-        Some(states.clone()),
-        None,
-    )?;
-    let options = SurvfitAJOptions {
-        se_fit: false,
-        conf_type: ConfType::None,
+    let observations = CoxphmsData {
+        time: time.into_inner(),
+        entry: entry.map(FloatVec::into_inner),
+        endpoint: to_index(endpoint, "endpoint")?,
+        istate: to_index(istate, "istate")?,
+        x: x.into_inner(),
+        strata_terms,
+        id: id.into_inner(),
+        x_assign: vec![0; design.nx],
+        weights: weights.map(FloatVec::into_inner),
+        offset: offset.map(FloatVec::into_inner),
+        cluster: None,
+    };
+    let data = CoxphmsCurveData {
+        observations: &observations,
+        design: &design,
+        states: &states,
+        strata: strata.as_deref(),
+        beta: &beta,
+        means: &means,
+        share_scale: share_scale.as_deref(),
+    };
+    let newdata = CoxphmsNewData {
+        x: newx.view(),
+        offset: newoffset.as_deref(),
+    };
+    let options = CoxphmsCurveOptions {
+        stype,
+        ctype,
         start_time,
         p0,
         time0,
-        timefix: false,
-        ..SurvfitAJOptions::default()
     };
-    let beta = beta.into_inner();
-    let means = means.into_inner();
-    let share_scale = share_scale.map(|v| v.into_inner());
-    let (engine, curves) = py.detach(|| -> SurvivalResult<_> {
-        let engine = survfitaj(&data, &options)?;
-        let curve_of: Vec<Option<usize>> = match (&strata, &engine.strata_codes) {
-            (Some(codes), Some(fitted)) => codes
-                .iter()
-                .map(|code| fitted.iter().position(|f| f == code))
-                .collect(),
-            _ => vec![Some(0); n],
-        };
-        let ranges = engine.curve_ranges();
-        let utime: Vec<Vec<f64>> = ranges
-            .iter()
-            .map(|range| engine.time[range.clone()].to_vec())
-            .collect();
-        let curve_data = CoxmsCurveData {
-            start: entry.as_deref(),
-            time: &time,
-            endpoint: &endpoint,
-            istate: &istate,
-            weights: &weights,
-            offset: &offset,
-            strata: &curve_of,
-            nstrata: ranges.len(),
-            x: x.view(),
-            design: &design,
-            strata_term_codes: &strata_terms,
-            beta: &beta,
-            means: &means,
-            share_scale: share_scale.as_deref(),
-        };
-        let curves = coxms_curves(
-            &curve_data,
-            &utime,
-            &engine.p0,
-            newx.view(),
-            &newoffset,
-            stype,
-            ctype,
-        )?;
-        Ok((engine, curves))
-    })?;
-    let as_numpy =
-        |array: Array3<f64>| PyArray3::from_owned_array(py, array.permuted_axes([1, 0, 2]));
-    Ok((engine, as_numpy(curves.pstate), as_numpy(curves.cumhaz)))
+    let curves = py.detach(|| coxphms_curves(&data, &newdata, &options))?;
+    Ok((
+        curves.baseline,
+        PyArray3::from_owned_array(py, curves.pstate),
+        PyArray3::from_owned_array(py, curves.cumhaz),
+    ))
 }
 
 #[cfg(test)]
@@ -537,7 +712,7 @@ mod tests {
         let time = [1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 4.0, 5.0];
         let endpoint = [2, 2, 2, 3, 2, 0, 3, 2];
         let x = Array2::from_shape_vec((8, 1), vec![0., 1., 0., 1., 0., 1., 1., 0.]).unwrap();
-        let design = MsDesign {
+        let design = CoxphmsDesign {
             cmap: Array2::from_shape_vec((1, 2), vec![1, 2]).unwrap(),
             nx: 1,
             baseline: vec![1, 2],

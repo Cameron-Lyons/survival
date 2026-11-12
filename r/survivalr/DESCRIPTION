@@ -6,7 +6,7 @@ Maintainer: Cameron Lyons <cameron.lyons2@gmail.com>
 Authors@R: person("Cameron", "Lyons", email = "cameron.lyons2@gmail.com", role = c("aut", "cre"))
 Description: Experimental R facade for the Rust-backed Python survival package.
     The package exposes familiar R survival-analysis entry points and delegates
-    computation to the Python survival.r_api module through reticulate.
+    computation to the Python survival.r module through reticulate.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 3.6.0)

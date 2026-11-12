@@ -504,31 +504,41 @@ fn turnbull_curve(
         )
     };
 
-    let (wtmat, lwt): (Vec<Vec<f64>>, Vec<f64>) = if censored.is_empty() {
-        (vec![vec![1.0; njump]], vec![1.0])
+    // Each row of R's binary membership matrix is a contiguous range of jumps.
+    // Keep its bounds rather than allocating censored.len() * njump values.
+    let (supports, lwt): (Vec<std::ops::Range<usize>>, Vec<f64>) = if censored.is_empty() {
+        (std::iter::once(0..njump).collect(), vec![1.0])
     } else {
         (
             censored
                 .iter()
                 .map(|&i| {
-                    jtimes
-                        .iter()
-                        .map(|&t| {
-                            let covered = match status[i] {
-                                IntervalStatus::Left => t <= time1[i],
-                                _ => t > time1[i] && t <= time2[i],
-                            };
-                            f64::from(covered)
-                        })
-                        .collect()
+                    if status[i] == IntervalStatus::Left {
+                        0..jtimes.partition_point(|&t| t <= time1[i])
+                    } else {
+                        jtimes.partition_point(|&t| t <= time1[i])
+                            ..jtimes.partition_point(|&t| t <= time2[i])
+                    }
                 })
                 .collect(),
             censored.iter().map(|&i| weights[i]).collect(),
         )
     };
 
-    let column_sums: Vec<f64> = (0..njump)
-        .map(|j| wtmat.iter().map(|row| row[j]).sum())
+    // The starting distribution counts overlapping intervals without case weights.
+    // Endpoint updates make this linear in the number of intervals and jumps.
+    let mut changes = vec![0isize; njump + 1];
+    for support in &supports {
+        changes[support.start] += 1;
+        changes[support.end] -= 1;
+    }
+    let mut count = 0isize;
+    let column_sums: Vec<f64> = changes[..njump]
+        .iter()
+        .map(|change| {
+            count += change;
+            count as f64
+        })
         .collect();
     let total: f64 = column_sums.iter().sum();
     let mut cumulative = 0.0;
@@ -547,9 +557,9 @@ fn turnbull_curve(
     let mut jump1 = vec![0.0; njump];
     let mut jump2 = vec![0.0; njump];
     let loglik = |jumps: &[f64]| -> f64 {
-        wtmat
+        supports
             .iter()
-            .map(|row| row.iter().zip(jumps).map(|(w, j)| w * j).sum::<f64>().ln())
+            .map(|support| jumps[support.clone()].iter().sum::<f64>().ln())
             .sum()
     };
     while eps > TURNBULL_EPS {
@@ -587,10 +597,16 @@ fn turnbull_curve(
         jump1 = jsave;
 
         let mut wt2 = vec![0.0; njump];
-        for (row, &weight) in wtmat.iter().zip(&lwt) {
-            let denominator: f64 = row.iter().zip(&jumps).map(|(w, j)| w * j).sum();
-            for j in 0..njump {
-                wt2[j] += weight / denominator * row[j] * jumps[j];
+        for (support, &weight) in supports.iter().zip(&lwt) {
+            let denominator: f64 = jumps[support.clone()].iter().sum();
+            let multiplier = weight / denominator;
+            if !multiplier.is_finite() {
+                return Err(SurvivalError::invalid_input(
+                    "interval-censored observation has no finite probability mass",
+                ));
+            }
+            for j in support.clone() {
+                wt2[j] += multiplier * jumps[j];
             }
         }
         let mut fit_weights: Vec<f64> = real.iter().map(|&i| weights[i]).collect();
@@ -995,6 +1011,122 @@ mod tests {
         assert_eq!(curve.n_censor, vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
         assert!((curve.n_risk[0] - 10.0).abs() < 1e-12);
         assert!((curve.n_event[0] - 1.53700796795399).abs() < 1e-6);
+    }
+
+    #[test]
+    fn disjoint_intervals_match_exact_events_at_their_midpoints() {
+        let n = 257;
+        let time1: Vec<f64> = (0..n).map(|i| (i * 2) as f64).collect();
+        let time2: Vec<f64> = time1.iter().map(|&t| t + 1.0).collect();
+        let midpoints: Vec<f64> = time1.iter().map(|&t| t + 0.5).collect();
+        let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.25).collect();
+        let result = turnbull(&TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &vec![3; n],
+            weights: Some(&weights),
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: false,
+            se_fit: true,
+            robust: None,
+        })
+        .unwrap();
+        let data = SurvfitKMData::try_new(
+            None,
+            midpoints.clone(),
+            vec![1; n],
+            Some(weights),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let km = survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+        let curve = &result.curves[0];
+        assert_eq!(curve.time, midpoints);
+        assert_close(&curve.n_risk, &km.n_risk, 1e-11, "n_risk");
+        assert_close(&curve.n_event, &km.n_event, 1e-12, "n_event");
+        assert_close(&curve.surv, &km.surv, 1e-12, "surv");
+        assert_close(
+            &curve.std_err,
+            km.std_err.as_ref().unwrap(),
+            1e-12,
+            "std_err",
+        );
+    }
+
+    #[test]
+    fn weighted_interval_boundaries_match_stock_r() {
+        // survival::survfit(Surv(time1, time2, status, type="interval") ~ 1,
+        //                   weights=weights, timefix=FALSE), survival 3.8-11.
+        let nan = f64::NAN;
+        let result = turnbull(&TurnbullInput {
+            time1: &[1.0, 2.0, 3.0, 1.0, 2.0, 4.0],
+            time2: &[nan, nan, nan, 2.0, nan, nan],
+            status: &[1, 1, 1, 3, 2, 0],
+            weights: Some(&[1.0, 2.0, 0.5, 3.0, 0.75, 1.25]),
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: false,
+            se_fit: true,
+            robust: None,
+        })
+        .unwrap();
+        let curve = &result.curves[0];
+        assert_eq!(curve.time, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_close(&curve.n_risk, &[8.5, 7.375, 1.75, 1.25], 1e-12, "n_risk");
+        assert_close(&curve.n_event, &[1.125, 5.625, 0.5, 0.0], 1e-12, "n_event");
+        assert_close(
+            &curve.surv,
+            &[
+                0.8676470588235294,
+                0.2058823529411765,
+                0.14705882352941177,
+                0.14705882352941177,
+            ],
+            1e-12,
+            "surv",
+        );
+    }
+
+    #[test]
+    fn an_interval_without_representable_support_is_rejected() {
+        // The bracket midpoint rounds down to the excluded lower endpoint.
+        // A sparse update must not silently discard even a zero-weight row.
+        for weight in [0.0, 1.0] {
+            let err = turnbull(&TurnbullInput {
+                time1: &[1.0, 2.0],
+                time2: &[1.0_f64.next_up(), f64::NAN],
+                status: &[3, 1],
+                weights: Some(&[weight, 1.0]),
+                group: None,
+                conf_level: 0.95,
+                conf_type: "log",
+                timefix: false,
+                se_fit: false,
+                robust: None,
+            })
+            .unwrap_err();
+            assert!(err.to_string().contains("no finite probability mass"));
+        }
+        // A nonempty support can also lose all its mass on a later iteration.
+        let err = turnbull(&TurnbullInput {
+            time1: &[1.0, 3.0],
+            time2: &[2.0, 4.0],
+            status: &[3, 3],
+            weights: Some(&[0.0, 1.0]),
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: false,
+            se_fit: false,
+            robust: None,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("no finite probability mass"));
     }
 
     #[test]
