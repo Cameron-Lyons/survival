@@ -1647,6 +1647,70 @@ mod tmerge_bench {
     }
 }
 
+mod neardate_bench {
+    use survival::data_prep::{NeardateBest, neardate};
+
+    fn run(bencher: divan::Bencher, n: usize, queried_subjects: usize) {
+        let subjects = n / 10;
+        let id2: Vec<usize> = (0..n).map(|i| i % subjects).collect();
+        let y2: Vec<f64> = (0..n).map(|i| ((i * 37) % 101) as f64).collect();
+        let id1: Vec<usize> = (0..queried_subjects).collect();
+        let y1 = vec![50.0; queried_subjects];
+        bencher.bench_local(|| neardate(&id1, &y1, &id2, &y2, NeardateBest::After).unwrap());
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn all_subjects(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, n / 10);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn subject_subset(bencher: divan::Bencher, n: usize) {
+        run(bencher, n, 10);
+    }
+
+    fn run_many_queries(bencher: divan::Bencher, n: usize, repeated: bool) {
+        let subjects = if repeated { 10 } else { n };
+        let id1: Vec<usize> = (0..n).map(|i| i % subjects).collect();
+        let id2: Vec<usize> = (0..10).collect();
+        let y1 = vec![50.0; n];
+        let y2: Vec<f64> = (0..10).map(|i| ((i * 37) % 101) as f64).collect();
+        bencher.bench_local(|| neardate(&id1, &y1, &id2, &y2, NeardateBest::After).unwrap());
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn many_query_subjects(bencher: divan::Bencher, n: usize) {
+        run_many_queries(bencher, n, false);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn repeated_queries(bencher: divan::Bencher, n: usize) {
+        run_many_queries(bencher, n, true);
+    }
+
+    fn run_strings(bencher: divan::Bencher, n: usize, queried_subjects: usize) {
+        let id2: Vec<String> = (0..n)
+            .map(|i| format!("subject-{}", i % queried_subjects))
+            .collect();
+        let id1: Vec<String> = (0..queried_subjects)
+            .map(|i| format!("subject-{i}"))
+            .collect();
+        let y2: Vec<f64> = (0..n).map(|i| ((i * 37) % 101) as f64).collect();
+        let y1 = vec![50.0; queried_subjects];
+        bencher.bench_local(|| neardate(&id1, &y1, &id2, &y2, NeardateBest::After).unwrap());
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn string_subjects(bencher: divan::Bencher, n: usize) {
+        run_strings(bencher, n, n / 10);
+    }
+
+    #[divan::bench(args = [1000, 10000, 100000])]
+    fn equal_string_inputs(bencher: divan::Bencher, n: usize) {
+        run_strings(bencher, n, n);
+    }
+}
+
 mod rttright_bench {
     use super::*;
     use survival::data_prep::{RttrightInput, rttright};
@@ -1809,6 +1873,32 @@ mod expected_survival_grid {
     #[divan::bench(args = [100, 1000, 4000, 16000, 32000])]
     fn repeated_requests(bencher: divan::Bencher, points: usize) {
         run(bencher, points, 2);
+    }
+}
+
+mod turnbull_bench {
+    use super::*;
+    use survival::interval::{TurnbullInput, turnbull};
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn disjoint_intervals(bencher: divan::Bencher, n: usize) {
+        let time1: Vec<f64> = (0..n).map(|i| (2 * i) as f64).collect();
+        let time2: Vec<f64> = time1.iter().map(|&t| t + 1.0).collect();
+        let status = vec![3; n];
+        let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.25).collect();
+        let input = TurnbullInput {
+            time1: &time1,
+            time2: &time2,
+            status: &status,
+            weights: Some(&weights),
+            group: None,
+            conf_level: 0.95,
+            conf_type: "log",
+            timefix: false,
+            se_fit: true,
+            robust: None,
+        };
+        bencher.bench(|| black_box(turnbull(black_box(&input)).unwrap()));
     }
 }
 

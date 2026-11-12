@@ -165,6 +165,67 @@ def test_unequal_iterator_columns_raise_after_materialization():
         r.strata(iter([1, 2]), iter(["a"]))
 
 
+@pytest.mark.parametrize("container", ["positional", "mapping", "nested", "outer_iterator"])
+@pytest.mark.parametrize("declared", [False, True])
+@pytest.mark.parametrize("na_group", [False, True])
+def test_shared_iterator_columns_match_stock_r(container, declared, na_group):
+    # R: strata(x, x, shortlabel=TRUE, na.group=...), where x is this character
+    # vector or factor(x, levels=c("b", "unused", "a")).
+    values = ["b", "a", None, "b"]
+    source = FactorIterator(values, ["b", "unused", "a"]) if declared else iter(values)
+    columns = [source, source]
+    arguments = (
+        columns
+        if container == "positional"
+        else [{"left": source, "right": source}]
+        if container == "mapping"
+        else [columns]
+        if container == "nested"
+        else [iter(columns)]
+    )
+    actual = r.strata(*arguments, shortlabel=True, na_group=na_group)
+    levels = ["b, b", "a, a"] if declared else ["a, a", "b, b"]
+    codes = [0, 1, None, 0] if declared else [1, 0, None, 1]
+    counts = [2, 1] if declared else [1, 2]
+    if na_group:
+        levels.append("NA, NA")
+        codes[2] = 2
+        counts.append(1)
+    assert_factor(
+        actual,
+        {
+            "codes": codes,
+            "levels": levels,
+            "labels": ["b, b", "a, a", "NA, NA" if na_group else None, "b, b"],
+            "counts": counts,
+        },
+    )
+    assert list(source) == []
+    if declared:
+        assert source.observed == values
+
+
+def test_shared_iterator_default_labels_and_distinct_columns():
+    source = iter([2, 1, 2])
+    actual = r.strata(source, source, iter(["z", "x", "y"]))
+    assert actual.levels == ["v1=1, v2=1, v3=x", "v1=2, v2=2, v3=y", "v1=2, v2=2, v3=z"]
+    assert actual.codes == [2, 0, 1]
+    assert actual.counts == [1, 1, 1]
+    source = iter(["b", "a", "b"])
+    assert r.strata(source, source).levels == ["a, a", "b, b"]
+
+
+def test_shared_mutable_columns_are_prepared_again_on_each_call():
+    source = [2, 1, 2]
+    first = r.strata(source, source, shortlabel=True)
+    source[0] = 3
+    second = r.strata(source, source, shortlabel=True)
+    assert first.codes == [1, 0, 1]
+    assert first.levels == ["1, 1", "2, 2"]
+    assert second.codes == [2, 0, 1]
+    assert second.levels == ["1, 1", "2, 2", "3, 3"]
+
+
 def test_literal_na_state_label_and_missing_factor_value_match_stock_r():
     case = REFERENCE["state_label"]
     events = RFactor(case["values"], case["levels"])

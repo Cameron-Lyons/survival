@@ -10,6 +10,13 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Added
 
+- Typed Rust multistate Cox fitting and curve APIs, available without Python,
+  with named results and validation of mutable input fields.
+- Spline and polynomial formula terms accept composed numeric inputs, including
+  `ns(log(age), df=3)` and `poly(age / 10, 2)`. Fitted bases retain their knots
+  and coefficients for prediction, with expressions evaluated before row selection.
+- `summary_survfit(..., data_frame=True)` supports ordinary and multi-state Cox
+  curves, with requested-time selection and new-data columns.
 - `survival.datasets.load_uspop2()` provides R's complete US population
   projections, with all age, sex and year labels, owned NumPy count arrays and
   copy/pickle support. Rust exposes the same data through `population::uspop2`.
@@ -30,6 +37,14 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Performance
 
+- Survival-summary data frames skip unused restricted-mean and quantile tables.
+- Turnbull interval-censored curves store each observation's jump range instead
+  of a dense observation-by-jump matrix. EM updates visit only covered jumps,
+  preserving the accumulation order and convergence rule.
+- `neardate` omits unrelated reference subjects for small query sets, avoiding
+  unnecessary allocation and sorting while retaining its full-input path.
+- `strata` materializes and factor-codes repeated input columns once per call.
+
 - Stable Cox diagnostics use additive risk sweeps and hazard prefixes when all
   rows enter before follow-up, avoiding repeated tree updates in case-cohort
   fits while retaining protection against cancellation.
@@ -43,6 +58,24 @@ replacement. Numerical corrections are described under Fixed below.
   conversion: 100,000 rows take 9 ms instead of 34 ms (R: 10 ms).
 
 ### Fixed
+
+- Optional ML builds use `chacha20` 0.10.2, fixing the RNG's use of an SSE4.1
+  instruction in its SSE2 backend ([upstream fix](https://github.com/RustCrypto/stream-ciphers/pull/580)).
+- Concordance formulas retain source columns used by logical or factor responses
+  for explicit predictors, weights and clusters, while keeping R's `.` expansion.
+- Release wheel smoke tests import the current `survival.r` interface.
+- Concordance treats positive and negative zero as tied times and predictions,
+  preserving event/censor ordering and preventing a panic when ranks are requested.
+- Spline formulas accept quoted column names containing spaces.
+- Multi-state summary data frames work without confidence bounds.
+- The R bridge forwards Cox summary data frames with factor columns and empty
+  selections preserved.
+- Multi-state Cox frames preserve state labels when prediction-column names
+  collide with curve fields; the R bridge retains R's duplicate names.
+- `neardate` treats negative and positive zero dates as ties, preserving R's
+  first-row (`after`) and last-row (`prior`) tie rules.
+- `strata` accepts a shared one-shot iterator in multiple columns, including
+  iterators with declared factor levels.
 
 - Cox fits retain covariate and offset origins separately from relative risk
   totals. Large constant coefficients, changing risk-set scales and compensated

@@ -9315,6 +9315,67 @@ anova.survival_py_model <- function(object, ..., test = "Chisq") {
 summary.survival_py_survfit <- function(object, times, censored = FALSE, scale = 1,
                                         extend = FALSE, rmean = getOption("survfit.rmean"),
                                         data.frame = FALSE, dosum, ...) {
+  data.frame <- .survival_py_summary_logical(data.frame, "data.frame")
+  if (data.frame && (.is_cox_curves(object) || .is_coxms_curves(object))) {
+    censored <- .survival_py_summary_logical(censored, "censored")
+    extend <- .survival_py_summary_logical(extend, "extend")
+    scale <- .survival_py_summary_scale(scale)
+    if (!missing(times)) {
+      if (length(times) == 0L) stop("no values in times vector", call. = FALSE)
+      if (inherits(times, "Date")) times <- as.numeric(times)
+      if (!is.numeric(times)) stop("times must be a numeric vector", call. = FALSE)
+      if (anyNA(times)) stop("times contains missing values", call. = FALSE)
+    }
+    columns <- .call_r_api(
+      "summary_survfit",
+      object,
+      times = if (missing(times)) NULL else as.list(as.numeric(times)),
+      censored = censored,
+      scale = scale,
+      extend = extend,
+      rmean = rmean,
+      dosum = if (missing(dosum)) NULL else dosum,
+      data_frame = TRUE
+    )
+    frame <- as.data.frame(lapply(columns, function(value) {
+      if (length(value)) unlist(value, use.names = FALSE) else numeric()
+    }), stringsAsFactors = FALSE, check.names = FALSE)
+    curve <- .restore_python(object)
+    present <- function(name, nonempty = FALSE) {
+      value <- reticulate::py_get_attr(curve, name)
+      !inherits(value, "python.builtin.NoneType") && (!nonempty || reticulate::py_len(value) > 0L)
+    }
+    has_strata <- present("strata")
+    if (has_strata && "strata" %in% names(frame)) {
+      frame$strata <- factor(frame$strata,
+        levels = unique(as.character(.result_field(object, "strata_names"))))
+    }
+    if (.is_coxms_curves(object) && "state" %in% names(frame)) {
+      frame$state <- as.character(frame$state)
+    }
+    newdata <- .survival_py_survfit_newdata(object)
+    original_names <- names(newdata)
+    if (.is_cox_curves(object)) {
+      fields <- c("time", "n.risk", "n.event", "n.censor", "surv")
+      if (present("cumhaz", nonempty = TRUE)) fields <- c(fields, "cumhaz")
+      optional <- c("std_err", "std_chaz", "lower", "upper")
+      fields <- c(fields, gsub("_", ".", optional[vapply(optional, present, logical(1L))],
+        fixed = TRUE), if (has_strata) "strata")
+      if (any(names(newdata) %in% fields)) names(newdata) <- paste0(names(newdata), "_")
+    } else {
+      fields <- c("time", "n.risk", "n.event", "n.censor", "pstate", "state",
+        if (has_strata) "strata")
+      if (any(names(newdata) %in% fields)) names(newdata) <- paste0(names(newdata), "_")
+    }
+    if (!nrow(frame) && is.data.frame(newdata)) {
+      for (name in intersect(names(frame), names(newdata))) frame[[name]] <- newdata[[name]][FALSE]
+    }
+    frame <- .restore_r_column_classes(frame, newdata)
+    if (.is_coxms_curves(object) && !identical(names(newdata), original_names)) {
+      names(frame)[match(names(newdata), names(frame))] <- original_names
+    }
+    return(frame)
+  }
   if (.is_coxms_curves(object)) {
     return(.as_summary_coxms_curves(.call_r_api(
       "summary_survfit",

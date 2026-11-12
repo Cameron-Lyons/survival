@@ -184,7 +184,14 @@ labels or zero-based indices in the order given; `curves.dim` is R's `dim(fit)`.
 A single selected stratum loses its label unless `drop=False`.
 `summary_survfit(curves, times=..., data_frame=True)` (or `as_data_frame` of a
 summary) returns R's `summary(fit, data.frame = TRUE)` table: one row per time
-and curve, long by state for multi-state curves.
+and curve, long by state for multi-state curves. This includes ordinary and
+multi-state Cox predictions and their retained new-data columns. Data-frame
+summaries skip restricted-mean and quantile calculations, which are absent from
+the returned table. Empty selections retain the table's columns, and multi-state
+frames include only the uncertainty components available on the fitted curve.
+If a prediction-column name conflicts with a curve field, Python appends `_`
+to every prediction-column name. The R bridge preserves R's duplicate column
+names, retaining both the curve labels and predictor values.
 
 Ordinary Cox curves expose `curves.subset(strata=..., data=..., drop=...)`.
 Python positions are zero-based; stratum labels and prediction-row names can also

@@ -1411,7 +1411,8 @@ def _summary_coxms(
     extend: bool,
     rmean: str,
     dosum: bool,
-) -> SummarySurvfitCoxmsResult:
+    data_frame: bool = False,
+) -> SummarySurvfitCoxmsResult | dict[str, list[Any]]:
     """``summary.survfitms`` of multi-state Cox curves: the engine's counts at the
     reported rows, the curves at the same rows, and ``survmean2``'s table."""
 
@@ -1421,11 +1422,14 @@ def _summary_coxms(
         engine.summary_rows(times=times, censored=censored, extend=extend), dtype=np.intp
     )
     pstate, cumhaz = _survfit0_arrays(x, rows)
-    values, ends, columns = engine.mean_table_data(x.pstate, x.p0, scale=scale, rmean=rmean)
     sizes = _coxms_strata(x, counts)
     strata = None if sizes is None else [name for name, size in sizes.items() for _ in range(size)]
+    time = [value / scale for value in counts.time]
+    if data_frame:
+        return _coxms_summary_frame(time, counts, pstate, strata, x.states, x.newdata)
+    values, ends, columns = engine.mean_table_data(x.pstate, x.p0, scale=scale, rmean=rmean)
     return SummarySurvfitCoxmsResult(
-        time=[value / scale for value in counts.time],
+        time=time,
         n_risk=counts.n_risk,
         n_event=counts.n_event,
         n_censor=counts.n_censor,
@@ -1529,26 +1533,115 @@ def _summary_survfit_frame(summary: SummarySurvfitResult) -> dict[str, list[Any]
         if summary.strata is not None:
             frame["strata"] = list(summary.strata)
         return frame
-    states = list(summary.states or ())
+    return _aj_summary_frame(summary, summary.time, list(summary.states or ()), summary.strata)
+
+
+def _aj_summary_frame(
+    summary: SummarySurvfitResult | _core.SurvfitAJResult,
+    time: list[float],
+    states: list[str],
+    strata: list[str] | None,
+) -> dict[str, list[Any]]:
+    """State-major columns from either native AJ rows or a Python summary."""
 
     def by_state(values: Any) -> list[Any]:
         return [row[state] for state in range(len(states)) for row in values]
 
     frame = {
-        "time": list(summary.time) * len(states),
+        "time": time * len(states),
         "n.risk": by_state(summary.n_risk),
         "n.event": by_state(summary.n_event),
         "n.censor": by_state(summary.n_censor),
         "pstate": by_state(summary.pstate),
     }
-    if summary.std_err is not None:
-        frame["std.err"] = by_state(summary.std_err)
-        frame["lower"] = by_state(summary.lower)
-        frame["upper"] = by_state(summary.upper)
-    if summary.strata is not None:
-        frame["strata"] = list(summary.strata) * len(states)
-    frame["state"] = [state for state in states for _ in summary.time]
+    for name, values in (
+        ("std.err", summary.std_err),
+        ("lower", summary.lower),
+        ("upper", summary.upper),
+    ):
+        if values is not None:
+            frame[name] = by_state(values)
+    if strata is not None:
+        frame["strata"] = strata * len(states)
+    frame["state"] = [state for state in states for _ in time]
     return frame
+
+
+def _ordinary_summary_frame(
+    columns: Mapping[str, Any],
+    *,
+    ncurve: int | None = None,
+    newdata: Mapping[str, Sequence[Any]] | None = None,
+) -> dict[str, list[Any]]:
+    """Summary rows in R's column order, stacking prediction columns if present."""
+
+    frame: dict[str, list[Any]] = {}
+    for name in (
+        "time",
+        "n_risk",
+        "n_event",
+        "n_censor",
+        "surv",
+        "cumhaz",
+        "std_err",
+        "std_chaz",
+        "lower",
+        "upper",
+        "strata",
+    ):
+        values = columns[name]
+        if values is None:
+            continue
+        if ncurve is None:
+            flattened = list(values)
+        elif _is_matrix(values):
+            flattened = [row[curve] for curve in range(ncurve) for row in values]
+        else:
+            flattened = list(values) * ncurve
+        frame[name.replace("_", ".")] = flattened
+    if ncurve is not None and newdata is not None:
+        suffix = "_" if frame.keys() & newdata.keys() else ""
+        ntime = len(columns["time"])
+        for name, values in newdata.items():
+            frame[name + suffix] = [value for value in values for _ in range(ntime)]
+    return frame
+
+
+def _coxms_summary_frame(
+    time: list[float],
+    counts: SummarySurvfitCoxmsResult | _core.SurvfitAJResult,
+    pstate: NDArray[np.float64],
+    strata: list[str] | None,
+    states: list[str],
+    newdata: Mapping[str, Sequence[Any]] | None,
+) -> dict[str, list[Any]]:
+    """Time/stratum rows vary fastest, then prediction rows, then states."""
+
+    nt, nd, ns = pstate.shape
+
+    def by_state(values: list[list[float]]) -> list[float]:
+        return [float(values[t][s]) for s in range(ns) for _ in range(nd) for t in range(nt)]
+
+    frame: dict[str, list[Any]] = {
+        "time": time * (nd * ns),
+        "n.risk": by_state(counts.n_risk),
+        "n.event": by_state(counts.n_event),
+        "n.censor": by_state(counts.n_censor),
+        "pstate": pstate.ravel(order="F").tolist(),
+    }
+    if strata is not None:
+        frame["strata"] = strata * (nd * ns)
+    frame["state"] = [state for state in states for _ in range(nd * nt)]
+    suffix = "_" if newdata is not None and frame.keys() & newdata.keys() else ""
+    for name, values in (newdata or {}).items():
+        frame[name + suffix] = [values[i] for _ in range(ns) for i in range(nd) for _ in range(nt)]
+    return frame
+
+
+def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, list[Any]]:
+    return _coxms_summary_frame(
+        summary.time, summary, summary.pstate, summary.strata, summary.states, summary.newdata
+    )
 
 
 def survfit0(
@@ -1633,7 +1726,7 @@ def summary_survfit(
 
 @overload
 def summary_survfit(
-    object: SurvfitResult | SurvfitMultiStateResult,
+    object: SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | CoxSurvfitMultiStateResult,
     times: Any | None = None,
     censored: Any = False,
     scale: Any = 1,
@@ -1681,15 +1774,12 @@ def summary_survfit(
     counts between them; ``False`` looks up counts at each preceding curve row.
     Ordinary curves default to accumulation only for strictly increasing times;
     multi-state curves sort/deduplicate times and default to accumulation.
-    ``data_frame=True`` returns R's ``data.frame = TRUE`` table instead.
+    ``data_frame=True`` returns R's ``data.frame = TRUE`` table instead: one row
+    per time and curve (and state), with retained Cox prediction columns. It skips
+    the compact restricted-mean/quantile table that this representation omits.
     """
 
-    if _logical(data_frame, "data.frame must be TRUE/FALSE"):
-        if not isinstance(object, SurvfitResult | SurvfitMultiStateResult):
-            raise TypeError("data_frame is available for survfit.formula curves")
-        return _summary_survfit_frame(
-            summary_survfit(object, times, censored, scale, extend, rmean, dosum)
-        )
+    data_frame = _logical(data_frame, "data.frame must be TRUE/FALSE")
     if not isinstance(
         object,
         SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult | CoxSurvfitMultiStateResult,
@@ -1698,6 +1788,8 @@ def summary_survfit(
     censored = _logical(censored, "censored must be TRUE/FALSE")
     extend = _logical(extend, "extend must be TRUE/FALSE")
     scale = _finite_float(scale, "scale")
+    if scale <= 0.0:
+        raise ValueError("scale must be a positive number")
     rmean_option = _rmean_option(rmean, object)
     if times is not None and dosum is not None:
         dosum = _logical(dosum, "dosum must be TRUE/FALSE")
@@ -1709,7 +1801,7 @@ def summary_survfit(
             else _float_vector([times] if isinstance(times, int | float) else times, "times")
         )
         return _summary_coxms(
-            object, requested, censored, scale, extend, rmean_option, multi_counts
+            object, requested, censored, scale, extend, rmean_option, multi_counts, data_frame
         )
     if isinstance(object, SurvfitMultiStateResult):
         engine = _engine_of(object)
@@ -1719,7 +1811,6 @@ def summary_survfit(
             else _float_vector([times] if isinstance(times, int | float) else times, "times")
         )
         rows = engine.summary(times=requested, censored=censored, extend=extend, dosum=multi_counts)
-        values, ends, columns = engine.mean_table(scale=scale, rmean=rmean_option)
         labels = [f"{group}, {state}" for state in object.states for group in object.strata_names]
         strata = (
             None
@@ -1730,8 +1821,12 @@ def summary_survfit(
                 for _ in range(size)
             ]
         )
+        time = [value / scale for value in rows.time]
+        if data_frame:
+            return _aj_summary_frame(rows, time, object.states, strata)
+        values, ends, columns = engine.mean_table(scale=scale, rmean=rmean_option)
         return SummarySurvfitResult(
-            time=[value / scale for value in rows.time],
+            time=time,
             n_risk=rows.n_risk,
             n_event=rows.n_event,
             n_censor=rows.n_censor,
@@ -1762,14 +1857,6 @@ def summary_survfit(
     else:
         engines = [_engine_of(object)]
         strata_names = labels = object.strata_names
-    tables = [
-        _core.survmean(
-            engine if math.isfinite(engine.t0) else _core.survfit0(engine),
-            scale,
-            rmean_option,
-        )
-        for engine in engines
-    ]
     if times is None:
         summaries = [_core.summary_survfit(engine, censored=censored) for engine in engines]
     else:
@@ -1797,23 +1884,40 @@ def summary_survfit(
     def curves(name: str) -> Any:
         return _joined_columns([getattr(summary, name) for summary in summaries], matrix)
 
+    columns = {
+        "time": [value / scale for value in rows.time],
+        "n_risk": rows.n_risk,
+        "n_event": rows.n_event,
+        "n_censor": rows.n_censor,
+        "surv": curves("surv"),
+        "cumhaz": curves("cumhaz") if object.cumhaz else [],
+        "strata": strata,
+        "std_err": curves("std_err"),
+        "std_chaz": curves("std_chaz"),
+        "lower": curves("lower"),
+        "upper": curves("upper"),
+    }
+    if data_frame:
+        if not object.cumhaz:
+            columns["cumhaz"] = None
+        return _ordinary_summary_frame(
+            columns,
+            ncurve=len(engines) if matrix else None,
+            newdata=object.newdata if isinstance(object, CoxSurvfitResult) else None,
+        )
+    tables = [
+        _core.survmean(
+            engine if math.isfinite(engine.t0) else _core.survfit0(engine), scale, rmean_option
+        )
+        for engine in engines
+    ]
     return SummarySurvfitResult(
-        time=[value / scale for value in rows.time],
-        n_risk=rows.n_risk,
-        n_event=rows.n_event,
-        n_censor=rows.n_censor,
-        surv=curves("surv"),
-        cumhaz=curves("cumhaz") if object.cumhaz else [],
-        strata=strata,
+        **columns,
         table=_summary_table(
             tables, labels, n_id=getattr(object, "n_id", None) is not None, conf_int=object.conf_int
         ),
         n=[int(value) for value in rows.n],
         n_enter=rows.n_enter,
-        std_err=curves("std_err"),
-        std_chaz=curves("std_chaz"),
-        lower=curves("lower"),
-        upper=curves("upper"),
         rmean_endtime=None if rmean_option == "none" else tables[0].end_time,
         conf_int=object.conf_int,
         conf_type=object.conf_type,

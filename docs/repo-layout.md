@@ -101,6 +101,15 @@ their fitters check all row lengths, times, event codes, and weights before
 accessing rows. The public API integration tests exercise modified inputs with
 time correction both enabled and disabled.
 
+Multistate Cox models use `regression::{CoxphmsData, CoxphmsDesign,
+CoxphmsFit, coxphms_fit}`. The fit retains the transition-expanded design and
+its mappings back to unstacked observations. `surv_analysis::coxphms_curves`
+takes borrowed training and prediction inputs and returns owned arrays with
+axes `(time, prediction row, state)` and `(time, prediction row, transition)`.
+Its `baseline` field contains the reporting grid and counts; the result's
+`pstate` and `cumhaz` fields contain the Cox predictions. These entry points
+revalidate public fields and are available in Rust-only builds.
+
 Cox risk-set counting, score, Schoenfeld and martingale boundaries also check
 mutable right/counting responses, covariate shapes, scores, weights and strata
 before sorting or indexing. Weighted numerical controls and malformed-input

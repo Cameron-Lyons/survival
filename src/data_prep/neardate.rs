@@ -32,25 +32,40 @@ pub fn neardate<I: SubjectId>(
     validate_length(id1.len(), y1.len(), "y1")?;
     validate_length(id2.len(), y2.len(), "y2")?;
 
+    let query_keys: Vec<I::Key> = id1.iter().map(SubjectId::key).collect();
+    // A small query set can avoid indexing unrelated reference subjects. For
+    // comparable input sizes, keep the single-pass reference index: preparing
+    // a query index adds hashing and string clones with little work to skip.
+    let restrict_reference = id1.len() <= id2.len() / 16;
     let mut by_id: HashMap<I::Key, Vec<(f64, usize)>> = HashMap::new();
-    for (row, (id, &date)) in id2.iter().zip(y2).enumerate() {
-        if !date.is_nan() {
-            by_id.entry(id.key()).or_default().push((date, row));
+    if restrict_reference {
+        for key in &query_keys {
+            by_id.entry(key.clone()).or_default();
         }
     }
-    if by_id.is_empty() {
-        return Err(SurvivalError::invalid_input(
-            "No valid entries in data set 2",
-        ));
+    for (row, (id, &date)) in id2.iter().zip(y2).enumerate() {
+        if !date.is_nan() {
+            if restrict_reference {
+                if let Some(rows) = by_id.get_mut(&id.key()) {
+                    rows.push((date, row));
+                }
+            } else {
+                by_id.entry(id.key()).or_default().push((date, row));
+            }
+        }
     }
-    let query_keys: Vec<I::Key> = id1.iter().map(SubjectId::key).collect();
-    if !query_keys.iter().any(|key| by_id.contains_key(key)) {
+    if !query_keys
+        .iter()
+        .any(|key| by_id.get(key).is_some_and(|rows| !rows.is_empty()))
+    {
         return Err(SurvivalError::invalid_input(
             "No valid entries in data set 2",
         ));
     }
     for rows in by_id.values_mut() {
-        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // NaNs were removed above. Numeric comparison keeps -0 and +0 tied;
+        // stable sorting preserves the first/last reference row chosen below.
+        rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     }
 
     Ok(query_keys
@@ -198,6 +213,97 @@ mod tests {
     }
 
     #[test]
+    fn signed_zero_dates_keep_the_reference_row_tie_order() {
+        // survival::neardate(c(1, 1), c(1, 1), c(0, -0), c(0, -0))
+        // returns c(1, 1), or c(2, 2) with best = "prior".
+        for dates in [[0.0, -0.0], [-0.0, 0.0]] {
+            for (best, expected) in [
+                (NeardateBest::After, vec![Some(0); 2]),
+                (NeardateBest::Prior, vec![Some(1); 2]),
+            ] {
+                assert_eq!(
+                    neardate(&[1i64; 2], &[0.0, -0.0], &[1; 2], &dates, best).unwrap(),
+                    expected,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn matches_linear_search_with_unqueried_subjects_and_missing_dates() {
+        let id1 = ["b", "a", "b", "absent", "b", "a", "a"];
+        let y1 = [
+            1.0,
+            0.0,
+            f64::NAN,
+            1.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            2.0,
+        ];
+        let id2 = ["unused", "b", "a", "unused", "b", "a", "a", "b", "a"];
+        let y2 = [
+            1.0,
+            1.0,
+            0.0,
+            2.0,
+            1.0,
+            -0.0,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for best in [NeardateBest::After, NeardateBest::Prior] {
+            let expected: Vec<_> = id1
+                .iter()
+                .zip(y1)
+                .map(|(id, date)| {
+                    let mut found = None;
+                    for (row, (candidate_id, &candidate_date)) in id2.iter().zip(&y2).enumerate() {
+                        if id != candidate_id {
+                            continue;
+                        }
+                        let is_better = match best {
+                            NeardateBest::After => {
+                                candidate_date >= date
+                                    && found.is_none_or(|previous| candidate_date < y2[previous])
+                            }
+                            NeardateBest::Prior => {
+                                candidate_date <= date
+                                    && found.is_none_or(|previous| candidate_date >= y2[previous])
+                            }
+                        };
+                        if is_better {
+                            found = Some(row);
+                        }
+                    }
+                    found
+                })
+                .collect();
+            // Extra unrelated rows exercise the restricted reference index.
+            for extra in [0, 128] {
+                let mut references = id2.to_vec();
+                references.extend(std::iter::repeat_n("unused", extra));
+                let mut dates = y2.to_vec();
+                dates.extend(std::iter::repeat_n(1.0, extra));
+                for repeats in [1, 3] {
+                    assert_eq!(
+                        neardate(
+                            &id1.repeat(repeats),
+                            &y1.repeat(repeats),
+                            &references,
+                            &dates,
+                            best,
+                        )
+                        .unwrap(),
+                        expected.repeat(repeats),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn missing_dates_never_match_and_prefixes_are_accepted() {
         let after = neardate(
             &["a", "a", "a"],
@@ -219,5 +325,15 @@ mod tests {
         assert!(neardate(&[1i64], &[1.0], &[1], &[f64::NAN], NeardateBest::After).is_err());
         assert!(neardate(&[1i64], &[1.0], &[2], &[1.0], NeardateBest::After).is_err());
         assert!(neardate(&[1i64], &[], &[1], &[1.0], NeardateBest::After).is_err());
+        assert!(
+            neardate(
+                &[1i64; 3],
+                &[1.0; 3],
+                &[1, 2],
+                &[f64::NAN, 1.0],
+                NeardateBest::After,
+            )
+            .is_err()
+        );
     }
 }

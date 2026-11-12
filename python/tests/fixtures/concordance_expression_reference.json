@@ -1,0 +1,584 @@
+{
+  "metadata": {
+    "survival": "3.8.12"
+  },
+  "cases": [
+    {
+      "name": "logical_explicit",
+      "formula": "I(x > 0) ~ x",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [1],
+        "count": [
+          [6, 0, 0, 4, 0]
+        ],
+        "names": null,
+        "n": 5,
+        "var": [
+          [0]
+        ],
+        "cvar": [0.166666666666667],
+        "dfbeta": [
+          [0],
+          [0],
+          [0],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "logical_dot",
+      "formula": "I(x > 0) ~ .",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.5],
+        "count": [
+          [3, 3, 0, 4, 0]
+        ],
+        "names": null,
+        "n": 5,
+        "var": [
+          [0.0694444444444444]
+        ],
+        "cvar": [0.166666666666667],
+        "dfbeta": [
+          [-0.0833333333333333],
+          [0.0833333333333333],
+          [0],
+          [-0.166666666666667],
+          [0.166666666666667]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [-0.4, 0.4, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "logical_dot_explicit",
+      "formula": "I(x > 0) ~ . + x",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.5, 1],
+        "count": [
+          [3, 3, 0, 4, 0],
+          [6, 0, 0, 4, 0]
+        ],
+        "names": ["z", "x"],
+        "n": 5,
+        "var": [
+          [0.0694444444444444, 0],
+          [0, 0]
+        ],
+        "cvar": [0.166666666666667, 0.166666666666667],
+        "dfbeta": [
+          [-0.0833333333333333, 0],
+          [0.0833333333333333, 0],
+          [0, 0],
+          [-0.166666666666667, 0],
+          [0.166666666666667, 0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [-0.4, 0.4, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          },
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": ["'varlist' has changed (from nvar=2) to new 3 after EncodeVars() -- should no longer happen!"]
+    },
+    {
+      "name": "logical_dot_interaction",
+      "formula": "I(x > 0) ~ .:x",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [1],
+        "count": [
+          [6, 0, 0, 4, 0]
+        ],
+        "names": null,
+        "n": 5,
+        "var": [
+          [0]
+        ],
+        "cvar": [0.166666666666667],
+        "dfbeta": [
+          [0],
+          [0],
+          [0],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": ["'varlist' has changed (from nvar=2) to new 3 after EncodeVars() -- should no longer happen!"]
+    },
+    {
+      "name": "logical_dot_power",
+      "formula": "I(x > 0) ~ (. + x)^2",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.5, 1, 1],
+        "count": [
+          [3, 3, 0, 4, 0],
+          [6, 0, 0, 4, 0],
+          [6, 0, 0, 4, 0]
+        ],
+        "names": ["z", "x", "z:x"],
+        "n": 5,
+        "var": [
+          [0.0694444444444444, 0, 0],
+          [0, 0, 0],
+          [0, 0, 0]
+        ],
+        "cvar": [0.166666666666667, 0.166666666666667, 0.166666666666667],
+        "dfbeta": [
+          [-0.0833333333333333, 0, 0],
+          [0.0833333333333333, 0, 0],
+          [0, 0, 0],
+          [-0.166666666666667, 0, 0],
+          [0.166666666666667, 0, 0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [-0.4, 0.4, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          },
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          },
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": ["'varlist' has changed (from nvar=2) to new 3 after EncodeVars() -- should no longer happen!"]
+    },
+    {
+      "name": "factor_expression",
+      "formula": "factor(x > 0) ~ x",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [1],
+        "count": [
+          [6, 0, 0, 4, 0]
+        ],
+        "names": null,
+        "n": 5,
+        "var": [
+          [0]
+        ],
+        "cvar": [0.166666666666667],
+        "dfbeta": [
+          [0],
+          [0],
+          [0],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [1, 1, 2, 2, 2],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "factor_source",
+      "formula": "factor(x) ~ x + z",
+      "data": {
+        "x": [1, 1, 2, 2, 2],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [1, 0.5],
+        "count": [
+          [6, 0, 0, 0, 4],
+          [3, 3, 0, 4, 0]
+        ],
+        "names": ["x", "z"],
+        "n": 5,
+        "var": [
+          [0, 0],
+          [0, 0.0694444444444444]
+        ],
+        "cvar": [0.0833333333333333, 0.166666666666667],
+        "dfbeta": [
+          [0, -0.0833333333333333],
+          [0, 0.0833333333333333],
+          [0, 0],
+          [0, -0.166666666666667],
+          [0, 0.166666666666667]
+        ],
+        "ranks": [
+          {
+            "time": [1, 1, 2, 2, 2],
+            "rank": [0.6, 0.6, 0, 0, 0],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          },
+          {
+            "time": [1, 1, 2, 2, 2],
+            "rank": [-0.4, 0.4, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "shared_weights_cluster",
+      "formula": "I(x > 2) ~ z",
+      "data": {
+        "x": [1, 1, 2, 3, 3, 4],
+        "z": [6, 1, 5, 3, 2, 4]
+      },
+      "weights": "x",
+      "cluster": "x",
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.25],
+        "count": [
+          [10, 30, 0, 38, 0]
+        ],
+        "names": null,
+        "n": 6,
+        "var": [
+          [0.03125]
+        ],
+        "cvar": [0.0848660714285714],
+        "dfbeta": [
+          [0.125],
+          [-0.125],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 0, 1, 1, 1],
+            "rank": [-0.928571428571429, -0.714285714285714, 0.928571428571429, -0.6, 0.1, 0.7],
+            "timewt": [14, 14, 14, 10, 10, 10],
+            "casewt": [1, 2, 1, 4, 3, 3]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "formula_cluster",
+      "formula": "I(x > 2) ~ z + cluster(x)",
+      "data": {
+        "x": [1, 1, 2, 3, 3, 4],
+        "z": [6, 1, 5, 3, 2, 4]
+      },
+      "weights": "x",
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.25],
+        "count": [
+          [10, 30, 0, 38, 0]
+        ],
+        "names": null,
+        "n": 6,
+        "var": [
+          [0.03125]
+        ],
+        "cvar": [0.0848660714285714],
+        "dfbeta": [
+          [0.125],
+          [-0.125],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 0, 1, 1, 1],
+            "rank": [-0.928571428571429, -0.714285714285714, 0.928571428571429, -0.6, 0.1, 0.7],
+            "timewt": [14, 14, 14, 10, 10, 10],
+            "casewt": [1, 2, 1, 4, 3, 3]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "subset_missing",
+      "formula": "I(x > 2) ~ . + x",
+      "data": {
+        "x": [1, null, 2, 3, 4, 5],
+        "z": [4, 1, 3, null, 2, 0]
+      },
+      "weights": "x",
+      "cluster": "x",
+      "subset": [0, 2, 3, 4, 5],
+      "na_action": "na.exclude",
+      "expected": {
+        "concordance": [0, 1],
+        "count": [
+          [0, 27, 0, 22, 0],
+          [27, 0, 0, 22, 0]
+        ],
+        "names": ["z", "x"],
+        "n": 4,
+        "var": [
+          [0, 0],
+          [0, 0]
+        ],
+        "cvar": [0.105452674897119, 0.105452674897119],
+        "dfbeta": [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1],
+            "rank": [-0.916666666666667, -0.666666666666667, -0.555555555555556, 0.444444444444444],
+            "timewt": [12, 12, 9, 9],
+            "casewt": [1, 2, 4, 5]
+          },
+          {
+            "time": [0, 0, 1, 1],
+            "rank": [0.666666666666667, 0.916666666666667, -0.444444444444444, 0.555555555555556],
+            "timewt": [12, 12, 9, 9],
+            "casewt": [2, 1, 5, 4]
+          }
+        ],
+        "omitted": [3]
+      },
+      "warnings": ["'varlist' has changed (from nvar=2) to new 3 after EncodeVars() -- should no longer happen!"]
+    },
+    {
+      "name": "quoted_source",
+      "formula": "factor(`response source`) ~ `response source` + .",
+      "data": {
+        "response source": ["b", "a", "b", "a", "b"],
+        "z": [3, 1, 2, 0, 4]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [1, 1],
+        "count": [
+          [6, 0, 0, 0, 4],
+          [6, 0, 0, 4, 0]
+        ],
+        "names": ["`response source`b", "z"],
+        "n": 5,
+        "var": [
+          [0, 0],
+          [0, 0]
+        ],
+        "cvar": [0.0833333333333333, 0.166666666666667],
+        "dfbeta": [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ],
+        "ranks": [
+          {
+            "time": [1, 1, 2, 2, 2],
+            "rank": [0.6, 0.6, 0, 0, 0],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          },
+          {
+            "time": [1, 1, 2, 2, 2],
+            "rank": [0.4, 0.8, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "internal_name_collision",
+      "formula": "I(x > 0) ~ .",
+      "data": {
+        "x": [-2, -1, 1, 2, 3],
+        "(response)": [5, 4, 3, 2, 1]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0],
+        "count": [
+          [0, 6, 0, 4, 0]
+        ],
+        "names": null,
+        "n": 5,
+        "var": [
+          [0]
+        ],
+        "cvar": [0.166666666666667],
+        "dfbeta": [
+          [0],
+          [0],
+          [0],
+          [0],
+          [0]
+        ],
+        "ranks": [
+          {
+            "time": [0, 0, 1, 1, 1],
+            "rank": [-0.8, -0.4, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [5, 5, 3, 3, 3],
+            "casewt": [1, 1, 1, 1, 1]
+          }
+        ],
+        "omitted": []
+      },
+      "warnings": []
+    },
+    {
+      "name": "warning_once",
+      "formula": "I(log(x) > 0) ~ z",
+      "data": {
+        "x": [-1, 1, 2, 3, 4],
+        "z": [2, 4, 1, 5, 3]
+      },
+      "weights": null,
+      "cluster": null,
+      "subset": null,
+      "na_action": null,
+      "expected": {
+        "concordance": [0.333333333333333],
+        "count": [
+          [1, 2, 0, 3, 0]
+        ],
+        "names": null,
+        "n": 4,
+        "var": [
+          [0.0740740740740741]
+        ],
+        "cvar": [0.361111111111111],
+        "dfbeta": [
+          [0],
+          [-0.111111111111111],
+          [0.222222222222222],
+          [-0.111111111111111]
+        ],
+        "ranks": [
+          {
+            "time": [0, 1, 1, 1],
+            "rank": [-0.25, -0.666666666666667, 0, 0.666666666666667],
+            "timewt": [4, 3, 3, 3],
+            "casewt": [1, 1, 1, 1]
+          }
+        ],
+        "omitted": [1]
+      },
+      "warnings": ["NaNs produced"]
+    }
+  ]
+}

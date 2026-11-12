@@ -24,7 +24,8 @@ groups such as `kaplan_meier`, `curve_summary`, `curve_table`, `matrix_curves`,
 `aggregate_curves`, `logrank`, `brier_score`, `exact_counting_process_cox`,
 `cox_regression`, `survreg_bench`, `expected_survival_grid`,
 `expected_survival_summary_bench`, `rate_matching_bench`, `yates_sgtt_bench` and
-`tmerge_bench`; `benches/concordance_benchmarks.rs` and
+`tmerge_bench`, plus `turnbull_bench` and `neardate_bench`;
+`benches/concordance_benchmarks.rs` and
 `benches/survfitaj_benchmarks.rs` cover concordance and Aalen–Johansen fits.
 
 ```sh
@@ -56,6 +57,10 @@ the Rust benchmarks. Save a previous release with `--extension`, then use
 `--compare` to check coefficients, covariance, phase-two variance, martingales
 and Borgan score contributions alongside the complete-call timings.
 
+`benches/python/bench_turnbull.py` measures disjoint and overlapping intervals,
+including fractional weights and mixed censoring. Use `--extension` to select a
+saved native build and `--compare` to check all curve fields and iteration counts.
+
 ## Current characteristics
 
 - Native bindings copy NumPy arrays once into owned Rust buffers (any dtype,
@@ -77,6 +82,12 @@ and Borgan score contributions alongside the complete-call timings.
 
 ### Survival curves
 
+- Turnbull fits store contiguous jump ranges for censored observations, using
+  O(n + j) membership storage for n observations and j jump points. Initial
+  overlap counts use endpoint updates. Each EM membership update visits only
+  covered jumps, summing in their original order; wide overlapping intervals
+  can still require O(n j) work per iteration. The Kaplan–Meier steps and
+  Aitken acceleration retain their existing arithmetic and stopping rule.
 - Kaplan–Meier fits sort once (O(n log n)). For right-censored data with one
   observation per cluster and no influence matrix, including the usual weighted
   curve where fractional weights select robust variance, standard errors come
@@ -249,5 +260,10 @@ and Borgan score contributions alongside the complete-call timings.
 - Term grouping (`attrassign`) is one O(P + T) pass over P columns and T terms.
 - Response repetition, `lvcf`, `neardate` and `tmerge` avoid per-row Python index
   lists and repeated sorts; `tmerge` does not convert unreferenced update columns.
+- `neardate` retains and sorts reference dates only for queried subjects when
+  query rows are at most one sixteenth of reference rows. Larger query sets keep
+  the single-pass reference index, avoiding extra hashing and string copies.
+  `strata` materializes and factor-codes each shared input source once per call,
+  including one-shot iterators.
 - P-spline penalties fill the three nonzero entries of each second-difference row
   directly instead of a cubic dense product.

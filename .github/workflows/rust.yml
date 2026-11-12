@@ -186,6 +186,10 @@ jobs:
             "$GITHUB_WORKSPACE/python/tests/test_ordered_factor_contrasts.py" \
             "$GITHUB_WORKSPACE/python/tests/test_formula_numeric_classification.py" \
             "$GITHUB_WORKSPACE/python/tests/test_typed_formula_expressions.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_spline_expression_inputs.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_curve_summary_frames.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_concordance_expression_sources.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_concordance_zero_times.py" \
             "$GITHUB_WORKSPACE/python/tests/test_model_frame_transport.py" \
             "$GITHUB_WORKSPACE/python/tests/test_survfit_missing_residuals.py"
 
@@ -445,6 +449,9 @@ jobs:
           cp python/tests/fixtures/cox_survfit_single_reference.json "$fixture_dir/committed/"
           cp python/tests/fixtures/rsurvreg_count_reference.json "$fixture_dir/committed/"
           cp python/tests/fixtures/penalty_constructor_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/spline_expression_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/curve_summary_frame_reference.json "$fixture_dir/committed/"
+          cp python/tests/fixtures/concordance_expression_reference.json "$fixture_dir/committed/"
           cp test/r/kernel_references/exact_counting_sweep.json "$fixture_dir/committed/"
           Rscript scripts/generate_typed_formula_expression_reference.R \
             "$fixture_dir/regenerated/typed_formula_expression_reference.json"
@@ -498,6 +505,12 @@ jobs:
             "$fixture_dir/regenerated/rsurvreg_count_reference.json"
           Rscript scripts/generate_penalty_constructor_reference.R \
             "$fixture_dir/regenerated/penalty_constructor_reference.json"
+          Rscript scripts/generate_spline_expression_reference.R \
+            "$fixture_dir/regenerated/spline_expression_reference.json"
+          Rscript scripts/generate_curve_summary_frame_reference.R \
+            "$fixture_dir/regenerated/curve_summary_frame_reference.json"
+          Rscript scripts/generate_concordance_expression_reference.R \
+            "$fixture_dir/regenerated/concordance_expression_reference.json"
           Rscript scripts/generate_exact_counting_reference.R \
             "$fixture_dir/regenerated/exact_counting_sweep.json"
           python test/r/compare_fixtures.py "$fixture_dir/committed" "$fixture_dir/regenerated" \

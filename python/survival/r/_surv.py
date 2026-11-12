@@ -768,13 +768,26 @@ def _strata(
     a factor.
     """
 
-    columns = [(name, _strata_iterator(values)) for name, values in columns]
     names = [name for name, _values in columns]
-    coded = [_factor(values, "strata") for _name, values in columns]
+    prepared: dict[int, tuple[list[int | None], list[str], bool]] = {}
+    coded = []
+    character_columns = []
+    for _name, source in columns:
+        # One source may supply several named columns, including a shared iterator.
+        # Keep this cache local so later calls see mutations to reusable inputs.
+        key = id(source)
+        if key not in prepared:
+            values = _strata_iterator(source)
+            codes, levels = _factor(values, "strata")
+            character = _is_character(values) if shortlabel is None else False
+            prepared[key] = codes, levels, character
+        codes, levels, character = prepared[key]
+        coded.append((codes, levels))
+        character_columns.append(character)
     if len({len(codes) for codes, _levels in coded}) > 1:
         raise ValueError("all arguments must be the same length")
     if shortlabel is None:
-        shortlabel = all(_is_character(values) for _name, values in columns)
+        shortlabel = all(character_columns)
     result = _core.strata(
         names,
         [levels for _codes, levels in coded],

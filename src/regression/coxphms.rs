@@ -1,16 +1,25 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use ndarray::{Array2, ArrayView1, ArrayView2, Axis, ShapeBuilder};
 use pyo3::prelude::*;
 
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
-use crate::internal::validation::validate_length;
+use crate::internal::validation::{validate_finite, validate_length, validate_non_empty};
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
 
+/// Transition-specific coefficients and shared baselines for a multistate Cox model.
+///
+/// `cmap` has one column per transition and at least `nx` rows: its first `nx`
+/// rows map columns of the unstacked covariate matrix to coefficients; further
+/// rows represent constant proportional-baseline effects. Zero omits an effect;
+/// positive entries index coefficients starting at one, with no gaps.
+/// `from` and `to` use one-based state codes. Equal positive `baseline` labels
+/// pool transition hazards. `strata_use` has one row per strata term; a shared
+/// baseline uses the strata terms of its first transition.
 #[derive(Debug, Clone)]
-pub(crate) struct MsDesign {
+pub struct CoxphmsDesign {
     pub cmap: Array2<i32>,
     pub nx: usize,
     pub baseline: Vec<i32>,
@@ -19,18 +28,72 @@ pub(crate) struct MsDesign {
     pub to: Vec<usize>,
 }
 
-impl MsDesign {
-    pub(crate) fn ntrans(&self) -> usize {
+impl CoxphmsDesign {
+    /// Number of transitions, in the column order of `cmap`.
+    pub fn ntrans(&self) -> usize {
         self.cmap.ncols()
     }
 
-    pub(crate) fn ncoef(&self) -> usize {
+    /// Number of coefficients in a valid design.
+    pub fn ncoef(&self) -> usize {
         self.cmap.iter().copied().max().unwrap_or(0).max(0) as usize
+    }
+
+    /// Check shapes and codes, including after direct modification of public fields.
+    pub fn validate(&self) -> SurvivalResult<()> {
+        let nt = self.ntrans();
+        for (len, name) in [
+            (self.baseline.len(), "baseline"),
+            (self.from.len(), "trans_from"),
+            (self.to.len(), "trans_to"),
+            (self.strata_use.ncols(), "strata_use columns"),
+        ] {
+            validate_length(nt, len, name)?;
+        }
+        if self.cmap.nrows() < self.nx {
+            return Err(SurvivalError::invalid_input(
+                "cmap needs a row per column of x",
+            ));
+        }
+        if self.cmap.iter().any(|&code| code < 0) {
+            return Err(SurvivalError::invalid_input(
+                "cmap codes must be non-negative",
+            ));
+        }
+        let coefficients: BTreeSet<i32> = self.cmap.iter().copied().filter(|&v| v > 0).collect();
+        if coefficients.len() != self.ncoef() {
+            return Err(SurvivalError::invalid_input(
+                "cmap coefficient codes must be consecutive from 1",
+            ));
+        }
+        if self.from.iter().chain(&self.to).any(|&state| state == 0) {
+            return Err(SurvivalError::invalid_input(
+                "transition state codes must be 1-based",
+            ));
+        }
+        let mut transitions = BTreeSet::new();
+        for k in 0..nt {
+            if self.from[k] == self.to[k] || !transitions.insert((self.from[k], self.to[k])) {
+                return Err(SurvivalError::invalid_input(
+                    "transitions must be distinct pairs of different states",
+                ));
+            }
+            if self.baseline[k] <= 0 {
+                return Err(SurvivalError::invalid_input(
+                    "baseline codes must be positive",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
+/// The transition-expanded design and mappings used by [`coxphms_fit`].
+///
+/// Rows stay in baseline-block order. `rindex` and `hazard` are zero-based source
+/// row and transition indices; `block` is one-based and `strata` is zero-based.
 #[derive(Debug, Clone)]
-pub(crate) struct MsStack {
+pub struct CoxphmsStack {
     pub x: Array2<f64>,
     pub rindex: Vec<usize>,
     pub status: Vec<i32>,
@@ -40,13 +103,13 @@ pub(crate) struct MsStack {
 }
 
 pub(crate) fn stacker(
-    design: &MsDesign,
+    design: &CoxphmsDesign,
     istate: &[usize],
     endpoint: &[usize],
     x: ArrayView2<f64>,
     strata_codes: &[Vec<i32>],
     dropzero: bool,
-) -> SurvivalResult<MsStack> {
+) -> SurvivalResult<CoxphmsStack> {
     let n = istate.len();
     validate_length(n, endpoint.len(), "endpoint")?;
     validate_length(n, x.nrows(), "x")?;
@@ -76,14 +139,13 @@ pub(crate) fn stacker(
         })
         .collect();
 
-    let nstate = istate.iter().copied().max().unwrap_or(0);
-    let mut at_risk: Vec<Vec<usize>> = vec![Vec::new(); nstate + 1];
+    let mut at_risk: HashMap<usize, Vec<usize>> = HashMap::new();
     for (row, &state) in istate.iter().enumerate() {
-        at_risk[state].push(row);
+        at_risk.entry(state).or_default().push(row);
     }
     let rows_of = |k: usize| -> &[usize] {
         at_risk
-            .get(design.from[k])
+            .get(&design.from[k])
             .map_or(&[] as &[usize], Vec::as_slice)
     };
     let n2: usize = blocks.iter().flatten().map(|&k| rows_of(k).len()).sum();
@@ -151,7 +213,7 @@ pub(crate) fn stacker(
             .collect()
     };
 
-    let stack = MsStack {
+    let stack = CoxphmsStack {
         x: xs,
         rindex,
         status,
@@ -166,7 +228,7 @@ pub(crate) fn stacker(
     })
 }
 
-impl MsStack {
+impl CoxphmsStack {
     fn select(self, keep: &[bool]) -> Self {
         let rows: Vec<usize> = (0..keep.len()).filter(|&r| keep[r]).collect();
         Self {
@@ -180,20 +242,25 @@ impl MsStack {
     }
 }
 
+/// Shared-baseline adjustments, corresponding to R's `fit$share`.
+///
+/// `vtype` has one entry per `cmap` row: 0 is constant within subject, 1 varies
+/// within subject, and 2 is a proportional-baseline effect. `scale` has one
+/// multiplier per transition.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MsShare {
+pub struct CoxphmsShare {
     pub vtype: Vec<i32>,
     pub scale: Vec<f64>,
 }
 
 pub(crate) fn share(
-    design: &MsDesign,
-    stack: &MsStack,
+    design: &CoxphmsDesign,
+    stack: &CoxphmsStack,
     coefficients: &[f64],
     x: ArrayView2<f64>,
     id: &[i32],
     x_assign: &[i32],
-) -> Option<MsShare> {
+) -> Option<CoxphmsShare> {
     let mut seen = Vec::with_capacity(design.baseline.len());
     let duplicated = design.baseline.iter().any(|b| {
         let dup = seen.contains(b);
@@ -203,12 +270,19 @@ pub(crate) fn share(
     if !duplicated {
         return None;
     }
-    let nid = id.iter().copied().max().unwrap_or(0).max(0) as usize;
+    let mut subjects = HashMap::new();
+    let subject: Vec<usize> = id
+        .iter()
+        .map(|&id| {
+            let next = subjects.len();
+            *subjects.entry(id).or_insert(next)
+        })
+        .collect();
     let tdvar: Vec<bool> = (0..design.nx)
         .map(|c| {
-            let mut first = vec![f64::NAN; nid + 1];
-            x.column(c).iter().zip(id).any(|(&value, &subject)| {
-                let reference = &mut first[subject as usize];
+            let mut first = vec![f64::NAN; subjects.len()];
+            x.column(c).iter().zip(&subject).any(|(&value, &subject)| {
+                let reference = &mut first[subject];
                 if value.is_nan() {
                     false
                 } else if reference.is_nan() {
@@ -265,7 +339,7 @@ pub(crate) fn share(
         isgamma = next;
         scale = multipliers(&mut isgamma);
     }
-    isgamma.iter().any(|&v| v).then(|| MsShare {
+    isgamma.iter().any(|&v| v).then(|| CoxphmsShare {
         vtype: tdvar2
             .iter()
             .zip(&isgamma)
@@ -275,8 +349,18 @@ pub(crate) fn share(
     })
 }
 
+/// Unstacked observations for a multistate Cox model.
+///
+/// `time` is the stop time; optional `entry` gives (entry, time] intervals.
+/// `istate` is the one-based state at entry, and `endpoint` is the one-based
+/// destination state, or zero for censoring. Positive `id` codes identify
+/// subjects. The first `design.nx` rows of `cmap` correspond to columns of `x`;
+/// `x_assign` gives their non-negative model-term labels. Each `strata_terms`
+/// vector is row-aligned, with negative codes denoting missing terms.
+/// Missing covariates (NaN) omit only the transitions that use those columns.
+/// Weights must be positive; offsets and follow-up times must be finite.
 #[derive(Debug, Clone)]
-pub(crate) struct MsData {
+pub struct CoxphmsData {
     pub time: Vec<f64>,
     pub entry: Option<Vec<f64>>,
     pub endpoint: Vec<usize>,
@@ -290,58 +374,122 @@ pub(crate) struct MsData {
     pub cluster: Option<Vec<i32>>,
 }
 
+impl CoxphmsData {
+    /// Validate all rows and the associated design before transition expansion.
+    pub fn validate(&self, design: &CoxphmsDesign) -> SurvivalResult<()> {
+        design.validate()?;
+        let n = self.time.len();
+        validate_non_empty(&self.time, "time")?;
+        validate_finite(&self.time, "time")?;
+        for (values, name) in [
+            (self.entry.as_ref().map(Vec::len), "entry"),
+            (self.weights.as_ref().map(Vec::len), "weights"),
+            (self.offset.as_ref().map(Vec::len), "offset"),
+            (self.cluster.as_ref().map(Vec::len), "cluster"),
+            (Some(self.endpoint.len()), "endpoint"),
+            (Some(self.istate.len()), "istate"),
+            (Some(self.id.len()), "id"),
+            (Some(self.x.nrows()), "x"),
+        ] {
+            if let Some(len) = values {
+                validate_length(n, len, name)?;
+            }
+        }
+        validate_length(design.nx, self.x.ncols(), "x columns")?;
+        validate_length(design.nx, self.x_assign.len(), "x_assign")?;
+        validate_length(
+            design.strata_use.nrows(),
+            self.strata_terms.len(),
+            "strata terms",
+        )?;
+        for codes in &self.strata_terms {
+            validate_length(n, codes.len(), "strata terms")?;
+        }
+        if let Some(entry) = &self.entry {
+            validate_finite(entry, "entry")?;
+            crate::core::strata_order::validate_intervals(entry, &self.time)?;
+        }
+        if let Some(weights) = &self.weights {
+            validate_finite(weights, "weights")?;
+            if weights.iter().any(|&w| w <= 0.0) {
+                return Err(SurvivalError::invalid_input("Invalid weights, must be >0"));
+            }
+        }
+        if let Some(offset) = &self.offset {
+            validate_finite(offset, "offset")?;
+        }
+        if self.x.iter().any(|value| value.is_infinite()) {
+            return Err(SurvivalError::invalid_input(
+                "data contains an infinite predictor",
+            ));
+        }
+        if self.id.iter().any(|&id| id < 1) {
+            return Err(SurvivalError::invalid_input("id codes must be 1-based"));
+        }
+        if self.istate.contains(&0) {
+            return Err(SurvivalError::invalid_input("istate codes must be 1-based"));
+        }
+        let nstate = self
+            .istate
+            .iter()
+            .chain(&design.from)
+            .chain(&design.to)
+            .copied()
+            .max()
+            .unwrap_or(0);
+        if self.endpoint.iter().any(|&state| state > nstate) {
+            return Err(SurvivalError::invalid_input(
+                "endpoint codes must name a state",
+            ));
+        }
+        if self.x_assign.iter().any(|&term| term < 0) {
+            return Err(SurvivalError::invalid_input(
+                "x_assign codes must be non-negative",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Fitted stacked model with the observation and shared-baseline mappings needed
+/// to assemble multistate coefficients, diagnostics and predictions.
 #[derive(Debug, Clone)]
-pub(crate) struct MsFit {
+pub struct CoxphmsFit {
     pub fit: CoxPHFit,
-    pub stack: MsStack,
-    pub share: Option<MsShare>,
+    pub stack: CoxphmsStack,
+    pub share: Option<CoxphmsShare>,
 }
 
 fn take<T: Copy>(values: &[T], rows: &[usize]) -> Vec<T> {
     rows.iter().map(|&r| values[r]).collect()
 }
 
-pub(crate) fn coxphms_fit_data(
-    data: MsData,
-    design: &MsDesign,
+/// Fit transition-specific or shared multistate Cox effects without Python.
+///
+/// Both inputs are revalidated. `options.method` may be Breslow or Efron; exact
+/// ties are unsupported for multistate models. Cluster codes in either `data`
+/// or `options` refer to unstacked rows; supplying both is an error.
+/// The returned `fit` uses stacked rows, mapped back by `stack.rindex`.
+pub fn coxphms_fit(
+    data: &CoxphmsData,
+    design: &CoxphmsDesign,
     options: CoxphOptions,
-) -> SurvivalResult<MsFit> {
+) -> SurvivalResult<CoxphmsFit> {
+    data.validate(design)?;
     let n = data.time.len();
-    for (values, name) in [
-        (data.entry.as_ref().map(Vec::len), "entry"),
-        (data.weights.as_ref().map(Vec::len), "weights"),
-        (data.offset.as_ref().map(Vec::len), "offset"),
-        (data.cluster.as_ref().map(Vec::len), "cluster"),
-        (Some(data.istate.len()), "istate"),
-        (Some(data.id.len()), "id"),
-    ] {
-        if let Some(len) = values {
-            validate_length(n, len, name)?;
-        }
-    }
-    if data.id.iter().any(|&subject| subject < 1) {
-        return Err(SurvivalError::invalid_input("id codes must be 1-based"));
-    }
-    if data.istate.contains(&0) {
-        return Err(SurvivalError::invalid_input("istate codes must be 1-based"));
-    }
-    let nstate = data
-        .istate
-        .iter()
-        .chain(&design.to)
-        .copied()
-        .max()
-        .unwrap_or(0);
-    if data.endpoint.iter().any(|&state| state > nstate) {
+    if options.method == TieMethod::Exact {
         return Err(SurvivalError::invalid_input(
-            "endpoint codes must name a state",
+            "ties='exact' not supported for multistate",
         ));
     }
-    validate_length(design.nx, data.x_assign.len(), "x_assign")?;
-    if design.strata_use.nrows() != data.strata_terms.len() {
+    if data.cluster.is_some() && options.cluster.is_some() {
         return Err(SurvivalError::invalid_input(
-            "strata_use needs one row per strata term",
+            "supply cluster in data or options, not both",
         ));
+    }
+    let cluster = data.cluster.as_deref().or(options.cluster.as_deref());
+    if let Some(cluster) = cluster {
+        validate_length(n, cluster.len(), "cluster")?;
     }
     let stack = stacker(
         design,
@@ -378,7 +526,7 @@ pub(crate) fn coxphms_fit_data(
         offset,
     )?;
     let options = CoxphOptions {
-        cluster: data.cluster.as_deref().map(|cluster| take(cluster, rows)),
+        cluster: cluster.map(|cluster| take(cluster, rows)),
         ..options
     };
     let fit = CoxPHFit::fit(fit_data, options)?;
@@ -390,7 +538,7 @@ pub(crate) fn coxphms_fit_data(
         &data.id,
         &data.x_assign,
     );
-    Ok(MsFit { fit, stack, share })
+    Ok(CoxphmsFit { fit, stack, share })
 }
 
 fn check_init(init: &[f64], x: &Array2<f64>, offset: Option<&[f64]>) -> SurvivalResult<()> {
@@ -452,7 +600,7 @@ pub(crate) fn ms_design(
     trans_to: IntVec,
     strata_use: Option<IntVec>,
     nterm: usize,
-) -> SurvivalResult<MsDesign> {
+) -> SurvivalResult<CoxphmsDesign> {
     let cmap = column_major(cmap, cmap_nrow, "cmap")?;
     let strata_use = match strata_use {
         Some(values) if nterm > 0 => {
@@ -460,7 +608,7 @@ pub(crate) fn ms_design(
         }
         _ => Array2::from_elem((0, cmap.ncols()), false),
     };
-    let design = MsDesign {
+    let design = CoxphmsDesign {
         nx,
         baseline: baseline.into_inner(),
         strata_use,
@@ -468,18 +616,7 @@ pub(crate) fn ms_design(
         to: to_index(trans_to, "trans_to")?,
         cmap,
     };
-    for (len, name) in [
-        (design.baseline.len(), "baseline"),
-        (design.from.len(), "trans_from"),
-        (design.to.len(), "trans_to"),
-    ] {
-        validate_length(design.ntrans(), len, name)?;
-    }
-    if design.cmap.nrows() < design.nx {
-        return Err(SurvivalError::invalid_input(
-            "cmap needs a row per column of x",
-        ));
-    }
+    design.validate()?;
     Ok(design)
 }
 
@@ -499,10 +636,10 @@ pub(crate) fn ms_design(
 #[doc = " source row, 1-based block, 0-based transition and stratum, and"]
 #[doc = " `share$vtype` and `share$scale` when the model has them."]
 #[allow(clippy::type_complexity)]
-#[pyfunction]
+#[pyfunction(name = "coxphms_fit")]
 #[pyo3(signature = (time, endpoint, istate, x, cmap, cmap_nrow, baseline, trans_from, trans_to, id, x_assign, entry=None, strata_terms=None, strata_use=None, weights=None, offset=None, cluster=None, method="breslow", init=None, iter_max=None, eps=None, toler_chol=None, nocenter=None, robust=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn coxphms_fit(
+pub(crate) fn coxphms_fit_py(
     py: Python<'_>,
     time: FloatVec,
     endpoint: IntVec,
@@ -552,7 +689,7 @@ pub fn coxphms_fit(
         strata_use,
         strata_terms.len(),
     )?;
-    let data = MsData {
+    let data = CoxphmsData {
         time: time.into_inner(),
         entry: entry.map(FloatVec::into_inner),
         endpoint: to_index(endpoint, "endpoint")?,
@@ -576,8 +713,8 @@ pub fn coxphms_fit(
         cluster: None,
         robust,
     };
-    let MsFit { fit, stack, share } =
-        py.detach(move || coxphms_fit_data(data, &design, options))?;
+    let CoxphmsFit { fit, stack, share } =
+        py.detach(move || coxphms_fit(&data, &design, options))?;
     let as_codes = |values: Vec<usize>| IntVec(values.into_iter().map(|v| v as i32).collect());
     let (vtype, scale) = match share {
         Some(share) => (Some(IntVec(share.vtype)), Some(FloatVec(share.scale))),
@@ -606,8 +743,8 @@ mod tests {
         (istate, endpoint, x)
     }
 
-    fn mtest_design() -> MsDesign {
-        MsDesign {
+    fn mtest_design() -> CoxphmsDesign {
+        CoxphmsDesign {
             cmap: Array2::from_shape_vec((1, 6), vec![1, 2, 3, 4, 5, 6]).unwrap(),
             nx: 1,
             baseline: vec![1, 2, 3, 4, 5, 6],
@@ -657,7 +794,7 @@ mod tests {
         let stack = stacker(&mtest_design(), &istate, &endpoint, x.view(), &[], true).unwrap();
         assert_eq!(stack.rindex.len(), 19);
         assert!(!stack.rindex.contains(&1));
-        let design = MsDesign {
+        let design = CoxphmsDesign {
             cmap: Array2::from_shape_vec((2, 2), vec![1, 0, 0, 2]).unwrap(),
             nx: 2,
             baseline: vec![1, 2],
@@ -672,7 +809,7 @@ mod tests {
 
     #[test]
     fn strata_codes_rank_block_and_term_codes() {
-        let design = MsDesign {
+        let design = CoxphmsDesign {
             cmap: Array2::from_shape_vec((1, 2), vec![1, 2]).unwrap(),
             nx: 1,
             baseline: vec![1, 2],
@@ -697,7 +834,7 @@ mod tests {
 
     #[test]
     fn misaligned_block_uses_its_first_transition_strata() {
-        let design = MsDesign {
+        let design = CoxphmsDesign {
             cmap: Array2::from_shape_vec((1, 3), vec![1, 2, 3]).unwrap(),
             nx: 1,
             baseline: vec![1, 1, 2],
@@ -723,7 +860,7 @@ mod tests {
     #[test]
     fn fit_data_rejects_misaligned_istate_and_bad_codes() {
         let (istate, endpoint, x) = mtest();
-        let data = MsData {
+        let data = CoxphmsData {
             time: vec![1.0; 10],
             entry: None,
             endpoint,
@@ -736,8 +873,8 @@ mod tests {
             offset: None,
             cluster: None,
         };
-        let error = |data: MsData| {
-            coxphms_fit_data(data, &mtest_design(), CoxphOptions::default())
+        let error = |data: CoxphmsData| {
+            coxphms_fit(&data, &mtest_design(), CoxphOptions::default())
                 .unwrap_err()
                 .to_string()
         };
@@ -757,7 +894,7 @@ mod tests {
 
     #[test]
     fn share_marks_constant_ph_covariates_and_scales_the_hazard() {
-        let design = MsDesign {
+        let design = CoxphmsDesign {
             cmap: Array2::from_shape_vec((2, 2), vec![1, 2, 0, 3]).unwrap(),
             nx: 1,
             baseline: vec![1, 1],
@@ -778,14 +915,14 @@ mod tests {
         .unwrap();
         assert_eq!(share.vtype, [0, 2]);
         assert_eq!(share.scale, [1.0, (-1.5f64).exp()]);
-        let separate = MsDesign {
+        let separate = CoxphmsDesign {
             baseline: vec![1, 2],
             ..design
         };
         assert!(share_of(&separate, &x).is_none());
     }
 
-    fn share_of(design: &MsDesign, x: &Array2<f64>) -> Option<MsShare> {
+    fn share_of(design: &CoxphmsDesign, x: &Array2<f64>) -> Option<CoxphmsShare> {
         let stack = stacker(design, &[1, 1, 1], &[2, 3, 0], x.view(), &[], true).unwrap();
         share(
             design,

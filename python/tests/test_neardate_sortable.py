@@ -160,6 +160,18 @@ def test_nomatch_must_not_be_a_valid_row():
     assert r.neardate([1, 2], [1, 1], [1, 5], [2, 3], nomatch=2) == [0, 2]
 
 
+@pytest.mark.parametrize(("best", "expected"), [("after", [0, 0]), ("prior", [1, 1])])
+@pytest.mark.parametrize("array", [False, True])
+def test_signed_zero_dates_keep_stock_reference_row_tie_order(best, expected, array):
+    # Stock survival::neardate returns c(1, 1) / c(2, 2), in one-based positions.
+    id1 = id2 = [1, 1]
+    query = reference = [0.0, -0.0]
+    if array:
+        id1 = id2 = np.array(id1, dtype=np.int64)
+        query = reference = np.array(query)
+    assert r.neardate(id1, id2, query, reference, best=best) == expected
+
+
 @pytest.mark.parametrize("dtype", [np.int64, np.int32, np.uint16])
 def test_integer_id_arrays_match_label_inputs(dtype):
     rng = np.random.default_rng(7)
