@@ -37,6 +37,12 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Performance
 
+- `interaction(..., drop=TRUE)` builds only observed factor combinations,
+  avoiding Cartesian products of unused levels while retaining R's level order.
+- Multistate summaries select rows directly from the fitted curve and synthesize
+  the initial row only when needed, avoiding copies of the full curve.
+- Breslow Cox detail calculations evaluate risk-set moments once per tied death
+  time, retaining the weighted per-death hazard variance.
 - Survival-summary data frames skip unused restricted-mean and quantile tables.
 - Turnbull interval-censored curves store each observation's jump range instead
   of a dense observation-by-jump matrix. EM updates visit only covered jumps,
@@ -59,6 +65,7 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Fixed
 
+- The Python package-layout example uses the current `survival.kernels` import.
 - Optional ML builds use `chacha20` 0.10.2, fixing the RNG's use of an SSE4.1
   instruction in its SSE2 backend ([upstream fix](https://github.com/RustCrypto/stream-ciphers/pull/580)).
 - Concordance formulas retain source columns used by logical or factor responses

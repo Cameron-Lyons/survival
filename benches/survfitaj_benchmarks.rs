@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, survfitaj};
+use survival::surv_analysis::{SurvfitAJData, SurvfitAJOptions, summary_survfit_aj, survfitaj};
 
 #[global_allocator]
 static ALLOCATOR: divan::AllocProfiler = divan::AllocProfiler::system();
@@ -115,6 +115,25 @@ fn influence_output(bencher: divan::Bencher, n: usize) {
     bencher
         .with_inputs(|| (data.clone(), options.clone()))
         .bench_local_values(|(data, options)| run_benchmark(data, options));
+}
+
+#[divan::bench(args = [1000, 100000])]
+fn event_summary(bencher: divan::Bencher, n: usize) {
+    let fit = survfitaj(&benchmark_inputs(n, n), &SurvfitAJOptions::default())
+        .expect("valid multistate curve");
+    bencher.bench_local(|| {
+        black_box(summary_survfit_aj(&fit, None, false, false).expect("valid summary"));
+    });
+}
+
+#[divan::bench(args = [1000, 100000])]
+fn requested_time_summary(bencher: divan::Bencher, n: usize) {
+    let fit = survfitaj(&benchmark_inputs(n, n), &SurvfitAJOptions::default())
+        .expect("valid multistate curve");
+    let times = [0.0, n as f64 / 2.0, n as f64, n as f64 + 1.0];
+    bencher.bench_local(|| {
+        black_box(summary_survfit_aj(&fit, Some(&times), false, true).expect("valid summary"));
+    });
 }
 
 fn main() {

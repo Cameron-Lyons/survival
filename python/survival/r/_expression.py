@@ -1162,17 +1162,34 @@ def _interaction(
             None if a is None or c is None else a + width * c if lex_order else a * width + c
             for a, c in zip(answer, codes, strict=True)
         ]
-        labels = (
-            [f"{left}{sep}{right}" for left in level_labels for right in labels]
-            if lex_order
-            else [f"{left}{sep}{right}" for right in labels for left in level_labels]
-        )
+        if drop:
+            # Only observed combinations need labels. Building the Cartesian
+            # product first can require exponential storage for sparse factors.
+            observed = sorted({code for code in answer if code is not None})
+            labels = (
+                [f"{level_labels[code // width]}{sep}{labels[code % width]}" for code in observed]
+                if lex_order
+                else [
+                    f"{level_labels[code % width]}{sep}{labels[code // width]}" for code in observed
+                ]
+            )
+            by_code = {code: i for i, code in enumerate(observed)}
+            answer = [None if code is None else by_code[code] for code in answer]
+        else:
+            labels = (
+                [f"{left}{sep}{right}" for left in level_labels for right in labels]
+                if lex_order
+                else [f"{left}{sep}{right}" for right in labels for left in level_labels]
+            )
+        # Separators may also occur inside levels: merge identical labels before
+        # combining the next factor, preserving R's first-occurrence ordering.
+        unique = dict.fromkeys(labels)
+        if len(unique) != len(labels):
+            by_label = {label: i for i, label in enumerate(unique)}
+            answer = [None if code is None else by_label[labels[code]] for code in answer]
+            labels = list(unique)
     combined = [None if code is None else labels[code] for code in answer]
-    categories = list(dict.fromkeys(labels))
-    if drop:
-        used = {label for label in combined if label is not None}
-        categories = [label for label in categories if label in used]
-    return _ExpressionVector(combined, "factor", categories)
+    return _ExpressionVector(combined, "factor", labels)
 
 
 def _in_values(x: _ExpressionVector, table: _ExpressionVector) -> _ExpressionVector:

@@ -3,7 +3,7 @@
 `survivalr` is an experimental R facade for this repository's Rust-backed
 Python package. It exposes familiar R entry points such as `Surv`, `survfit`,
 `coxph`, `aareg`, `survdiff`, `survreg`, `basehaz`, `cox.zph`, and `concordance`, then
-delegates computation to `survival.r_api` through `reticulate`.
+delegates computation to `survival.r` through `reticulate`.
 Simple Python return values are converted back into R objects when possible;
 fitted model objects stay wrapped so S3 methods can dispatch to the Python API.
 Bridged models support standard R generics including `coef`, `vcov`, `confint`,

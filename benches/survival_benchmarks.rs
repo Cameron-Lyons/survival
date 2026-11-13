@@ -1784,7 +1784,45 @@ mod surv2counting_bench {
 
 mod cox_diagnostic_bench {
     use super::*;
-    use survival::regression::cox_zph_smooth;
+    use survival::regression::{cox_zph_smooth, coxph_detail};
+
+    fn tied_detail_fit(n: usize, extreme: bool) -> CoxPHFit {
+        let data = CoxphData::try_new(
+            (0..n).map(|i| 1.0 + (i % 5) as f64).collect(),
+            None,
+            (0..n).map(|i| i32::from(i % 4 != 0)).collect(),
+            generate_covariates(n, 20),
+            Some(generate_case_weights(n)),
+            None,
+            extreme.then(|| {
+                (0..n)
+                    .map(|i| if i % 2 == 0 { 0.0 } else { 300.0 })
+                    .collect()
+            }),
+        )
+        .unwrap();
+        CoxPHFit::fit(
+            data,
+            CoxphOptions {
+                method: TieMethod::Breslow,
+                iter_max: 0,
+                ..CoxphOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[divan::bench(args = [1_000, 10_000])]
+    fn breslow_detail_ties(bencher: divan::Bencher, n: usize) {
+        let fit = tied_detail_fit(n, false);
+        bencher.bench_local(|| black_box(coxph_detail(&fit, false).unwrap()));
+    }
+
+    #[divan::bench(args = [1_000, 10_000])]
+    fn breslow_detail_ties_extreme(bencher: divan::Bencher, n: usize) {
+        let fit = tied_detail_fit(n, true);
+        bencher.bench_local(|| black_box(coxph_detail(&fit, false).unwrap()));
+    }
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn smooth_twenty_terms(bencher: divan::Bencher, n: usize) {

@@ -1,6 +1,6 @@
 """Minimal example showing the preferred module-oriented Python imports."""
 
-from survival import core, datasets, validation
+from survival import core, datasets, kernels, validation
 
 
 def main() -> None:
@@ -8,7 +8,7 @@ def main() -> None:
     print(f"lung rows: {len(lung['time'])}")
     print(f"lung columns: {list(lung)[:4]}")
 
-    concordance = core.concordancefit(
+    concordance = kernels.concordancefit(
         core.SurvivalData([1.0, 2.0, 3.0, 4.0, 5.0], [1, 1, 0, 1, 1]),
         core.CovariateMatrix([0.2, 0.1, 0.5, 0.4, 0.9], 5, 1),
     )

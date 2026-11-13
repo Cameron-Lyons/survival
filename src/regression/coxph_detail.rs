@@ -156,7 +156,11 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
         sweep.for_each_death_time(|death| {
             let d = death.ndead();
             let d_f = d as f64;
-            let meanwt = death.tied.weight / d_f;
+            // Breslow uses the same risk set for every tied death, so its
+            // identical moment contributions can be evaluated once.
+            let steps = if efron { d } else { 1 };
+            let steps_f = steps as f64;
+            let step_weight = death.tied.weight / steps_f;
             let mut haz = 0.0;
             let mut var = 0.0;
             let mut mean = vec![0.0; nvar];
@@ -170,19 +174,25 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                 })
                 .collect();
             let mut info = vec![vec![0.0; nvar]; nvar];
-            for j in 0..d {
-                let step = if efron { j } else { 0 };
+            let mut xbar = vec![0.0; nvar];
+            for step in 0..steps {
                 let d2 = death.efron_denom(step);
-                haz += meanwt / d2;
-                var += meanwt * meanwt / (d2 * d2);
-                let xbar: Vec<f64> = (0..nvar).map(|i| death.efron_a(step, i) / d2).collect();
+                let increment = step_weight / d2;
+                haz += increment;
+                // R sums squares of the per-death hazard increments; a
+                // combined Breslow increment therefore retains a 1/d factor.
+                var += increment * (increment * (steps_f / d_f));
+                for (i, value) in xbar.iter_mut().enumerate() {
+                    *value = death.efron_a(step, i) / d2;
+                }
                 for i in 0..nvar {
-                    mean[i] += (fit.means[i] + xbar[i]) / d_f;
-                    u[i] -= meanwt * xbar[i];
+                    mean[i] += (fit.means[i] + xbar[i]) / steps_f;
+                    u[i] -= step_weight * xbar[i];
                     for k in 0..=i {
-                        let value = meanwt
-                            * (death.efron_cmat(step, i, k) - xbar[i] * death.efron_a(step, k))
-                            / d2;
+                        // Normalize the weight first: a tied death weight can
+                        // overflow the raw moment even when information is finite.
+                        let value = increment
+                            * (death.efron_cmat(step, i, k) - xbar[i] * death.efron_a(step, k));
                         info[i][k] += value;
                         if k < i {
                             info[k][i] += value;
@@ -280,7 +290,11 @@ fn log_detail(fit: &CoxPHFit, riskmat: bool, x: &Array2<f64>) -> SurvivalResult<
             if d == 0 {
                 return Ok(());
             }
-            let meanwt = event.death_weight / d as f64;
+            let steps = if fit.method.is_efron() { d } else { 1 };
+            let steps_f = steps as f64;
+            let step_weight = event.death_weight / steps_f;
+            let log_steps = steps_f.ln();
+            let log_variance_weight = log_steps - (d as f64).ln();
             let mut hazard = LogMoments::new(0);
             let mut variance = LogMoments::new_with_degree(0, 2.0);
             let mut mean = vec![0.; p];
@@ -296,11 +310,10 @@ fn log_detail(fit: &CoxPHFit, riskmat: bool, x: &Array2<f64>) -> SurvivalResult<
             let mut info = Array2::zeros((p, p));
             let mut covariance = Array2::zeros((p, p));
             let mut xbar = vec![0.; p];
-            for step in 0..d {
-                let step = if fit.method.is_efron() { step } else { 0 };
+            for step in 0..steps {
                 let increment = event
                     .efron_denom(step)
-                    .reciprocal(event.log_death_weight - (d as f64).ln());
+                    .reciprocal(event.log_death_weight - log_steps);
                 if increment.origin.is_nan()
                     || increment.origin_correction.is_nan()
                     || increment.log_mass.is_nan()
@@ -312,17 +325,17 @@ fn log_detail(fit: &CoxPHFit, riskmat: bool, x: &Array2<f64>) -> SurvivalResult<
                     LogScale::new_parts(
                         increment.origin,
                         increment.origin_correction,
-                        2. * increment.log_mass,
+                        2. * increment.log_mass + log_variance_weight,
                     ),
                     &[],
                 );
                 event.efron_mean(step, &mut xbar);
                 event.efron_covariance(step, &mut covariance);
                 for i in 0..p {
-                    mean[i] += (fit.means[i] + xbar[i]) / d as f64;
-                    score[i] -= meanwt * xbar[i];
+                    mean[i] += (fit.means[i] + xbar[i]) / steps_f;
+                    score[i] -= step_weight * xbar[i];
                     for j in 0..p {
-                        info[(i, j)] += meanwt * covariance[(i, j)];
+                        info[(i, j)] += step_weight * covariance[(i, j)];
                     }
                 }
             }
@@ -471,6 +484,122 @@ mod tests {
             assert_eq!(riskmat[3], vec![1, 1, 0, 0]);
             assert_eq!(detail.wtrisk.len(), 4);
             assert_eq!(detail.nevent_wt[1], 3.0);
+        }
+    }
+
+    #[test]
+    fn breslow_ties_keep_weighted_moments_and_per_death_hazard_variance() {
+        // Three tied deaths have weight 6, while all four risk-set rows have
+        // weight 10. At beta=0 the hazard is 6/10, but its variance is
+        // 3 * (2/10)^2, not (6/10)^2. The second stratum doubles the weights
+        // and shifts both covariates without changing either hazard quantity.
+        for counting in [false, true] {
+            let data = CoxphData::try_new(
+                vec![1.; 8],
+                counting.then(|| vec![-1., -2., 0., -3., -1., -2., 0., -3.]),
+                vec![1, 1, 1, 0, 1, 1, 1, 0],
+                ndarray::arr2(&[
+                    [0., 0.],
+                    [1., 2.],
+                    [0., 1.],
+                    [1., 0.],
+                    [10., 10.],
+                    [11., 12.],
+                    [10., 11.],
+                    [11., 10.],
+                ]),
+                Some(vec![1., 2., 3., 4., 2., 4., 6., 8.]),
+                Some(vec![7, 7, 7, 7, 19, 19, 19, 19]),
+                None,
+            )
+            .unwrap();
+            let fit = CoxPHFit::fit(
+                data,
+                CoxphOptions {
+                    method: TieMethod::Breslow,
+                    init: Some(vec![0., 0.]),
+                    iter_max: 0,
+                    ..CoxphOptions::default()
+                },
+            )
+            .unwrap();
+            let mut x = fit.x.clone();
+            for (mut column, &center) in x.columns_mut().into_iter().zip(&fit.means) {
+                column -= center;
+            }
+            for detail in [
+                coxph_detail(&fit, true).unwrap(),
+                log_detail(&fit, true, &x).unwrap(),
+            ] {
+                assert_eq!(detail.time, vec![1., 1.]);
+                assert_eq!(detail.nevent, vec![3, 3]);
+                assert_eq!(detail.nrisk, vec![4, 4]);
+                assert_eq!(detail.strata, Some(vec![7, 19]));
+                assert_eq!(
+                    detail.riskmat,
+                    Some(vec![
+                        vec![1, 0],
+                        vec![1, 0],
+                        vec![1, 0],
+                        vec![1, 0],
+                        vec![0, 1],
+                        vec![0, 1],
+                        vec![0, 1],
+                        vec![0, 1],
+                    ])
+                );
+                for group in 0..2 {
+                    let weight = (group + 1) as f64;
+                    assert_close(detail.hazard[group], 0.6, 1e-12);
+                    assert_close(detail.varhaz[group], 0.12, 1e-12);
+                    assert_close(detail.wtrisk[group], 10. * weight, 1e-12);
+                    assert_close(detail.nevent_wt[group], 6. * weight, 1e-12);
+                    for (j, mean) in [0.6, 0.7].iter().enumerate() {
+                        assert_close(detail.means[group][j], mean + 10. * group as f64, 1e-12);
+                        assert_close(detail.score[group][j], [-1.6, 2.8][j] * weight, 1e-12);
+                        for k in 0..2 {
+                            let information = [[1.44, -0.12], [-0.12, 3.66]][j][k];
+                            assert_close(detail.imat[group][j][k], information * weight, 1e-11);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn breslow_ties_preserve_finite_information_for_large_covariates() {
+        let n = 1000;
+        for (magnitude, weight) in [(1e152, 1.0), (1e190, 1e-80)] {
+            let data =
+                CoxphData::try_new(
+                    vec![1.0; n],
+                    None,
+                    vec![1; n],
+                    Array2::from_shape_fn((n, 1), |(row, _)| {
+                        if row % 2 == 0 { magnitude } else { -magnitude }
+                    }),
+                    Some(vec![weight; n]),
+                    None,
+                    None,
+                )
+                .unwrap();
+            let fit = CoxPHFit::fit(
+                data,
+                CoxphOptions {
+                    method: TieMethod::Breslow,
+                    init: Some(vec![0.0]),
+                    iter_max: 0,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let detail = coxph_detail(&fit, false).unwrap();
+            let expected = (weight * magnitude) * magnitude * n as f64;
+            assert!(detail.imat[0][0][0].is_finite());
+            assert_close(detail.imat[0][0][0] / expected, 1.0, 1e-12);
+            assert_close(detail.hazard[0], 1.0, 1e-12);
+            assert_close(detail.varhaz[0], 1.0 / n as f64, 1e-12);
         }
     }
 
