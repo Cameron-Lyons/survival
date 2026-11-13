@@ -1,0 +1,997 @@
+{
+  "r_version": "R version 4.6.2 (2026-10-29)",
+  "cases": [
+    {
+      "name": "ordinary/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["b.y.z", "a.x.w", "b.x.w", null, null, "b.y.w", "a.x.z"],
+      "levels": ["b.y.w", "a.y.w", "unused.y.w", "b.x.w", "a.x.w", "unused.x.w", "b.unused.w", "a.unused.w", "unused.unused.w", "b.y.z", "a.y.z", "unused.y.z", "b.x.z", "a.x.z", "unused.x.z", "b.unused.z", "a.unused.z", "unused.unused.z", "b.y.unused", "a.y.unused", "unused.y.unused", "b.x.unused", "a.x.unused", "unused.x.unused", "b.unused.unused", "a.unused.unused", "unused.unused.unused"]
+    },
+    {
+      "name": "ordinary/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": ["byz", "axw", "bxw", null, null, "byw", "axz"],
+      "levels": ["byw", "ayw", "unusedyw", "bxw", "axw", "unusedxw", "bunusedw", "aunusedw", "unusedunusedw", "byz", "ayz", "unusedyz", "bxz", "axz", "unusedxz", "bunusedz", "aunusedz", "unusedunusedz", "byunused", "ayunused", "unusedyunused", "bxunused", "axunused", "unusedxunused", "bunusedunused", "aunusedunused", "unusedunusedunused"]
+    },
+    {
+      "name": "ordinary/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["b.y.z", "a.x.w", "b.x.w", null, null, "b.y.w", "a.x.z"],
+      "levels": ["b.y.w", "b.y.z", "b.y.unused", "b.x.w", "b.x.z", "b.x.unused", "b.unused.w", "b.unused.z", "b.unused.unused", "a.y.w", "a.y.z", "a.y.unused", "a.x.w", "a.x.z", "a.x.unused", "a.unused.w", "a.unused.z", "a.unused.unused", "unused.y.w", "unused.y.z", "unused.y.unused", "unused.x.w", "unused.x.z", "unused.x.unused", "unused.unused.w", "unused.unused.z", "unused.unused.unused"]
+    },
+    {
+      "name": "ordinary/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": ["byz", "axw", "bxw", null, null, "byw", "axz"],
+      "levels": ["byw", "byz", "byunused", "bxw", "bxz", "bxunused", "bunusedw", "bunusedz", "bunusedunused", "ayw", "ayz", "ayunused", "axw", "axz", "axunused", "aunusedw", "aunusedz", "aunusedunused", "unusedyw", "unusedyz", "unusedyunused", "unusedxw", "unusedxz", "unusedxunused", "unusedunusedw", "unusedunusedz", "unusedunusedunused"]
+    },
+    {
+      "name": "ordinary/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["b.y.z", "a.x.w", "b.x.w", null, null, "b.y.w", "a.x.z"],
+      "levels": ["b.y.w", "b.x.w", "a.x.w", "b.y.z", "a.x.z"]
+    },
+    {
+      "name": "ordinary/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": ["byz", "axw", "bxw", null, null, "byw", "axz"],
+      "levels": ["byw", "bxw", "axw", "byz", "axz"]
+    },
+    {
+      "name": "ordinary/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["b.y.z", "a.x.w", "b.x.w", null, null, "b.y.w", "a.x.z"],
+      "levels": ["b.y.w", "b.y.z", "b.x.w", "a.x.w", "a.x.z"]
+    },
+    {
+      "name": "ordinary/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", "b", null, "a", "b", "a"],
+          "levels": ["b", "a", "unused"]
+        },
+        "b": {
+          "values": ["y", "x", "x", "y", null, "y", "x"],
+          "levels": ["y", "x", "unused"]
+        },
+        "c": {
+          "values": ["z", "w", "w", "z", "z", "w", "z"],
+          "levels": ["w", "z", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": ["byz", "axw", "bxw", null, null, "byw", "axz"],
+      "levels": ["byw", "byz", "bxw", "axw", "axz"]
+    },
+    {
+      "name": "collisions/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["A.p.r", "B.p.q.r", "A.p.q.q.r", "B.p.q.r", "A.p.q.r", null],
+      "levels": ["B.p.q.r", "A.p.q.r", "B.p.q.q.r", "A.p.q.q.r", "B.p.r", "A.p.r"]
+    },
+    {
+      "name": "collisions/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": ["Apr", "Bp.qr", "Ap.qq.r", "Bpq.r", "Ap.qr", null],
+      "levels": ["Bpq.r", "Apq.r", "Bp.qq.r", "Ap.qq.r", "Bpr", "Apr", "Bp.qr", "Ap.qr"]
+    },
+    {
+      "name": "collisions/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["A.p.r", "B.p.q.r", "A.p.q.q.r", "B.p.q.r", "A.p.q.r", null],
+      "levels": ["B.p.q.r", "B.p.r", "B.p.q.q.r", "A.p.q.r", "A.p.r", "A.p.q.q.r"]
+    },
+    {
+      "name": "collisions/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": ["Apr", "Bp.qr", "Ap.qq.r", "Bpq.r", "Ap.qr", null],
+      "levels": ["Bpq.r", "Bpr", "Bp.qq.r", "Bp.qr", "Apq.r", "Apr", "Ap.qq.r", "Ap.qr"]
+    },
+    {
+      "name": "collisions/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["A.p.r", "B.p.q.r", "A.p.q.q.r", "B.p.q.r", "A.p.q.r", null],
+      "levels": ["B.p.q.r", "A.p.q.r", "A.p.q.q.r", "A.p.r"]
+    },
+    {
+      "name": "collisions/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": ["Apr", "Bp.qr", "Ap.qq.r", "Bpq.r", "Ap.qr", null],
+      "levels": ["Bpq.r", "Ap.qq.r", "Apr", "Bp.qr", "Ap.qr"]
+    },
+    {
+      "name": "collisions/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["A.p.r", "B.p.q.r", "A.p.q.q.r", "B.p.q.r", "A.p.q.r", null],
+      "levels": ["B.p.q.r", "A.p.q.r", "A.p.r", "A.p.q.q.r"]
+    },
+    {
+      "name": "collisions/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["A", "B", "A", "B", "A", "B"],
+          "levels": ["B", "A"]
+        },
+        "b": {
+          "values": ["p", "p.q", "p.q", "p", "p.q", null],
+          "levels": ["p", "p.q"]
+        },
+        "c": {
+          "values": ["r", "r", "q.r", "q.r", "r", "r"],
+          "levels": ["q.r", "r"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": ["Apr", "Bp.qr", "Ap.qq.r", "Bpq.r", "Ap.qr", null],
+      "levels": ["Bpq.r", "Bp.qr", "Apr", "Ap.qq.r", "Ap.qr"]
+    },
+    {
+      "name": "no_separator/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["a.bc.d", "ab.c.d", "a.c.cd", "ab.bc.d"],
+      "levels": ["ab.bc.d", "a.bc.d", "ab.c.d", "a.c.d", "ab.bc.cd", "a.bc.cd", "ab.c.cd", "a.c.cd"]
+    },
+    {
+      "name": "no_separator/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": ["abcd", "abcd", "accd", "abbcd"],
+      "levels": ["abbcd", "abcd", "acd", "abbccd", "abccd", "accd"]
+    },
+    {
+      "name": "no_separator/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["a.bc.d", "ab.c.d", "a.c.cd", "ab.bc.d"],
+      "levels": ["ab.bc.d", "ab.bc.cd", "ab.c.d", "ab.c.cd", "a.bc.d", "a.bc.cd", "a.c.d", "a.c.cd"]
+    },
+    {
+      "name": "no_separator/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": ["abcd", "abcd", "accd", "abbcd"],
+      "levels": ["abbcd", "abbccd", "abcd", "abccd", "acd", "accd"]
+    },
+    {
+      "name": "no_separator/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["a.bc.d", "ab.c.d", "a.c.cd", "ab.bc.d"],
+      "levels": ["ab.bc.d", "a.bc.d", "ab.c.d", "a.c.cd"]
+    },
+    {
+      "name": "no_separator/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": ["abcd", "abcd", "accd", "abbcd"],
+      "levels": ["abbcd", "abcd", "accd"]
+    },
+    {
+      "name": "no_separator/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["a.bc.d", "ab.c.d", "a.c.cd", "ab.bc.d"],
+      "levels": ["ab.bc.d", "ab.c.d", "a.bc.d", "a.c.cd"]
+    },
+    {
+      "name": "no_separator/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["a", "ab", "a", "ab"],
+          "levels": ["ab", "a"]
+        },
+        "b": {
+          "values": ["bc", "c", "c", "bc"],
+          "levels": ["bc", "c"]
+        },
+        "c": {
+          "values": ["d", "d", "cd", "d"],
+          "levels": ["d", "cd"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": ["abcd", "abcd", "accd", "abbcd"],
+      "levels": ["abbcd", "abcd", "accd"]
+    },
+    {
+      "name": "all_missing/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": [null, null, null],
+      "levels": ["b.y.c", "a.y.c", "b.x.c", "a.x.c", "b.y.d", "a.y.d", "b.x.d", "a.x.d"]
+    },
+    {
+      "name": "all_missing/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": [null, null, null],
+      "levels": ["byc", "ayc", "bxc", "axc", "byd", "ayd", "bxd", "axd"]
+    },
+    {
+      "name": "all_missing/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": [null, null, null],
+      "levels": ["b.y.c", "b.y.d", "b.x.c", "b.x.d", "a.y.c", "a.y.d", "a.x.c", "a.x.d"]
+    },
+    {
+      "name": "all_missing/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": [null, null, null],
+      "levels": ["byc", "byd", "bxc", "bxd", "ayc", "ayd", "axc", "axd"]
+    },
+    {
+      "name": "all_missing/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": [null, null, null],
+      "levels": []
+    },
+    {
+      "name": "all_missing/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": [null, null, null],
+      "levels": []
+    },
+    {
+      "name": "all_missing/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": [null, null, null],
+      "levels": []
+    },
+    {
+      "name": "all_missing/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": [null, null, null],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": ["x", null, "y"],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": ["c", "c", "d"],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": [null, null, null],
+      "levels": []
+    },
+    {
+      "name": "empty/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": [],
+      "levels": ["b.y.c", "a.y.c", "b.x.c", "a.x.c", "b.y.d", "a.y.d", "b.x.d", "a.x.d"]
+    },
+    {
+      "name": "empty/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": [],
+      "levels": ["byc", "ayc", "bxc", "axc", "byd", "ayd", "bxd", "axd"]
+    },
+    {
+      "name": "empty/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": [],
+      "levels": ["b.y.c", "b.y.d", "b.x.c", "b.x.d", "a.y.c", "a.y.d", "a.x.c", "a.x.d"]
+    },
+    {
+      "name": "empty/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": [],
+      "levels": ["byc", "byd", "bxc", "bxd", "ayc", "ayd", "axc", "axd"]
+    },
+    {
+      "name": "empty/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": [],
+      "levels": []
+    },
+    {
+      "name": "empty/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": [],
+      "levels": []
+    },
+    {
+      "name": "empty/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": [],
+      "levels": []
+    },
+    {
+      "name": "empty/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": [],
+          "levels": ["b", "a"]
+        },
+        "b": {
+          "values": [],
+          "levels": ["y", "x"]
+        },
+        "c": {
+          "values": [],
+          "levels": ["c", "d"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": [],
+      "levels": []
+    },
+    {
+      "name": "single/FALSE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a", "unused"]
+    },
+    {
+      "name": "single/FALSE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": false,
+      "sep": "",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a", "unused"]
+    },
+    {
+      "name": "single/FALSE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a", "unused"]
+    },
+    {
+      "name": "single/FALSE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": false,
+      "lex_order": true,
+      "sep": "",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a", "unused"]
+    },
+    {
+      "name": "single/TRUE/FALSE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": ".",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a"]
+    },
+    {
+      "name": "single/TRUE/FALSE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": false,
+      "sep": "",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a"]
+    },
+    {
+      "name": "single/TRUE/TRUE/dot",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": ".",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a"]
+    },
+    {
+      "name": "single/TRUE/TRUE/empty",
+      "input": {
+        "a": {
+          "values": ["b", "a", null, "b"],
+          "levels": ["b", "a", "unused"]
+        }
+      },
+      "drop": true,
+      "lex_order": true,
+      "sep": "",
+      "values": ["b", "a", null, "b"],
+      "levels": ["b", "a"]
+    }
+  ]
+}

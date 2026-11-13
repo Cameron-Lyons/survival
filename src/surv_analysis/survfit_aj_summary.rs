@@ -153,8 +153,14 @@ fn area_to(
         .sum()
 }
 
+#[derive(Clone, Copy)]
+enum SummaryRow {
+    Observed(usize),
+    Initial(usize),
+}
+
 struct SummaryIndex {
-    selection: Vec<usize>,
+    selection: Vec<SummaryRow>,
     risk_selection: Vec<Option<usize>>,
     intervals: Vec<std::ops::Range<usize>>,
     output_times: Vec<f64>,
@@ -189,19 +195,25 @@ fn summary_index(
         output_times: Vec::new(),
         sizes: Vec::new(),
     };
-    for range in source.curve_ranges() {
+    for (curve, range) in source.curve_ranges().into_iter().enumerate() {
         let before = index.selection.len();
         let mut previous = range.start;
         if let Some(times) = requested {
             let observed = &source.time[range.clone()];
+            let initial = observed.first().is_none_or(|&time| time != source.t0);
+            let last = observed.last().copied().unwrap_or(source.t0);
             for &time in times {
-                if observed.is_empty() || (!extend && time > observed[observed.len() - 1]) {
+                if !extend && time > last {
                     continue;
                 }
                 let right = range.start + observed.partition_point(|&value| value <= time);
-                index
-                    .selection
-                    .push(right.saturating_sub(1).max(range.start));
+                index.selection.push(if right > range.start {
+                    SummaryRow::Observed(right - 1)
+                } else if initial {
+                    SummaryRow::Initial(curve)
+                } else {
+                    SummaryRow::Observed(range.start)
+                });
                 let risk = range.start + observed.partition_point(|&value| value < time);
                 index
                     .risk_selection
@@ -213,7 +225,7 @@ fn summary_index(
         } else {
             for i in range.clone() {
                 if censored || source.n_event[i].iter().any(|&value| value > 0.0) {
-                    index.selection.push(i);
+                    index.selection.push(SummaryRow::Observed(i));
                     index.risk_selection.push(Some(i));
                     index.intervals.push(previous..i + 1);
                     previous = i + 1;
@@ -233,21 +245,14 @@ pub(crate) fn summary_rows(
     extend: bool,
 ) -> SurvivalResult<Vec<i64>> {
     let requested = summary_times(times)?;
-    Ok(match &requested {
-        Some(times) => {
-            let rows = survfit0_aj_rows(fit);
-            summary_index(&survfit0_aj(fit), Some(times), censored, extend)
-                .selection
-                .into_iter()
-                .map(|i| rows[i])
-                .collect()
-        }
-        None => summary_index(fit, None, censored, extend)
-            .selection
-            .into_iter()
-            .map(|i| i as i64)
-            .collect(),
-    })
+    Ok(summary_index(fit, requested.as_deref(), censored, extend)
+        .selection
+        .into_iter()
+        .map(|row| match row {
+            SummaryRow::Observed(i) => i as i64,
+            SummaryRow::Initial(curve) => -1 - curve as i64,
+        })
+        .collect())
 }
 
 pub fn summary_survfit_aj(
@@ -267,22 +272,25 @@ pub fn summary_survfit_aj_with_counts(
     dosum: bool,
 ) -> SurvivalResult<SurvfitAJResult> {
     let requested = summary_times(times)?;
-    let source = if requested.is_some() {
-        survfit0_aj(fit)
-    } else {
-        fit.clone()
-    };
-    let mut out = source.clone();
     let SummaryIndex {
         selection,
         risk_selection,
         intervals,
         output_times,
         sizes,
-    } = summary_index(&source, requested.as_deref(), censored, extend);
-    let pick = |values: &[Vec<f64>]| selection.iter().map(|&i| values[i].clone()).collect();
-    let sum = |values: &[Vec<f64>]| -> Vec<Vec<f64>> {
-        let width = values.first().map_or(0, Vec::len);
+    } = summary_index(fit, requested.as_deref(), censored, extend);
+    // The initial row has zero counts, hazards and standard errors. Select it
+    // virtually so a sparse summary never copies the full fitted time grid.
+    let pick = |values: &[Vec<f64>], width: usize| -> Vec<Vec<f64>> {
+        selection
+            .iter()
+            .map(|&row| match row {
+                SummaryRow::Observed(i) => values[i].clone(),
+                SummaryRow::Initial(_) => vec![0.0; width],
+            })
+            .collect()
+    };
+    let sum = |values: &[Vec<f64>], width: usize| -> Vec<Vec<f64>> {
         intervals
             .iter()
             .map(|range| {
@@ -296,42 +304,62 @@ pub fn summary_survfit_aj_with_counts(
             })
             .collect()
     };
-    let counts = |values: &[Vec<f64>]| {
+    let counts = |values: &[Vec<f64>], width: usize| {
         if requested.is_some() && !dosum {
-            pick(values)
+            pick(values, width)
         } else {
-            sum(values)
+            sum(values, width)
         }
     };
-    out.time = output_times;
-    out.strata = source.strata.as_ref().map(|_| sizes);
-    out.n_risk = risk_selection
-        .iter()
-        .map(|index| {
-            index.map_or_else(
-                || vec![0.0; source.states.len()],
-                |i| source.n_risk[i].clone(),
-            )
-        })
-        .collect();
-    out.n_event = if requested.is_some() {
-        counts(&source.n_event)
-    } else {
-        pick(&source.n_event)
-    };
-    out.n_censor = counts(&source.n_censor);
-    out.n_enter = source.n_enter.as_ref().map(|values| counts(values));
-    out.n_transition = counts(&source.n_transition);
-    out.pstate = pick(&source.pstate);
-    out.cumhaz = pick(&source.cumhaz);
-    out.std_err = source.std_err.as_ref().map(|values| pick(values));
-    out.std_chaz = source.std_chaz.as_ref().map(|values| pick(values));
-    out.lower = source.lower.as_ref().map(|values| pick(values));
-    out.upper = source.upper.as_ref().map(|values| pick(values));
-    out.std_auc = source.std_auc.as_ref().map(|values| pick(values));
-    out.influence_pstate = None;
-    out.counts = None;
-    Ok(out)
+    let ns = fit.states.len();
+    let nh = fit.hazard_from.len();
+    let pick_states = |values: &[Vec<f64>]| pick(values, ns);
+    Ok(SurvfitAJResult {
+        n: fit.n.clone(),
+        time: output_times,
+        n_risk: risk_selection
+            .iter()
+            .map(|index| index.map_or_else(|| vec![0.0; ns], |i| fit.n_risk[i].clone()))
+            .collect(),
+        n_event: if requested.is_some() {
+            counts(&fit.n_event, ns)
+        } else {
+            pick(&fit.n_event, ns)
+        },
+        n_censor: counts(&fit.n_censor, ns),
+        n_enter: fit.n_enter.as_ref().map(|values| counts(values, ns)),
+        n_transition: counts(&fit.n_transition, nh),
+        counts: None,
+        pstate: selection
+            .iter()
+            .map(|&row| match row {
+                SummaryRow::Observed(i) => fit.pstate[i].clone(),
+                SummaryRow::Initial(curve) => fit.p0[curve].clone(),
+            })
+            .collect(),
+        cumhaz: pick(&fit.cumhaz, nh),
+        std_err: fit.std_err.as_deref().map(pick_states),
+        std_chaz: fit.std_chaz.as_deref().map(|values| pick(values, nh)),
+        std_auc: fit.std_auc.as_deref().map(pick_states),
+        se0: fit.se0.clone(),
+        lower: fit.lower.as_deref().map(pick_states),
+        upper: fit.upper.as_deref().map(pick_states),
+        p0: fit.p0.clone(),
+        strata: fit.strata.as_ref().map(|_| sizes),
+        strata_codes: fit.strata_codes.clone(),
+        n_id: fit.n_id.clone(),
+        states: fit.states.clone(),
+        transitions: fit.transitions.clone(),
+        hazard_from: fit.hazard_from.clone(),
+        hazard_to: fit.hazard_to.clone(),
+        logse: fit.logse,
+        conf_int: fit.conf_int,
+        conf_type: fit.conf_type.clone(),
+        type_: fit.type_.clone(),
+        t0: fit.t0,
+        start_time: fit.start_time,
+        influence_pstate: None,
+    })
 }
 
 #[cfg(test)]
@@ -525,6 +553,108 @@ mod tests {
             assert_eq!(sampled.n_censor, accumulated.n_censor);
             assert_eq!(sampled.n_enter, accumulated.n_enter);
             assert_eq!(sampled.n_transition, accumulated.n_transition);
+        }
+    }
+
+    #[test]
+    fn requested_summaries_match_explicit_origins_without_changing_the_fit() {
+        let data = SurvfitAJData::try_new(
+            None,
+            vec![1., 2., 3., 4., 5., 6., 7., 8.],
+            vec![1, 0, 2, 0, 2, 1, 0, 0],
+            vec!["a".into(), "b".into()],
+            Some(vec![0.5, 1., 2., 1., 1.5, 1., 0.5, 1.]),
+            Some(vec![-2, 7, -2, 7, -2, 7, -2, 7]),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for se_fit in [false, true] {
+            let fit = survfitaj(
+                &data,
+                &SurvfitAJOptions {
+                    start_time: Some(0.5),
+                    se_fit,
+                    influence: se_fit,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let selected = fit.select_curves(&[1, 0, 1]).unwrap();
+            for source in [&fit, &selected, &fit.select_states(&[2, 0]).unwrap()] {
+                let original = source.clone();
+                let with_origin = survfit0_aj(source);
+                for extend in [false, true] {
+                    for dosum in [false, true] {
+                        let times = [9., 0., 0.5, 1., 2.5, 7., 9.];
+                        let summary = summary_survfit_aj_with_counts(
+                            source,
+                            Some(&times),
+                            false,
+                            extend,
+                            dosum,
+                        )
+                        .unwrap();
+                        let explicit = summary_survfit_aj_with_counts(
+                            &with_origin,
+                            Some(&times),
+                            false,
+                            extend,
+                            dosum,
+                        )
+                        .unwrap();
+                        assert_eq!(summary, explicit);
+                        assert!(summary.influence_pstate.is_none());
+                        assert!(summary.counts.is_none());
+                        assert_eq!(*source, original);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn requested_summaries_of_empty_curves_keep_the_initial_state_and_dimensions() {
+        let data = SurvfitAJData::try_new(
+            None,
+            vec![1., 2.],
+            vec![0, 0],
+            vec!["a".into()],
+            None,
+            Some(vec![0, 1]),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let fit = survfitaj(&data, &SurvfitAJOptions::default()).unwrap();
+        let empty = summary_survfit_aj(&fit, None, false, false).unwrap();
+        assert!(empty.time.is_empty());
+        assert_eq!(empty.strata, Some(vec![0, 0]));
+        for extend in [false, true] {
+            for dosum in [false, true] {
+                let times = [-1., 0., 1.];
+                let summary =
+                    summary_survfit_aj_with_counts(&empty, Some(&times), false, extend, dosum)
+                        .unwrap();
+                let explicit = summary_survfit_aj_with_counts(
+                    &survfit0_aj(&empty),
+                    Some(&times),
+                    false,
+                    extend,
+                    dosum,
+                )
+                .unwrap();
+                assert_eq!(summary, explicit);
+                for state in &summary.pstate {
+                    assert_eq!(state, &empty.p0[0]);
+                }
+                assert!(summary.n_risk.iter().all(|row| row == &[0., 0.]));
+                assert!(summary.n_event.iter().all(|row| row == &[0., 0.]));
+            }
         }
     }
 }

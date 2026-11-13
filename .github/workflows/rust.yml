@@ -419,6 +419,9 @@ jobs:
         env:
           R_SURVIVAL_VERSION: '3.8-12'
 
+      - name: Check interaction references against stock R
+        run: Rscript scripts/generate_interaction_reference.R --check
+
       - name: Regenerate current-stock formula, survival and exact-risk references
         run: |
           fixture_dir="$RUNNER_TEMP/current-stock-fixtures"

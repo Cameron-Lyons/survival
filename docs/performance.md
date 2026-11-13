@@ -61,6 +61,12 @@ and Borgan score contributions alongside the complete-call timings.
 including fractional weights and mixed censoring. Use `--extension` to select a
 saved native build and `--compare` to check all curve fields and iteration counts.
 
+`scripts/benchmark_interaction.py` measures formula interactions with sparse
+observed combinations, checking their labels and level order before reporting
+runtime and peak Python allocations. The multistate `summary` benchmarks in
+`benches/survfitaj_benchmarks.rs` cover sparse requests and event summaries, and the Cox
+diagnostic benchmarks include tied Breslow events with ordinary and extreme risks.
+
 ## Current characteristics
 
 - Native bindings copy NumPy arrays once into owned Rust buffers (any dtype,
@@ -114,6 +120,11 @@ saved native build and `--compare` to check all curve fields and iteration count
 - Grouped residuals and pseudo-values bucket input rows by curve in one pass
   (O(n + g) for g curves). Grouped multi-state data frames copy contiguous time
   blocks per state.
+- Multistate summaries allocate selected output rows directly and represent
+  inserted initial rows in the selection indices. Sparse requested-time summaries
+  and multistate Cox row selection avoid copying the fitted time grid, counts,
+  probabilities and confidence arrays. Summed counts still visit the covered
+  intervals in their original addition order.
 - Curve aggregation prepares group positions once and fills one reusable buffer per
   time and state; medians use linear-time selection instead of sorting. When the
   product of declared factor levels overflows, observed level combinations are
@@ -205,6 +216,10 @@ saved native build and `--compare` to check all curve fields and iteration count
   once, reuses QR factorizations and prediction variances for terms with the same
   missing-value mask, and computes standard errors by triangular solves without
   normal equations, so one call for all terms is much cheaper than one per term.
+- Cox detail calculations evaluate Breslow risk-set moments once per unique death
+  time, including at extreme risk scales. Weighted hazard variance retains the
+  sum of squared per-death increments. Efron keeps its changing risk-set steps
+  and reuses the covariate-mean buffer across those steps.
 
 ### AFT models
 
@@ -254,6 +269,10 @@ saved native build and `--compare` to check all curve fields and iteration count
   accumulate the covariance online without keeping each draw's responses.
 - Evaluated R model-frame columns with numeric dtypes skip per-value boolean and
   string scans during classification.
+- `interaction(..., drop=TRUE)` labels only observed combinations after adding
+  each factor, with at most one combination per input row. It preserves declared
+  level order, missing values and merged labels when separators occur within
+  levels. `drop=FALSE` retains the requested Cartesian level set.
 - O'Brien expansion sorts each covariate once per stratum and writes into
   precomputed output slices: O(P N log N + P M) work for N rows, P continuous
   columns and M expanded rows.
