@@ -911,6 +911,43 @@ fn kernel_matches_the_reference_with_zero_and_extreme_weights_and_empty_groups()
 }
 
 #[test]
+fn the_stable_path_reads_the_input_rows_unchanged() {
+    let mut rng = Rng::with_seed(11);
+    for counting in [false, true] {
+        let case = Case::random(
+            &mut rng,
+            Shape {
+                n: 70,
+                nvar: 3,
+                distinct_times: Some(7),
+                nstrata: 3,
+                nfrail: 8,
+                counting,
+            },
+        );
+        let kernel = Kernel::new(case.data(true));
+        let reference = Reference::new(&case.data(true));
+        let data = kernel.original();
+        assert_bits(
+            "covariates",
+            data.covar.as_slice().unwrap(),
+            reference.covar.as_slice().unwrap(),
+        );
+        assert_bits("weights", &data.weights, &reference.weights);
+        assert_bits("offset", &data.offset, &reference.offset);
+        assert_bits("stop", &data.stop, &reference.stop);
+        assert_eq!(data.status, reference.status);
+        assert_eq!(data.frail, reference.frail);
+        assert_eq!(data.start.is_some(), counting);
+        if let (Some(start), Some(expected)) = (&data.start, &reference.start) {
+            assert_bits("start", start, expected);
+        }
+        assert_eq!(kernel.sort1, reference.sort1);
+        assert_eq!(kernel.strata_end, reference.strata_end);
+    }
+}
+
+#[test]
 fn kernel_matches_the_reference_for_column_major_covariates() {
     let mut rng = Rng::with_seed(5);
     for counting in [false, true] {
