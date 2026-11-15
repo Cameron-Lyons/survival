@@ -6,14 +6,17 @@ use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_positive,
 };
-use crate::regression::survreg_distributions::{SurvregDistribution, SurvregTransform};
+use crate::regression::survreg_distributions::{
+    SurvregDistribution, SurvregFamily, SurvregTransform,
+};
+use crate::regression::survreg_kernels::with_builtin_kernel;
 use crate::regression::survreg_lowlevel::SurvregFitResult;
 use crate::regression::survreg_predict::{
     SurvregNewdata, SurvregPredictType, SurvregPrediction, predict_survreg,
 };
 use crate::regression::survregc1::{SurvregKernel, SurvregLikelihood};
 use crate::residuals::survreg_resid::{
-    SurvregResidType, SurvregResiduals, residuals_survreg, survreg_deriv,
+    SurvregResidType, SurvregResiduals, location_deriv, residuals_survreg, survreg_derivatives,
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
@@ -605,23 +608,24 @@ pub(crate) fn derfun(
     eta: &[f64],
     sigma: impl Fn(usize) -> f64,
 ) -> SurvivalResult<(Vec<f64>, Vec<f64>)> {
-    if distribution.family != crate::regression::survreg_distributions::SurvregFamily::Custom {
-        return Ok((0..response.y1.len())
-            .map(|i| {
-                let d = survreg_deriv(
-                    distribution,
-                    response.y1[i],
-                    response.y2[i],
-                    response.status[i],
-                    eta[i],
-                    sigma(i),
-                );
-                (d[1], d[2])
-            })
-            .unzip());
+    if distribution.family != SurvregFamily::Custom {
+        return Ok(with_builtin_kernel!(distribution, kernel => {
+            (0..response.y1.len())
+                .map(|i| {
+                    location_deriv(
+                        kernel,
+                        response.y1[i],
+                        response.y2[i],
+                        response.status[i],
+                        eta[i],
+                        sigma(i),
+                    )
+                })
+                .unzip()
+        }));
     }
     let scale: Vec<_> = (0..response.y1.len()).map(sigma).collect();
-    let deriv = crate::residuals::survreg_resid::survreg_derivatives(
+    let deriv = survreg_derivatives(
         distribution,
         &response.y1,
         &response.y2,

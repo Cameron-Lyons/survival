@@ -1,6 +1,7 @@
 use crate::error::SurvivalResult;
 use crate::regression::survreg_density::{SurvregDensitySource, check_density_batch};
-use crate::regression::survreg_distributions::{KernelCase, SurvregDistribution};
+use crate::regression::survreg_distributions::SurvregDistribution;
+use crate::regression::survreg_kernels::{BuiltinKernel, with_builtin_kernel};
 use ndarray::{Array2, ArrayView2};
 
 const SMALL: f64 = -200.0;
@@ -35,6 +36,7 @@ struct Contribution {
 }
 
 impl Contribution {
+    #[inline(always)]
     fn small(dg: f64, ddg: f64) -> Self {
         Self {
             g: SMALL,
@@ -46,18 +48,8 @@ impl Contribution {
         }
     }
 
-    fn exact(
-        distribution: &SurvregDistribution,
-        z: f64,
-        sz: f64,
-        sigma: f64,
-        log_sigma: f64,
-    ) -> Self {
-        let funs = distribution.kernel(z, KernelCase::Density);
-        Self::exact_from(funs, z, sz, sigma, log_sigma)
-    }
-
     /// `log_sigma` is `sigma.ln()`, computed once per scale parameter.
+    #[inline(always)]
     fn exact_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64, log_sigma: f64) -> Self {
         if funs[1] <= 0.0 {
             return Self::small(-z / sigma, -1.0 / sigma);
@@ -77,11 +69,7 @@ impl Contribution {
         }
     }
 
-    fn right_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
-        let funs = distribution.kernel(z, KernelCase::Distribution);
-        Self::right_from(funs, z, sz, sigma)
-    }
-
+    #[inline(always)]
     fn right_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
         if funs[1] <= 0.0 {
             return Self::small(z / sigma, 0.0);
@@ -91,11 +79,7 @@ impl Contribution {
         Self::censored(funs[1].ln(), temp, temp2, sz)
     }
 
-    fn left_censored(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
-        let funs = distribution.kernel(z, KernelCase::Distribution);
-        Self::left_from(funs, z, sz, sigma)
-    }
-
+    #[inline(always)]
     fn left_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
         if funs[0] <= 0.0 {
             return Self::small(-z / sigma, 0.0);
@@ -105,6 +89,7 @@ impl Contribution {
         Self::censored(funs[0].ln(), temp, temp2, sz)
     }
 
+    #[inline(always)]
     fn censored(g: f64, temp: f64, temp2: f64, sz: f64) -> Self {
         let dg = -temp;
         let dsig = -temp * sz;
@@ -118,12 +103,7 @@ impl Contribution {
         }
     }
 
-    fn interval_censored(distribution: &SurvregDistribution, z: f64, zu: f64, sigma: f64) -> Self {
-        let funs = distribution.kernel(z, KernelCase::Distribution);
-        let ufun = distribution.kernel(zu, KernelCase::Distribution);
-        Self::interval_from(funs, ufun, z, zu, sigma)
-    }
-
+    #[inline(always)]
     fn interval_from(funs: [f64; 4], ufun: [f64; 4], z: f64, zu: f64, sigma: f64) -> Self {
         let temp = if z > 0.0 {
             funs[1] - ufun[1]
@@ -279,12 +259,39 @@ impl SurvregKernel<'_> {
         with_jj: bool,
     ) -> SurvivalResult<SurvregLikelihood> {
         let nvar = self.nvar();
-        let nvar2 = self.nvar2();
         debug_assert!(beta.len() > nvar, "beta must carry a log(scale)");
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
         let scales = self.scales(beta, 0);
-        let contributions = self.prepare_contributions(beta, None, design, &scales)?;
+        Ok(
+            match self.prepare_contributions(beta, None, design, &scales)? {
+                Contributions::Batch(rows) => {
+                    self.likelihood_sweep(design, with_jj, |person, _, _| rows[person])
+                }
+                Contributions::Builtin(distribution) => {
+                    with_builtin_kernel!(distribution, kernel => {
+                        self.likelihood_sweep(design, with_jj, |person, stratum, x| {
+                            let eta = self.offset[person]
+                                + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
+                            self.builtin_contribution(kernel, person, eta, &scales, stratum)
+                        })
+                    })
+                }
+            },
+        )
+    }
+
+    /// `survreg6`'s sweep over the observations: the log-likelihood, score,
+    /// information and (with `with_jj`) the sum of squared scores, with
+    /// `contribution(person, stratum, x)` giving each observation's terms.
+    fn likelihood_sweep(
+        &self,
+        design: &[f64],
+        with_jj: bool,
+        contribution: impl Fn(usize, usize, &[f64]) -> Contribution,
+    ) -> SurvregLikelihood {
+        let nvar = self.nvar();
+        let nvar2 = self.nvar2();
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![0.0; nvar2 * nvar2];
@@ -293,31 +300,28 @@ impl SurvregKernel<'_> {
         for person in 0..self.n() {
             let stratum = self.stratum(person);
             let x = &design[person * nvar..(person + 1) * nvar];
-            let contribution = match &contributions {
-                Contributions::Builtin(distribution) => {
-                    let eta = self.offset[person]
-                        + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
-                    self.contribution(distribution, person, eta, &scales, stratum)
-                }
-                Contributions::Batch(rows) => rows[person],
-            };
+            let contribution = contribution(person, stratum, x);
             let w = self.weights[person];
             loglik += contribution.g * w;
             let scale = (self.nstrat != 0).then_some(nvar + stratum);
             contribution.accumulate(x, scale, w, &mut u, &mut imat, jj.as_deref_mut());
         }
 
-        Ok(SurvregLikelihood {
+        SurvregLikelihood {
             loglik,
             u,
             imat: symmetric_from_lower(nvar2, imat),
             jj: jj.map(|jj| symmetric_from_lower(nvar2, jj)),
-        })
+        }
     }
 
-    fn contribution(
+    /// One observation's terms under a builtin family at linear predictor
+    /// `eta`.  Generic over the family so that the kernel inlines into the
+    /// sweep that calls it.
+    #[inline(always)]
+    fn builtin_contribution<K: BuiltinKernel>(
         &self,
-        distribution: &SurvregDistribution,
+        kernel: K,
         person: usize,
         eta: f64,
         scales: &StratumScales,
@@ -327,12 +331,12 @@ impl SurvregKernel<'_> {
         let sz = self.y1[person] - eta;
         let z = sz / sigma;
         match self.status[person] {
-            1 => Contribution::exact(distribution, z, sz, sigma, scales.log_sigma[stratum]),
-            0 => Contribution::right_censored(distribution, z, sz, sigma),
-            2 => Contribution::left_censored(distribution, z, sz, sigma),
+            1 => Contribution::exact_from(kernel.exact(z), z, sz, sigma, scales.log_sigma[stratum]),
+            0 => Contribution::right_from(kernel.censored(z), z, sz, sigma),
+            2 => Contribution::left_from(kernel.censored(z), z, sz, sigma),
             _ => {
                 let zu = (self.y2[person] - eta) / sigma;
-                Contribution::interval_censored(distribution, z, zu, sigma)
+                Contribution::interval_from(kernel.censored(z), kernel.censored(zu), z, zu, sigma)
             }
         }
     }
@@ -424,9 +428,7 @@ impl SurvregKernel<'_> {
         with_jj: bool,
         out: &mut BlockLikelihood,
     ) -> SurvivalResult<()> {
-        let nvar = self.nvar();
         let nf = frailty.map_or(0, |f| f.nf);
-        let width = nf + self.nvar2();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
         let scales = self.scales(beta, nf);
@@ -441,6 +443,34 @@ impl SurvregKernel<'_> {
             out.jj.fill(0.0);
         }
         out.has_jj = with_jj;
+        out.loglik = match contributions {
+            Contributions::Batch(rows) => {
+                self.block_sweep(design, frailty, with_jj, out, |person, _, _| rows[person])
+            }
+            Contributions::Builtin(distribution) => with_builtin_kernel!(distribution, kernel => {
+                self.block_sweep(design, frailty, with_jj, out, |person, stratum, x| {
+                    let eta = self.block_eta(person, x, beta, frailty);
+                    self.builtin_contribution(kernel, person, eta, &scales, stratum)
+                })
+            }),
+        };
+        Ok(())
+    }
+
+    /// The sweep of [`Self::evaluate_blocks`] into the zeroed blocks of `out`,
+    /// returning the log-likelihood; `contribution(person, stratum, x)` gives
+    /// each observation's terms.
+    fn block_sweep(
+        &self,
+        design: &[f64],
+        frailty: Option<&SparseFrailty<'_>>,
+        with_jj: bool,
+        out: &mut BlockLikelihood,
+        contribution: impl Fn(usize, usize, &[f64]) -> Contribution,
+    ) -> f64 {
+        let nvar = self.nvar();
+        let nf = frailty.map_or(0, |f| f.nf);
+        let width = nf + self.nvar2();
         let u = &mut out.u;
         let fdiag = &mut out.fdiag;
         let jdiag = &mut out.jdiag;
@@ -450,13 +480,7 @@ impl SurvregKernel<'_> {
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
             let stratum = self.stratum(person);
-            let c = match &contributions {
-                Contributions::Builtin(distribution) => {
-                    let eta = self.block_eta(person, x, beta, frailty);
-                    self.contribution(distribution, person, eta, &scales, stratum)
-                }
-                Contributions::Batch(rows) => rows[person],
-            };
+            let c = contribution(person, stratum, x);
             let w = self.weights[person];
             loglik += c.g * w;
             let group = frailty.map(|f| f.group[person]);
@@ -506,8 +530,7 @@ impl SurvregKernel<'_> {
                 }
             }
         }
-        out.loglik = loglik;
-        Ok(())
+        loglik
     }
 
     pub(crate) fn loglik_at(
@@ -515,24 +538,40 @@ impl SurvregKernel<'_> {
         beta: &[f64],
         frailty: Option<&SparseFrailty<'_>>,
     ) -> SurvivalResult<f64> {
-        let nvar = self.nvar();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
         let scales = self.scales(beta, frailty.map_or(0, |f| f.nf));
-        let contributions = self.prepare_contributions(beta, frailty, design, &scales)?;
+        Ok(
+            match self.prepare_contributions(beta, frailty, design, &scales)? {
+                Contributions::Batch(rows) => {
+                    self.loglik_sweep(design, |person, _, _| rows[person])
+                }
+                Contributions::Builtin(distribution) => {
+                    with_builtin_kernel!(distribution, kernel => {
+                        self.loglik_sweep(design, |person, stratum, x| {
+                            let eta = self.block_eta(person, x, beta, frailty);
+                            self.builtin_contribution(kernel, person, eta, &scales, stratum)
+                        })
+                    })
+                }
+            },
+        )
+    }
+
+    /// The log-likelihood alone; `contribution(person, stratum, x)` gives each
+    /// observation's terms, of which only `g` is read.
+    fn loglik_sweep(
+        &self,
+        design: &[f64],
+        contribution: impl Fn(usize, usize, &[f64]) -> Contribution,
+    ) -> f64 {
+        let nvar = self.nvar();
         let mut loglik = 0.0;
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
-            let c = match &contributions {
-                Contributions::Builtin(distribution) => {
-                    let eta = self.block_eta(person, x, beta, frailty);
-                    self.contribution(distribution, person, eta, &scales, self.stratum(person))
-                }
-                Contributions::Batch(rows) => rows[person],
-            };
-            loglik += c.g * self.weights[person];
+            loglik += contribution(person, self.stratum(person), x).g * self.weights[person];
         }
-        Ok(loglik)
+        loglik
     }
 
     pub(crate) fn jj(&self, beta: &[f64]) -> SurvivalResult<Array2<f64>> {
@@ -554,9 +593,13 @@ fn symmetric_from_lower(n: usize, lower: Vec<f64>) -> Array2<f64> {
 mod callback_tests;
 
 #[cfg(test)]
+mod reference_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::regression::survreg_distributions::{SurvregFamily, SurvregTransform};
+    use crate::regression::survreg_kernels::ExtremeValue;
     use ndarray::{Array2, ArrayView2};
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
@@ -577,12 +620,15 @@ mod tests {
         let sigma = log_sigma.exp();
         let sz = y - eta;
         let z = sz / sigma;
-        match status {
-            0 => Contribution::right_censored(distribution, z, sz, sigma),
-            1 => Contribution::exact(distribution, z, sz, sigma, sigma.ln()),
-            2 => Contribution::left_censored(distribution, z, sz, sigma),
-            _ => Contribution::interval_censored(distribution, z, (upper - eta) / sigma, sigma),
-        }
+        with_builtin_kernel!(distribution, kernel => match status {
+            0 => Contribution::right_from(kernel.censored(z), z, sz, sigma),
+            1 => Contribution::exact_from(kernel.exact(z), z, sz, sigma, sigma.ln()),
+            2 => Contribution::left_from(kernel.censored(z), z, sz, sigma),
+            _ => {
+                let zu = (upper - eta) / sigma;
+                Contribution::interval_from(kernel.censored(z), kernel.censored(zu), z, zu, sigma)
+            }
+        })
     }
 
     fn assert_derivatives_match_finite_difference(
@@ -650,11 +696,11 @@ mod tests {
 
     #[test]
     fn off_scale_observations_use_the_small_fallback() {
-        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
-        let c = Contribution::interval_censored(&weibull, 0.3, 0.3, 1.0);
+        let funs = ExtremeValue.censored(0.3);
+        let c = Contribution::interval_from(funs, funs, 0.3, 0.3, 1.0);
         assert_eq!(c.g, SMALL);
         assert_eq!(c.dg, 1.0);
-        let c = Contribution::right_censored(&weibull, 800.0, 800.0, 1.0);
+        let c = Contribution::right_from(ExtremeValue.censored(800.0), 800.0, 800.0, 1.0);
         assert_eq!(c.g, SMALL);
     }
 

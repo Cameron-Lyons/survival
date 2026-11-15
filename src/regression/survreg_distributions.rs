@@ -1,15 +1,13 @@
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::dist::{dnorm, dt, erf, erfc, pnorm, pt, qnorm, qt};
+use crate::internal::dist::{dnorm, dt, pnorm, pt, qnorm, qt};
 use crate::internal::match_arg::match_arg;
 use crate::regression::survreg_callbacks::{
     QueryParms, RuntimeCallback, SurvregCallbacks, SurvregTransformCallbacks, callback_serde,
 };
+use crate::regression::survreg_kernels::{BuiltinKernel, SPI, with_builtin_kernel};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::f64::consts::{PI, SQRT_2};
-
-const SPI: f64 = 2.506628274631001;
-const KERNEL_CLAMP: f64 = 200.0;
+use std::f64::consts::PI;
 
 #[doc = " A distribution with its own `init`/`deviance`/`density`/`quantile`"]
 #[doc = " definition in `survreg.distributions` (`extreme`, `logistic`, `gaussian`"]
@@ -76,12 +74,6 @@ impl SurvregTransform {
             }
         })
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KernelCase {
-    Density,
-    Distribution,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -199,21 +191,6 @@ const DEFAULT_T_DF: f64 = 4.0;
 
 fn invalid(message: impl Into<String>) -> SurvivalError {
     SurvivalError::invalid_input(message)
-}
-
-fn t_tails(z: f64, df: f64) -> (f64, f64) {
-    let v = pt(-z.abs(), df, true, false);
-    let other = 0.5 - v + 0.5;
-    if z > 0.0 { (other, v) } else { (v, other) }
-}
-
-fn t_density(z: f64, df: f64) -> [f64; 3] {
-    let denom = df + z * z;
-    [
-        dt(z, df, false),
-        -(df + 1.0) * z / denom,
-        (df + 1.0) * (z * z * (df + 3.0) / denom - 1.0) / denom,
-    ]
 }
 
 fn compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
@@ -399,7 +376,7 @@ impl SurvregDistribution {
         }
     }
 
-    fn df(&self) -> f64 {
+    pub(crate) fn df(&self) -> f64 {
         self.parms.first().copied().unwrap_or(DEFAULT_T_DF)
     }
 
@@ -516,50 +493,7 @@ impl SurvregDistribution {
     }
 
     pub(crate) fn builtin_density(&self, z: f64) -> SurvregDensity {
-        match self.family {
-            SurvregFamily::Custom => unreachable!("custom density uses batches"),
-            SurvregFamily::ExtremeValue => {
-                let w = z.exp();
-                let ww = (-w).exp();
-                SurvregDensity {
-                    cdf: 1.0 - ww,
-                    survival: ww,
-                    pdf: w * ww,
-                    score: 1.0 - w,
-                    curvature: w * (w - 3.0) + 1.0,
-                }
-            }
-            SurvregFamily::Logistic => {
-                let w = z.exp();
-                let denom = 1.0 + w;
-                SurvregDensity {
-                    cdf: w / denom,
-                    survival: 1.0 / denom,
-                    pdf: w / (denom * denom),
-                    score: (1.0 - w) / denom,
-                    curvature: (w * (w - 4.0) + 1.0) / (denom * denom),
-                }
-            }
-            SurvregFamily::Gaussian => SurvregDensity {
-                cdf: pnorm(z, true, false),
-                survival: pnorm(-z, true, false),
-                pdf: dnorm(z, false),
-                score: -z,
-                curvature: z * z - 1.0,
-            },
-            SurvregFamily::T => {
-                let df = self.df();
-                let (cdf, survival) = t_tails(z, df);
-                let [pdf, score, curvature] = t_density(z, df);
-                SurvregDensity {
-                    cdf,
-                    survival,
-                    pdf,
-                    score,
-                    curvature,
-                }
-            }
-        }
+        with_builtin_kernel!(self, kernel => kernel.density(z))
     }
 
     pub(crate) fn base_pdf(&self, z: f64) -> SurvivalResult<f64> {
@@ -587,70 +521,6 @@ impl SurvregDistribution {
             SurvregFamily::Logistic => (p / (1.0 - p)).ln(),
             SurvregFamily::Gaussian => qnorm(p, true, false),
             SurvregFamily::T => qt(p, self.df(), true, false),
-        }
-    }
-
-    pub(crate) fn kernel(&self, z: f64, case: KernelCase) -> [f64; 4] {
-        match self.family {
-            SurvregFamily::Custom => unreachable!("custom density uses batches"),
-            SurvregFamily::ExtremeValue => {
-                let w = z.clamp(-KERNEL_CLAMP, KERNEL_CLAMP).exp();
-                let temp = (-w).exp();
-                match case {
-                    KernelCase::Density => [0.0, w * temp, 1.0 - w, w * (w - 3.0) + 1.0],
-                    KernelCase::Distribution => [1.0 - temp, temp, w * temp, w * temp * (1.0 - w)],
-                }
-            }
-            SurvregFamily::Logistic => {
-                let (w, sign, positive) = if z > 0.0 {
-                    ((-z).exp(), -1.0, true)
-                } else {
-                    (z.exp(), 1.0, false)
-                };
-                let temp = 1.0 + w;
-                match case {
-                    KernelCase::Density => [
-                        0.0,
-                        w / (temp * temp),
-                        sign * (1.0 - w) / temp,
-                        (w * w - 4.0 * w + 1.0) / (temp * temp),
-                    ],
-                    KernelCase::Distribution => {
-                        let (cdf, survival) = if positive {
-                            (1.0 / temp, w / temp)
-                        } else {
-                            (w / temp, 1.0 / temp)
-                        };
-                        let pdf = w / (temp * temp);
-                        [cdf, survival, pdf, sign * pdf * (1.0 - w) / temp]
-                    }
-                }
-            }
-            SurvregFamily::Gaussian => {
-                let f = (-z * z / 2.0).exp() / SPI;
-                match case {
-                    KernelCase::Density => [0.0, f, -z, z * z - 1.0],
-                    KernelCase::Distribution => {
-                        let (cdf, survival) = if z > 0.0 {
-                            ((1.0 + erf(z / SQRT_2)) / 2.0, erfc(z / SQRT_2) / 2.0)
-                        } else {
-                            (erfc(-z / SQRT_2) / 2.0, (1.0 + erf(-z / SQRT_2)) / 2.0)
-                        };
-                        [cdf, survival, f, -z * f]
-                    }
-                }
-            }
-            SurvregFamily::T => {
-                let df = self.df();
-                let [pdf, score, curvature] = t_density(z, df);
-                match case {
-                    KernelCase::Density => [0.0, pdf, score, curvature],
-                    KernelCase::Distribution => {
-                        let (cdf, survival) = t_tails(z, df);
-                        [cdf, survival, pdf, pdf * score]
-                    }
-                }
-            }
         }
     }
 
@@ -918,15 +788,15 @@ mod tests {
             let dist = SurvregDistribution::from_name(name, None).unwrap();
             for z in [-2.5, -0.3, 0.0, 0.7, 3.1] {
                 let d = dist.density(z).unwrap();
-                let density = dist.kernel(z, KernelCase::Density);
-                let distribution = dist.kernel(z, KernelCase::Distribution);
-                assert_close(density[1], d.pdf, 1e-13);
-                assert_close(density[2], d.score, 1e-13);
-                assert_close(density[3], d.curvature, 1e-13);
-                assert_close(distribution[0], d.cdf, 1e-13);
-                assert_close(distribution[1], d.survival, 1e-13);
-                assert_close(distribution[2], d.pdf, 1e-13);
-                assert_close(distribution[3], d.pdf * d.score, 1e-13);
+                let (exact, censored) =
+                    with_builtin_kernel!(&dist, kernel => (kernel.exact(z), kernel.censored(z)));
+                assert_close(exact[1], d.pdf, 1e-13);
+                assert_close(exact[2], d.score, 1e-13);
+                assert_close(exact[3], d.curvature, 1e-13);
+                assert_close(censored[0], d.cdf, 1e-13);
+                assert_close(censored[1], d.survival, 1e-13);
+                assert_close(censored[2], d.pdf, 1e-13);
+                assert_close(censored[3], d.pdf * d.score, 1e-13);
             }
         }
     }
@@ -938,7 +808,7 @@ mod tests {
             let lower = pt(z, 4.0, true, false);
             let upper = pt(-z, 4.0, true, false);
             let d = t.density(z).unwrap();
-            let kernel = t.kernel(z, KernelCase::Distribution);
+            let kernel = with_builtin_kernel!(&t, kernel => kernel.censored(z));
             assert_eq!((d.cdf, d.survival), (lower, upper), "z = {z}");
             assert_eq!((kernel[0], kernel[1]), (lower, upper), "z = {z}");
             assert_eq!(t.cdf(z, 0.0, 1.0).unwrap(), lower, "z = {z}");
@@ -962,7 +832,7 @@ mod tests {
     #[test]
     fn kernel_extreme_value_is_clamped() {
         let dist = SurvregDistribution::from_name("extreme", None).unwrap();
-        let far = dist.kernel(1e6, KernelCase::Distribution);
+        let far = with_builtin_kernel!(&dist, kernel => kernel.censored(1e6));
         assert!(far.iter().all(|v| v.is_finite()));
     }
 
