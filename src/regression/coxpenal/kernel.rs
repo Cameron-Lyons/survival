@@ -5,6 +5,8 @@ use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use ndarray::Array2;
 use std::sync::OnceLock;
 
+#[cfg(test)]
+mod reference_tests;
 mod stable;
 #[cfg(test)]
 mod stable_tests;
@@ -169,6 +171,12 @@ impl Kernel {
             let center = *mean;
             covar.column_mut(i).mapv_inplace(|value| value - center);
         }
+        // The sweeps read each observation's covariates as one slice. Change
+        // the layout only after centring: a column sum folds a contiguous
+        // column in a different order from a strided one.
+        if !covar.is_standard_layout() {
+            covar = covar.as_standard_layout().into_owned();
+        }
 
         Self {
             n,
@@ -211,13 +219,22 @@ impl Kernel {
         &self.means
     }
 
+    /// Observation `p`'s centred covariates.
+    fn row(&self, p: usize) -> &[f64] {
+        self.covar
+            .row(p)
+            .to_slice()
+            .expect("covariates are row-major")
+    }
+
     fn eta(&self, p: usize, beta: &[f64], fbeta: &[f64]) -> f64 {
+        debug_assert_eq!(beta.len(), self.nvar);
         let mut zbeta = self.offset[p];
         if let Some(frail) = &self.frail {
             zbeta += fbeta[frail[p]];
         }
-        for (i, b) in beta.iter().enumerate() {
-            zbeta += b * self.covar[(p, i)];
+        for (b, x) in beta.iter().zip(self.row(p)) {
+            zbeta += b * x;
         }
         coxsafe(zbeta)
     }
@@ -342,26 +359,32 @@ impl Kernel {
             self.tied_mark[g] = true;
             self.tied.push(g);
         }
-        let target = if second { &mut self.a2 } else { &mut self.a };
-        if let Some(g) = fgrp {
-            target[g] += sign * risk;
-        }
-        for i in 0..self.nvar {
-            let xi = self.covar[(p, i)];
-            target[i + nf] += sign * risk * xi;
-        }
-        let cmat = if second {
-            &mut self.cmat2
+        let row = self.covar.row(p);
+        let x = row.to_slice().expect("covariates are row-major");
+        let (target, cmat) = if second {
+            (&mut self.a2, &mut self.cmat2)
         } else {
-            &mut self.cmat
+            (&mut self.a, &mut self.cmat)
         };
-        for i in 0..self.nvar {
-            let xi = self.covar[(p, i)];
+        // Each product keeps the association ((sign * risk) * x_i) * x_j.
+        let risk = sign * risk;
+        if let Some(g) = fgrp {
+            target[g] += risk;
+        }
+        for (sum, &xi) in target[nf..].iter_mut().zip(x) {
+            *sum += risk * xi;
+        }
+        for (i, &xi) in x.iter().enumerate() {
+            let weighted = risk * xi;
+            let cross = cmat
+                .row_mut(i)
+                .into_slice()
+                .expect("moment matrices are row-major");
             if let Some(g) = fgrp {
-                cmat[(i, g)] += sign * risk * xi;
+                cross[g] += weighted;
             }
-            for j in 0..=i {
-                cmat[(i, j + nf)] += sign * risk * xi * self.covar[(p, j)];
+            for (sum, &xj) in cross[nf..=nf + i].iter_mut().zip(&x[..=i]) {
+                *sum += weighted * xj;
             }
         }
     }
@@ -411,18 +434,27 @@ impl Kernel {
         let nvar = self.nvar;
         let temp = k as f64 * self.method / ndead;
         let d2 = denom - temp * efron_wt;
-        for ii in 0..nvar {
-            let i = ii + nf;
-            let temp2 = (self.a[i] - temp * self.a2[i]) / d2;
-            self.tmean[i] = temp2;
-            u[i] -= meanwt * temp2;
+        for (((mean, score), &a), &a2) in self.tmean[nf..]
+            .iter_mut()
+            .zip(&mut u[nf..])
+            .zip(&self.a[nf..])
+            .zip(&self.a2[nf..])
+        {
+            let temp2 = (a - temp * a2) / d2;
+            *mean = temp2;
+            *score -= meanwt * temp2;
         }
-        for ii in 0..nvar {
-            let i = ii + nf;
-            for j in nf..=i {
-                jmat[(ii, j)] += meanwt
-                    * ((self.cmat[(ii, j)] - temp * self.cmat2[(ii, j)]) / d2
-                        - self.tmean[i] * self.tmean[j]);
+        let means = &self.tmean[nf..];
+        for (ii, &mean_i) in means.iter().enumerate() {
+            let span = nf..=nf + ii;
+            let cmat = self.cmat.row(ii);
+            let cmat2 = self.cmat2.row(ii);
+            let mut info = jmat.row_mut(ii);
+            let info = &mut info.as_slice_mut().expect("information is row-major")[span.clone()];
+            let cmat = &cmat.to_slice().expect("moment matrices are row-major")[span.clone()];
+            let cmat2 = &cmat2.to_slice().expect("moment matrices are row-major")[span];
+            for (((value, &c), &c2), &mean_j) in info.iter_mut().zip(cmat).zip(cmat2).zip(means) {
+                *value += meanwt * ((c - temp * c2) / d2 - mean_i * mean_j);
             }
         }
         if nf > 0 {
@@ -508,8 +540,8 @@ impl Kernel {
                 if let Some(frail) = &self.frail {
                     u[frail[p]] += self.weights[p];
                 }
-                for i in 0..self.nvar {
-                    u[i + nf] += self.weights[p] * self.covar[(p, i)];
+                for (score, &x) in u[nf..].iter_mut().zip(self.row(p)) {
+                    *score += self.weights[p] * x;
                 }
                 self.accumulate(p, risk, 1.0, true);
             }
@@ -589,8 +621,8 @@ impl Kernel {
                         if let Some(frail) = &self.frail {
                             u[frail[q]] += self.weights[q];
                         }
-                        for i in 0..self.nvar {
-                            u[i + nf] += self.weights[q] * self.covar[(q, i)];
+                        for (score, &x) in u[nf..].iter_mut().zip(self.row(q)) {
+                            *score += self.weights[q] * x;
                         }
                         self.accumulate(q, risk, 1.0, true);
                     }
