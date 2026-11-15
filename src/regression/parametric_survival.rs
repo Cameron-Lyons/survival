@@ -17,6 +17,7 @@ use crate::regression::survreg_predict::{
 use crate::regression::survregc1::{SurvregKernel, SurvregLikelihood};
 use crate::residuals::survreg_resid::{
     SurvregResidType, SurvregResiduals, location_deriv, residuals_survreg, survreg_derivatives,
+    visit_weighted_dfbeta,
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
@@ -863,20 +864,21 @@ pub(crate) fn intercept_only_fit(
     survreg6(&kernel0, 20, coef0, eps, tol_chol)
 }
 
+/// R's robust variance `t(D) %*% D` for `D = residuals(fit, "dfbeta", collapse =
+/// cluster, weighted = TRUE)`, accumulated one row of `D` at a time.
 pub(crate) fn robust_variance(
     fit: &SurvregFit,
     cluster: Option<&[usize]>,
 ) -> SurvivalResult<Vec<Vec<f64>>> {
-    let dfbeta = fit.residuals(SurvregResidType::Dfbeta, true, cluster, true)?;
     let width = fit.coefficients.len();
     let mut sandwich = vec![vec![0.0; width]; width];
-    for row in &dfbeta.values {
+    visit_weighted_dfbeta(fit, cluster, |row| {
         for j in 0..width {
             for k in 0..width {
                 sandwich[j][k] += row[j] * row[k];
             }
         }
-    }
+    })?;
     Ok(sandwich)
 }
 
