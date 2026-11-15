@@ -78,6 +78,9 @@ pub(super) struct Kernel {
     strata_end: Vec<usize>,
     mark: Vec<usize>,
     wtave: Vec<f64>,
+    /// The deaths whose Efron second moments can reach a result; see
+    /// [`second_moment_deaths`].
+    second_moments: Vec<bool>,
     method: f64,
     score: Vec<f64>,
     a: Vec<f64>,
@@ -85,10 +88,48 @@ pub(super) struct Kernel {
     tmean: Vec<f64>,
     cmat: Array2<f64>,
     cmat2: Array2<f64>,
+    /// Whether `a2` or `cmat2` holds anything since it was last cleared.
+    second_pending: bool,
     running: Vec<RunningSum>,
     flushed: Vec<RunningSum>,
     tied: Vec<usize>,
     tied_mark: Vec<bool>,
+}
+
+/// Efron's second moments (`a2`, `cmat2`) enter death step `k` of a tie set
+/// of `d` only through `k / d` times them, which is zero for a lone death and
+/// for Breslow ties; while they stay finite, `x - 0 * a2` is `x` exactly (no
+/// running sum is ever -0), so those deaths need not accumulate them. They
+/// stay finite when `n` terms of the largest possible magnitude,
+/// `e^22 * weight * max(1, |x|)^2`, sum to a finite value with room to spare;
+/// otherwise every death accumulates them, keeping the NaN that
+/// `0 * inf` gives.
+fn second_moment_deaths(
+    status: &[i32],
+    stop: &[f64],
+    strata_end: &[usize],
+    efron: bool,
+    largest_term: f64,
+) -> Vec<bool> {
+    let n = status.len();
+    let bounded = (4.0 * n as f64 * largest_term).is_finite();
+    let mut deaths = vec![false; n];
+    let mut begin = 0;
+    for &end in strata_end {
+        let mut i = begin;
+        while i < end {
+            let mut j = i + 1;
+            if status[i] == 1 {
+                while j < end && status[j] == 1 && stop[j] == stop[i] {
+                    j += 1;
+                }
+                deaths[i..j].fill(!bounded || (efron && j - i > 1));
+            }
+            i = j;
+        }
+        begin = end;
+    }
+    deaths
 }
 
 pub(super) struct KernelData<'a> {
@@ -204,14 +245,25 @@ impl Kernel {
                 *value = if docenter { x - center } else { x };
             }
         }
+        let covar_bounds: Vec<f64> = (0..nvar)
+            .map(|j| covar.column(j).iter().map(|x| x.abs()).fold(0.0, f64::max))
+            .collect();
+        let largest_risk =
+            coxsafe(f64::INFINITY).exp() * weights.iter().fold(0.0, |m: f64, w| m.max(w.abs()));
+        let largest_x = covar_bounds.iter().fold(1.0, |m: f64, &b| m.max(b));
+        let second_moments = second_moment_deaths(
+            &status,
+            &stop,
+            &strata_end,
+            data.efron,
+            largest_risk * largest_x * largest_x,
+        );
 
         Self {
             n,
             nvar,
             nf,
-            covar_bounds: (0..nvar)
-                .map(|j| covar.column(j).iter().map(|x| x.abs()).fold(0.0, f64::max))
-                .collect(),
+            covar_bounds,
             predictor_anchors: OnceLock::new(),
             unsafe_offsets: data.unsafe_offsets,
             stable_score: None,
@@ -231,6 +283,7 @@ impl Kernel {
             strata_end,
             mark,
             wtave,
+            second_moments,
             method: f64::from(u8::from(data.efron)),
             score: vec![0.0; n],
             a: vec![0.0; nvar2],
@@ -238,6 +291,7 @@ impl Kernel {
             tmean: vec![0.0; nvar2],
             cmat: Array2::zeros((nvar, nvar2)),
             cmat2: Array2::zeros((nvar, nvar2)),
+            second_pending: false,
             running: vec![RunningSum::default(); nvar + 2],
             flushed: vec![RunningSum::default(); nf * (nvar + 2)],
             tied: Vec::new(),
@@ -378,6 +432,7 @@ impl Kernel {
     fn accumulate(&mut self, p: usize, risk: f64, sign: f64, second: bool) {
         let nf = self.nf;
         let fgrp = self.frail.as_ref().map(|f| f[p]);
+        self.second_pending |= second;
         if second
             && let Some(g) = fgrp
             && !self.tied_mark[g]
@@ -509,6 +564,9 @@ impl Kernel {
 
     fn reset_sums(&mut self, second: bool) {
         if second {
+            if !std::mem::take(&mut self.second_pending) {
+                return;
+            }
             for &g in &self.tied {
                 self.a2[g] = 0.0;
                 self.cmat2.column_mut(g).fill(0.0);
@@ -568,7 +626,9 @@ impl Kernel {
                 for (score, &x) in u[nf..].iter_mut().zip(self.row(p)) {
                     *score += self.weights[p] * x;
                 }
-                self.accumulate(p, risk, 1.0, true);
+                if self.second_moments[p] {
+                    self.accumulate(p, risk, 1.0, true);
+                }
             }
             if self.mark[p] > 0 {
                 let ndead = self.mark[p] as f64;
@@ -647,7 +707,9 @@ impl Kernel {
                         for (score, &x) in u[nf..].iter_mut().zip(self.row(k)) {
                             *score += self.weights[k] * x;
                         }
-                        self.accumulate(k, risk, 1.0, true);
+                        if self.second_moments[k] {
+                            self.accumulate(k, risk, 1.0, true);
+                        }
                     }
                     k += 1;
                 }
@@ -903,5 +965,24 @@ mod tests {
         assert_eq!(coxsafe(30.0), 22.0);
         assert_eq!(coxsafe(-300.0), -200.0);
         assert_eq!(coxsafe(1.5), 1.5);
+    }
+
+    #[test]
+    fn only_tied_efron_deaths_accumulate_second_moments_while_they_stay_finite() {
+        // Positions in risk-set order: a tie of two deaths at 5, a lone death
+        // at 4 after a censoring, and a tie at 3 split by the stratum boundary.
+        let status = [1, 1, 0, 1, 1, 1, 0];
+        let stop = [5., 5., 4., 4., 3., 3., 3.];
+        let strata_end = [5, 7];
+        let flags =
+            |efron, largest| second_moment_deaths(&status, &stop, &strata_end, efron, largest);
+        assert_eq!(
+            flags(true, 1e9),
+            [true, true, false, false, false, false, false]
+        );
+        assert_eq!(flags(false, 1e9), [false; 7]);
+        let deaths = status.map(|s| s == 1);
+        assert_eq!(flags(true, f64::MAX / 8.0), deaths);
+        assert_eq!(flags(false, f64::INFINITY), deaths);
     }
 }

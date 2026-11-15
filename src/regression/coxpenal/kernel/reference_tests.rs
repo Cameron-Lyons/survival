@@ -972,26 +972,27 @@ fn kernel_matches_the_reference_for_column_major_covariates() {
 
 #[test]
 fn kernel_matches_the_reference_when_second_moments_overflow() {
-    let mut rng = Rng::with_seed(3);
+    // The censored row cancels the first death in the risk-set sum, which
+    // stays finite, while the two tied deaths' second moment overflows: the
+    // reference's first death step then takes 0 * inf.
     for counting in [false, true] {
-        let mut case = Case::random(
-            &mut rng,
-            Shape {
-                n: 80,
-                nvar: 2,
-                distinct_times: Some(6),
-                nstrata: 1,
-                nfrail: 5,
-                counting,
-            },
-        );
-        for value in case.x.column_mut(1) {
-            *value *= 1e160;
-        }
-        case.beta.fill(0.0);
+        let case = Case {
+            stop: vec![2., 1., 1.],
+            start: counting.then(|| vec![0.; 3]),
+            status: vec![0, 1, 1],
+            x: ndarray::array![[0., -1e308], [1., 1e308], [0., 1e308]],
+            weights: vec![1.; 3],
+            offset: vec![0.; 3],
+            strata: None,
+            frail: Some(vec![0, 1, 1]),
+            nfrail: 2,
+            docenter: vec![false; 2],
+            beta: vec![0.; 2],
+            fbeta: vec![0.1, -0.1],
+        };
         for efron in [false, true] {
             let old = compare(&case, efron, &format!("counting {counting} efron {efron}"));
-            assert!(old.jmat.iter().any(|value| !value.is_finite()));
+            assert!(old.u[2..].iter().any(|value| value.is_nan()));
         }
     }
 }
