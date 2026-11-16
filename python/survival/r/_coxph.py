@@ -85,8 +85,8 @@ from ._formula import (
     _data_row_count,
     _data_row_labels,
     _data_rows,
+    _design_array_from_spec,
     _design_contrasts,
-    _design_rows_from_spec,
     _design_term_name,
     _formula_data_rows,
     _formula_design_row_count,
@@ -174,6 +174,8 @@ class CoxphModel:
     id_levels: tuple[Any, ...] | None = field(default=None, repr=False)
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
     _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
+    # The tt() expansion's row names, which fits pickled by earlier versions stored;
+    # model_matrix now rebuilds them from the frame on demand.
     _matrix_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -261,12 +263,11 @@ class CoxphModel:
 
     @property
     def var(self) -> list[list[float]]:
-        return [list(row) for row in self.fit.var]
+        return self.fit.var
 
     @property
     def naive_var(self) -> list[list[float]] | None:
-        naive = self.fit.naive_var
-        return None if naive is None else [list(row) for row in naive]
+        return self.fit.naive_var
 
     @property
     def robust(self) -> bool:
@@ -328,7 +329,9 @@ class CoxphModel:
 
     @property
     def x(self) -> list[list[float]]:
-        return [list(row) for row in self.fit.x]
+        # The engine getter builds new nested lists on every read; copying them
+        # again in Python only feeds the garbage collector.
+        return self.fit.x
 
     @property
     def weights(self) -> list[float] | None:
@@ -476,7 +479,6 @@ class _CoxData:
     cluster: list[Any] | None
     id: list[Any] | None
     design: _FormulaDesign | None = None
-    row_names: tuple[str, ...] | None = None
 
 
 def _time_transform_design(
@@ -639,9 +641,20 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     tindex = [int(idx) for idx in counts.index]
     nrisk = [int(value) for value in counts.nrisk]
     new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
-    new_y = Surv(new_time, [int(value) for value in counts.status])
+    # coxcount's times are finite and its statuses 0/1, which Surv() would keep as they are.
+    new_y = Surv._from_normalized(
+        time=new_time,
+        event=[int(value) for value in counts.status],
+        start=None,
+        time2=None,
+        surv_type="right",
+    )
     riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
-    data = _formula_data_rows(frame.formula, frame.data, tindex, frame.n)
+    # Neither the expanded rows' names nor their response is read here; model_matrix
+    # rebuilds the names from the fit's frame when it is asked for them.
+    data = _formula_data_rows(
+        frame.formula, frame.data, tindex, frame.n, row_names=False, response=False
+    )
     weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
     transformed: dict[_CovariateTerm, Any] = {}
     replacements: dict[_CovariateTerm, _SingleDesignTerm] = {}
@@ -688,7 +701,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     )
     return _CoxData(
         y=new_y,
-        x=_design_rows_from_spec(
+        x=_design_array_from_spec(
             data, design, len(tindex), evaluated=transformed, factor_values=categorical
         ),
         strata=riskset,
@@ -697,7 +710,6 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
         cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
         id=None if frame.id is None else [frame.id[idx] for idx in tindex],
         design=design,
-        row_names=_data_row_labels(data, len(tindex)),
     )
 
 
@@ -1054,7 +1066,6 @@ def _coxph_fit_frame(
         _frame=replace(frame, x=[]),
         _sparse_values=sparse_values,
         _prediction_rows=frame.row_names,
-        _matrix_rows=data.row_names,
     )
 
 
@@ -2282,7 +2293,7 @@ def _collapse_groups(
     return _rowsum_groups(collapse, n)
 
 
-def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
+def _drop_single_column(rows: list[Any], nvar: int) -> Any:
     return [row[0] for row in rows] if nvar == 1 else rows
 
 
@@ -2377,7 +2388,7 @@ def residuals_coxph(
         )
         result = _schoenfeld_result(fit, residuals)
         return {"values": result, "group_names": None} if with_group_names else result
-    groups = _collapse_groups(fit, collapse, len(fit.residuals) + len(excluded))
+    groups = _collapse_groups(fit, collapse, engine.n + len(excluded))
     codes, group_names = (None, None) if groups is None else groups
     padded_codes = codes if excluded and collapse is not True else None
     fit_codes = codes
@@ -2386,9 +2397,9 @@ def residuals_coxph(
         fit_codes = [code for row, code in enumerate(padded_codes) if row not in gaps]
     values: list[Any]
     if otype == "martingale":
-        values = list(engine.martingale_residuals(weighted=weighted_value, collapse=fit_codes))
+        values = engine.martingale_residuals(weighted=weighted_value, collapse=fit_codes)
     elif otype == "deviance":
-        values = list(engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes))
+        values = engine.deviance_residuals(weighted=weighted_value, collapse=fit_codes)
     elif otype == "partial":
         values = engine.partial_residuals(
             assign=_active_assign(fit), weighted=weighted_value, collapse=fit_codes
@@ -2868,12 +2879,13 @@ def cox_zph(
         strata = _stacked_strata_labels(result.strata)
     elif result.strata is not None and fit.strata_levels:
         strata = [fit.strata_levels[int(code)] for code in result.strata]
+    # Each engine getter returns new lists, so they pass straight through.
     return CoxZphResult(
         table=table,
-        x=list(result.x),
-        time=list(result.time),
-        y=[list(row) for row in result.y],
-        var=[list(row) for row in result.var],
+        x=result.x,
+        time=result.time,
+        y=result.y,
+        var=result.var,
         transform=transform_name,
         names=list(names),
         strata=strata,
@@ -2882,14 +2894,17 @@ def cox_zph(
 
 def _detail_response(
     start: Sequence[float] | None, time: Sequence[float], status: Sequence[Any]
-) -> list[list[float]]:
-    """``coxph.detail``'s ``y``: always in (start, stop, status) form."""
+) -> np.ndarray:
+    """``coxph.detail``'s ``y``: always in (start, stop, status) form, one row per
+    observation."""
 
-    if start is not None:
-        return [[s, t, float(e)] for s, t, e in zip(start, time, status, strict=True)]
-    mintime = min(time) if time else 0.0
-    begin = 2 * mintime - 1 if mintime < 0 else -1.0
-    return [[begin, t, float(e)] for t, e in zip(time, status, strict=True)]
+    stop = np.asarray(time, dtype=float)
+    if start is None:
+        mintime = float(stop.min()) if stop.size else 0.0
+        begin = np.full(stop.size, 2 * mintime - 1 if mintime < 0 else -1.0)
+    else:
+        begin = np.asarray(start, dtype=float)
+    return np.column_stack([begin, stop, np.asarray(status, dtype=float)])
 
 
 def coxph_detail(
@@ -2921,52 +2936,60 @@ def coxph_detail(
     )
     include_riskmat = _normalize_bool_option(riskmat, "riskmat")
     detail = _core.coxph_detail(fit.fit, riskmat=include_riskmat)
-    if multistate:
-        engine = fit.fit
-        y = _detail_response(engine.entry, engine.time, engine.status)
-        x = [list(row) for row in engine.x]
-    else:
-        y = _detail_response(fit.y.start, fit.y.time, fit.y.event)
-        x = fit.x
-    n = len(y)
-    strata_codes = fit.fit.strata or [0] * n
-    order = sorted(range(n), key=lambda idx: (strata_codes[idx], y[idx][1], -y[idx][2]))
-    weights = list(fit.fit.weights)
-    weighted = any(value != 1.0 for value in weights)
+    engine = fit.fit
+    response = (
+        _detail_response(engine.entry, engine.time, engine.status)
+        if multistate
+        else _detail_response(fit.y.start, fit.y.time, fit.y.event)
+    )
+    # Every engine getter returns new lists, so its values pass straight through.
+    x = engine.x
+    weights = engine.weights
+    weighted = bool(np.any(np.asarray(weights) != 1.0))
+    order: list[int] = []
+    if order_name == "time" or weighted:
+        # (stratum, time, -status) with ties in row order: lexsort is stable.
+        keys = [-response[:, 2], response[:, 1]]
+        if engine.strata is not None:
+            keys.append(np.asarray(engine.strata))
+        sort_index = np.lexsort(keys)
+        order = sort_index.tolist()
+        if order_name == "time":
+            response = response[sort_index]
+    strata_codes = detail.strata
     strata_table: dict[str, int] | None = None
-    if detail.strata is not None and (multistate or fit.strata_levels):
+    if strata_codes is not None and (multistate or fit.strata_levels):
         labels = (
-            _stacked_strata_labels(detail.strata)
+            _stacked_strata_labels(strata_codes)
             if multistate
-            else [fit.strata_levels[int(code)] for code in detail.strata]
+            else [fit.strata_levels[int(code)] for code in strata_codes]
         )
         strata_table = {}
         for label in labels:
             strata_table[label] = strata_table.get(label, 0) + 1
-    risk_rows = None if detail.riskmat is None else [list(row) for row in detail.riskmat]
+    risk_rows = detail.riskmat
     if order_name == "time":
         x = [x[idx] for idx in order]
-        y = [y[idx] for idx in order]
         if risk_rows is not None:
             risk_rows = [risk_rows[idx] for idx in order]
     return CoxphDetailResult(
-        time=list(detail.time),
-        nevent=[int(value) for value in detail.nevent],
-        nrisk=[int(value) for value in detail.nrisk],
-        hazard=list(detail.hazard),
-        varhaz=list(detail.varhaz),
-        wtrisk=list(detail.wtrisk),
-        means=[list(row) for row in detail.means],
-        score=[list(row) for row in detail.score],
-        imat=[[list(row) for row in layer] for layer in detail.imat],
+        time=detail.time,
+        nevent=detail.nevent,
+        nrisk=detail.nrisk,
+        hazard=detail.hazard,
+        varhaz=detail.varhaz,
+        wtrisk=detail.wtrisk,
+        means=detail.means,
+        score=detail.score,
+        imat=detail.imat,
         x=x,
-        y=y,
+        y=response.tolist(),
         strata=strata_table,
         riskmat=risk_rows,
         sortorder=order if order_name == "time" and include_riskmat else None,
         weights=[weights[idx] for idx in order] if weighted else None,
-        nevent_wt=list(detail.nevent_wt) if weighted else None,
-        nrisk_wt=list(detail.wtrisk) if weighted else None,
+        nevent_wt=detail.nevent_wt if weighted else None,
+        nrisk_wt=detail.wtrisk if weighted else None,
     )
 
 

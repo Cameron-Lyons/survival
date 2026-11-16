@@ -270,7 +270,14 @@ def _normalize_na_action(na_action: str | None) -> str:
 
 
 def _is_missing_value(value: Any) -> bool:
-    if value is None or type(value).__name__ in {"NAType", "NaTType"}:
+    # Exact Python scalars first: a float is missing only as NaN, and an int, a string or
+    # a bool never is. Subclasses and numpy scalars take the general test below.
+    value_type = type(value)
+    if value_type is float:
+        return value != value
+    if value_type is int or value_type is str or value_type is bool:
+        return False
+    if value is None or value_type.__name__ in {"NAType", "NaTType"}:
         return True
     if isinstance(value, np.ma.MaskedArray) and value.size == 1 and np.ma.is_masked(value):
         return True
@@ -597,7 +604,14 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
 def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
     """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does."""
 
-    selected = list(map(values.__getitem__, rows))
+    # The factor classes' own __getitem__ is Python code; their storage's is not.
+    if type(values) is _RFactorVector:
+        getter = values._values.__getitem__
+    elif type(values) is Factor:
+        getter = list.__getitem__.__get__(values)
+    else:
+        getter = values.__getitem__
+    selected = list(map(getter, rows))
     categories = _categories(values)
     if categories is None:
         return selected
@@ -691,6 +705,13 @@ def _rowsum_groups(
     if len(values) != n:
         raise ValueError(message)
     declared = _categories(source) if levels is None else levels
+    if declared is None and values and set(map(type, values)) == {int}:
+        # Plain integer labels (cluster or id codes): numpy's sorted unique values
+        # are the ascending order below, and ``str`` is their ``as.character``.
+        labels = np.asarray(values)
+        if labels.dtype.kind in "iu":
+            distinct, inverse = np.unique(labels, return_inverse=True)
+            return inverse.tolist(), [str(value) for value in distinct.tolist()]
     unique = _label_levels(values, "collapse")
     keys = {
         value: _GROUP_NAN
@@ -771,6 +792,29 @@ def _categories(values: Any) -> list[Any] | None:
     if categories is None:
         return None
     return list(_coerce_array_like(categories, "categories"))
+
+
+def _category_codes(values: Any, categories: Sequence[Any]) -> np.ndarray | None:
+    """The codes (-1 for ``NA``) of a pandas categorical *values* whose *categories* are
+    distinct plain Python scalars, else ``None``.
+
+    Each value of such a column is its category at the code, so the codes are what a
+    lookup of every value in the categories finds, without materializing the values.
+    """
+
+    if type(getattr(values, "dtype", None)).__name__ != "CategoricalDtype":
+        return None
+    if (
+        not set(map(type, categories)) <= _PLAIN_SCALARS
+        or len(set(categories)) != len(categories)
+        or any(_missing_flags(categories))
+    ):
+        return None
+    codes = getattr(getattr(values, "cat", values), "codes", None)
+    if codes is None:
+        return None
+    array = np.asarray(codes)
+    return array if array.ndim == 1 and array.dtype.kind == "i" else None
 
 
 def _r_scientific(value: float, digits: int) -> tuple[bool, int, int]:
@@ -931,6 +975,12 @@ def _factor(
         declared = _categories(values)
         if declared is not None:
             levels = [level for level in declared if not _is_missing_value(level)]
+            category_codes = _category_codes(values, declared)
+            if category_codes is not None:
+                coded = cast(list[int | None], category_codes.tolist())
+                for row in np.flatnonzero(category_codes < 0).tolist():
+                    coded[row] = None
+                return coded, [_as_character(level) for level in levels]
         else:
             array = _numeric_ndarray(values)
             if array is not None:

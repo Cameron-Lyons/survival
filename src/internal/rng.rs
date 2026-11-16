@@ -166,6 +166,12 @@ impl Rng {
         }
     }
 
+    /// One of `choices`, uniformly.
+    #[cfg(test)]
+    pub(crate) fn pick<T: Copy>(&mut self, choices: &[T]) -> T {
+        choices[self.usize(0..choices.len())]
+    }
+
     pub(crate) fn shuffle<T>(&mut self, values: &mut [T]) {
         for index in 1..values.len() {
             let swap_index = self.usize(..=index);

@@ -46,16 +46,23 @@ impl Contribution {
         }
     }
 
-    fn exact(distribution: &SurvregDistribution, z: f64, sz: f64, sigma: f64) -> Self {
+    fn exact(
+        distribution: &SurvregDistribution,
+        z: f64,
+        sz: f64,
+        sigma: f64,
+        log_sigma: f64,
+    ) -> Self {
         let funs = distribution.kernel(z, KernelCase::Density);
-        Self::exact_from(funs, z, sz, sigma)
+        Self::exact_from(funs, z, sz, sigma, log_sigma)
     }
 
-    fn exact_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64) -> Self {
+    /// `log_sigma` is `sigma.ln()`, computed once per scale parameter.
+    fn exact_from(funs: [f64; 4], z: f64, sz: f64, sigma: f64, log_sigma: f64) -> Self {
         if funs[1] <= 0.0 {
             return Self::small(-z / sigma, -1.0 / sigma);
         }
-        let g = funs[1].ln() - sigma.ln();
+        let g = funs[1].ln() - log_sigma;
         let temp = funs[2] / sigma;
         let temp2 = funs[3] / (sigma * sigma);
         let dg = -temp;
@@ -215,6 +222,24 @@ impl BlockLikelihood {
     }
 }
 
+/// `exp(log scale)` and its logarithm for every scale parameter of one evaluation.
+///
+/// R's `survreg6` recomputes both for every observation; they depend only on the
+/// stratum, so computing them once gives the same values without `2n` calls to
+/// `exp` and `ln` per likelihood evaluation.
+struct StratumScales {
+    sigma: Vec<f64>,
+    log_sigma: Vec<f64>,
+}
+
+impl StratumScales {
+    fn new(log_scales: &[f64]) -> Self {
+        let sigma: Vec<f64> = log_scales.iter().map(|value| value.exp()).collect();
+        let log_sigma = sigma.iter().map(|value| value.ln()).collect();
+        Self { sigma, log_sigma }
+    }
+}
+
 enum Contributions<'a> {
     Builtin(&'a SurvregDistribution),
     Batch(Vec<Contribution>),
@@ -233,6 +258,21 @@ impl SurvregKernel<'_> {
         self.nvar() + self.nstrat
     }
 
+    fn stratum(&self, person: usize) -> usize {
+        if self.nstrat > 1 {
+            self.strata[person]
+        } else {
+            0
+        }
+    }
+
+    /// The scales of `beta`, whose log-scale parameters follow `nf` frailty and
+    /// `nvar` regression coefficients (one, fixed or estimated, without strata).
+    fn scales(&self, beta: &[f64], nf: usize) -> StratumScales {
+        let first = nf + self.nvar();
+        StratumScales::new(&beta[first..first + self.nstrat.max(1)])
+    }
+
     pub(crate) fn evaluate(
         &self,
         beta: &[f64],
@@ -243,25 +283,21 @@ impl SurvregKernel<'_> {
         debug_assert!(beta.len() > nvar, "beta must carry a log(scale)");
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
-        let contributions = self.prepare_contributions(beta, None, design)?;
+        let scales = self.scales(beta, 0);
+        let contributions = self.prepare_contributions(beta, None, design, &scales)?;
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![0.0; nvar2 * nvar2];
         let mut jj = with_jj.then(|| vec![0.0; nvar2 * nvar2]);
 
         for person in 0..self.n() {
-            let stratum = if self.nstrat > 1 {
-                self.strata[person]
-            } else {
-                0
-            };
-            let sigma = beta[nvar + stratum].exp();
+            let stratum = self.stratum(person);
             let x = &design[person * nvar..(person + 1) * nvar];
             let contribution = match &contributions {
                 Contributions::Builtin(distribution) => {
                     let eta = self.offset[person]
                         + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
-                    self.contribution(distribution, person, eta, sigma)
+                    self.contribution(distribution, person, eta, &scales, stratum)
                 }
                 Contributions::Batch(rows) => rows[person],
             };
@@ -284,12 +320,14 @@ impl SurvregKernel<'_> {
         distribution: &SurvregDistribution,
         person: usize,
         eta: f64,
-        sigma: f64,
+        scales: &StratumScales,
+        stratum: usize,
     ) -> Contribution {
+        let sigma = scales.sigma[stratum];
         let sz = self.y1[person] - eta;
         let z = sz / sigma;
         match self.status[person] {
-            1 => Contribution::exact(distribution, z, sz, sigma),
+            1 => Contribution::exact(distribution, z, sz, sigma, scales.log_sigma[stratum]),
             0 => Contribution::right_censored(distribution, z, sz, sigma),
             2 => Contribution::left_censored(distribution, z, sz, sigma),
             _ => {
@@ -304,6 +342,7 @@ impl SurvregKernel<'_> {
         beta: &[f64],
         frailty: Option<&SparseFrailty<'_>>,
         design: &[f64],
+        scales: &StratumScales,
     ) -> SurvivalResult<Contributions<'_>> {
         if let Some(distribution) = self.distribution.builtin() {
             return Ok(Contributions::Builtin(distribution));
@@ -312,12 +351,11 @@ impl SurvregKernel<'_> {
         let nvar = self.nvar();
         let mut z = vec![0.0; n + self.status.iter().filter(|&&s| s == 3).count()];
         let mut upper_index = n;
-        let mut scales = Vec::with_capacity(n);
         for person in 0..n {
             let x = &design[person * nvar..(person + 1) * nvar];
-            let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
+            let eta = self.block_eta(person, x, beta, frailty);
+            let sigma = scales.sigma[self.stratum(person)];
             z[person] = (self.y1[person] - eta) / sigma;
-            scales.push(sigma);
             if self.status[person] == 3 {
                 z[upper_index] = (self.y2[person] - eta) / sigma;
                 upper_index += 1;
@@ -329,10 +367,17 @@ impl SurvregKernel<'_> {
         let mut rows = Vec::with_capacity(n);
         for person in 0..n {
             let d = values[person];
-            let sigma = scales[person];
+            let stratum = self.stratum(person);
+            let sigma = scales.sigma[stratum];
             let sz = z[person] * sigma;
             let row = match self.status[person] {
-                1 => Contribution::exact_from(d.density_kernel(), z[person], sz, sigma),
+                1 => Contribution::exact_from(
+                    d.density_kernel(),
+                    z[person],
+                    sz,
+                    sigma,
+                    scales.log_sigma[stratum],
+                ),
                 0 => Contribution::right_from(d.distribution_kernel(), z[person], sz, sigma),
                 2 => Contribution::left_from(d.distribution_kernel(), z[person], sz, sigma),
                 _ => {
@@ -352,20 +397,15 @@ impl SurvregKernel<'_> {
         Ok(Contributions::Batch(rows))
     }
 
-    fn block_eta_sigma(
+    fn block_eta(
         &self,
         person: usize,
         x: &[f64],
         beta: &[f64],
         frailty: Option<&SparseFrailty<'_>>,
-    ) -> (f64, f64) {
+    ) -> f64 {
         let nf = frailty.map_or(0, |f| f.nf);
         let nvar = x.len();
-        let stratum = if self.nstrat > 1 {
-            self.strata[person]
-        } else {
-            0
-        };
         let mut eta = 0.0;
         for (xi, b) in x.iter().zip(&beta[nf..nf + nvar]) {
             eta += b * xi;
@@ -374,7 +414,7 @@ impl SurvregKernel<'_> {
         if let Some(frailty) = frailty {
             eta += beta[frailty.group[person]];
         }
-        (eta, beta[nf + nvar + stratum].exp())
+        eta
     }
 
     pub(crate) fn evaluate_blocks(
@@ -389,7 +429,8 @@ impl SurvregKernel<'_> {
         let width = nf + self.nvar2();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
-        let contributions = self.prepare_contributions(beta, frailty, design)?;
+        let scales = self.scales(beta, nf);
+        let contributions = self.prepare_contributions(beta, frailty, design, &scales)?;
         out.at.clear();
         out.at.extend_from_slice(beta);
         out.u.fill(0.0);
@@ -408,10 +449,11 @@ impl SurvregKernel<'_> {
         let mut loglik = 0.0;
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
+            let stratum = self.stratum(person);
             let c = match &contributions {
                 Contributions::Builtin(distribution) => {
-                    let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
-                    self.contribution(distribution, person, eta, sigma)
+                    let eta = self.block_eta(person, x, beta, frailty);
+                    self.contribution(distribution, person, eta, &scales, stratum)
                 }
                 Contributions::Batch(rows) => rows[person],
             };
@@ -443,11 +485,6 @@ impl SurvregKernel<'_> {
                 }
             }
             if self.nstrat != 0 {
-                let stratum = if self.nstrat > 1 {
-                    self.strata[person]
-                } else {
-                    0
-                };
                 let k = stratum + nvar;
                 let row = k * width;
                 u[nf + k] += w * c.dsig;
@@ -481,14 +518,15 @@ impl SurvregKernel<'_> {
         let nvar = self.nvar();
         let design = self.covariates.as_standard_layout();
         let design = design.as_slice().expect("standard layout");
-        let contributions = self.prepare_contributions(beta, frailty, design)?;
+        let scales = self.scales(beta, frailty.map_or(0, |f| f.nf));
+        let contributions = self.prepare_contributions(beta, frailty, design, &scales)?;
         let mut loglik = 0.0;
         for person in 0..self.n() {
             let x = &design[person * nvar..(person + 1) * nvar];
             let c = match &contributions {
                 Contributions::Builtin(distribution) => {
-                    let (eta, sigma) = self.block_eta_sigma(person, x, beta, frailty);
-                    self.contribution(distribution, person, eta, sigma)
+                    let eta = self.block_eta(person, x, beta, frailty);
+                    self.contribution(distribution, person, eta, &scales, self.stratum(person))
                 }
                 Contributions::Batch(rows) => rows[person],
             };
@@ -541,7 +579,7 @@ mod tests {
         let z = sz / sigma;
         match status {
             0 => Contribution::right_censored(distribution, z, sz, sigma),
-            1 => Contribution::exact(distribution, z, sz, sigma),
+            1 => Contribution::exact(distribution, z, sz, sigma, sigma.ln()),
             2 => Contribution::left_censored(distribution, z, sz, sigma),
             _ => Contribution::interval_censored(distribution, z, (upper - eta) / sigma, sigma),
         }

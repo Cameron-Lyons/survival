@@ -25,6 +25,7 @@ from .._factor import Factor
 from ._coerce import (
     _as_character,
     _categories,
+    _category_codes,
     _DEFAULT_NA_ACTION,
     _factor_levels,
     _finite_float,
@@ -37,6 +38,7 @@ from ._coerce import (
     _materialize_labels,
     _missing_flags,
     _normalize_bool_option,
+    _PLAIN_SCALARS,
     _normalize_positive_scale,
     _numeric_ndarray,
     _pop_dotted_keyword,
@@ -79,11 +81,19 @@ _NEARDATE_EPOCH = datetime(1970, 1, 1)
 _NEARDATE_UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
+_PLAIN_NUMBERS = frozenset({float, int, bool, type(None)})
+
+
 def _numeric_or_nan(values: Any, name: str) -> list[float]:
     """A numeric vector with ``NaN`` for missing values (dates arrive as day counts)."""
 
+    materialized = _materialize_1d(values, name)
+    if set(map(type, materialized)) <= _PLAIN_NUMBERS:
+        return [
+            math.nan if value is None or value != value else float(value) for value in materialized
+        ]
     result: list[float] = []
-    for value in _materialize_1d(values, name):
+    for value in materialized:
         if _is_missing_value(value):
             result.append(math.nan)
             continue
@@ -603,21 +613,36 @@ def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> d
 
 
 def _split_data(data: Any, rows: Sequence[int]) -> dict[str, list[Any]]:
-    """``data[rows, ]`` column by column; plain numeric arrays are indexed directly."""
+    """``data[rows, ]`` column by column; plain numeric arrays, and pandas columns of a
+    numpy numeric dtype or with categorical codes, are indexed directly."""
 
     sources = _data_column_sources(data, "data")
     index = np.asarray(rows, dtype=np.intp)
+    top = index.max() if len(index) else -1
     frame: dict[str, list[Any]] = {}
     for column, source in sources.items():
+        array = source if type(source) is np.ndarray else None
+        if type(source).__name__ == "Series" and isinstance(source.dtype, np.dtype):
+            # Only a numpy dtype: a nullable column's to_numpy() would turn its NA into NaN.
+            array = source.to_numpy()
         if (
-            type(source) is np.ndarray
-            and source.ndim == 1
-            and source.dtype.kind in "biuf"
-            and len(source) > (index.max() if len(index) else -1)
+            array is not None
+            and array.ndim == 1
+            and array.dtype.kind in "biuf"
+            and len(array) > top
         ):
-            frame[column] = source[index].tolist()
-        else:
-            frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
+            frame[column] = array[index].tolist()
+            continue
+        categories = _categories(source)
+        if categories is not None:
+            codes = _category_codes(source, categories)
+            if codes is not None and len(codes) > top:
+                ordered = getattr(source, "ordered", getattr(source.dtype, "ordered", False))
+                labels = [*categories, None]
+                selected = list(map(labels.__getitem__, codes[index].tolist()))
+                frame[column] = Factor(selected, categories, bool(ordered))
+                continue
+        frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
     if len({len(values) for values in frame.values()}) > 1:
         raise ValueError("data columns must have equal lengths")
     return frame
@@ -959,7 +984,7 @@ def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
 
     keyed = [
         [None if value != value else value for value in column]
-        if set(map(type, column)) <= {float, int}
+        if set(map(type, column)) <= _PLAIN_SCALARS
         else [None if _is_missing_value(value) else value for value in column]
         for column in columns
     ]
@@ -1001,8 +1026,10 @@ def survcondense(
         raise ValueError("the response must be a Surv object")
     if response.type not in {"counting", "mcounting"}:
         raise ValueError("invalid survival type")
-    if any(math.isnan(value) for value in (*response.time, *(response.start or ()))) or any(
-        value is None for value in response.event
+    if (
+        any(map(math.isnan, response.time))
+        or any(map(math.isnan, response.start or ()))
+        or any(value is None for value in response.event)
     ):
         raise ValueError("response cannot have missing values")
     if mf.id is None:
@@ -1293,18 +1320,20 @@ def _tmerge_vector(
 
 def _first_call_frame(
     columns1: dict[str, list[Any]],
-    base_ids: list[Any],
-    id2: list[Any],
+    keys1: list[str],
+    keys2: list[str],
     tstart: list[float] | None,
     tstop: list[float],
     control: Mapping[str, Any],
 ) -> dict[str, list[Any]]:
-    """R's first ``tmerge`` call: ``data1`` rows in ``data2`` order with the time range."""
+    """R's first ``tmerge`` call: ``data1`` rows in ``data2`` order with the time range.
 
-    if any(_is_missing_value(value) for value in tstop):
+    ``keys1`` and ``keys2`` are the ``as.character`` subject keys of the ``data1`` rows and
+    of the range rows.
+    """
+
+    if any(_missing_flags(tstop)):
         raise ValueError("missing time value, when that variable defines the span")
-    keys1 = [_as_character(value) for value in base_ids]
-    keys2 = [_as_character(value) for value in id2]
     if tstart is None:
         for value in tstop:
             if value <= 0.0:
@@ -1315,7 +1344,7 @@ def _first_call_frame(
         tstart = [0.0] * len(tstop)
     if any(a >= b for a, b in zip(tstart, tstop, strict=True)):
         raise ValueError("tstart must be < tstop")
-    order = list(range(len(id2)))
+    order = list(range(len(keys2)))
     if len(set(keys2)) != len(keys2):
         first_seen = {key: idx for idx, key in enumerate(dict.fromkeys(keys2))}
         order.sort(key=lambda idx: (first_seen[keys2[idx]], tstop[idx]))
@@ -1342,6 +1371,16 @@ def _storage_mode(values: Sequence[Any] | None) -> str:
 
     if values is None:
         return "integer"
+    types = set(map(type, values))
+    if types <= _PLAIN_SCALARS:
+        # The same rules, read from the types of the values: None and NaN are the
+        # missing ones.
+        if str in types:
+            return "character"
+        present = {type(value) for value in values if value is not None and value == value}
+        if not present:
+            return "double" if float in types else "logical"
+        return "double" if float in present else "integer" if int in present else "logical"
     observed = [value for value in values if not _is_missing_value(value)]
     if any(isinstance(value, str) for value in observed):
         return "character"
@@ -1373,6 +1412,8 @@ def _as_mode(value: Any, mode: str) -> Any:
 def _numeric_values(values: Sequence[Any]) -> list[float] | None:
     """The numeric view of an argument's values (``NaN`` for ``NA``), or ``None``."""
 
+    if set(map(type, values)) <= _PLAIN_NUMBERS:
+        return [math.nan if value is None or value != value else float(value) for value in values]
     result: list[float] = []
     for value in values:
         if _is_missing_value(value):
@@ -1409,7 +1450,7 @@ class _TmergeArgument:
 
     @property
     def missing(self) -> list[bool] | None:
-        return None if self.values is None else [_is_missing_value(v) for v in self.values]
+        return None if self.values is None else _missing_flags(self.values)
 
     def censor_value(self) -> Any:
         """R's ``tcens`` for a new event variable: the censoring value of its type.
@@ -1573,8 +1614,8 @@ def _apply_tmerge_argument(
             raise ValueError("data and starting value do not agree on data type")
     step = _core.tmerge_step(
         newdata[idname],
-        [float(value) for value in newdata[startname]],
-        [float(value) for value in newdata[stopname]],
+        list(map(float, newdata[startname])),
+        list(map(float, newdata[stopname])),
         id2,
         argument.time,
         kind,
@@ -1635,7 +1676,8 @@ def _tmerge_first_call(
     if id not in columns1:
         raise ValueError("id variable not found in data1")
     base_ids = list(columns1[id])
-    keys1 = {_as_character(value) for value in base_ids}
+    base_keys = [_as_character(value) for value in base_ids]
+    keys1 = set(base_keys)
     if len(keys1) != len(base_ids):
         raise ValueError(
             "for the first call (that establishes the time range) data1 must have no "
@@ -1644,7 +1686,8 @@ def _tmerge_first_call(
     idname = str(control["idname"])
     if idname != id:
         columns1[idname] = list(base_ids)
-    keys2 = {_as_character(value) for value in id2}
+    id_keys = [_as_character(value) for value in id2]
+    keys2 = set(id_keys)
     if keys2 - keys1:
         raise ValueError("setting the range, and data2 has id values not in data1")
     if keys1 - keys2:
@@ -1656,12 +1699,12 @@ def _tmerge_first_call(
         name, operation = first
         times = _numeric_or_nan(_tmerge_vector(operation.time, data2, n2, name), "tstop")
         seen: dict[str, int] = {}
-        for row, value in enumerate(id2):
-            seen.setdefault(_as_character(value), row)
-        range_ids = [id2[row] for row in seen.values()]
+        for row, key in enumerate(id_keys):
+            seen.setdefault(key, row)
+        range_keys = list(seen)
         range_stop = [times[row] for row in seen.values()]
     else:
-        range_ids = id2
+        range_keys = id_keys
         range_stop = _numeric_or_nan(
             _tmerge_vector(
                 tstop, data2, n2, "tstop", mismatch="tstop and id must be the same length"
@@ -1675,7 +1718,7 @@ def _tmerge_first_call(
             _tmerge_vector(
                 tstart,
                 data2,
-                len(range_ids),
+                len(range_keys),
                 "tstart",
                 recycle=True,
                 mismatch="tstart and id must be the same length",
@@ -1683,7 +1726,7 @@ def _tmerge_first_call(
             "tstart",
         )
     )
-    return _first_call_frame(columns1, base_ids, range_ids, start_values, range_stop, control)
+    return _first_call_frame(columns1, base_keys, range_keys, start_values, range_stop, control)
 
 
 def _tmerge_inputs(
@@ -1772,7 +1815,7 @@ def tmerge(
         id2 = _materialize_labels(id_source, "id")
         if data2_rows is not None and len(id2) != data2_rows:
             raise ValueError("id variable not found in data2")
-    if any(_is_missing_value(value) for value in id2):
+    if any(_missing_flags(id2)):
         raise ValueError("id variable cannot have missing values")
 
     if first_call:

@@ -1,6 +1,5 @@
-use crate::concordance::kernels::{
-    FastKm, SweepInput, SweepOutput, btree, concordance_sweep, fastkm,
-};
+use crate::concordance::kernels::{FastKm, SweepInput, SweepOutput, concordance_sweep, fastkm};
+use crate::concordance::order::{PredictorRanks, resort_ties, sweep_order};
 use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -410,6 +409,8 @@ struct PreparedStratum {
     sort_stop: Vec<usize>,
     predictor_ties: Vec<Range<usize>>,
     death_times: Vec<f64>,
+    /// The first predictor's ranks, which order `sort_stop`.
+    first_ranks: PredictorRanks,
 }
 
 fn prepare_stratum(
@@ -441,6 +442,7 @@ fn prepare_stratum(
             sort_stop: Vec::new(),
             predictor_ties: Vec::new(),
             death_times: Vec::new(),
+            first_ranks: PredictorRanks::default(),
         });
     }
     let timeopt = if merged_events.unwrap_or(nevent) < 2 {
@@ -449,31 +451,12 @@ fn prepare_stratum(
         options.timewt
     };
 
-    let mut sort_stop: Vec<usize> = (0..n).collect();
-    // All times and predictors were validated above. Use numeric equality for
-    // signed zeros, as the sweep does: censors at either zero must precede all
-    // deaths at that time, and equal predictors retain their input tie order.
-    sort_stop.sort_by(|&a, &b| {
-        stop[b]
-            .partial_cmp(&stop[a])
-            .unwrap()
-            .then_with(|| status[a].cmp(&status[b]))
-            .then_with(|| risk[a].partial_cmp(&risk[b]).unwrap())
-    });
-    let mut predictor_ties = Vec::new();
-    let mut first = 0;
-    while first < n {
-        let row = sort_stop[first];
-        let mut end = first + 1;
-        while end < n && stop[row] == stop[sort_stop[end]] && status[row] == status[sort_stop[end]]
-        {
-            end += 1;
-        }
-        if end - first > 1 {
-            predictor_ties.push(first..end);
-        }
-        first = end;
-    }
+    // All times and predictors were validated above. The order uses numeric
+    // equality for signed zeros, as the sweep does: censors at either zero
+    // must precede all deaths at that time, and equal predictors retain their
+    // input tie order.
+    let first_ranks = PredictorRanks::new(risk);
+    let (sort_stop, predictor_ties) = sweep_order(&stop, &status, &first_ranks.rank);
     let sort_start: Option<Vec<usize>> = start.as_ref().map(|start| {
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| start[b].partial_cmp(&start[a]).unwrap());
@@ -551,6 +534,7 @@ fn prepare_stratum(
         sort_stop,
         predictor_ties,
         death_times,
+        first_ranks,
     })
 }
 
@@ -568,29 +552,23 @@ fn docount(
             resid: Vec::new(),
         };
     }
+    let later_ranks;
+    let predictor = if first_predictor {
+        &prepared.first_ranks
+    } else {
+        later_ranks = PredictorRanks::new(risk);
+        &later_ranks
+    };
     let sort_stop: Cow<'_, [usize]> = if first_predictor || prepared.predictor_ties.is_empty() {
         Cow::Borrowed(&prepared.sort_stop)
     } else {
-        let mut order = prepared.sort_stop.clone();
-        for group in &prepared.predictor_ties {
-            order[group.clone()].sort_unstable_by(|&a, &b| {
-                risk[a]
-                    .partial_cmp(&risk[b])
-                    .unwrap()
-                    .then_with(|| a.cmp(&b))
-            });
-        }
-        Cow::Owned(order)
+        Cow::Owned(resort_ties(
+            &prepared.sort_stop,
+            &prepared.predictor_ties,
+            &predictor.rank,
+        ))
     };
-
-    let mut levels = risk.to_vec();
-    levels.sort_by(f64::total_cmp);
-    levels.dedup();
-    let tree = btree(levels.len());
-    let node: Vec<usize> = risk
-        .iter()
-        .map(|value| tree[levels.partition_point(|level| level < value)])
-        .collect();
+    let node = predictor.nodes();
 
     concordance_sweep(
         &SweepInput {

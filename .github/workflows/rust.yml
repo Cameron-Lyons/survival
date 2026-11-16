@@ -299,7 +299,12 @@ jobs:
 
   r-fixture-stability:
     name: R Fixture Stability
-    runs-on: ubuntu-latest
+    # This job regenerates stock-R references and compares them with the
+    # committed ones, which were recorded on Ubuntu 24.04. The same R and
+    # survival versions on Ubuntu 26.04 give NA instead of 0 for some
+    # weighted Aalen-Johansen confidence limits whose standard error is zero,
+    # so stay on 24.04 until the references are re-recorded.
+    runs-on: ubuntu-24.04
     env:
       R_SURVIVAL_VERSION: '3.8-11'
     steps:
@@ -362,7 +367,12 @@ jobs:
 
   r-bridge:
     name: R Bridge Package
-    runs-on: ubuntu-latest
+    # This job regenerates stock-R references and compares them with the
+    # committed ones, which were recorded on Ubuntu 24.04. The same R and
+    # survival versions on Ubuntu 26.04 give NA instead of 0 for some
+    # weighted Aalen-Johansen confidence limits whose standard error is zero,
+    # so stay on 24.04 until the references are re-recorded.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

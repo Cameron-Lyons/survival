@@ -3,7 +3,7 @@ use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::SurvivalData;
 use crate::internal::validation::validate_binary_i32;
 use crate::regression::TieMethod;
-use crate::scoring::validate_score_inputs;
+use crate::scoring::{gather_rows, scatter_rows, validate_score_inputs};
 use ndarray::{Array2, ArrayView2};
 
 pub fn coxscore2(
@@ -41,22 +41,36 @@ pub(crate) fn coxscore2_rows(
     strata: &[i32],
     method: TieMethod,
 ) -> Array2<f64> {
-    let n = time.len();
-    let nvar = covariates.ncols();
     let order = order_within_strata(strata, |a, b| {
         time[a]
             .total_cmp(&time[b])
             .then_with(|| status[b].cmp(&status[a]))
     });
+    coxscore2_rows_ordered(
+        &order, time, status, covariates, score, weights, strata, method,
+    )
+}
+
+/// [`coxscore2_rows`] for rows already in its (stratum, time, status
+/// descending, row) order, which a fit derives from its sorted rows with
+/// [`crate::core::strata_order::events_first_within_ties`] instead of sorting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn coxscore2_rows_ordered(
+    order: &[usize],
+    time: &[f64],
+    status: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Array2<f64> {
     let sorted_time: Vec<f64> = order.iter().map(|&i| time[i]).collect();
     let sorted_status: Vec<i32> = order.iter().map(|&i| status[i]).collect();
     let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
     let sorted_score: Vec<f64> = order.iter().map(|&i| score[i]).collect();
     let sorted_weights: Vec<f64> = order.iter().map(|&i| weights[i]).collect();
-    let mut sorted_covar = Array2::zeros((n, nvar));
-    for (row, &i) in order.iter().enumerate() {
-        sorted_covar.row_mut(row).assign(&covariates.row(i));
-    }
+    let sorted_covar = gather_rows(covariates, order);
 
     let sorted = coxscore2_sorted(
         &sorted_time,
@@ -67,11 +81,7 @@ pub(crate) fn coxscore2_rows(
         &sorted_weights,
         method,
     );
-    let mut resid = Array2::zeros((n, nvar));
-    for (row, &i) in order.iter().enumerate() {
-        resid.row_mut(i).assign(&sorted.row(row));
-    }
-    resid
+    scatter_rows(&sorted, order)
 }
 
 pub(crate) fn coxscore2_sorted(

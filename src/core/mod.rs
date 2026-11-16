@@ -6,6 +6,7 @@ pub mod pspline;
 pub(crate) mod risk_sweep;
 pub mod spline_basis;
 pub mod strata_order;
+pub(crate) mod time_order;
 
 pub use coxcount1::{CoxCountOutput, coxcount1, coxcount2};
 pub use coxscho::{CoxschoResiduals, schoenfeld_residuals};

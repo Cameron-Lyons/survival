@@ -72,9 +72,28 @@ pub(crate) fn coxscho(
     strata: &[i32],
     method: TieMethod,
 ) -> CoxschoResiduals {
+    let order = order_within_strata(strata, |a, b| stop[a].total_cmp(&stop[b]));
+    coxscho_ordered(
+        &order, start, stop, event, covariates, score, weights, strata, method,
+    )
+}
+
+/// [`coxscho`] for rows already in its stable (stratum, stop) order: the
+/// order a fit's sorted rows keep, so a fit passes them instead of sorting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn coxscho_ordered(
+    order: &[usize],
+    start: Option<&[f64]>,
+    stop: &[f64],
+    event: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> CoxschoResiduals {
     let nvar = covariates.ncols();
     let steps_of = |ndead: usize| if method.is_efron() { ndead } else { 1 };
-    let order = order_within_strata(strata, |a, b| stop[a].total_cmp(&stop[b]));
     let mut time = Vec::new();
     let mut index = Vec::new();
     let mut strata_out = Vec::new();

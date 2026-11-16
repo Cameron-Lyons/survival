@@ -105,6 +105,92 @@ pub(crate) fn agmart_rows(
     )
 }
 
+/// [`agmart_rows`] for rows whose (stratum, stop, row) order is known, as a
+/// fit's sorted rows are.  Walking that order gives the used rows (those with
+/// an event time of their stratum in `(start, stop]`) and their descending
+/// stop order without a sort; only the start order is sorted, per stratum.
+/// Both orders list just the used rows, the only ones [`agmart3`] reads.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn agmart_rows_ordered(
+    order: &[usize],
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Vec<f64> {
+    let mut sort_stop = Vec::with_capacity(order.len());
+    let mut sort_start = Vec::with_capacity(order.len());
+    let mut first = 0;
+    while first < order.len() {
+        let label = strata[order[first]];
+        let end = first + order[first..].partition_point(|&row| strata[row] == label);
+        let rows = &order[first..end];
+        let used = spans_an_event(rows, start, stop, event);
+        // Descending stop as `total_cmp` orders it (+0.0 before -0.0), ties
+        // in row order as a stable sort leaves them.
+        let mut run_end = rows.len();
+        while run_end > 0 {
+            let bits = stop[rows[run_end - 1]].to_bits();
+            let run_start = rows[..run_end]
+                .iter()
+                .rposition(|&row| stop[row].to_bits() != bits)
+                .map_or(0, |position| position + 1);
+            sort_stop.extend((run_start..run_end).filter(|&p| used[p]).map(|p| rows[p]));
+            run_end = run_start;
+        }
+        let stratum_start = sort_start.len();
+        sort_start.extend(
+            rows.iter()
+                .zip(&used)
+                .filter(|(_, used)| **used)
+                .map(|(&row, _)| row),
+        );
+        sort_start[stratum_start..]
+            .sort_unstable_by(|&a, &b| start[b].total_cmp(&start[a]).then(a.cmp(&b)));
+        first = end;
+    }
+    agmart3(
+        sort_stop.len(),
+        start,
+        stop,
+        event,
+        score,
+        weights,
+        strata,
+        &sort_start,
+        &sort_stop,
+        method,
+    )
+}
+
+/// Whether each of a stratum's `rows`, in ascending stop order, has an event
+/// time in `(start, stop]`: the latest event time up to its stop exceeds its
+/// start.  Times compare as IEEE values, as the event-time search of
+/// [`agmart_rows`] does.
+fn spans_an_event(rows: &[usize], start: &[f64], stop: &[f64], event: &[i32]) -> Vec<bool> {
+    let mut used = vec![false; rows.len()];
+    let mut last_event = f64::NEG_INFINITY;
+    let mut first = 0;
+    while first < rows.len() {
+        let time = stop[rows[first]];
+        let end = rows[first..]
+            .iter()
+            .position(|&row| stop[row] != time)
+            .map_or(rows.len(), |length| first + length);
+        if rows[first..end].iter().any(|&row| event[row] == 1) {
+            last_event = time;
+        }
+        for position in first..end {
+            used[position] = start[rows[position]] < last_event;
+        }
+        first = end;
+    }
+    used
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn agmart3(
     nused: usize,

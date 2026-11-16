@@ -1,7 +1,8 @@
 use super::log_curves::CachedCurves;
 use crate::concordance::ConcordanceFit;
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
-use crate::core::strata_order::{grouped_sum, order_within_strata, validate_intervals};
+use crate::core::strata_order::{grouped_sum, validate_intervals};
+use crate::core::time_order::stratum_time_order;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
 use crate::regression::cox_optimizer::TieMethod;
@@ -158,15 +159,7 @@ impl SortedRows {
     }
 
     pub(crate) fn by_time(time: &[f64], strata: Option<&[i32]>) -> Self {
-        let order = match strata {
-            Some(strata) => order_within_strata(strata, |a, b| time[a].total_cmp(&time[b])),
-            None => {
-                let mut order: Vec<usize> = (0..time.len()).collect();
-                order.sort_by(|&a, &b| time[a].total_cmp(&time[b]));
-                order
-            }
-        };
-        Self::new(order, strata)
+        Self::new(stratum_time_order(time, strata), strata)
     }
 
     pub(crate) fn nstrata(&self) -> usize {

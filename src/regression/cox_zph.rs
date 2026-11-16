@@ -15,6 +15,8 @@ use pyo3::Borrowed;
 #[cfg(feature = "python")]
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ZphTransform {
@@ -348,10 +350,22 @@ fn zph_kernel(
     })
 }
 
-fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
+/// The rows in ascending time order for [`km_transform`]: an unstratified
+/// fit's sorted rows already are, so only a stratified fit sorts.
+fn km_order(fit: &CoxPHFit) -> Cow<'_, [usize]> {
+    if fit.sorted.nstrata() == 1 {
+        return Cow::Borrowed(&fit.sorted.order);
+    }
+    let mut order: Vec<usize> = (0..fit.n).collect();
+    order.sort_unstable_by(|&a, &b| fit.time[a].total_cmp(&fit.time[b]));
+    Cow::Owned(order)
+}
+
+/// `1 - KM(t-)` of the pooled data at each row's time.  `order` sorts the rows
+/// by time; rows with equal times share every value, so their order within a
+/// tie does not matter.
+fn km_transform(order: &[usize], time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
     let n = time.len();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_unstable_by(|&a, &b| time[a].total_cmp(&time[b]));
     let sorted_entry = entry.map(|entry| {
         let mut sorted = entry.to_vec();
         sorted.sort_unstable_by(f64::total_cmp);
@@ -383,6 +397,72 @@ fn km_transform(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64>
 
 fn solve(matrix: &Array2<f64>, rhs: &[f64]) -> SurvivalResult<Vec<f64>> {
     LuDecomposition::decompose(matrix)?.solve(rhs)
+}
+
+/// cox.zph's `y` before the coefficients are added: each death's scaled
+/// residuals solved against the block of `vmean` for the terms its stratum
+/// uses (`used > 0`), `NaN` for the others; deaths in a stratum that uses no
+/// term keep `sresid`.  `death_strata` is each death's stratum position.
+fn standardise_residuals(
+    sresid: &Array2<f64>,
+    vmean: &Array2<f64>,
+    used: &Array2<f64>,
+    death_strata: &[usize],
+) -> SurvivalResult<Array2<f64>> {
+    let (nstrata, ncol) = (used.nrows(), sresid.ncols());
+    // The deaths of each stratum, in death order, from one counting sort
+    // rather than a scan of every death per stratum.
+    let mut offsets = vec![0usize; nstrata + 1];
+    for &s in death_strata {
+        offsets[s + 1] += 1;
+    }
+    for s in 0..nstrata {
+        offsets[s + 1] += offsets[s];
+    }
+    let mut members = vec![0usize; death_strata.len()];
+    let mut fill = offsets[..nstrata].to_vec();
+    for (g, &s) in death_strata.iter().enumerate() {
+        members[fill[s]] = g;
+        fill[s] += 1;
+    }
+    // Strata that use the same terms share one factorisation of their block
+    // of `vmean`; matched sets repeat a handful of patterns.
+    let mut factors: HashMap<Vec<usize>, LuDecomposition> = HashMap::new();
+    let mut y = sresid.clone();
+    for s in 0..nstrata {
+        let k: Vec<usize> = (0..ncol).filter(|&j| used[(s, j)] > 0.0).collect();
+        let rows = &members[offsets[s]..offsets[s + 1]];
+        if k.is_empty() || rows.is_empty() {
+            continue;
+        }
+        if let [column] = k[..] {
+            let variance = vmean[(column, column)];
+            for &g in rows {
+                y[(g, column)] = sresid[(g, column)] / variance;
+            }
+        } else {
+            if !factors.contains_key(&k) {
+                let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
+                factors.insert(k.clone(), LuDecomposition::decompose(&vk)?);
+            }
+            let lu = &factors[&k];
+            for &g in rows {
+                let rhs: Vec<f64> = k.iter().map(|&j| sresid[(g, j)]).collect();
+                let solved = lu.solve(&rhs)?;
+                for (position, &j) in k.iter().enumerate() {
+                    y[(g, j)] = solved[position];
+                }
+            }
+        }
+        for &g in rows {
+            for j in 0..ncol {
+                if !k.contains(&j) {
+                    y[(g, j)] = f64::NAN;
+                }
+            }
+        }
+    }
+    Ok(y)
 }
 
 fn penalty_matrix(second: &[f64], keep: &[usize], nfull: usize) -> SurvivalResult<Array2<f64>> {
@@ -484,7 +564,9 @@ pub fn cox_zph<'a>(
         ZphTransform::Identity => fit.time.clone(),
         ZphTransform::Rank => rank_average(&fit.time),
         ZphTransform::Log => fit.time.iter().map(|t| t.ln()).collect(),
-        ZphTransform::Km => km_transform(&fit.time, fit.entry.as_deref(), &fit.status),
+        ZphTransform::Km => {
+            km_transform(&km_order(fit), &fit.time, fit.entry.as_deref(), &fit.status)
+        }
         ZphTransform::Values(values) => {
             if values.len() != fit.n || values.iter().any(|value| !value.is_finite()) {
                 return Err(SurvivalError::invalid_input(
@@ -609,43 +691,12 @@ pub fn cox_zph<'a>(
         let firsts: Vec<usize> = assign.iter().map(|columns| columns[0]).collect();
         used_terms = used.select(Axis(1), &firsts);
     }
-    let ncol = sresid.ncols();
-
     let death_strata: Vec<usize> = kernel
         .death_rows
         .iter()
         .map(|&row| fit.sorted.stratum_index[row])
         .collect();
-    let mut y = sresid.clone();
-    for s in 0..used_terms.nrows() {
-        let k: Vec<usize> = (0..ncol).filter(|&j| used_terms[(s, j)] > 0.0).collect();
-        let rows: Vec<usize> = (0..y.nrows()).filter(|&g| death_strata[g] == s).collect();
-        if k.is_empty() || rows.is_empty() {
-            continue;
-        }
-        let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
-        if k.len() == 1 {
-            for &g in &rows {
-                y[(g, k[0])] = sresid[(g, k[0])] / vk[(0, 0)];
-            }
-        } else {
-            let lu = LuDecomposition::decompose(&vk)?;
-            for &g in &rows {
-                let rhs: Vec<f64> = k.iter().map(|&j| sresid[(g, j)]).collect();
-                let solved = lu.solve(&rhs)?;
-                for (position, &j) in k.iter().enumerate() {
-                    y[(g, j)] = solved[position];
-                }
-            }
-        }
-        for &g in &rows {
-            for j in 0..ncol {
-                if !k.contains(&j) {
-                    y[(g, j)] = f64::NAN;
-                }
-            }
-        }
-    }
+    let mut y = standardise_residuals(&sresid, &vmean, &used_terms, &death_strata)?;
     for (t, columns) in assign.iter().enumerate() {
         let shift = if columns.len() == 1 {
             coef[columns[0]]
@@ -716,6 +767,7 @@ pub(crate) fn cox_zph_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::rng::Rng;
     use crate::regression::coxpenal::{
         CoxpenalData, CoxpenalOptions, FrailtyFamily, ModelTerm, PenaltyTerm,
     };
@@ -821,9 +873,145 @@ mod tests {
         assert!(error.to_string().contains("more than one term"));
     }
 
+    /// `km_transform` over its own sort of the times, as it sorted before
+    /// taking the fit's order.
+    fn km_by_sorting(time: &[f64], entry: Option<&[f64]>, status: &[i32]) -> Vec<f64> {
+        let mut order: Vec<usize> = (0..time.len()).collect();
+        order.sort_unstable_by(|&a, &b| time[a].total_cmp(&time[b]));
+        km_transform(&order, time, entry, status)
+    }
+
+    #[test]
+    fn km_transform_over_the_fit_order_matches_its_own_sort() {
+        let mut draws = Rng::with_seed(5);
+        for case in 0..60_usize {
+            let n = 20 + draws.usize(0..40);
+            let time: Vec<f64> = (0..n)
+                .map(|_| {
+                    [-0.0, 0.0, 1.0, 1.5, 2.0, 3.0][draws.usize(0..6)] + 4.0 * (case % 2) as f64
+                })
+                .collect();
+            let entry: Vec<f64> = time.iter().map(|t| t - 1.0 - draws.f64()).collect();
+            let status: Vec<i32> = (0..n).map(|i| i32::from(i % 3 != 2)).collect();
+            let x = Array2::from_shape_fn((n, 1), |_| draws.f64());
+            let strata = case
+                .is_multiple_of(3)
+                .then(|| (0..n).map(|i| (i % 4) as i32).collect());
+            let counting = case % 4 < 2;
+            let data = CoxphData::try_new(
+                time.clone(),
+                counting.then(|| entry.clone()),
+                status.clone(),
+                x,
+                None,
+                strata,
+                None,
+            )
+            .unwrap();
+            let options = CoxphOptions {
+                iter_max: 0,
+                ..CoxphOptions::default()
+            };
+            let fit = CoxPHFit::fit(data, options).unwrap();
+            let entry = counting.then_some(entry.as_slice());
+            let km = km_transform(&km_order(&fit), &time, entry, &status);
+            let expected = km_by_sorting(&time, entry, &status);
+            assert_eq!(
+                km.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The standardisation loop before the deaths were bucketed by stratum
+    /// and the factorisations shared.
+    fn standardise_by_scanning(
+        sresid: &Array2<f64>,
+        vmean: &Array2<f64>,
+        used: &Array2<f64>,
+        death_strata: &[usize],
+    ) -> SurvivalResult<Array2<f64>> {
+        let ncol = sresid.ncols();
+        let mut y = sresid.clone();
+        for s in 0..used.nrows() {
+            let k: Vec<usize> = (0..ncol).filter(|&j| used[(s, j)] > 0.0).collect();
+            let rows: Vec<usize> = (0..y.nrows()).filter(|&g| death_strata[g] == s).collect();
+            if k.is_empty() || rows.is_empty() {
+                continue;
+            }
+            let vk = vmean.select(Axis(0), &k).select(Axis(1), &k);
+            if k.len() == 1 {
+                for &g in &rows {
+                    y[(g, k[0])] = sresid[(g, k[0])] / vk[(0, 0)];
+                }
+            } else {
+                let lu = LuDecomposition::decompose(&vk)?;
+                for &g in &rows {
+                    let rhs: Vec<f64> = k.iter().map(|&j| sresid[(g, j)]).collect();
+                    let solved = lu.solve(&rhs)?;
+                    for (position, &j) in k.iter().enumerate() {
+                        y[(g, j)] = solved[position];
+                    }
+                }
+            }
+            for &g in &rows {
+                for j in 0..ncol {
+                    if !k.contains(&j) {
+                        y[(g, j)] = f64::NAN;
+                    }
+                }
+            }
+        }
+        Ok(y)
+    }
+
+    #[test]
+    fn standardised_residuals_match_the_per_stratum_scan() {
+        let mut draws = Rng::with_seed(3);
+        for case in 0..500_usize {
+            let ncol = 1 + draws.usize(0..4);
+            let nstrata = 1 + draws.usize(0..12);
+            let ndeath = draws.usize(0..40);
+            let mut death_strata: Vec<usize> =
+                (0..ndeath).map(|_| draws.usize(0..nstrata)).collect();
+            if case.is_multiple_of(2) {
+                death_strata.sort_unstable();
+            }
+            let used =
+                Array2::from_shape_fn((nstrata, ncol), |_| [0.0, 1.0, 2.0, 5.0][draws.usize(0..4)]);
+            let mut sresid = Array2::from_shape_fn((ndeath, ncol), |_| draws.f64() - 0.5);
+            let base = Array2::from_shape_fn((ncol, ncol), |_| draws.f64() - 0.5);
+            let mut vmean = base.t().dot(&base) + Array2::<f64>::eye(ncol) * 0.1;
+            match case % 25 {
+                // A singular block of two identical terms.
+                23 if ncol > 1 => {
+                    for j in 0..ncol {
+                        vmean[(0, j)] = vmean[(1, j)];
+                    }
+                }
+                // A non-finite residual fails its solve.
+                24 if ndeath > 0 => sresid[(ndeath / 2, 0)] = f64::INFINITY,
+                _ => {}
+            }
+            let actual = standardise_residuals(&sresid, &vmean, &used, &death_strata);
+            let expected = standardise_by_scanning(&sresid, &vmean, &used, &death_strata);
+            match (actual, expected) {
+                (Ok(actual), Ok(expected)) => assert_eq!(
+                    actual.mapv(f64::to_bits),
+                    expected.mapv(f64::to_bits),
+                    "case {case}"
+                ),
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.to_string(), expected.to_string());
+                }
+                (actual, expected) => panic!("case {case}: {actual:?} != {expected:?}"),
+            }
+        }
+    }
+
     #[test]
     fn km_transform_is_left_continuous() {
-        let km = km_transform(&TIME, None, &STATUS);
+        let km = km_by_sorting(&TIME, None, &STATUS);
         assert_eq!(km[0], 0.0);
         assert!(km[1] > 0.0 && km[1] < 1.0);
         assert_eq!(km[1], km[2]);
@@ -861,7 +1049,7 @@ mod tests {
     #[test]
     fn km_transform_counts_the_risk_set_like_its_definition() {
         assert_eq!(
-            km_transform(&TIME, Some(&START), &STATUS),
+            km_by_sorting(&TIME, Some(&START), &STATUS),
             km_transform_by_definition(&TIME, Some(&START), &STATUS)
         );
         let n = 300;
@@ -877,11 +1065,11 @@ mod tests {
             .collect();
         let status: Vec<i32> = (0..n).map(|i| i32::from(i % 4 != 1)).collect();
         assert_eq!(
-            km_transform(&time, None, &status),
+            km_by_sorting(&time, None, &status),
             km_transform_by_definition(&time, None, &status)
         );
         assert_eq!(
-            km_transform(&time, Some(&entry), &status),
+            km_by_sorting(&time, Some(&entry), &status),
             km_transform_by_definition(&time, Some(&entry), &status)
         );
     }

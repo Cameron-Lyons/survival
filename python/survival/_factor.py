@@ -41,9 +41,13 @@ class Factor(list[Any]):
             levels = sorted({value for value in values if not _missing(value)}, key=_level_key)
         else:
             declared = set(levels)
-            values = [
-                None if _missing(value) or value not in declared else value for value in values
-            ]
+            if any(map(_missing, declared)):
+                values = [
+                    None if _missing(value) or value not in declared else value for value in values
+                ]
+            else:
+                # A missing value is then never a level, so membership alone decides.
+                values = [value if value in declared else None for value in values]
         super().__init__(values)
         self.categories = tuple(levels)
         self.ordered = bool(ordered)

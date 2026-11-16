@@ -6,16 +6,18 @@ use super::scaling::{
 use super::{CoxPHFit, CoxphData, CoxphOptions, SortedRows};
 use crate::concordance::{ConcordanceCounts, ConcordanceFit, ConcordanceOptions, concordancefit};
 use crate::core::SurvResponse;
+use crate::core::strata_order::{DenseGroups, weighted_rowsum};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::typed_inputs::{CountingProcessData, SurvivalData};
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::{CoxFitBuilder, CoxFitResults, TieMethod};
 use crate::regression::coxph_diagnostics::{
-    collapse_rows, martingale_residuals_at, martingale_residuals_at_scales, score_residuals_at,
-    score_residuals_at_scales,
+    martingale_residuals_at, martingale_residuals_at_scales, score_residuals_at_scales,
+    score_residuals_in_order,
 };
 use crate::regression::coxph_wtest::{wald_statistic, wald_tests};
 use ndarray::{Array2, ArrayView2};
+use std::cell::OnceCell;
 use std::sync::OnceLock;
 
 pub(super) fn crossprod(rows: &Array2<f64>) -> Array2<f64> {
@@ -276,16 +278,22 @@ impl CoxPHFit {
                     "dfbeta residuals are not available for the exact method",
                 ));
             }
-            let cluster = fit
-                .cluster
-                .clone()
-                .unwrap_or_else(|| (0..n as i32).collect());
-            fit.naive_var = Some(fit.var.clone());
-            let dfbeta = if let Some(saved) = &retained {
-                fit.dfbeta_matrix_scales(&saved.scales, true, Some(&cluster))?
-            } else {
-                fit.dfbeta_matrix(&fit.linear_predictors, true, Some(&cluster))?
+            // R collapses the weighted dfbeta and score residuals by cluster
+            // (each row its own cluster without one); both collapses share
+            // one grouping, and both score-residual calls one row order.
+            let groups = match &fit.cluster {
+                Some(cluster) => DenseGroups::new(cluster),
+                None => DenseGroups::identity(n),
             };
+            let score_order = OnceCell::new();
+            let naive_var = fit.var.clone();
+            let scores = match &retained {
+                Some(saved) => score_residuals_at_scales(&fit, &saved.scales)?,
+                None => score_residuals_in_order(&fit, &fit.linear_predictors, &score_order)?,
+            };
+            let dfbeta =
+                weighted_rowsum(scores.dot(&naive_var).view(), Some(&fit.weights), &groups);
+            fit.naive_var = Some(naive_var);
             fit.var = crossprod(&dfbeta);
             let lp0: Vec<f64> = match &options.init {
                 Some(init) => (0..n)
@@ -305,12 +313,12 @@ impl CoxPHFit {
                     );
                     score_residuals_at_scales(&fit, &scales)?
                 } else {
-                    score_residuals_at(&fit, &lp0)?
+                    score_residuals_in_order(&fit, &lp0, &score_order)?
                 }
             } else {
-                score_residuals_at(&fit, &lp0)?
+                score_residuals_in_order(&fit, &lp0, &score_order)?
             };
-            let scores = collapse_rows(&scores, Some(&fit.weights), Some(&cluster));
+            let scores = weighted_rowsum(scores.view(), Some(&fit.weights), &groups);
             let u: Vec<f64> = (0..nvar).map(|j| scores.column(j).sum()).collect();
             let u_matrix = Array2::from_shape_vec((nvar, 1), u)
                 .map_err(|err| SurvivalError::computation(err.to_string()))?;

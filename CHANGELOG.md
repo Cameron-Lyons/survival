@@ -37,6 +37,32 @@ replacement. Numerical corrections are described under Fixed below.
 
 ### Performance
 
+- Concordance is 3-5x faster at 10^4 to 10^6 rows with bitwise-identical
+  results. This covers `concordance`, `concordancefit` and the concordance that
+  every `coxph` fit reports; with the Cox fit changes below, `coxph` itself is
+  1.8-2.8x faster. The risk-set and death trees share one array with
+  fused walks, the final influence walks run once per tree node, predictors are
+  ranked by one keyed sort, and rows are ordered by packed integer keys.
+- Cox fits sort rows by packed total-order time keys, centre and scale
+  covariates in row-major passes, and skip the tied-death sums that Breslow
+  fits and single-death times never read. `coxph.fit` is 1.3-2.1x faster at
+  10^6 rows with bitwise-identical results.
+- Robust and cluster variances, counting-process martingale residuals, and
+  score, dfbeta and Schoenfeld residuals reuse the fit's row order and dense
+  cluster ids instead of re-sorting and regrouping rows. `cox.zph` buckets
+  deaths by stratum, so its cost no longer grows with strata × deaths: it is
+  about 18x faster with 20,000 strata at 10^5 rows. `coxph_detail`, `cox_zph`,
+  `residuals` and `fit$x` no longer copy engine results row by row in Python
+  (`coxph_detail` about 4.5x faster).
+- Formula fits on filtered, sliced or string-indexed data frames read row
+  labels without per-value formatting, which makes `coxph`, `survreg` and
+  `survfit` up to 4x faster on such frames. `coxph` with `tt()` terms expands
+  into an array design without row names and is about 2.4x faster. Model frames
+  count rows and missing responses without copying columns, and `survSplit`,
+  `tmerge` and `survcondense` select rows through storage, not value by value
+  (1.3-2x faster).
+- `survreg` likelihood evaluations compute each stratum's scale and its
+  logarithm once, not once per observation.
 - `interaction(..., drop=TRUE)` builds only observed factor combinations,
   avoiding Cartesian products of unused levels while retaining R's level order.
 - Multistate summaries select rows directly from the fitted curve and synthesize

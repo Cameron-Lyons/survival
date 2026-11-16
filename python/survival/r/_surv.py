@@ -402,10 +402,10 @@ class Surv(_SurvivalOperations):
 
         rows = list(indices)
         return Surv._from_normalized(
-            time=[self.time[idx] for idx in rows],
-            event=[self.event[idx] for idx in rows],
-            start=None if self.start is None else [self.start[idx] for idx in rows],
-            time2=None if self.time2 is None else [self.time2[idx] for idx in rows],
+            time=tuple(map(self.time.__getitem__, rows)),
+            event=tuple(map(self.event.__getitem__, rows)),
+            start=None if self.start is None else tuple(map(self.start.__getitem__, rows)),
+            time2=None if self.time2 is None else tuple(map(self.time2.__getitem__, rows)),
             surv_type=self.type,
             states=self.states,
             clabel=self.clabel,
@@ -511,11 +511,21 @@ def is_surv(value: Any = _MISSING, **kwargs: Any) -> bool:
 def _missing_rows(x: Surv | Surv2) -> np.ndarray:
     """``is.na(x)`` as a boolean array: a missing entry in any column of the response."""
 
-    columns = (x.time, x.status) if isinstance(x, Surv2) else (x.start, x.time, x.time2, x.event)
+    columns: tuple[Sequence[Any] | None, ...] = (
+        (x.time, x.status) if isinstance(x, Surv2) else (x.start, x.time, x.time2, x.event)
+    )
     missing = np.zeros(len(x), dtype=bool)
     for column in columns:
-        if column is not None:
-            missing |= np.isnan(np.array(column, dtype=np.float64))
+        if column is None:
+            continue
+        try:
+            # A NaN entry makes the sum NaN, so a sum that is not NaN proves the column
+            # complete; a missing status (None) or inf - inf takes the array scan.
+            if not math.isnan(sum(column)):
+                continue
+        except (TypeError, OverflowError):
+            pass
+        missing |= np.isnan(np.array(column, dtype=np.float64))
     return missing
 
 
@@ -876,8 +886,8 @@ class Surv2(_SurvivalOperations):
 
         rows = list(indices)
         return Surv2._from_normalized(
-            time=[self.time[idx] for idx in rows],
-            status=[self.status[idx] for idx in rows],
+            time=tuple(map(self.time.__getitem__, rows)),
+            status=tuple(map(self.status.__getitem__, rows)),
             states=self.states,
             repeated=self.repeated,
             clabel=self.clabel,

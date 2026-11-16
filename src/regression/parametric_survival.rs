@@ -837,7 +837,8 @@ pub(crate) fn intercept_only_fit(
     }
     let mut coef0 = vec![coef[0]];
     coef0.extend(std::iter::repeat_n(vars, nstrata));
-    let (dg, ddg) = derfun(distribution, response, &yy, |_| vars.exp())?;
+    let sigma = vars.exp();
+    let (dg, ddg) = derfun(distribution, response, &yy, |_| sigma)?;
     let wt: Vec<f64> = ddg.iter().zip(weights).map(|(d, w)| -d * w).collect();
     coef0[0] = (0..n)
         .map(|i| weights[i] * dg[i] + wt[i] * (yy[i] - offset[i]))
@@ -1068,7 +1069,8 @@ pub(crate) fn fit_survreg_engine(
                 }
             };
             let eta: Vec<f64> = yy.iter().zip(&offset).map(|(y, o)| y - o).collect();
-            let (dg, ddg) = derfun(distribution, &response, &yy, |i| vars[strata[i]].exp())?;
+            let sigmas: Vec<f64> = vars.iter().map(|value| value.exp()).collect();
+            let (dg, ddg) = derfun(distribution, &response, &yy, |i| sigmas[strata[i]])?;
             let wt: Vec<f64> = ddg.iter().zip(&weights).map(|(d, w)| -d * w).collect();
             let rhs_weight: Vec<f64> = (0..n)
                 .map(|i| wt[i] * eta[i] + weights[i] * dg[i])
