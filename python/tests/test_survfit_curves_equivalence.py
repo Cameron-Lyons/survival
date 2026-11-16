@@ -39,14 +39,16 @@ def _identical(a, b):
 def _clustered_km_data(last_status, n=3000, seed=6):
     """Hundreds of clusters of mixed sizes, ties, zero weights and a last time at which
     everyone still at risk has ``last_status``, so that the curve (with ``reverse``, the
-    censoring curve for a status of 0) ends at zero.  Times on a grid of 0.01 give each
-    curve enough distinct times for the running sums to replace the dense loop."""
+    censoring curve for a status of 0) ends at zero, or a mix of both statuses for
+    ``None``.  Times on a grid of 0.01 give each curve enough distinct times for the
+    running sums to replace the dense loop."""
 
     rng = np.random.default_rng(seed)
     time = np.round(rng.exponential(1.0, n), 2) + 0.01
     status = rng.integers(0, 2, n)
     last = rng.random(n) < 0.02
-    time[last], status[last] = time.max() + 1.0, last_status
+    time[last] = time.max() + 1.0
+    status[last] = rng.integers(0, 2, last.sum()) if last_status is None else last_status
     cluster = np.where(rng.random(n) < 0.1, 0, rng.integers(1, n // 4, n))
     weights = np.where(rng.random(n) < 0.05, 0.0, rng.uniform(0.5, 2.0, n))
     return pd.DataFrame(
@@ -82,6 +84,26 @@ def test_clustered_robust_variance_matches_the_dense_cluster_loop(options):
     zero = np.array(fast.surv) == 0.0
     assert zero.any() == ("stype" not in options)
     assert _identical(np.array(fast.std_err)[zero].tolist(), np.array(dense.std_err)[zero].tolist())
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_clustered_robust_variance_matches_the_dense_loop_where_the_censoring_curve_runs_out(
+    seed,
+):
+    """A weighted censoring curve whose last time mixes deaths and censorings ends on a
+    survival factor that is the rounding residue of ``n.risk - n.event`` rather than zero.
+    That time takes the dense loop's step, so the standard errors and limits there agree
+    with the dense loop to rounding of their own size, not only of the curve's."""
+
+    data = _clustered_km_data(last_status=None, seed=seed)
+    options = {"cluster": "cl", "weights": "w", "reverse": True}
+    fast = r.survfit("Surv(time, status) ~ g", data=data, **options)
+    dense = r.survfit("Surv(time, status) ~ g", data=data, influence=True, **options)
+    assert _identical(fast.surv, dense.surv)
+    assert (np.array(fast.std_err) != np.array(dense.std_err)).any()
+    for field in ("std_err", "std_chaz", "lower", "upper"):
+        actual, expected = np.array(getattr(fast, field)), np.array(getattr(dense, field))
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=0.0, err_msg=field)
 
 
 ENGINE_FIELDS = (
