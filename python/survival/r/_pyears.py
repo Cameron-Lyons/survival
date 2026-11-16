@@ -25,7 +25,6 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
-    _warn_outside_package,
     _as_character,
     _categories,
     _coerce_array_like,
@@ -41,12 +40,14 @@ from ._coerce import (
     _materialize_labels,
     _normalize_bool_option,
     _normalize_positive_scale,
+    _PLAIN_REALS_OR_BOOL,
     _pop_dotted_keyword,
     _r_factor,
     _r_format_number,
     _rows_of,
     _scalar_or_vector,
     _subset_sequence,
+    _warn_outside_package,
 )
 from ._fit import _excluded_rows, _pad_rows
 from ._formula import (
@@ -425,7 +426,6 @@ def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
     return _match_rate_columns(mf.extra, ratetable).r
 
 
-_PLAIN_NUMBERS = frozenset({float, int, bool})
 _NS_PER_DAY = 86_400_000_000_000
 
 
@@ -496,7 +496,7 @@ def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetable
         elif code > 2:
             days = _timestamp_days(column)
             columns.append([_ratetable_day(value) for value in column] if days is None else days)
-        elif set(map(type, column)) <= _PLAIN_NUMBERS:
+        elif set(map(type, column)) <= _PLAIN_REALS_OR_BOOL:
             columns.append(list(map(float, column)))
         else:
             columns.append([_day_count(value) for value in column])

@@ -19,6 +19,7 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _PLAIN_REALS,
     _categories,
     _coerce_array_like,
     _float_or_nan,
@@ -28,10 +29,10 @@ from ._coerce import (
     _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
-    _missing_flags,
     _normalize_bool_option,
+    _present_values,
+    _r_sorted_levels,
     _scalar_or_vector,
-    _strata_level_sort_key,
     _strata_value_label,
     _warn_outside_package,
 )
@@ -48,9 +49,6 @@ PENALTY_FUNCTIONS = (
 )
 
 _FRAILTY_PREFIX = {"gamma": "gamma", "gaussian": "gauss", "t": "t"}
-
-_PLAIN_NUMBERS = frozenset({float, int})
-_EXACT_INTEGER = 2**53
 
 
 @dataclass(frozen=True)
@@ -205,9 +203,9 @@ def frailty(
         values = _materialize_labels(x, "x")
     except TypeError:
         values = [x]
-    present = {value for value in values if not _is_missing_value(value)}
+    present = _present_values(x, values)
     groups = tuple(
-        sorted(present, key=_strata_level_sort_key)
+        _r_sorted_levels(present)
         if declared is None
         else (level for level in declared if level in present)
     )
@@ -418,9 +416,9 @@ def _fit_frailty(
     """frailty.gamma/gaussian/t: the groups are the levels of ``factor(x)``, their number
     sets the ``sparse`` default and ``length(x)`` the start of the ``df`` search."""
 
-    present = {value for value, missing in zip(x, _missing_flags(x), strict=True) if not missing}
+    present = _present_values(x, x)
     groups = tuple(
-        _sorted_levels(present)
+        _r_sorted_levels(present)
         if levels is None
         else (level for level in levels if level in present)
     )
@@ -447,23 +445,11 @@ def _fit_frailty(
     return _PenaltyDesignTerm(term, (column,), names, penalty, levels=groups)
 
 
-def _sorted_levels(present: set[Any]) -> list[Any]:
-    """*present* in R's level order. Plain floats, and ints of at most 2**53 in
-    magnitude, sort as their exact float values, which is that order, so they
-    need no key per level."""
-
-    if set(map(type, present)) <= _PLAIN_NUMBERS and all(
-        abs(value) <= _EXACT_INTEGER for value in present if type(value) is int
-    ):
-        return sorted(present)
-    return sorted(present, key=_strata_level_sort_key)
-
-
 def _observed(values: Sequence[Any]) -> np.ndarray:
     """``x[!is.na(x)]`` as numbers. Plain Python numbers are missing only when NaN,
     so they convert in one step."""
 
-    if set(map(type, values)) <= _PLAIN_NUMBERS:
+    if set(map(type, values)) <= _PLAIN_REALS:
         array = np.asarray(values, dtype=float)
         return array[~np.isnan(array)]
     return np.asarray(
