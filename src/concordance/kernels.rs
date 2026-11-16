@@ -240,12 +240,32 @@ fn influence_sweep(input: &SweepInput<'_>, ranks: bool) -> SweepOutput {
         i += ndeath;
     }
 
-    let remaining: &[usize] = match input.sort_start {
-        Some(sort1) => &sort1[i2..],
-        None => sort2,
-    };
-    for &ii in remaining {
-        leave_risk_set(&mut imat[ii], trees.walkup_death(x[ii]));
+    // The rows still at risk leave the risk set now.  The death tree is
+    // final, so its sums depend only on the node: once there are at least as
+    // many rows to settle as nodes, one walk per node in node order (a
+    // sequential pass over the tree) beats a random walk per row.
+    match input.sort_start {
+        None => {
+            // Right-censored rows are all still at risk, and `sort_stop` is
+            // a permutation of the rows, so visit them in row order.
+            let walks = trees.death_walkups();
+            for (row, &node) in imat.iter_mut().zip(x) {
+                leave_risk_set(row, walks[node]);
+            }
+        }
+        Some(sort1) => {
+            let remaining = &sort1[i2..];
+            if remaining.len() >= ntree {
+                let walks = trees.death_walkups();
+                for &ii in remaining {
+                    leave_risk_set(&mut imat[ii], walks[x[ii]]);
+                }
+            } else {
+                for &ii in remaining {
+                    leave_risk_set(&mut imat[ii], trees.walkup_death(x[ii]));
+                }
+            }
+        }
     }
     count[3] -= count[4];
     SweepOutput {
@@ -643,12 +663,15 @@ mod tests {
     #[test]
     fn sweep_matches_the_separate_tree_sweep_bit_for_bit() {
         let mut rng = Rng::with_seed(0x00c0_ffee);
+        // Counting-process cases that settle the rows still at risk by
+        // per-node walks and by per-row walks.
+        let mut settled = [0usize; 2];
         for trial in 0..3000 {
             let n = 1 + rng.usize(0..if trial % 10 == 0 { 300 } else { 40 });
             let ntime = 1 + rng.usize(0..n + 2);
             let nx = 1 + rng.usize(0..if trial % 2 == 0 { 3 } else { n + 2 });
             let counting = trial % 3 == 0;
-            let mut stop: Vec<f64> = (0..n).map(|_| (1 + rng.usize(0..ntime)) as f64).collect();
+            let stop: Vec<f64> = (0..n).map(|_| (1 + rng.usize(0..ntime)) as f64).collect();
             let status: Vec<i32> = (0..n).map(|_| i32::from(rng.usize(0..3) != 0)).collect();
             let risk: Vec<f64> = (0..n).map(|_| rng.usize(0..nx) as f64 * 0.37).collect();
             let weight: Vec<f64> = (0..n)
@@ -665,13 +688,6 @@ mod tests {
                     .map(|&s| (s - rng.usize(1..=lag) as f64).max(-1.0))
                     .collect()
             });
-            if let Some(start) = &start {
-                for (s, &a) in stop.iter_mut().zip(start) {
-                    if a >= *s {
-                        *s = a + 1.0;
-                    }
-                }
-            }
             let mut levels = risk.clone();
             levels.sort_by(f64::total_cmp);
             levels.dedup();
@@ -719,6 +735,12 @@ mod tests {
                 sort_start: sort_start.as_deref(),
                 sort_stop: &sort_stop,
             };
+            if let Some(start) = &start {
+                // Rows starting at or after the earliest death time leave
+                // the risk set during the sweep.
+                let still_at_risk = start.iter().filter(|&&entry| entry < etimes[0]).count();
+                settled[usize::from(still_at_risk >= levels.len())] += 1;
+            }
             for (std_err, ranks) in [(true, true), (true, false), (false, true), (false, false)] {
                 assert_same_bits(
                     &concordance_sweep(&input, std_err, ranks),
@@ -727,6 +749,7 @@ mod tests {
                 );
             }
         }
+        assert!(settled.iter().all(|&cases| cases > 50), "{settled:?}");
     }
 
     #[test]

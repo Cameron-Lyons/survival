@@ -233,6 +233,15 @@ impl PairedRankTree {
         (death, risk)
     }
 
+    /// The death tree's walk from every node, in node order.  The walks
+    /// from consecutive nodes share their ancestors, so this streams through
+    /// the tree.
+    pub(crate) fn death_walkups(&self) -> Vec<[f64; 3]> {
+        (0..self.nodes.len())
+            .map(|index| self.walkup_death(index))
+            .collect()
+    }
+
     pub(crate) fn total_risk(&self) -> f64 {
         self.nodes[0].risk_total
     }
@@ -330,9 +339,10 @@ mod tests {
                 }
                 assert_eq!(paired.total_risk().to_bits(), risk.total().to_bits());
             }
-            for index in 0..ntree {
+            for (index, walk) in paired.death_walkups().into_iter().enumerate() {
                 assert_eq!(bits(paired.walkup_risk(index)), bits(risk.walkup(index)));
                 assert_eq!(bits(paired.walkup_death(index)), bits(death.walkup(index)));
+                assert_eq!(bits(walk), bits(death.walkup(index)));
             }
         }
     }
