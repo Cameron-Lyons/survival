@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+mod cluster_rows;
 mod independent;
 
 #[derive(Debug, Clone)]
@@ -861,14 +862,13 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
             } else {
                 ctime - d.t0
             };
-            for (j, se) in se3.iter_mut().enumerate() {
-                let mut temp = 0.0;
-                for (a, &x) in row_mut(ua, j).iter_mut().zip(row(u, j)) {
-                    *a += delta * x;
-                    temp += *a * *a;
-                }
-                *se = temp.sqrt();
-            }
+            cluster_rows::integrate_rows(
+                ua.as_slice_mut().expect("standard layout"),
+                u.as_slice().expect("standard layout"),
+                ngrp,
+                delta,
+                se3,
+            );
             while person1 < nused {
                 let i1 = d.sort1[person1];
                 if d.time1[i1] < ctime {
@@ -951,29 +951,15 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
                         let (j, k) = d.trmat[jk];
                         let haz = ntrans[[i, jk]] / nrisk[[i, j]];
                         let htemp = haz / nrisk[[i, j]];
-                        for (x, &w) in row_mut(c, jk).iter_mut().zip(row(wg, j)) {
-                            if w > 0.0 {
-                                *x -= w * htemp;
-                            }
-                        }
+                        cluster_rows::remove_hazard(row_mut(c, jk), row(wg, j), htemp);
                         if j != k {
                             let (from, to) = rows_mut_pair(u, j, k);
-                            for ((x, y), &w) in from.iter_mut().zip(to).zip(row(wg, j)) {
-                                if w > 0.0 {
-                                    let term = w * phat[j] * htemp;
-                                    *x += term;
-                                    *y -= term;
-                                }
-                            }
+                            cluster_rows::move_hazard(from, to, row(wg, j), phat[j], htemp);
                         }
                     }
                 }
-                for (j, se) in se1.iter_mut().enumerate() {
-                    *se = row(u, j).iter().map(|v| v * v).sum::<f64>().sqrt();
-                }
-                for (jk, se) in se2.iter_mut().enumerate() {
-                    *se = row(c, jk).iter().map(|v| v * v).sum::<f64>().sqrt();
-                }
+                cluster_rows::row_norms(u.as_slice().expect("standard layout"), ngrp, se1);
+                cluster_rows::row_norms(c.as_slice().expect("standard layout"), ngrp, se2);
             }
         }
         if !skip_update {
