@@ -117,12 +117,50 @@ pub(super) fn independent_variance(
     }
 }
 
+/// Largest [`cluster_concentration`] at which [`cluster_variance`] is used.  Its expanded
+/// sums cancel by about that factor, so below it they agree with the dense loop to about
+/// 1e-11 relative; one cluster holding most of the weight would lose several more digits.
+const MAX_CLUSTER_CONCENTRATION: f64 = 1_000.0;
+
 /// Whether [`cluster_variance`] should replace the dense update of every cluster at every
-/// event time: it pays off when `nid x ntime` dwarfs the rows, and its expanded sums are
-/// only free of cancellation with many clusters (a handful of large ones loses digits),
-/// which is also when the dense loop is slow.
-pub(super) fn use_cluster_sums(nid: usize, ntime: usize, nused: usize) -> bool {
-    nid > 64 && (nid as f64) * (ntime as f64) > 32.0 * nused as f64
+/// event time: it pays off when `nid x ntime` dwarfs the rows, which is also when the
+/// dense loop is slow, and its expanded sums are free of cancellation only when no cluster
+/// holds a large share of the weight (a handful of large clusters, or one dominant
+/// cluster, loses digits).  `concentration` is evaluated only when the counts qualify.
+pub(super) fn use_cluster_sums(
+    nid: usize,
+    ntime: usize,
+    nused: usize,
+    concentration: impl FnOnce() -> f64,
+) -> bool {
+    nid > 64
+        && (nid as f64) * (ntime as f64) > 32.0 * nused as f64
+        && concentration() <= MAX_CLUSTER_CONCENTRATION
+}
+
+/// How much grouping rows into clusters inflates their sum of squared weights:
+/// `sum_g W_g^2 / sum_i w_i^2` for the clusters' total weights `W_g`.  It is 1 when every
+/// row is its own cluster and, for equal weights, the mean size of the cluster a random
+/// row belongs to.  `rows` gives each row's cluster code, below `ncodes`, and weight.
+pub(super) fn cluster_concentration(
+    rows: impl Iterator<Item = (usize, f64)> + Clone,
+    ncodes: usize,
+) -> f64 {
+    let scale = rows
+        .clone()
+        .map(|(_, weight)| weight)
+        .fold(0.0_f64, f64::max);
+    if scale == 0.0 {
+        return 1.0;
+    }
+    let mut totals = vec![0.0; ncodes];
+    let mut row_squares = 0.0;
+    for (g, weight) in rows {
+        let weight = weight / scale;
+        totals[g] += weight;
+        row_squares += weight * weight;
+    }
+    totals.iter().map(|total| total * total).sum::<f64>() / row_squares
 }
 
 /// How close to zero the survival factor `f = 1 - hazard` of an event time must be for
@@ -390,7 +428,9 @@ impl ClusterSums {
     /// `sum (W a + E)^2` from the running sums or, when their expansion cancels, cluster by
     /// cluster.
     fn variance(&self, departed: &Departed, a: f64) -> f64 {
-        let squares = a * a * self.weight_weight + departed.value_value;
+        // `a` can pass 1e154 once the weight at risk is that small a share of the largest
+        // weight, while `(a W)^2` stays finite.
+        let squares = (a * self.weight_weight.sqrt()).powi(2) + departed.value_value;
         let variance = squares + 2.0 * a * departed.weight_value;
         if variance >= 1e-6 * squares {
             return variance;

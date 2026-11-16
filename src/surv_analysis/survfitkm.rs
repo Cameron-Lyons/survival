@@ -985,9 +985,12 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             &mut std_chaz,
         );
     } else if summable
-        && data
-            .cluster
-            .is_some_and(|(_, nid)| robust::use_cluster_sums(nid, ntime, nused))
+        && data.cluster.is_some_and(|(cluster, nid)| {
+            robust::use_cluster_sums(nid, ntime, nused, || {
+                let rows = rows.sort2.iter().map(|&row| (cluster[row], data.wt[row]));
+                robust::cluster_concentration(rows, nid)
+            })
+        })
     {
         robust::cluster_variance(
             data,
@@ -2594,21 +2597,103 @@ mod tests {
         }
     }
 
-    /// Every curve of `fit` has enough clusters and times for the running-sum variance.
+    /// Whether every curve of `fit` has enough clusters and times, and balanced enough
+    /// clusters, for the running-sum variance.
+    fn takes_cluster_sums(
+        data: &SurvfitKMData,
+        options: &SurvfitKMOptions,
+        fit: &SurvfitKMResult,
+    ) -> bool {
+        fit.curve_ranges()
+            .into_iter()
+            .enumerate()
+            .all(|(curve, range)| {
+                let code = fit.strata_codes.as_ref().map_or(0, |c| c[curve]);
+                let rows: Vec<usize> = (0..data.time.len())
+                    .filter(|&i| {
+                        data.strata.as_ref().is_none_or(|s| s[i] == code)
+                            && options.start_time.is_none_or(|t| data.time[i] >= t)
+                    })
+                    .collect();
+                let clusters = data.cluster.as_ref().unwrap();
+                let nid = count_unique(rows.iter().map(|&i| clusters[i] as usize));
+                let ncodes = rows
+                    .iter()
+                    .map(|&i| clusters[i] as usize + 1)
+                    .max()
+                    .unwrap_or(0);
+                let weight = |i: usize| data.weights.as_ref().map_or(1.0, |w| w[i]);
+                robust::use_cluster_sums(nid, range.len(), fit.n[curve], || {
+                    let rows = rows.iter().map(|&i| (clusters[i] as usize, weight(i)));
+                    robust::cluster_concentration(rows, ncodes)
+                })
+            })
+    }
+
     fn assert_takes_cluster_sums(
         data: &SurvfitKMData,
         options: &SurvfitKMOptions,
         fit: &SurvfitKMResult,
     ) {
-        for (curve, range) in fit.curve_ranges().into_iter().enumerate() {
-            let code = fit.strata_codes.as_ref().map_or(0, |c| c[curve]);
-            let rows = (0..data.time.len()).filter(|&i| {
-                data.strata.as_ref().is_none_or(|s| s[i] == code)
-                    && options.start_time.is_none_or(|t| data.time[i] >= t)
-            });
+        assert!(takes_cluster_sums(data, options, fit));
+    }
+
+    /// One cluster holds most of the rows and a hundred small ones the rest: the running
+    /// sums would cancel by about the dominant cluster's size, so the dense loop is kept
+    /// and the variance is its own bit for bit.
+    #[test]
+    fn a_dominant_cluster_keeps_the_dense_cluster_loop() {
+        let n = 4000;
+        let mut data = SurvfitKMData::try_new(
+            None,
+            (0..n).map(|i| ((i * 37) % 2003 + 1) as f64).collect(),
+            (0..n)
+                .map(|i: usize| i32::from(!(i % 10).is_multiple_of(3)))
+                .collect(),
+            None,
+            None,
+            None,
+            Some(
+                (0..n)
+                    .map(|i| {
+                        if i % 10 == 0 {
+                            1 + (i / 10 % 100) as i64
+                        } else {
+                            0
+                        }
+                    })
+                    .collect(),
+            ),
+        )
+        .unwrap();
+        for weighted in [false, true] {
+            data.weights = weighted.then(|| (0..n).map(|i| (i % 7 + 1) as f64 / 3.0).collect());
+            let options = SurvfitKMOptions::default();
+            let fast = survfitkm(&data, &options).unwrap();
+            let dense = survfitkm(
+                &data,
+                &SurvfitKMOptions {
+                    influence: InfluenceRequest::Both,
+                    ..options.clone()
+                },
+            )
+            .unwrap();
             let clusters = data.cluster.as_ref().unwrap();
-            let nid = count_unique(rows.map(|i| clusters[i] as usize));
-            assert!(robust::use_cluster_sums(nid, range.len(), fit.n[curve]));
+            let nid = count_unique(clusters.iter().map(|&c| c as usize));
+            assert!(
+                nid > 64 && nid * fast.time.len() > 32 * n,
+                "the counts qualify"
+            );
+            assert!(!takes_cluster_sums(&data, &options, &fast));
+            for (actual, expected) in [
+                (&fast.std_err, &dense.std_err),
+                (&fast.std_chaz, &dense.std_chaz),
+            ] {
+                let bits = |v: &Option<Vec<f64>>| -> Vec<u64> {
+                    v.as_ref().unwrap().iter().map(|x| x.to_bits()).collect()
+                };
+                assert_eq!(bits(actual), bits(expected), "weighted={weighted}");
+            }
         }
     }
 
@@ -2807,10 +2892,33 @@ mod tests {
     }
 
     #[test]
-    fn cluster_sums_need_many_clusters_and_times() {
-        assert!(!robust::use_cluster_sums(64, 10_000, 100));
-        assert!(!robust::use_cluster_sums(1000, 10, 1000));
-        assert!(robust::use_cluster_sums(65, 1000, 2000));
+    fn cluster_sums_need_many_balanced_clusters_and_times() {
+        let balanced = || 1.0;
+        assert!(!robust::use_cluster_sums(64, 10_000, 100, balanced));
+        assert!(!robust::use_cluster_sums(1000, 10, 1000, balanced));
+        assert!(robust::use_cluster_sums(65, 1000, 2000, balanced));
+        assert!(robust::use_cluster_sums(65, 1000, 2000, || 1_000.0));
+        assert!(!robust::use_cluster_sums(65, 1000, 2000, || 1_001.0));
+        assert!(!robust::use_cluster_sums(65, 1000, 2000, || f64::NAN));
+        assert!(!robust::use_cluster_sums(64, 10_000, 100, || {
+            unreachable!("the counts decide first")
+        }));
+    }
+
+    #[test]
+    fn cluster_concentration_is_the_size_biased_cluster_weight() {
+        let singletons = (0..5).map(|g| (g, 2.0));
+        assert_eq!(robust::cluster_concentration(singletons, 5), 1.0);
+        let pairs = (0..6).map(|i| (i / 2, 1.0));
+        assert_eq!(robust::cluster_concentration(pairs, 3), 2.0);
+        let dominant = (0..10).map(|i| (usize::from(i >= 9), 1.0));
+        assert_eq!(robust::cluster_concentration(dominant, 2), 8.2);
+        let tiny = (0..6).map(|i| (i / 2, 1e-300));
+        assert_eq!(robust::cluster_concentration(tiny, 3), 2.0);
+        assert_eq!(
+            robust::cluster_concentration((0..3).map(|g| (g, 0.0)), 3),
+            1.0
+        );
     }
 
     #[test]
