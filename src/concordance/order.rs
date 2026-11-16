@@ -8,17 +8,13 @@
 //! cache.
 
 use crate::concordance::rank_tree::btree;
+use crate::core::time_order::total_order_key;
 use std::ops::Range;
 
 /// Maps a non-NaN value to an integer of the same order, with `-0.0` and
 /// `0.0` equal as they are under `==`.
 fn ordered_bits(value: f64) -> u64 {
-    let bits = if value == 0.0 { 0 } else { value.to_bits() };
-    if bits >> 63 == 1 {
-        !bits
-    } else {
-        bits | 1 << 63
-    }
+    total_order_key(if value == 0.0 { 0.0 } else { value })
 }
 
 /// Each row's predictor value as its position among the sorted unique
