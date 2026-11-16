@@ -270,7 +270,14 @@ def _normalize_na_action(na_action: str | None) -> str:
 
 
 def _is_missing_value(value: Any) -> bool:
-    if value is None or type(value).__name__ in {"NAType", "NaTType"}:
+    # Exact Python scalars first: a float is missing only as NaN, and an int, a string or
+    # a bool never is. Subclasses and numpy scalars take the general test below.
+    value_type = type(value)
+    if value_type is float:
+        return value != value
+    if value_type is int or value_type is str or value_type is bool:
+        return False
+    if value is None or value_type.__name__ in {"NAType", "NaTType"}:
         return True
     if isinstance(value, np.ma.MaskedArray) and value.size == 1 and np.ma.is_masked(value):
         return True
