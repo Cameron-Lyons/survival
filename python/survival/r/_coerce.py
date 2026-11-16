@@ -365,9 +365,31 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
     return array
 
 
+def _datetime_missing_mask(values: Any) -> Any | None:
+    """``NaT`` flags of a one-dimensional datetime or timedelta array, Series or Index,
+    else ``None``.
+
+    ``NaT`` is the only missing value these dtypes hold, so the flags equal the
+    per-element scan, which would first build a ``Timestamp`` for every row.
+    """
+
+    kind = getattr(getattr(values, "dtype", None), "kind", None)
+    if kind not in ("M", "m") or getattr(values, "ndim", None) != 1:
+        return None
+    if isinstance(values, np.ma.MaskedArray):
+        return None
+    return values.isna() if hasattr(values, "isna") else np.isnat(values)
+
+
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
+        nat = _datetime_missing_mask(values)
+        if nat is not None:
+            if len(values) != n:
+                raise ValueError(f"{name} must have length {n}")
+            missing.update(np.flatnonzero(np.asarray(nat)).tolist())
+            continue
         array = _numeric_ndarray(values)
         if array is None:
             array = _numeric_ndarray(values, ndim=2)
