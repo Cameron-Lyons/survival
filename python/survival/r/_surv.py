@@ -651,25 +651,24 @@ def _apply_surv_na_action(
 
 def _survreg_response_arrays(
     response: Surv,
-) -> tuple[list[float], list[float], list[float] | None]:
-    """R's ``survreg`` response columns: time, status code and (interval data) time2."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """R's ``survreg`` response columns: time, status code and (interval data) time2.
 
-    if None in response.event:
-        raise ValueError("missing values in the response")
+    The columns are float64 and int32 arrays, which the native fit reads without a
+    per-element conversion; a missing (``None``) status cannot be stored as int32.
+    """
+
+    try:
+        event = np.fromiter(response.event, np.int32, count=len(response))
+    except TypeError:
+        raise ValueError("missing values in the response") from None
+    time = np.fromiter(response.time, np.float64, count=len(response))
     if response.type == "right":
-        return list(response.time), [float(value or 0) for value in response.event], None
+        return time, event, None
     if response.type == "left":
-        return (
-            list(response.time),
-            [1.0 if value == 1 else 2.0 for value in response.event],
-            None,
-        )
+        return time, np.where(event == 1, 1, 2).astype(np.int32), None
     if response.type == "interval":
-        return (
-            list(response.time),
-            [float(value or 0) for value in response.event],
-            list(response.time2 or ()),
-        )
+        return time, event, np.fromiter(response.time2 or (), np.float64)
     raise NotImplementedError("survreg supports right, left, and interval Surv responses")
 
 

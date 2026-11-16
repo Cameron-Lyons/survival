@@ -825,7 +825,7 @@ def survreg(
     )
     data_value = _core.SurvregData(
         time,
-        [int(code) for code in status],
+        status,
         frame.x,
         time2=time2,
         weights=frame.weights,
