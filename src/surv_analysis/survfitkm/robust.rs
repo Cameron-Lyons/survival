@@ -35,6 +35,18 @@ pub(super) fn hazard_influence_terms(
     }
 }
 
+/// Whether `row` has left the risk set by the event time `time`: it ended earlier or, for
+/// the censoring curve (`reverse`), it died then, a death coming before a censoring it ties.
+fn left_before(data: &KernelData<'_>, reverse: bool, row: usize, time: f64) -> bool {
+    data.time2[row] < time || (reverse && data.time2[row] == time && data.status[row] == 1)
+}
+
+/// Whether `row`, ending at an event time, has the curve's event: a death or, for the
+/// censoring curve (`reverse`), a censoring.
+fn has_event(data: &KernelData<'_>, reverse: bool, row: usize) -> bool {
+    (data.status[row] == 0) == reverse
+}
+
 pub(super) fn independent_variance(
     data: &KernelData<'_>,
     rows: &CurveRows,
@@ -65,14 +77,8 @@ pub(super) fn independent_variance(
     let (mut var_surv, mut var_chaz) = (0.0_f64, 0.0_f64);
     let mut km = 1.0;
     for (i, &time) in times.iter().enumerate() {
-        while person < order.len() {
-            let row = order[person];
-            if !(data.time2[row] < time
-                || (options.reverse && data.time2[row] == time && data.status[row] == 1))
-            {
-                break;
-            }
-            let weight = data.wt[row] / scale;
+        while person < order.len() && left_before(data, options.reverse, order[person], time) {
+            let weight = data.wt[order[person]] / scale;
             departed_surv += (weight * a_surv).powi(2);
             departed_chaz += (weight * a_chaz).powi(2);
             person += 1;
@@ -92,7 +98,7 @@ pub(super) fn independent_variance(
             while person < order.len() && data.time2[order[person]] <= time {
                 let row = order[person];
                 let weight = data.wt[row] / scale;
-                let event = (data.status[row] == 0) == options.reverse;
+                let event = has_event(data, options.reverse, row);
                 let surv = a_surv - if event { km / nrisk } else { 0.0 };
                 let chaz = a_chaz + if event { event_derivative } else { 0.0 };
                 departed_surv += (weight * surv).powi(2);
@@ -160,13 +166,8 @@ pub(super) fn cluster_variance(
     let (mut var_surv, mut var_chaz) = (0.0_f64, 0.0_f64);
     let mut km = 1.0;
     for (i, &time) in times.iter().enumerate() {
-        while person < order.len() {
+        while person < order.len() && left_before(data, options.reverse, order[person], time) {
             let row = order[person];
-            if !(data.time2[row] < time
-                || (options.reverse && data.time2[row] == time && data.status[row] == 1))
-            {
-                break;
-            }
             sums.depart(cluster[row], data.wt[row], [a_surv, a_chaz], [0.0, 0.0]);
             person += 1;
         }
@@ -186,7 +187,7 @@ pub(super) fn cluster_variance(
             while person < order.len() && data.time2[order[person]] <= time {
                 let row = order[person];
                 let g = cluster[row];
-                let event = (data.status[row] == 0) == options.reverse;
+                let event = has_event(data, options.reverse, row);
                 if event && let Some(dense) = &mut dense_surv {
                     dense[g] -= km * data.wt[row] / nrisk;
                 }
