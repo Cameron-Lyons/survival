@@ -18,6 +18,7 @@ use crate::internal::validation::{
 };
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1250,20 +1251,29 @@ pub fn survfitaj(
         i0: Option<Array2<f64>>,
         fit: AJCurveFit,
     }
-    let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
-    let mut c2 = vec![0usize; n];
-    let mut is_atrisk = vec![false; n];
-    let mut renumbering = SubsetRenumbering::new(n_clusters);
-    let mut row_offset = 0;
     let single = n_curves == 1;
     let min_start = (counting && p0_common.is_none())
         .then(|| time1.iter().copied().fold(f64::INFINITY, f64::min));
+    let mut c2 = vec![0usize; n];
+    let mut renumbering = SubsetRenumbering::new(n_clusters);
+    let mut planned = Vec::with_capacity(n_curves);
+    let mut row_offset = 0;
     for (&code, keep) in strata_levels.iter().zip(rows_by_curve(&x, n_curves)) {
         let curve_offset = row_offset;
         row_offset += keep.len();
         if keep.is_empty() {
             continue;
         }
+        let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| cluster[i]));
+        for (&i, code) in keep.iter().zip(renumbered) {
+            c2[i] = code;
+        }
+        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
+        planned.push((code, keep, curve_offset, clusters));
+    }
+    // A curve reads only its own rows of `c2`, so the curves are fitted in parallel once
+    // every curve's clusters are numbered.
+    let fit_curve = |(code, keep, curve_offset, clusters): (i32, Vec<usize>, usize, Vec<i64>)| {
         let sort1 = ordered_subset(&keep, &time1, single);
         let sort2 = ordered_subset(&keep, &time, single);
         // Read in time order, so that sorting only merges the two sorted runs.
@@ -1289,12 +1299,7 @@ pub fn survfitaj(
         } else {
             utime.into_iter().filter(|&t| t >= t0).collect()
         };
-        let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| cluster[i]));
-        for (&i, code) in keep.iter().zip(renumbered) {
-            c2[i] = code;
-        }
-        let nclust = unique.len();
-        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
+        let nclust = clusters.len();
         let n_id = {
             let mut ids: Vec<usize> = keep.iter().map(|&i| id[i]).collect();
             ids.sort_unstable();
@@ -1335,21 +1340,17 @@ pub fn survfitaj(
                     *value /= wtsum;
                 }
                 if p00.iter().all(|&p| p < 1.0) && sefit > 0 {
-                    for &i in &atrisk {
-                        is_atrisk[i] = true;
-                    }
+                    // R reads the at-risk flag, weight and state at the curve's offset into
+                    // the data rather than at the curve's own row; `atrisk` is sorted.
                     for (k, &curve_row) in keep.iter().enumerate() {
                         let row = curve_offset + k;
-                        if !is_atrisk[row] {
+                        if atrisk.binary_search(&row).is_err() {
                             continue;
                         }
                         for j in 0..nstate {
                             let indicator = if istate[row] == j { 1.0 } else { 0.0 };
                             u0[[c2[curve_row], j]] += weights[row] * (indicator - p00[j]) / wtsum;
                         }
-                    }
-                    for &i in &atrisk {
-                        is_atrisk[i] = false;
                     }
                     sd0 = Some(
                         (0..nstate)
@@ -1383,7 +1384,7 @@ pub fn survfitaj(
             t0,
         };
         let fit = aj_kernel(&kernel_data);
-        curves.push(Curve {
+        Ok(Curve {
             code,
             n: keep.len(),
             n_id,
@@ -1393,8 +1394,14 @@ pub fn survfitaj(
             clusters,
             i0: has_i0.then_some(u0),
             fit,
-        });
-    }
+        })
+    };
+    let curves: SurvivalResult<Vec<Curve>> = if planned.len() > 1 {
+        planned.into_par_iter().map(fit_curve).collect()
+    } else {
+        planned.into_iter().map(fit_curve).collect()
+    };
+    let curves = curves?;
 
     let total: usize = curves.iter().map(|c| c.utime.len()).sum();
     let addcounts = weights.iter().any(|&w| w != 1.0);

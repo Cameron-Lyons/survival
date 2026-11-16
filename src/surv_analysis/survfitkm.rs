@@ -1266,13 +1266,6 @@ pub fn survfitkm(
         entry,
     };
     let n_curves = strata_levels.len();
-    let mut n_used = vec![0usize; n_curves];
-    let mut n_id = has_id.then(|| vec![0usize; n_curves]);
-    let mut fits: Vec<(usize, CurveFit, Vec<i64>)> = Vec::with_capacity(n_curves);
-    let mut ctemp = vec![0usize; n];
-    let mut renumbering = cluster
-        .as_ref()
-        .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
     let inputs = curve_inputs(
         &x,
         n_curves,
@@ -1281,36 +1274,58 @@ pub fn survfitkm(
         &status,
         options.reverse,
     );
+    let n_used: Vec<usize> = inputs.iter().map(|input| input.keep.len()).collect();
+    let mut n_id = has_id.then(|| vec![0usize; n_curves]);
+    let mut ctemp = vec![0usize; n];
+    let mut renumbering = cluster
+        .as_ref()
+        .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
+    let mut curves = Vec::with_capacity(n_curves);
     for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
-        n_used[curve] = keep.len();
         if keep.is_empty() {
             continue;
         }
         if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
             n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
         }
-        let (kernel_cluster, curve_clusters) = match (&cluster, &mut renumbering) {
+        let curve_clusters = match (&cluster, &mut renumbering) {
             (Some((codes, labels)), Some(renumbering)) => {
                 let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| codes[i]));
                 for (&i, code) in keep.iter().zip(renumbered) {
                     ctemp[i] = code;
                 }
-                let names = unique.iter().map(|&code| labels[code]).collect();
-                (Some((ctemp.as_slice(), unique.len())), names)
+                Some(
+                    unique
+                        .iter()
+                        .map(|&code| labels[code])
+                        .collect::<Vec<i64>>(),
+                )
             }
-            _ => (None, Vec::new()),
+            _ => None,
         };
+        curves.push((curve, rows, curve_clusters));
+    }
+    // A curve's kernel reads only its own rows of `ctemp`, so the curves are fitted in
+    // parallel once every curve's clusters are numbered.
+    let fit_curve = |(curve, rows, curve_clusters): (usize, CurveRows, Option<Vec<i64>>)| {
         let kernel_data = KernelData {
             time1: start.as_deref(),
             time2: &time,
             status: &status,
             wt: &weights,
             position: &position,
-            cluster: kernel_cluster,
+            cluster: curve_clusters
+                .as_ref()
+                .map(|names| (ctemp.as_slice(), names.len())),
         };
         let fit = kernel(&kernel_data, &rows, kernel_options);
-        fits.push((curve, fit, curve_clusters));
-    }
+        (curve, fit, curve_clusters.unwrap_or_default())
+    };
+    let fits: Vec<(usize, CurveFit, Vec<i64>)> = if curves.len() > 1 {
+        curves.into_par_iter().map(fit_curve).collect()
+    } else {
+        curves.into_iter().map(fit_curve).collect()
+    };
 
     let total: usize = fits.iter().map(|(_, fit, _)| fit.time.len()).sum();
     let mut result = SurvfitKMResult {
