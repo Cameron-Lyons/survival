@@ -610,6 +610,8 @@ fn row_at_risk(start: Option<&[f64]>, stop: &[f64], idx: usize, time: f64) -> bo
 /// weight and residual, so with a finite, nonzero risk and finite moments each of its
 /// influence and test contributions is a signed zero, which leaves every sum (seeded
 /// with +0 and never -0) unchanged. Otherwise its contributions carry NaN and are kept.
+/// The row's own `x - mean` stays finite too: covariates are validated finite, and a
+/// mean far enough from them to overflow would leave the moment without variance.
 fn outside_rows_add_zero(moment: &RiskMoment) -> bool {
     moment.risk != 0.0
         && moment.risk.is_finite()

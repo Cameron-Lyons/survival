@@ -9,10 +9,10 @@ use std::ops::Range;
 
 /// Below this many subject-time steps the walk stays on the calling thread.
 const PARALLEL_WORK_THRESHOLD: usize = 32_768;
-/// Bytes of per-subject increments held while one block of subjects is walked.
+/// Bytes of per-subject increments a block of subjects may hold while it is walked.
+/// A subject holds two values per output time, so beyond 2^19 output times a block is
+/// one subject, whose walk is long enough to run alone.
 const BLOCK_SCRATCH_BYTES: usize = 16 << 20;
-/// Fewest subjects walked together, however many output times there are.
-const MIN_BLOCK_SUBJECTS: usize = 64;
 
 struct Pyears3bOutput {
     surv: Array2<f64>,
@@ -152,8 +152,7 @@ fn pyears3b(
     times: &[f64],
     n_groups: usize,
 ) -> Pyears3bOutput {
-    let block =
-        (BLOCK_SCRATCH_BYTES / (2 * size_of::<f64>() * times.len().max(1))).max(MIN_BLOCK_SUBJECTS);
+    let block = (BLOCK_SCRATCH_BYTES / (2 * size_of::<f64>() * times.len().max(1))).max(1);
     pyears3b_in_blocks(conditional, table, rates, subjects, times, n_groups, block)
 }
 
