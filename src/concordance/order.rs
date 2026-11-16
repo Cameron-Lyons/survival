@@ -1,11 +1,14 @@
 //! The orderings the concordance sweep runs over: each predictor's rank among
-//! its unique values.
+//! its unique values, and the rows in sweep order (R's
+//! `order(-y[, 1], y[, 2], risk)`).
 //!
-//! They sort contiguous integer keys rather than searching or comparing
-//! through the data, whose random loads dominate once the data outgrow the
+//! Both sort contiguous integer keys rather than row indices compared through
+//! the data: an indirect comparison loads the stop time, status and predictor
+//! of two random rows, which dominates the sort once the data outgrow the
 //! cache.
 
 use crate::concordance::rank_tree::btree;
+use std::ops::Range;
 
 /// Maps a non-NaN value to an integer of the same order, with `-0.0` and
 /// `0.0` equal as they are under `==`.
@@ -51,6 +54,101 @@ impl PredictorRanks {
         let tree = btree(self.levels);
         self.rank.iter().map(|&rank| tree[rank]).collect()
     }
+}
+
+/// Rows past this count cannot pack their rank and index into the low 64
+/// bits of a sort key.
+const PACKED_ROWS: usize = 1 << 31;
+
+/// The rows in sweep order (descending stop time, censored rows before
+/// deaths at each time, then ascending predictor rank, ties in row order),
+/// with the runs of two or more rows that share a stop time and status.
+/// Later predictors re-sort only within those runs.
+pub(crate) fn sweep_order(
+    stop: &[f64],
+    status: &[i32],
+    rank: &[usize],
+) -> (Vec<usize>, Vec<Range<usize>>) {
+    if stop.len() < PACKED_ROWS {
+        packed_sweep_order(stop, status, rank)
+    } else {
+        compared_sweep_order(stop, status, rank)
+    }
+}
+
+/// One `u128` key per row: the reversed stop time, the status, the rank and
+/// the row, so that an unstable sort of the distinct keys reproduces the
+/// stable sort.
+fn packed_sweep_order(
+    stop: &[f64],
+    status: &[i32],
+    rank: &[usize],
+) -> (Vec<usize>, Vec<Range<usize>>) {
+    let mut keys: Vec<u128> = (0..stop.len())
+        .map(|row| {
+            u128::from(!ordered_bits(stop[row])) << 64
+                | u128::from(status[row] == 1) << 63
+                | (rank[row] as u128) << 32
+                | row as u128
+        })
+        .collect();
+    keys.sort_unstable();
+    let ties = runs(keys.len(), |a, b| keys[a] >> 63 == keys[b] >> 63);
+    (keys.iter().map(|&key| key as u32 as usize).collect(), ties)
+}
+
+fn compared_sweep_order(
+    stop: &[f64],
+    status: &[i32],
+    rank: &[usize],
+) -> (Vec<usize>, Vec<Range<usize>>) {
+    let mut order: Vec<usize> = (0..stop.len()).collect();
+    // Stop times are finite or infinite, never NaN.
+    order.sort_by(|&a, &b| {
+        stop[b]
+            .partial_cmp(&stop[a])
+            .unwrap()
+            .then_with(|| status[a].cmp(&status[b]))
+            .then_with(|| rank[a].cmp(&rank[b]))
+    });
+    let ties = runs(order.len(), |a, b| {
+        stop[order[a]] == stop[order[b]] && status[order[a]] == status[order[b]]
+    });
+    (order, ties)
+}
+
+/// The runs of two or more consecutive positions that `same` groups with
+/// the run's first position.
+fn runs(n: usize, same: impl Fn(usize, usize) -> bool) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
+    let mut first = 0;
+    while first < n {
+        let mut end = first + 1;
+        while end < n && same(first, end) {
+            end += 1;
+        }
+        if end - first > 1 {
+            runs.push(first..end);
+        }
+        first = end;
+    }
+    runs
+}
+
+/// The sweep order for another predictor: each run of `ties` re-sorted by
+/// that predictor's rank, ties in row order.
+pub(crate) fn resort_ties(order: &[usize], ties: &[Range<usize>], rank: &[usize]) -> Vec<usize> {
+    let mut order = order.to_vec();
+    let mut keyed: Vec<(usize, usize)> = Vec::new();
+    for run in ties {
+        keyed.clear();
+        keyed.extend(order[run.clone()].iter().map(|&row| (rank[row], row)));
+        keyed.sort_unstable();
+        for (slot, &(_, row)) in order[run.clone()].iter_mut().zip(&keyed) {
+            *slot = row;
+        }
+    }
+    order
 }
 
 #[cfg(test)]
@@ -103,6 +201,51 @@ mod tests {
         }
     }
 
+    /// prepare_stratum's order before packed keys: a stable sort comparing
+    /// the rows' values.
+    fn compared_order(stop: &[f64], status: &[i32], risk: &[f64]) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..stop.len()).collect();
+        order.sort_by(|&a, &b| {
+            stop[b]
+                .partial_cmp(&stop[a])
+                .unwrap()
+                .then_with(|| status[a].cmp(&status[b]))
+                .then_with(|| risk[a].partial_cmp(&risk[b]).unwrap())
+        });
+        order
+    }
+
+    fn compared_ties(stop: &[f64], status: &[i32], order: &[usize]) -> Vec<Range<usize>> {
+        let n = order.len();
+        let mut ties = Vec::new();
+        let mut first = 0;
+        while first < n {
+            let row = order[first];
+            let mut end = first + 1;
+            while end < n && stop[row] == stop[order[end]] && status[row] == status[order[end]] {
+                end += 1;
+            }
+            if end - first > 1 {
+                ties.push(first..end);
+            }
+            first = end;
+        }
+        ties
+    }
+
+    fn compared_resort(order: &[usize], ties: &[Range<usize>], risk: &[f64]) -> Vec<usize> {
+        let mut order = order.to_vec();
+        for group in ties {
+            order[group.clone()].sort_unstable_by(|&a, &b| {
+                risk[a]
+                    .partial_cmp(&risk[b])
+                    .unwrap()
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+        order
+    }
+
     fn draw(rng: &mut Rng, kind: usize) -> f64 {
         match kind {
             0 => [0.0, -0.0, 1.0, -1.0, 2.0, 0.5][rng.usize(0..6)],
@@ -113,20 +256,35 @@ mod tests {
     }
 
     #[test]
-    fn keyed_ranks_match_searched_levels() {
+    fn keyed_orders_match_compared_sorts() {
         let mut rng = Rng::with_seed(0x0dd_ba11);
         for trial in 0..4000 {
             let n = rng.usize(0..40) + if trial % 50 == 0 { 2000 } else { 0 };
-            let kind = rng.usize(0..4);
-            let risk: Vec<f64> = (0..n)
-                .map(|_| {
-                    let value = draw(&mut rng, kind);
-                    if value.is_finite() { value } else { -0.0 }
-                })
-                .collect();
+            let (stop_kind, risk_kind, other_kind) =
+                (rng.usize(0..4), rng.usize(0..4), rng.usize(0..4));
+            let stop: Vec<f64> = (0..n).map(|_| draw(&mut rng, stop_kind)).collect();
+            let status: Vec<i32> = (0..n).map(|_| i32::from(rng.bool())).collect();
+            let finite = |rng: &mut Rng, kind| {
+                let value = draw(rng, kind);
+                if value.is_finite() { value } else { -0.0 }
+            };
+            let risk: Vec<f64> = (0..n).map(|_| finite(&mut rng, risk_kind)).collect();
+            let other: Vec<f64> = (0..n).map(|_| finite(&mut rng, other_kind)).collect();
+
+            let ranks = PredictorRanks::new(&risk);
+            assert_eq!(ranks, searched_ranks(&risk), "trial {trial}");
+            let other_ranks = PredictorRanks::new(&other);
+            assert_eq!(other_ranks, searched_ranks(&other), "trial {trial}");
+
+            let order = compared_order(&stop, &status, &risk);
+            let ties = compared_ties(&stop, &status, &order);
+            let expected = (order.clone(), ties.clone());
+            assert_eq!(sweep_order(&stop, &status, &ranks.rank), expected);
+            assert_eq!(packed_sweep_order(&stop, &status, &ranks.rank), expected);
+            assert_eq!(compared_sweep_order(&stop, &status, &ranks.rank), expected);
             assert_eq!(
-                PredictorRanks::new(&risk),
-                searched_ranks(&risk),
+                resort_ties(&order, &ties, &other_ranks.rank),
+                compared_resort(&order, &ties, &other),
                 "trial {trial}"
             );
         }
