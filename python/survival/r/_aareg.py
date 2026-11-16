@@ -96,6 +96,7 @@ def aareg(
         test=test_name,
     )
     coefficient_names = ["Intercept", *frame.names]
+    # The getter builds new lists, so the reordered influences are stored without a copy.
     influences = raw.dfbeta
     if influences is not None:
         order = sorted(range(len(response.time)), key=lambda i: (response.time[i], -events[i]))
@@ -113,11 +114,7 @@ def aareg(
         test_variance=[list(row) for row in raw.test_variance],
         test=str(raw.test),
         time_weights=[list(row) for row in raw.time_weights],
-        dfbeta=(
-            None
-            if influences is None
-            else [[list(values) for values in rows] for rows in influences]
-        ),
+        dfbeta=influences,
         robust_test_variance=(
             None
             if raw.robust_test_variance is None

@@ -33,10 +33,11 @@ from ._coerce import (
     _mstate_categories,
     _normalize_na_action,
     _numeric_ndarray,
+    _present_values,
     _r_factor,
+    _r_sorted_levels,
     _RFactorVector,
     _rows_of,
-    _strata_level_sort_key,
     _strata_value_label,
     _subset_indices,
     _subset_optional_sequence,
@@ -2556,7 +2557,7 @@ def _single_design_columns(
                     for row, penalty_value in zip(kept, source, strict=True):
                         target[row] = penalty_value
                 return result
-        return penalty_columns(spec, penalty_values)
+        return penalty_columns(spec, penalty_values, as_arrays=as_arrays)
     if isinstance(spec, _NumericDesignTerm):
         term = spec.term
         if as_arrays and not (
@@ -3317,14 +3318,14 @@ def _strata_argument_values(data: Any, term: _CovariateTerm, n: int) -> Any:
                 values = ["NaN" if i in created else value for i, value in enumerate(values)]
     if term.categorical_wrapper is not None:
         materialized = _materialize_1d(values, term.column)
-        present = {value for value in materialized if not _is_missing_value(value)}
+        present = _present_values(values, materialized)
         declared = _mstate_categories(values)
         if term.categorical_wrapper == "as.factor" and declared is not None:
             return values
         levels = (
             [level for level in declared if level in present]
             if declared is not None
-            else sorted(present, key=_strata_level_sort_key)
+            else _r_sorted_levels(present)
         )
         return _r_factor(materialized, levels)
     return values

@@ -3,7 +3,16 @@ use super::pystep::{PystepTable, pystep_cell};
 use super::ratetable::RateTable;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{validate_finite, validate_length, validate_non_negative};
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView1};
+use rayon::prelude::*;
+use std::ops::Range;
+
+/// Below this many subject-time steps the walk stays on the calling thread.
+const PARALLEL_WORK_THRESHOLD: usize = 32_768;
+/// Bytes of per-subject increments a block of subjects may hold while it is walked.
+/// A subject holds two values per output time, so beyond 2^19 output times a block is
+/// one subject, whose walk is long enough to run alone.
+const BLOCK_SCRATCH_BYTES: usize = 16 << 20;
 
 struct Pyears3bOutput {
     surv: Array2<f64>,
@@ -16,6 +25,125 @@ struct Pyears3bSubjects<'a> {
     y: &'a [f64],
 }
 
+/// One subject's terms of the expected-survival (`esurv`) and weight (`wvec`) sums,
+/// one per output time it reaches. At a zero output time they are the constants
+/// R's `pyears3b` assigns instead of adding.
+struct SubjectIncrements<'a> {
+    esurv: &'a mut [f64],
+    wvec: &'a mut [f64],
+}
+
+/// R's `pyears3b` walk of one subject, entering the rate table at `start` and
+/// followed for `y`, through the output `times`; `data2` and `limits` are scratch.
+/// Returns how many output times the subject reaches.
+#[allow(clippy::too_many_arguments)]
+fn walk_subject(
+    conditional: bool,
+    table: &PystepTable<'_>,
+    rates: &[f64],
+    start: ArrayView1<'_, f64>,
+    y: f64,
+    times: &[f64],
+    increments: SubjectIncrements<'_>,
+    data2: &mut [f64],
+    limits: &mut [f64],
+) -> usize {
+    for (value, &position) in data2.iter_mut().zip(start) {
+        *value = position;
+    }
+    let mut cell_rate = 0.0;
+    let mut cell_left = 0.0;
+    let mut cumhaz: f64 = 0.0;
+    let mut survival = 1.0;
+    let mut timeleft = y;
+    let mut time = 0.0;
+
+    for (j, &output_time) in times.iter().enumerate() {
+        if timeleft <= 0.0 {
+            return j;
+        }
+        let thiscell = (output_time - time).min(timeleft);
+
+        let mut etime = thiscell;
+        let mut hazard = 0.0;
+        while etime > 0.0 {
+            if cell_left <= 0.0 {
+                let cell = pystep_cell(table, data2, limits);
+                cell_rate = rates[cell.index.unwrap_or(0)];
+                cell_left = cell.time;
+            }
+            let dt = etime.min(cell_left);
+            hazard += dt * cell_rate;
+            cell_left = f64::INFINITY;
+            for ((value, &limit), &factor) in data2.iter_mut().zip(&*limits).zip(table.factors) {
+                if factor != 1 {
+                    *value += dt;
+                    cell_left = cell_left.min(limit - *value);
+                }
+            }
+            etime -= dt;
+        }
+        if output_time == 0.0 {
+            increments.wvec[j] = 1.0;
+            increments.esurv[j] = if conditional { 0.0 } else { 1.0 };
+        } else if conditional {
+            increments.esurv[j] = hazard * thiscell;
+            increments.wvec[j] = thiscell;
+        } else {
+            let next = (-(cumhaz + hazard)).exp();
+            increments.esurv[j] = next * thiscell;
+            increments.wvec[j] = survival * thiscell;
+            survival = next;
+        }
+        cumhaz += hazard;
+        time += thiscell;
+        timeleft -= thiscell;
+    }
+    times.len()
+}
+
+/// The walked terms of one block of subjects, `times.len()` slots per subject.
+struct BlockIncrements<'a> {
+    group: &'a [usize],
+    esurv: &'a [f64],
+    wvec: &'a [f64],
+    reached: &'a [usize],
+}
+
+/// Adds a block's terms to the output rows `rows`, held row-major over `n_groups`
+/// groups in `esurv`, `wvec` and `nsurv`. Subjects are taken in data order, so each
+/// sum receives its terms in the order of R's sequential loop.
+fn add_block(
+    block: &BlockIncrements<'_>,
+    times: &[f64],
+    rows: Range<usize>,
+    n_groups: usize,
+    esurv: &mut [f64],
+    wvec: &mut [f64],
+    nsurv: &mut [usize],
+) {
+    let ntime = times.len();
+    for (k, (&g, &reached)) in block.group.iter().zip(block.reached).enumerate() {
+        let end = reached.clamp(rows.start, rows.end);
+        let terms = k * ntime + rows.start..k * ntime + end;
+        let row_terms = times[rows.start..end]
+            .iter()
+            .zip(&block.esurv[terms.clone()])
+            .zip(&block.wvec[terms]);
+        for (offset, ((&time, &esurv_term), &wvec_term)) in row_terms.enumerate() {
+            let cell = offset * n_groups + g;
+            if time == 0.0 {
+                esurv[cell] = esurv_term;
+                wvec[cell] = wvec_term;
+            } else {
+                esurv[cell] += esurv_term;
+                wvec[cell] += wvec_term;
+            }
+            nsurv[cell] += 1;
+        }
+    }
+}
+
 fn pyears3b(
     conditional: bool,
     table: &PystepTable<'_>,
@@ -23,6 +151,24 @@ fn pyears3b(
     subjects: &Pyears3bSubjects<'_>,
     times: &[f64],
     n_groups: usize,
+) -> Pyears3bOutput {
+    let block = (BLOCK_SCRATCH_BYTES / (2 * size_of::<f64>() * times.len().max(1))).max(1);
+    pyears3b_in_blocks(conditional, table, rates, subjects, times, n_groups, block)
+}
+
+/// [`pyears3b`] for `block` subjects at a time: the subjects of a block are walked
+/// in parallel into their own terms, which are then added to the shared sums in
+/// parallel over output times but in subject order. Each sum is therefore the one
+/// R's sequential loop computes, bit for bit.
+#[allow(clippy::too_many_arguments)]
+fn pyears3b_in_blocks(
+    conditional: bool,
+    table: &PystepTable<'_>,
+    rates: &[f64],
+    subjects: &Pyears3bSubjects<'_>,
+    times: &[f64],
+    n_groups: usize,
+    block: usize,
 ) -> Pyears3bOutput {
     let Pyears3bSubjects {
         group,
@@ -35,62 +181,66 @@ fn pyears3b(
     let mut esurv = Array2::<f64>::zeros((ntime, n_groups));
     let mut wvec = Array2::<f64>::zeros((ntime, n_groups));
     let mut nsurv = Array2::<usize>::zeros((ntime, n_groups));
-    let mut data2 = vec![0.0; edim];
-    let mut limits = vec![0.0; edim];
 
-    for i in 0..n {
-        for (j, value) in data2.iter_mut().enumerate() {
-            *value = positions[[i, j]];
-        }
-        let mut cell_rate = 0.0;
-        let mut cell_left = 0.0;
-        let mut cumhaz: f64 = 0.0;
-        let mut survival = 1.0;
-        let mut timeleft = y[i];
-        let g = group[i];
-        let mut time = 0.0;
+    if n > 0 && ntime > 0 && n_groups > 0 {
+        // A minimum length no iterator reaches keeps small inputs on this thread.
+        let parallel = n.saturating_mul(ntime) >= PARALLEL_WORK_THRESHOLD;
+        let min_len = if parallel { 1 } else { usize::MAX };
+        let rows_per_task = if parallel {
+            ntime.div_ceil(4 * rayon::current_num_threads())
+        } else {
+            ntime
+        };
+        let cells_per_task = rows_per_task * n_groups;
+        let block = block.clamp(1, n);
+        let mut block_esurv = vec![0.0; block * ntime];
+        let mut block_wvec = vec![0.0; block * ntime];
+        let mut reached = vec![0; block];
+        let esurv_cells = esurv.as_slice_mut().expect("zeros are in standard layout");
+        let wvec_cells = wvec.as_slice_mut().expect("zeros are in standard layout");
+        let nsurv_cells = nsurv.as_slice_mut().expect("zeros are in standard layout");
 
-        for (j, &output_time) in times.iter().enumerate() {
-            if timeleft <= 0.0 {
-                break;
-            }
-            let thiscell = (output_time - time).min(timeleft);
-
-            let mut etime = thiscell;
-            let mut hazard = 0.0;
-            while etime > 0.0 {
-                if cell_left <= 0.0 {
-                    let cell = pystep_cell(table, &data2, &mut limits);
-                    cell_rate = rates[cell.index.unwrap_or(0)];
-                    cell_left = cell.time;
-                }
-                let dt = etime.min(cell_left);
-                hazard += dt * cell_rate;
-                cell_left = f64::INFINITY;
-                for ((value, &limit), &factor) in data2.iter_mut().zip(&limits).zip(table.factors) {
-                    if factor != 1 {
-                        *value += dt;
-                        cell_left = cell_left.min(limit - *value);
-                    }
-                }
-                etime -= dt;
-            }
-            if output_time == 0.0 {
-                wvec[[j, g]] = 1.0;
-                esurv[[j, g]] = if conditional { 0.0 } else { 1.0 };
-            } else if conditional {
-                esurv[[j, g]] += hazard * thiscell;
-                wvec[[j, g]] += thiscell;
-            } else {
-                let next = (-(cumhaz + hazard)).exp();
-                esurv[[j, g]] += next * thiscell;
-                wvec[[j, g]] += survival * thiscell;
-                survival = next;
-            }
-            nsurv[[j, g]] += 1;
-            cumhaz += hazard;
-            time += thiscell;
-            timeleft -= thiscell;
+        for first in (0..n).step_by(block) {
+            let size = block.min(n - first);
+            block_esurv[..size * ntime]
+                .par_chunks_mut(ntime)
+                .zip(block_wvec[..size * ntime].par_chunks_mut(ntime))
+                .zip(reached[..size].par_iter_mut())
+                .enumerate()
+                .with_min_len(min_len)
+                .for_each_init(
+                    || (vec![0.0; edim], vec![0.0; edim]),
+                    |(data2, limits), (k, ((esurv, wvec), reached))| {
+                        *reached = walk_subject(
+                            conditional,
+                            table,
+                            rates,
+                            positions.row(first + k),
+                            y[first + k],
+                            times,
+                            SubjectIncrements { esurv, wvec },
+                            data2,
+                            limits,
+                        );
+                    },
+                );
+            let walked = BlockIncrements {
+                group: &group[first..first + size],
+                esurv: &block_esurv,
+                wvec: &block_wvec,
+                reached: &reached[..size],
+            };
+            esurv_cells
+                .par_chunks_mut(cells_per_task)
+                .zip(wvec_cells.par_chunks_mut(cells_per_task))
+                .zip(nsurv_cells.par_chunks_mut(cells_per_task))
+                .enumerate()
+                .with_min_len(min_len)
+                .for_each(|(task, ((esurv, wvec), nsurv))| {
+                    let first_row = task * rows_per_task;
+                    let rows = first_row..(first_row + rows_per_task).min(ntime);
+                    add_block(&walked, times, rows, n_groups, esurv, wvec, nsurv);
+                });
         }
     }
 
@@ -340,6 +490,196 @@ mod tests {
                 pyears3b_c_hazards(&table, &ratetable.rates, &start.to_vec(), y[g], &times);
             for (j, (hazard, thiscell)) in intervals.into_iter().enumerate() {
                 assert_eq!(fit.surv[[j, g]], (-(hazard * thiscell) / thiscell).exp());
+            }
+        }
+    }
+
+    /// R's `pyears3b` as one sequential loop over the subjects: the bitwise reference
+    /// for the blocked, parallel walk.
+    fn pyears3b_reference(
+        conditional: bool,
+        table: &PystepTable<'_>,
+        rates: &[f64],
+        subjects: &Pyears3bSubjects<'_>,
+        times: &[f64],
+        n_groups: usize,
+    ) -> Pyears3bOutput {
+        let Pyears3bSubjects {
+            group,
+            positions,
+            y,
+        } = *subjects;
+        let ntime = times.len();
+        let edim = table.factors.len();
+        let mut esurv = Array2::<f64>::zeros((ntime, n_groups));
+        let mut wvec = Array2::<f64>::zeros((ntime, n_groups));
+        let mut nsurv = Array2::<usize>::zeros((ntime, n_groups));
+        let mut data2 = vec![0.0; edim];
+        let mut limits = vec![0.0; edim];
+        for i in 0..y.len() {
+            for (j, value) in data2.iter_mut().enumerate() {
+                *value = positions[[i, j]];
+            }
+            let mut cell_rate = 0.0;
+            let mut cell_left = 0.0;
+            let mut cumhaz: f64 = 0.0;
+            let mut survival = 1.0;
+            let mut timeleft = y[i];
+            let g = group[i];
+            let mut time = 0.0;
+            for (j, &output_time) in times.iter().enumerate() {
+                if timeleft <= 0.0 {
+                    break;
+                }
+                let thiscell = (output_time - time).min(timeleft);
+                let mut etime = thiscell;
+                let mut hazard = 0.0;
+                while etime > 0.0 {
+                    if cell_left <= 0.0 {
+                        let cell = pystep_cell(table, &data2, &mut limits);
+                        cell_rate = rates[cell.index.unwrap_or(0)];
+                        cell_left = cell.time;
+                    }
+                    let dt = etime.min(cell_left);
+                    hazard += dt * cell_rate;
+                    cell_left = f64::INFINITY;
+                    for ((value, &limit), &factor) in
+                        data2.iter_mut().zip(&limits).zip(table.factors)
+                    {
+                        if factor != 1 {
+                            *value += dt;
+                            cell_left = cell_left.min(limit - *value);
+                        }
+                    }
+                    etime -= dt;
+                }
+                if output_time == 0.0 {
+                    wvec[[j, g]] = 1.0;
+                    esurv[[j, g]] = if conditional { 0.0 } else { 1.0 };
+                } else if conditional {
+                    esurv[[j, g]] += hazard * thiscell;
+                    wvec[[j, g]] += thiscell;
+                } else {
+                    let next = (-(cumhaz + hazard)).exp();
+                    esurv[[j, g]] += next * thiscell;
+                    wvec[[j, g]] += survival * thiscell;
+                    survival = next;
+                }
+                nsurv[[j, g]] += 1;
+                cumhaz += hazard;
+                time += thiscell;
+                timeleft -= thiscell;
+            }
+        }
+        for (value, &weight) in esurv.iter_mut().zip(wvec.iter()) {
+            if weight > 0.0 {
+                if conditional {
+                    *value = (-*value / weight).exp();
+                } else {
+                    *value /= weight;
+                }
+            } else if conditional {
+                *value = (-*value).exp();
+            }
+        }
+        Pyears3bOutput {
+            surv: esurv,
+            n: nsurv,
+        }
+    }
+
+    #[test]
+    fn blocked_parallel_walk_matches_the_sequential_loop_bitwise() {
+        let mut rng = crate::internal::rng::Rng::with_seed(20_261_116);
+        let tables = [
+            crate::population::ratetable_data::survexp_us_table(),
+            crate::population::ratetable_data::survexp_usr_table(),
+        ];
+        for ratetable in tables {
+            let factors = ratetable.factor_flags();
+            let cuts = ratetable.cut_slices();
+            let table = PystepTable {
+                factors: &factors,
+                dims: &ratetable.dims,
+                cuts: &cuts,
+                edge: true,
+            };
+            // Few subjects stay serial; the larger cases take the parallel walk, the
+            // last with a group per subject as individual survival uses.
+            for (n, ntime, n_groups) in [(1, 6, 1), (37, 12, 3), (700, 90, 4), (2500, 30, 2500)] {
+                let positions = Array2::from_shape_fn((n, factors.len()), |(_, dim)| {
+                    if factors[dim] == 1 {
+                        rng.usize(1..=ratetable.dims[dim]) as f64
+                    } else {
+                        let (low, high) = (cuts[dim][0], cuts[dim][ratetable.dims[dim] - 1]);
+                        low - 2000.0 + rng.f64() * (high - low + 4000.0)
+                    }
+                });
+                // Whole days give ties between follow-up and output times; some
+                // subjects have no follow-up at all.
+                let y: Vec<f64> = (0..n)
+                    .map(|_| {
+                        if rng.f64() < 0.1 {
+                            0.0
+                        } else {
+                            (rng.f64() * 12_000.0).round()
+                        }
+                    })
+                    .collect();
+                let group: Vec<usize> = if n_groups == n {
+                    (0..n).collect()
+                } else {
+                    (0..n).map(|_| rng.usize(0..n_groups)).collect()
+                };
+                let mut times: Vec<f64> =
+                    (0..ntime).map(|_| (rng.f64() * 13_000.0).round()).collect();
+                times.extend(y.iter().take(3));
+                if n > 1 {
+                    times.push(0.0);
+                }
+                times.sort_by(f64::total_cmp);
+                times.dedup();
+                let subjects = Pyears3bSubjects {
+                    group: &group,
+                    positions: &positions,
+                    y: &y,
+                };
+                for conditional in [false, true] {
+                    let expected = pyears3b_reference(
+                        conditional,
+                        &table,
+                        &ratetable.rates,
+                        &subjects,
+                        &times,
+                        n_groups,
+                    );
+                    let expected_bits: Vec<u64> =
+                        expected.surv.iter().map(|v| v.to_bits()).collect();
+                    let blocked = [1, 7, 64, n].map(|block| {
+                        pyears3b_in_blocks(
+                            conditional,
+                            &table,
+                            &ratetable.rates,
+                            &subjects,
+                            &times,
+                            n_groups,
+                            block,
+                        )
+                    });
+                    let default = pyears3b(
+                        conditional,
+                        &table,
+                        &ratetable.rates,
+                        &subjects,
+                        &times,
+                        n_groups,
+                    );
+                    for actual in blocked.iter().chain([&default]) {
+                        let bits: Vec<u64> = actual.surv.iter().map(|v| v.to_bits()).collect();
+                        assert_eq!(bits, expected_bits, "n {n}, conditional {conditional}");
+                        assert_eq!(actual.n, expected.n, "n {n}, conditional {conditional}");
+                    }
+                }
             }
         }
     }

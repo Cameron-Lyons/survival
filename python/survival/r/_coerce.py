@@ -138,6 +138,13 @@ def _materialize_1d(values: Any, name: str) -> list[Any]:
 
 
 _PLAIN_SCALARS = frozenset({float, int, str, bool, type(None)})
+# Exact Python types (compared with ``type(value)``, so ``bool`` is not an ``int``)
+# whose values a fast path may convert or compare without a call per value.
+_PLAIN_REALS = frozenset({float, int})
+_PLAIN_REALS_OR_BOOL = _PLAIN_REALS | {bool}
+_PLAIN_REALS_BOOL_OR_NONE = _PLAIN_REALS_OR_BOOL | {type(None)}
+# Integers up to this magnitude are exact as doubles.
+_EXACT_INTEGER = 2**53
 
 
 def _materialize_labels(values: Any, name: str) -> list[Any]:
@@ -345,7 +352,8 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
 
     Masked arrays, object, string, datetime and nullable extension columns (which
     ``to_numpy`` turns into object arrays) and factor-like columns get ``None``: they keep
-    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels.
+    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels
+    (datetime columns can get their ``NaT`` flags from :func:`_datetime_missing_mask`).
     """
 
     if isinstance(values, np.ndarray):
@@ -365,9 +373,31 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
     return array
 
 
+def _datetime_missing_mask(values: Any) -> Any | None:
+    """``NaT`` flags of a one-dimensional datetime or timedelta array, Series or Index,
+    else ``None``.
+
+    ``NaT`` is the only missing value these dtypes hold, so the flags equal the
+    per-element scan, which would first build a ``Timestamp`` for every row.
+    """
+
+    kind = getattr(getattr(values, "dtype", None), "kind", None)
+    if kind not in ("M", "m") or getattr(values, "ndim", None) != 1:
+        return None
+    if isinstance(values, np.ma.MaskedArray):
+        return None
+    return values.isna() if hasattr(values, "isna") else np.isnat(values)
+
+
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
     missing: set[int] = set()
     for name, values in columns:
+        nat = _datetime_missing_mask(values)
+        if nat is not None:
+            if len(values) != n:
+                raise ValueError(f"{name} must have length {n}")
+            missing.update(np.flatnonzero(np.asarray(nat)).tolist())
+            continue
         array = _numeric_ndarray(values)
         if array is None:
             array = _numeric_ndarray(values, ndim=2)
@@ -686,8 +716,14 @@ def _label_levels(values: Sequence[Any], name: str) -> tuple[Any, ...]:
 
 
 def _encode_labels(values: Sequence[Any], name: str) -> list[int]:
-    labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
-    return [labels[value] for value in values]
+    """Zero-based codes in order of first appearance (the codes of ``_label_levels``),
+    found in one pass over ``values``."""
+
+    codes: dict[Any, int] = {}
+    try:
+        return [codes.setdefault(value, len(codes)) for value in values]
+    except TypeError as exc:
+        raise TypeError(f"{name} contains unhashable labels") from exc
 
 
 _GROUP_NAN = object()
@@ -943,7 +979,30 @@ def _observed_factor_levels(values: Iterable[Any], name: str) -> list[Any]:
         unique = dict.fromkeys(values)
     except TypeError as exc:
         raise TypeError(f"{name} contains unhashable labels") from exc
-    return sorted((value for value in unique if not _is_missing_value(value)), key=_r_sort_key)
+    return _r_sorted_levels([value for value in unique if not _is_missing_value(value)])
+
+
+def _r_sorted_levels(present: Sequence[Any] | set[Any]) -> list[Any]:
+    """The distinct non-missing values *present* in R's level order. Plain floats,
+    and ints of at most 2**53 in magnitude, sort as their exact float values, which
+    is that order, so they need no key per level."""
+
+    if set(map(type, present)) <= _PLAIN_REALS and all(
+        abs(value) <= _EXACT_INTEGER for value in present if type(value) is int
+    ):
+        return sorted(present)
+    return sorted(present, key=_r_sort_key)
+
+
+def _present_values(values: Any, materialized: Sequence[Any]) -> set[Any]:
+    """The distinct non-missing values of *values*, whose elements are *materialized*.
+    A numeric column without NaN has no missing value, so its set is built in C."""
+
+    array = _numeric_ndarray(values)
+    if array is not None and not (array.dtype.kind == "f" and np.isnan(array).any()):
+        return set(materialized)
+    flags = _missing_flags(materialized)
+    return {value for value, missing in zip(materialized, flags, strict=True) if not missing}
 
 
 def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:

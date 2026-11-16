@@ -30,6 +30,8 @@ replacement. Numerical corrections are described under Fixed below.
   `survfit` and `survdiff` take `formula=`.
 - `survreg_control()` reads like R's control list: `control["iter.max"]`,
   `control["rel.tolerance"]`, ... (`SurvregControlResult`).
+- `CoxPHFit.brier(time, status, times, ...)` returns the Brier scores of a Cox
+  fit's own survival predictions without storing them; its `phat` is empty.
 - Native classes report `survival._survival` as their module, and the kernel
   results `SurvDiffResult`, `SurvExpResult`, `PyearsResult` and `RateTable`
   (including `survexp_us()`) pickle and copy.
@@ -61,8 +63,43 @@ replacement. Numerical corrections are described under Fixed below.
   count rows and missing responses without copying columns, and `survSplit`,
   `tmerge` and `survcondense` select rows through storage, not value by value
   (1.3-2x faster).
-- `survreg` likelihood evaluations compute each stratum's scale and its
-  logarithm once, not once per observation.
+- `survreg` is 1.4-1.6x faster with bitwise-identical results. Each built-in
+  family's likelihood sweep is compiled separately, each stratum's scale and
+  its logarithm are computed once per evaluation, the robust and cluster
+  sandwich is built without materializing dfbeta rows, the response reaches
+  the native fit as NumPy arrays, and labels are encoded in one pass.
+- Penalized Cox fits stream their data in risk-set order with vectorized inner
+  loops, skip Efron second moments that are multiplied by zero, and set up
+  ridge, pspline and frailty terms without per-element Python loops: pspline
+  fits are 1.9-2.7x and ridge fits 1.3x faster, with identical results.
+  Frailty fits apply Efron's tie correction once per tie set instead of once
+  per death, which makes tied frailty fits 3x faster at 10^5 rows and 12x
+  faster at 10^6. Their results change at rounding level, by about as much as
+  reordering the input rows changes them (up to 1e-9 relative).
+- Clustered Kaplan-Meier robust variances keep running sums over the clusters
+  instead of updating every cluster at every event time: O(n + t + c log n) per
+  curve instead of O(t c), which makes clustered `survfit` 5-8x faster at 10^5
+  to 10^6 rows. Results agree with the dense calculation to about 1e-11
+  relative, and exactly where the curve reaches zero; fits with few clusters or
+  one dominant cluster, counting-process data and influence requests keep the
+  dense loop.
+- Stratified Kaplan-Meier and Aalen-Johansen curves are fitted in parallel, the
+  multi-state influence update shares one pass over the clusters, integer ids and
+  clusters are numbered through tables, and `survfit` checks its inputs and passes
+  integer labels without Python loops: clustered multi-state curves are 3.8-5.2x
+  and counting-process multi-state curves with ids 2-4.7x faster at 10^5 to 10^6
+  rows, with bitwise-identical results.
+  `summary`, `quantile`, `print` and `survfit0` of `survfit.coxph(newdata=)` build
+  their curve engines in one native call: requested-time summaries and
+  quantiles are 3.5-5.7x faster, full summaries and `survfit0` 1.2-1.9x.
+- `survexp` and `pyears` walk subjects through the rate table in parallel blocks
+  and convert date rate variables by column: 2.5-3.3x faster at 10^6 rows, with
+  bitwise-identical results. `brier` on a Cox fit scores each time's predictions
+  as it computes them instead of building the times-by-subjects probability
+  matrix (about 7.6 GB at 10^5 subjects), which also makes it 3.7-4.3x faster.
+  Cox survival predictions at requested times fill their rows in parallel, and
+  `aareg(dfbeta=TRUE)` skips rows outside the risk set (about 2x faster), both with
+  bitwise-identical results.
 - `interaction(..., drop=TRUE)` builds only observed factor combinations,
   avoiding Cartesian products of unused levels while retaining R's level order.
 - Multistate summaries select rows directly from the fitted curve and synthesize

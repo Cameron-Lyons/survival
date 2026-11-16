@@ -202,9 +202,17 @@ estimate (`stype = 2`, with the hazard type of the fitted tie method) and keep
 `exp(-H).powf(risk)` rounding, step values at ties, survival 1 before the first
 time, extension after the last time, offsets, aliased coefficients and stratum
 order. Use `survfit` for other estimates, confidence intervals or time-varying
-covariates. `CoxPHEstimator.predict_survival_function` and the R-style `brier`
+covariates. `CoxPHEstimator.predict_survival_function` and `brier(detail=True)`
 use this method; the estimator keeps its `(n_observations, n_times)` orientation
 and `brier(detail=True)` keeps its nested-list `phat` result.
+
+`CoxPHFit.brier(time, status, times, weights=None, ties=True, efron=False,
+timefix=True, start=None, newdata=None, new_strata=None, new_offset=None)` scores
+the same predictions without storing them: each time's row of event probabilities
+is evaluated inside the scoring loop, one buffer per thread, so memory stays
+linear in the number of subjects, and the result's `phat` is empty. Errors keep
+the order of the matrix kernel: prediction errors first, then the outcome checks,
+then the first non-finite row. The R-style `brier` uses it unless `detail=True`.
 
 ## Native results
 

@@ -29,6 +29,7 @@ from ._coerce import (
     _floats_or_nan,
     _int_vector,
     _integer_scalar,
+    _is_bool_like,
     _is_missing_value,
     _match_string_arg,
     _materialize_1d,
@@ -946,6 +947,21 @@ def _brier_model_predictions(
     return probabilities
 
 
+def _brier_model_scores(
+    fit: Any, engine: Any, newdata: Any | None, *args: Any, **kwargs: Any
+) -> Any:
+    """``_core.brier`` of :func:`_brier_model_predictions`, without the prediction matrix.
+
+    The fit scores each time's row of predictions as it evaluates it, so memory stays
+    linear in the number of observations; the result's ``phat`` is empty.
+    """
+
+    if newdata is None:
+        return engine.brier(*args, **kwargs)
+    rows, strata, offsets = _newdata_design(fit, newdata)
+    return engine.brier(*args, newdata=rows, new_strata=strata, new_offset=offsets, **kwargs)
+
+
 def brier(
     fit: Any,
     times: Any | None = None,
@@ -998,20 +1014,20 @@ def brier(
         eval_times = [t for t, d in zip(null_curve.time, null_curve.n_event, strict=True) if d > 0]
     else:
         eval_times = _float_vector(times, "times")
-    phat = _brier_model_predictions(fit, engine, newdata, eval_times)
-    result = _core.brier(
-        dtime,
-        dstat,
-        eval_times,
-        phat,
-        weights=weights,
-        ties=ties_value,
-        efron=use_efron,
-        timefix=timefix,
-        start=None if response.start is None else list(response.start),
-    )
-    if not _normalize_bool_option(detail, "detail"):
+    kernel: dict[str, Any] = {
+        "weights": weights,
+        "ties": ties_value,
+        "efron": use_efron,
+        "timefix": timefix,
+        "start": None if response.start is None else list(response.start),
+    }
+    if detail is None or (_is_bool_like(detail) and not detail):
+        result = _brier_model_scores(fit, engine, newdata, dtime, dstat, eval_times, **kernel)
         return BrierResult(rsquared=result.rsquared, brier=result.brier, times=result.times)
+    phat = _brier_model_predictions(fit, engine, newdata, eval_times)
+    result = _core.brier(dtime, dstat, eval_times, phat, **kernel)
+    # Any other detail value is checked once the scores are computed, as before.
+    _normalize_bool_option(detail, "detail")
     return BrierResult(
         rsquared=result.rsquared,
         brier=result.brier,

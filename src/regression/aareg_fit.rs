@@ -606,6 +606,42 @@ fn row_at_risk(start: Option<&[f64]>, stop: &[f64], idx: usize, time: f64) -> bo
     stop[idx] >= time && start.is_none_or(|values| values[idx] < time)
 }
 
+/// Whether rows outside the risk set at `moment` may be skipped. Such a row has zero
+/// weight and residual, so with a finite, nonzero risk and finite moments each of its
+/// influence and test contributions is a signed zero, which leaves every sum (seeded
+/// with +0 and never -0) unchanged. Otherwise its contributions carry NaN and are kept.
+/// The row's own `x - mean` stays finite too: covariates are validated finite, and a
+/// mean far enough from them to overflow would leave the moment without variance.
+fn outside_rows_add_zero(moment: &RiskMoment) -> bool {
+    moment.risk != 0.0
+        && moment.risk.is_finite()
+        && moment
+            .mean
+            .iter()
+            .chain(&moment.inverse)
+            .chain(&moment.time_weight)
+            .all(|value| value.is_finite())
+}
+
+/// `values` laid out as `[cluster][column][time]`, split into one vector per column.
+fn nested_influence(
+    values: &[f64],
+    clusters: usize,
+    width: usize,
+    times: usize,
+) -> Vec<Vec<Vec<f64>>> {
+    (0..clusters)
+        .map(|cluster| {
+            (0..width)
+                .map(|column| {
+                    let first = (cluster * width + column) * times;
+                    values[first..first + times].to_vec()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn influence_values_rowwise(
     moments: &[RiskMoment],
@@ -627,7 +663,9 @@ fn influence_values_rowwise(
     let test_cluster_count = test_cluster
         .and_then(|values| values.iter().max().copied())
         .map_or(n, |value| value as usize + 1);
-    let mut dfbeta = vec![vec![vec![0.0; moments.len()]; width]; cluster_count];
+    let times = moments.len();
+    // One buffer, `[cluster][column][time]`, keeps each update a single indexed add.
+    let mut dfbeta = vec![0.0; cluster_count * width * times];
     let mut test_influence = vec![vec![0.0; width]; test_cluster_count];
     let mut event_rows = vec![false; n];
     let mut event_rhs = vec![0.0; nvar];
@@ -658,9 +696,13 @@ fn influence_values_rowwise(
             }
         }
 
+        let skip_outside = outside_rows_add_zero(moment);
         for row_idx in 0..n {
-            let row_covariates = covariates.row(row_idx);
             let at_risk = row_at_risk(start, stop, row_idx, moment.time);
+            if !at_risk && !event_rows[row_idx] && skip_outside {
+                continue;
+            }
+            let row_covariates = covariates.row(row_idx);
             let event_indicator = usize::from(event_rows[row_idx]) as f64;
             let row_weight = if at_risk {
                 weights.map_or(1.0, |values| values[row_idx])
@@ -701,7 +743,7 @@ fn influence_values_rowwise(
                 } else {
                     row_slopes[column - 1]
                 };
-                dfbeta[cluster_idx][column][time_idx] += influence;
+                dfbeta[(cluster_idx * width + column) * times + time_idx] += influence;
                 let test_value = if test == AaregTest::Nrisk {
                     influence * moment.risk
                 } else if test == AaregTest::Variance && nvar > 1 && column > 0 {
@@ -721,7 +763,10 @@ fn influence_values_rowwise(
     for row in &test_influence {
         add_outer_product(&mut robust, row);
     }
-    (dfbeta, nested_square(robust, width))
+    (
+        nested_influence(&dfbeta, cluster_count, width, times),
+        nested_square(robust, width),
+    )
 }
 
 #[derive(Debug)]
@@ -1573,6 +1618,239 @@ mod tests {
                             );
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// The row-by-row influence sweep before rows outside the risk set were skipped and
+    /// the influences moved to one buffer: the bitwise reference for that change.
+    #[allow(clippy::too_many_arguments)]
+    fn influence_values_rowwise_reference(
+        moments: &[RiskMoment],
+        covariates: ArrayView2<'_, f64>,
+        start: Option<&[f64]>,
+        stop: &[f64],
+        weights: Option<&[f64]>,
+        cluster: Option<&[i32]>,
+        test_cluster: Option<&[i32]>,
+        test: AaregTest,
+    ) -> (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>) {
+        let n = stop.len();
+        let nvar = covariates.ncols();
+        let width = nvar + 1;
+        let cluster_count = cluster
+            .and_then(|values| values.iter().max().copied())
+            .map_or(n, |value| value as usize + 1);
+        let test_cluster = test_cluster.or(cluster);
+        let test_cluster_count = test_cluster
+            .and_then(|values| values.iter().max().copied())
+            .map_or(n, |value| value as usize + 1);
+        let mut dfbeta = vec![vec![vec![0.0; moments.len()]; width]; cluster_count];
+        let mut test_influence = vec![vec![0.0; width]; test_cluster_count];
+        let mut event_rows = vec![false; n];
+        let mut event_rhs = vec![0.0; nvar];
+        let mut summed_slopes = vec![0.0; nvar];
+        let mut row_slopes = vec![0.0; nvar];
+        for (time_idx, moment) in moments.iter().enumerate() {
+            for &event_idx in &moment.events {
+                event_rows[event_idx] = true;
+            }
+            let total_event_weight: f64 = moment
+                .events
+                .iter()
+                .map(|&idx| weights.map_or(1.0, |values| values[idx]))
+                .sum();
+            summed_slopes.fill(0.0);
+            for &event_idx in &moment.events {
+                let event_weight = weights.map_or(1.0, |values| values[event_idx]);
+                let event_covariates = covariates.row(event_idx);
+                for column in 0..nvar {
+                    event_rhs[column] = event_weight
+                        * (event_covariates[column] - moment.mean[column])
+                        / moment.risk;
+                }
+                for (row, slope) in summed_slopes.iter_mut().enumerate() {
+                    *slope += (0..nvar)
+                        .map(|column| moment.inverse[row * nvar + column] * event_rhs[column])
+                        .sum::<f64>();
+                }
+            }
+            for row_idx in 0..n {
+                let row_covariates = covariates.row(row_idx);
+                let at_risk = row_at_risk(start, stop, row_idx, moment.time);
+                let event_indicator = usize::from(event_rows[row_idx]) as f64;
+                let row_weight = if at_risk {
+                    weights.map_or(1.0, |values| values[row_idx])
+                } else {
+                    0.0
+                };
+                let predicted = if at_risk {
+                    total_event_weight / moment.risk
+                        + (0..nvar)
+                            .map(|column| {
+                                (row_covariates[column] - moment.mean[column])
+                                    * summed_slopes[column]
+                            })
+                            .sum::<f64>()
+                } else {
+                    0.0
+                };
+                let residual = event_indicator - predicted;
+                let normalized_score = residual * row_weight / moment.risk;
+                let intercept = if nvar == 0 {
+                    normalized_score
+                } else {
+                    for (row, slope) in row_slopes.iter_mut().enumerate() {
+                        *slope = (0..nvar)
+                            .map(|column| {
+                                moment.inverse[row * nvar + column]
+                                    * normalized_score
+                                    * (row_covariates[column] - moment.mean[column])
+                            })
+                            .sum();
+                    }
+                    normalized_score - dot(&row_slopes, &moment.mean)
+                };
+                let cluster_idx = cluster.map_or(row_idx, |values| values[row_idx] as usize);
+                let test_cluster_idx =
+                    test_cluster.map_or(row_idx, |values| values[row_idx] as usize);
+                for column in 0..width {
+                    let influence = if column == 0 {
+                        intercept
+                    } else {
+                        row_slopes[column - 1]
+                    };
+                    dfbeta[cluster_idx][column][time_idx] += influence;
+                    let test_value = if test == AaregTest::Nrisk {
+                        influence * moment.risk
+                    } else if test == AaregTest::Variance && nvar > 1 && column > 0 {
+                        residual
+                            * row_weight
+                            * (row_covariates[column - 1] - moment.mean[column - 1])
+                    } else {
+                        influence * moment.time_weight[column]
+                    };
+                    test_influence[test_cluster_idx][column] += test_value;
+                }
+            }
+            for &event_idx in &moment.events {
+                event_rows[event_idx] = false;
+            }
+        }
+        let mut robust = vec![0.0; width * width];
+        for row in &test_influence {
+            add_outer_product(&mut robust, row);
+        }
+        (dfbeta, nested_square(robust, width))
+    }
+
+    type Influence = (Vec<Vec<Vec<f64>>>, Vec<Vec<f64>>);
+
+    fn bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    fn assert_same_influence(actual: &Influence, expected: &Influence, context: &str) {
+        assert_eq!(actual.0.len(), expected.0.len(), "{context}");
+        for (actual, expected) in actual.0.iter().zip(&expected.0) {
+            assert_eq!(actual.len(), expected.len(), "{context}");
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(bits(actual), bits(expected), "{context}: dfbeta");
+            }
+        }
+        assert_eq!(actual.1.len(), expected.1.len(), "{context}");
+        for (actual, expected) in actual.1.iter().zip(&expected.1) {
+            assert_eq!(bits(actual), bits(expected), "{context}: robust variance");
+        }
+    }
+
+    #[test]
+    fn rowwise_influence_matches_the_full_sweep_bitwise() {
+        let mut rng = crate::internal::rng::Rng::with_seed(20_261_115);
+        for (n, nvar) in [(60, 0), (90, 1), (150, 3), (240, 2)] {
+            // Coarse times give tied stops and tied event times.
+            let stop: Vec<f64> = (0..n)
+                .map(|_| 1.0 + rng.usize(0..25) as f64 * 0.5)
+                .collect();
+            let status: Vec<i32> = (0..n).map(|_| i32::from(rng.f64() < 0.65)).collect();
+            let covariates = Array2::from_shape_fn((n, nvar), |_| rng.f64() * 4.0 - 2.0);
+            let weights: Vec<f64> = (0..n).map(|_| 0.25 + rng.f64() * 2.0).collect();
+            let entry: Vec<f64> = stop
+                .iter()
+                .map(|value| value - 0.25 - rng.f64() * 6.0)
+                .collect();
+            let clusters: Vec<i32> = (0..n).map(|_| rng.usize(0..n / 3) as i32).collect();
+            let test_clusters: Vec<i32> = (0..n).map(|_| rng.usize(0..n / 5) as i32).collect();
+            for start in [None, Some(entry.as_slice())] {
+                for weights in [None, Some(weights.as_slice())] {
+                    let mut moments =
+                        risk_moments(&stop, &status, covariates.view(), start, weights, nvar);
+                    let retained = prepare_retained_moments(&mut moments, nvar, Some(2), 1e-7)
+                        .expect("random data should retain full-rank moments");
+                    moments.truncate(retained);
+                    let cases = [AaregTest::Aalen, AaregTest::Variance, AaregTest::Nrisk]
+                        .into_iter()
+                        .flat_map(|test| {
+                            [None, Some(clusters.as_slice())]
+                                .into_iter()
+                                .map(move |cluster| (test, cluster))
+                        });
+                    for (test, cluster) in cases {
+                        for test_cluster in [None, Some(test_clusters.as_slice())] {
+                            let context = format!(
+                                "n {n}, nvar {nvar}, start {}, weights {}, {test:?}, \
+                                 cluster {}, test cluster {}",
+                                start.is_some(),
+                                weights.is_some(),
+                                cluster.is_some(),
+                                test_cluster.is_some()
+                            );
+                            let sweep = |reference: bool| {
+                                let run = if reference {
+                                    influence_values_rowwise_reference
+                                } else {
+                                    influence_values_rowwise
+                                };
+                                run(
+                                    &moments,
+                                    covariates.view(),
+                                    start,
+                                    &stop,
+                                    weights,
+                                    cluster,
+                                    test_cluster,
+                                    test,
+                                )
+                            };
+                            assert_same_influence(&sweep(false), &sweep(true), &context);
+                        }
+                    }
+                    // Non-finite moments keep the NaN their rows outside the risk set add.
+                    let mut broken = moments.clone();
+                    let last = broken.len() - 1;
+                    broken[last].time_weight[0] = f64::INFINITY;
+                    broken[0].risk = 0.0;
+                    let sweep = |reference: bool| {
+                        let run = if reference {
+                            influence_values_rowwise_reference
+                        } else {
+                            influence_values_rowwise
+                        };
+                        run(
+                            &broken,
+                            covariates.view(),
+                            start,
+                            &stop,
+                            weights,
+                            None,
+                            None,
+                            AaregTest::Aalen,
+                        )
+                    };
+                    let actual = sweep(false);
+                    assert_same_influence(&actual, &sweep(true), "non-finite moments");
+                    assert!(actual.1.iter().flatten().any(|value| value.is_nan()));
                 }
             }
         }

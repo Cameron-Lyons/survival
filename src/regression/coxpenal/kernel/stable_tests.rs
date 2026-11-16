@@ -2,8 +2,28 @@ use super::*;
 use ndarray::array;
 
 fn fixture(counting: bool, efron: bool, unsafe_offsets: bool) -> Kernel {
-    let stop = [1., 1., 2., 3., 3., 4., 5., 5., 6., 7., 8., 8.];
-    let start = [0., 0., 0.5, 0., 1., 0., 2., 1., 4., 0., 5., 0.];
+    fixture_with(counting, efron, unsafe_offsets, 1., false)
+}
+
+/// The fixture with its weights scaled and, if `tied`, every observation
+/// entering at 0 and leaving at 1.
+fn fixture_with(
+    counting: bool,
+    efron: bool,
+    unsafe_offsets: bool,
+    weight_scale: f64,
+    tied: bool,
+) -> Kernel {
+    let mut stop = [1., 1., 2., 3., 3., 4., 5., 5., 6., 7., 8., 8.];
+    let mut start = [0., 0., 0.5, 0., 1., 0., 2., 1., 4., 0., 5., 0.];
+    if tied {
+        stop.fill(1.);
+        start.fill(0.);
+    }
+    let mut weights = [0.5, 1., 2., 1.5, 0.75, 1.25, 1.5, 0.75, 1.25, 2., 1., 0.5];
+    for weight in &mut weights {
+        *weight *= weight_scale;
+    }
     let x = array![
         [1., -1.],
         [1., 0.5],
@@ -23,7 +43,7 @@ fn fixture(counting: bool, efron: bool, unsafe_offsets: bool) -> Kernel {
         start: counting.then_some(start.as_slice()),
         status: &[1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0],
         x: &x,
-        weights: &[0.5, 1., 2., 1.5, 0.75, 1.25, 1.5, 0.75, 1.25, 2., 1., 0.5],
+        weights: &weights,
         offset: &[0.; 12],
         strata: None,
         frail: Some(&[0, 0, 1, 1, 2, 2, 0, 2, 1, 1, 2, 0]),
@@ -39,6 +59,7 @@ fn fixture(counting: bool, efron: bool, unsafe_offsets: bool) -> Kernel {
 fn oracle(kernel: &Kernel, beta: &[f64], fbeta: &[f64]) -> (f64, Vec<f64>, Array2<f64>, Vec<f64>) {
     let n = kernel.n;
     let q = kernel.nvar + kernel.nf;
+    let data = kernel.original();
     let mut strata = vec![0; n];
     let mut first = 0;
     for (s, &end) in kernel.strata_end.iter().enumerate() {
@@ -50,46 +71,46 @@ fn oracle(kernel: &Kernel, beta: &[f64], fbeta: &[f64]) -> (f64, Vec<f64>, Array
     let mut z = Array2::zeros((n, q));
     let mut eta = vec![0.; n];
     for row in 0..n {
-        if let Some(frail) = &kernel.frail {
+        if let Some(frail) = &data.frail {
             z[(row, frail[row])] = 1.;
             eta[row] += fbeta[frail[row]];
         }
-        eta[row] += kernel.offset[row];
+        eta[row] += data.offset[row];
         for (i, &b) in beta.iter().enumerate() {
-            z[(row, kernel.nf + i)] = kernel.covar[(row, i)];
-            eta[row] += b * kernel.covar[(row, i)];
+            z[(row, kernel.nf + i)] = data.covar[(row, i)];
+            eta[row] += b * data.covar[(row, i)];
         }
     }
-    let mut times: Vec<_> = (0..n).filter(|&row| kernel.status[row] == 1).collect();
+    let mut times: Vec<_> = (0..n).filter(|&row| data.status[row] == 1).collect();
     times.sort_by(|&a, &b| {
         strata[a]
             .cmp(&strata[b])
-            .then(kernel.stop[a].total_cmp(&kernel.stop[b]))
+            .then(data.stop[a].total_cmp(&data.stop[b]))
     });
-    times.dedup_by(|a, b| strata[*a] == strata[*b] && kernel.stop[*a] == kernel.stop[*b]);
+    times.dedup_by(|a, b| strata[*a] == strata[*b] && data.stop[*a] == data.stop[*b]);
     let (mut loglik, mut score, mut info, mut expected) =
         (0., vec![0.; q], Array2::zeros((q, q)), vec![0.; n]);
     for event in times {
         let deaths: Vec<_> = (0..n)
             .filter(|&row| {
                 strata[row] == strata[event]
-                    && kernel.stop[row] == kernel.stop[event]
-                    && kernel.status[row] == 1
+                    && data.stop[row] == data.stop[event]
+                    && data.status[row] == 1
             })
             .collect();
         let risk: Vec<_> = (0..n)
             .filter(|&row| {
                 strata[row] == strata[event]
-                    && kernel.stop[row] >= kernel.stop[event]
-                    && kernel
+                    && data.stop[row] >= data.stop[event]
+                    && data
                         .start
                         .as_ref()
-                        .is_none_or(|start| start[row] < kernel.stop[event])
+                        .is_none_or(|start| start[row] < data.stop[event])
             })
             .collect();
         let max_log = risk
             .iter()
-            .map(|&row| eta[row] + kernel.weights[row].ln())
+            .map(|&row| eta[row] + data.weights[row].ln())
             .fold(f64::NEG_INFINITY, f64::max);
         let steps = if kernel.method == 1. { deaths.len() } else { 1 };
         for step in 0..steps {
@@ -107,12 +128,12 @@ fn oracle(kernel: &Kernel, beta: &[f64], fbeta: &[f64]) -> (f64, Vec<f64>, Array
                 .iter()
                 .zip(&fractions)
                 .map(|(&row, &fraction)| {
-                    (eta[row] + kernel.weights[row].ln() - max_log).exp() * fraction
+                    (eta[row] + data.weights[row].ln() - max_log).exp() * fraction
                 })
                 .collect();
             let denominator: f64 = risks.iter().sum();
             let average: f64 =
-                deaths.iter().map(|&row| kernel.weights[row]).sum::<f64>() / steps as f64;
+                deaths.iter().map(|&row| data.weights[row]).sum::<f64>() / steps as f64;
             let mean: Vec<f64> = (0..q)
                 .map(|j| {
                     risk.iter()
@@ -122,7 +143,7 @@ fn oracle(kernel: &Kernel, beta: &[f64], fbeta: &[f64]) -> (f64, Vec<f64>, Array
                 })
                 .collect();
             for &row in &deaths {
-                let weight = kernel.weights[row] / steps as f64;
+                let weight = data.weights[row] / steps as f64;
                 loglik += weight * (eta[row] - max_log - denominator.ln());
                 for j in 0..q {
                     score[j] += weight * (z[(row, j)] - mean[j]);
@@ -152,7 +173,7 @@ fn check(kernel: &mut Kernel, beta: &[f64], reference_beta: &[f64], fbeta: &[f64
     let actual = kernel
         .evaluate(beta, fbeta, &mut u, &mut info, &mut diagonal)
         .unwrap();
-    let scale: f64 = kernel.weights.iter().sum();
+    let scale: f64 = kernel.original().weights.iter().sum();
     let close =
         |a: f64, b: f64| assert!((a - b).abs() <= 2e-10 * (b.abs() + scale), "{a:e} != {b:e}");
     close(actual, expected_lk);
@@ -185,10 +206,7 @@ fn sparse_stable_moments_match_explicit_indicators_with_weights_ties_and_entry()
     for counting in [false, true] {
         for efron in [false, true] {
             for weight_scale in [1e-200, 1., 1e200] {
-                let mut kernel = fixture(counting, efron, true);
-                for weight in &mut kernel.weights {
-                    *weight *= weight_scale;
-                }
+                let mut kernel = fixture_with(counting, efron, true, weight_scale, false);
                 check(&mut kernel, &[1e16, 0.3], &[0., 0.3], &[0.2, -0.1, 0.3]);
             }
         }
@@ -199,11 +217,7 @@ fn sparse_stable_moments_match_explicit_indicators_with_weights_ties_and_entry()
 fn tied_sparse_groups_mix_deaths_and_survivors_against_explicit_indicators() {
     for counting in [false, true] {
         for efron in [false, true] {
-            let mut kernel = fixture(counting, efron, true);
-            kernel.stop.fill(1.);
-            if let Some(start) = &mut kernel.start {
-                start.fill(0.);
-            }
+            let mut kernel = fixture_with(counting, efron, true, 1., true);
             check(&mut kernel, &[1e16, 0.3], &[0., 0.3], &[0.2, -0.1, 0.3]);
         }
     }

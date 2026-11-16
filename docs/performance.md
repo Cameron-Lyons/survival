@@ -101,8 +101,21 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   curve where fractional weights select robust variance, standard errors come
   from an O(n) sweep: observations at risk share a coefficient, departed
   observations' influences evolve by product-limit factors, and suffix sums of
-  squared risk weights avoid cancellation. Repeated clusters, counting-process
-  data and explicit influence matrices use the general influence calculation.
+  squared risk weights avoid cancellation.
+- Right-censored Kaplan–Meier fits with repeated clusters and no influence request
+  keep each cluster's influence as its weight at risk times a shared coefficient
+  plus a departed part, held in running sums of squares and products that change
+  only when a row leaves: O(n + t + c log n) per curve for c clusters and t times,
+  instead of O(t c). The sums are rebuilt whenever the sum of squared weights at
+  risk halves.
+  Times at which nearly everyone at risk has the event (|1 - hazard| < 1e-3) take
+  the dense step, so a standard error where the curve reaches zero is the dense
+  loop's bit for bit; elsewhere the two agree to about 1e-11 relative. The
+  expanded sums cancel by about the mean size of the cluster a random row belongs
+  to (`sum W_g^2 / sum w_i^2`), so fits where that exceeds 1,000, such as one
+  cluster holding most of the rows, keep the general influence calculation, as do
+  fits with at most 64 clusters or few event times, counting-process data and
+  explicit influence matrices.
 - Independent right-censored competing-risk curves use a moment sweep with small
   triangular QR factors updated by Givens rotations: O((n + t)(s + h)) time and
   O(n + s + h) extra storage for t reporting times, s states and h hazard columns.
@@ -110,7 +123,17 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   explicit influences and numerically sensitive inputs use the general kernel.
   Point-estimate fits (`se_fit=False`) allocate no robust-variance workspace.
   Grouped initial-state preparation scans the global minimum entry time once, and
-  only for counting-process data.
+  only for counting-process data. Outside the moment sweep, each event time updates
+  up to four state or hazard rows in one pass over the clusters, keeping every
+  sum's order, so results are unchanged bit for bit.
+- Stratified Kaplan–Meier and Aalen–Johansen fits number every curve's clusters
+  through one table cleared after each curve, then fit the curves in parallel when
+  there are several curves and more than 1,000 rows. Integer ids and clusters whose
+  values span fewer than 2n values are numbered through a table indexed by value,
+  others through a hash map.
+- `survfit.coxph(newdata)` curve columns become Kaplan–Meier engines in one native
+  call that reads the time-by-curve matrices directly, with no per-element Python
+  conversion.
 - Requested-time summaries choose a forward sweep for dense ordered queries and
   binary search for sparse or unordered ones, comparing the query count with the
   grid size divided by its search depth; count accumulation streams prefix sums in
@@ -172,6 +195,11 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   product of its largest risks. For r active rows and k = min(d, r - d), this
   fallback uses O(r log r + r k p²) work and O(r + k p²) storage. Event likelihoods
   cancel each selected predictor against its reference before summing.
+- Penalized fits store their rows in risk-set order once per fit, so each
+  Newton evaluation streams covariates, weights and offsets instead of
+  gathering them through the sort order. Efron's frailty tie correction adds
+  each death step to a few running sums and corrects every tied group once per
+  tie set: O(d) instead of O(d²) group updates for d tied deaths.
 - Penalized fits use the same risk representation for extreme predictors.
   Sparse frailty groups integrate score and information updates only when their
   active risks change, using hazard interval queries. Efron ties accumulate block
@@ -202,7 +230,11 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - Predictions at requested times read the cached per-stratum baseline at each
   time and expand only those probabilities: O(s m log u) lookup and O(n m)
   expansion for m times, s strata and u unique times, instead of full n-by-u
-  curves. The Brier kernel caches censoring survival once per subject.
+  curves. Each time row is filled independently, in parallel above 8,192 values.
+  Cox Brier scores evaluate each time's row inside the scoring loop with one
+  n-length buffer per thread, so `brier(detail=FALSE)` needs O(n) memory per
+  thread instead of O(n m); the Brier kernel caches censoring survival once per
+  subject.
 - Full curves accumulate coefficient uncertainty with one O(p) vector per curve
   instead of a time-by-covariate matrix; time-dependent subjects find their
   baseline rows by binary search (O(I log T + U) for I intervals and U selected
@@ -237,8 +269,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - Formula designs are built as owned contiguous NumPy arrays, avoiding Python
   row lists and per-element conversion at the native boundary. Retained model
   matrices (`x=True`) still expose the existing list representation.
-- Built-in families select their scalar kernels once per likelihood evaluation and
-  allocate no endpoint or density buffers; callback families use workspace linear
+- Built-in families have one compiled likelihood sweep each, with the stratum
+  scales and their logarithms computed once per evaluation. They allocate no
+  endpoint or density buffers; callback families use workspace linear
   in the number of rows plus interval endpoints, and the Python adapter reacquires
   the GIL once per batch.
 - Built-in distribution queries compose recycling indices and allocate the result
@@ -274,13 +307,22 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   promoted to a hash map after four distinct observed labels. Prefix matching
   scans an axis only when there is no exact match. Expected-survival grids select
   requested times with one forward scan (O(fitted times + requests)).
+- Expected-survival walks process subjects in blocks bounded by 16 MiB of
+  per-time terms: each block is walked in parallel, and its
+  terms are then added in parallel over output times but in subject order, so the
+  sums match R's sequential loop bit for bit. Date rate variables held as pandas
+  Timestamps convert to days by integer division of their nanosecond value, and
+  NaT flags come from the column's dtype rather than a per-value scan.
 - Person-years tabulation accumulates directly into cells for fixed categories
   without a rate table; other inputs use the shared interval stepper. Summary
   margins use direct column-major slab offsets, and `print_pyears` totals walk the
   stored cells without flattening them.
 - Aalen influence reductions for robust summaries and plot variances work in
   blocks of about 1 MiB and never convert or square the whole group by coefficient
-  by time array; `se=False` plots never read the stored influences.
+  by time array; `se=False` plots never read the stored influences. The dfbeta
+  sweep skips rows outside the risk set when the moments are finite (their
+  contributions are signed zeros) and accumulates into one cluster by column by
+  time buffer.
 - Yates survival setups fill one N by (T + 2) result row by row with constant
   scratch space, and response simulations reuse one predictor buffer and
   accumulate the covariance online without keeping each draw's responses.

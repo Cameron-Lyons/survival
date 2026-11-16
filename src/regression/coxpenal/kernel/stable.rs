@@ -16,6 +16,19 @@ use crate::residuals::martingale_log::martingale_log_scales;
 use ndarray::Array2;
 use std::collections::BTreeMap;
 
+/// The kernel's per-observation data in input row order. The stable sweeps
+/// break ties and sort by input row number, so they read this copy, which is
+/// only built if a fit needs them.
+pub(super) struct OriginalOrder {
+    pub(super) covar: Array2<f64>,
+    pub(super) weights: Vec<f64>,
+    pub(super) offset: Vec<f64>,
+    pub(super) status: Vec<i32>,
+    pub(super) stop: Vec<f64>,
+    pub(super) start: Option<Vec<f64>>,
+    pub(super) frail: Option<Vec<usize>>,
+}
+
 impl Kernel {
     pub(super) fn needs_stable(&self, beta: &[f64], fbeta: &[f64]) -> bool {
         self.unsafe_offsets
@@ -25,7 +38,26 @@ impl Kernel {
                 .any(|value| predictor_bound_needs_anchor(value.abs()))
     }
 
+    pub(super) fn original(&self) -> &OriginalOrder {
+        self.original.get_or_init(|| {
+            let mut covar = Array2::zeros(self.covar.raw_dim());
+            for (&row, values) in self.sort1.iter().zip(self.covar.rows()) {
+                covar.row_mut(row).assign(&values);
+            }
+            OriginalOrder {
+                covar,
+                weights: self.unsorted(&self.weights),
+                offset: self.unsorted(&self.offset),
+                status: self.unsorted(&self.status),
+                stop: self.unsorted(&self.stop),
+                start: self.start.as_deref().map(|start| self.unsorted(start)),
+                frail: self.frail.as_deref().map(|frail| self.unsorted(frail)),
+            }
+        })
+    }
+
     fn paired_scores(&self, beta: &[f64], fbeta: &[f64]) -> Vec<LogScale> {
+        let data = self.original();
         let anchors = self.predictor_anchors.get_or_init(|| {
             let mut anchors = Vec::with_capacity(self.strata_end.len());
             let mut start = 0;
@@ -33,7 +65,7 @@ impl Kernel {
                 anchors.push(
                     *self.sort1[start..end]
                         .iter()
-                        .max_by(|&&a, &&b| self.stop[a].total_cmp(&self.stop[b]).then(a.cmp(&b)))
+                        .max_by(|&&a, &&b| data.stop[a].total_cmp(&data.stop[b]).then(a.cmp(&b)))
                         .expect("nonempty stratum"),
                 );
                 start = end;
@@ -43,12 +75,12 @@ impl Kernel {
         let mut scores = vec![LogScale::EMPTY; self.n];
         let mut start = 0;
         for (&end, &anchor) in self.strata_end.iter().zip(anchors) {
-            let anchor = self.covar.row(anchor).to_vec();
+            let anchor = data.covar.row(anchor).to_vec();
             for &row in &self.sort1[start..end] {
-                let covariate = relative_covariate_scale(self.covar.row(row), &anchor, beta);
+                let covariate = relative_covariate_scale(data.covar.row(row), &anchor, beta);
                 let mut score =
-                    add_predictor_parts(LogScale::from_log(self.offset[row]), covariate);
-                if let Some(frail) = &self.frail {
+                    add_predictor_parts(LogScale::from_log(data.offset[row]), covariate);
+                if let Some(frail) = &data.frail {
                     score = add_predictor_parts(score, LogScale::from_log(fbeta[frail[row]]));
                 }
                 scores[row] = score;
@@ -67,6 +99,7 @@ impl Kernel {
         fdiag: &mut [f64],
     ) -> SurvivalResult<(f64, Vec<LogScale>)> {
         let scores = self.paired_scores(beta, fbeta);
+        let data = self.original();
         let mut loglik = 0.0;
         let mut mean = vec![0.0; self.nvar];
         let mut covariance = Array2::zeros((self.nvar, self.nvar));
@@ -75,13 +108,13 @@ impl Kernel {
         for &end in &self.strata_end {
             let rows = &self.sort1[start..end];
             let mut sparse =
-                (self.nf > 0).then(|| SparseRisk::new(self, rows, &scores, &mut positions));
+                (self.nf > 0).then(|| SparseRisk::new(data, rows, &scores, &mut positions));
             let sweep = LogRiskSweep {
-                stop: &self.stop,
-                entry: self.start.as_deref(),
-                status: &self.status,
-                x: self.covar.view(),
-                weights: &self.weights,
+                stop: &data.stop,
+                entry: data.start.as_deref(),
+                status: &data.status,
+                x: data.covar.view(),
+                weights: &data.weights,
                 log_risk: &[],
                 rows,
             };
@@ -100,13 +133,13 @@ impl Kernel {
                     }
                 });
                 for &row in event.deaths {
-                    let weight = self.weights[row];
+                    let weight = data.weights[row];
                     loglik += weight * scores[row].ratio_log(reference);
-                    if let Some(frail) = &self.frail {
+                    if let Some(frail) = &data.frail {
                         u[frail[row]] += weight;
                     }
                     for (i, value) in u[self.nf..].iter_mut().enumerate() {
-                        *value += weight * self.covar[(row, i)];
+                        *value += weight * data.covar[(row, i)];
                     }
                 }
                 let death_groups = sparse
@@ -172,16 +205,17 @@ impl Kernel {
         } else {
             TieMethod::Breslow
         };
+        let data = self.original();
         let residuals = martingale_log_scales(
-            self.start.as_deref(),
-            &self.stop,
-            &self.status,
+            data.start.as_deref(),
+            &data.stop,
+            &data.status,
             scores,
-            &self.weights,
+            &data.weights,
             &strata,
             method,
         )?;
-        Ok(self
+        Ok(data
             .status
             .iter()
             .zip(residuals)
@@ -249,7 +283,7 @@ struct Group {
 }
 
 struct SparseRisk<'a> {
-    kernel: &'a Kernel,
+    data: &'a OriginalOrder,
     scores: &'a [LogScale],
     positions: &'a [(usize, usize)],
     groups: Vec<Group>,
@@ -265,12 +299,13 @@ struct SparseRisk<'a> {
 
 impl<'a> SparseRisk<'a> {
     fn new(
-        kernel: &'a Kernel,
+        data: &'a OriginalOrder,
         rows: &[usize],
         scores: &'a [LogScale],
         positions: &'a mut [(usize, usize)],
     ) -> Self {
-        let frail = kernel.frail.as_ref().expect("sparse groups");
+        let nvar = data.covar.ncols();
+        let frail = data.frail.as_ref().expect("sparse groups");
         let mut grouped = BTreeMap::<usize, Vec<usize>>::new();
         for &row in rows {
             grouped.entry(frail[row]).or_default().push(row);
@@ -282,18 +317,18 @@ impl<'a> SparseRisk<'a> {
             }
             groups.push(Group {
                 label,
-                risk: LogMomentTree::new(members.len(), kernel.nvar),
+                risk: LogMomentTree::new(members.len(), nvar),
                 last: 0,
             });
         }
         let mut by_stop = rows.to_vec();
-        by_stop.sort_by(|&a, &b| kernel.stop[a].total_cmp(&kernel.stop[b]));
+        by_stop.sort_by(|&a, &b| data.stop[a].total_cmp(&data.stop[b]));
         let mut by_start = rows.to_vec();
-        if let Some(start) = &kernel.start {
+        if let Some(start) = &data.start {
             by_start.sort_by(|&a, &b| start[a].total_cmp(&start[b]));
         }
         let mut state = Self {
-            kernel,
+            data,
             scores,
             positions,
             groups,
@@ -302,13 +337,13 @@ impl<'a> SparseRisk<'a> {
             entered: 0,
             departed: 0,
             index: 0,
-            hazards: LogMomentTree::new(rows.len(), kernel.nvar),
+            hazards: LogMomentTree::new(rows.len(), nvar),
             variances: LogMomentTree::new_with_degree(rows.len(), 0, 2.0),
-            scratch: vec![0.0; kernel.nvar],
+            scratch: vec![0.0; nvar],
         };
-        if kernel.start.is_none() {
+        if data.start.is_none() {
             for &row in rows {
-                state.set(row, scores[row].shifted(kernel.weights[row].ln()));
+                state.set(row, scores[row].shifted(data.weights[row].ln()));
             }
         }
         state
@@ -316,7 +351,7 @@ impl<'a> SparseRisk<'a> {
 
     fn set(&mut self, row: usize, weight: LogScale) {
         let (group, position) = self.positions[row];
-        for (target, &x) in self.scratch.iter_mut().zip(self.kernel.covar.row(row)) {
+        for (target, &x) in self.scratch.iter_mut().zip(self.data.covar.row(row)) {
             *target = x;
         }
         self.groups[group].risk.set(position, weight, &self.scratch);
@@ -350,16 +385,16 @@ impl<'a> SparseRisk<'a> {
     }
 
     fn update(&mut self, time: f64, u: &mut [f64], jmat: &mut Array2<f64>, fdiag: &mut [f64]) {
-        if let Some(start) = &self.kernel.start {
+        if let Some(start) = &self.data.start {
             while self.entered < self.by_start.len() && start[self.by_start[self.entered]] < time {
                 let row = self.by_start[self.entered];
                 self.flush(self.positions[row].0, u, jmat, fdiag);
-                self.set(row, self.scores[row].shifted(self.kernel.weights[row].ln()));
+                self.set(row, self.scores[row].shifted(self.data.weights[row].ln()));
                 self.entered += 1;
             }
         }
         while self.departed < self.by_stop.len()
-            && self.kernel.stop[self.by_stop[self.departed]] < time
+            && self.data.stop[self.by_stop[self.departed]] < time
         {
             let row = self.by_stop[self.departed];
             self.flush(self.positions[row].0, u, jmat, fdiag);
@@ -382,9 +417,9 @@ impl<'a> SparseRisk<'a> {
             self.set(row, LogScale::EMPTY);
             groups
                 .entry(group)
-                .or_insert_with(|| LogMoments::new(self.kernel.nvar))
+                .or_insert_with(|| LogMoments::new(self.scratch.len()))
                 .add(
-                    self.scores[row].shifted(self.kernel.weights[row].ln()),
+                    self.scores[row].shifted(self.data.weights[row].ln()),
                     &self.scratch,
                 );
         }

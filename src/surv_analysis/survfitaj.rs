@@ -6,8 +6,9 @@ use super::survfit_summary::{RmeanOption, survfit0_aj_rows};
 use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
-use crate::data_prep::{aeq_counting, first_appearance_codes};
+use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -18,10 +19,12 @@ use crate::internal::validation::{
 };
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+mod cluster_rows;
 mod independent;
 
 #[derive(Debug, Clone)]
@@ -861,14 +864,13 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
             } else {
                 ctime - d.t0
             };
-            for (j, se) in se3.iter_mut().enumerate() {
-                let mut temp = 0.0;
-                for (a, &x) in row_mut(ua, j).iter_mut().zip(row(u, j)) {
-                    *a += delta * x;
-                    temp += *a * *a;
-                }
-                *se = temp.sqrt();
-            }
+            cluster_rows::integrate_rows(
+                ua.as_slice_mut().expect("standard layout"),
+                u.as_slice().expect("standard layout"),
+                ngrp,
+                delta,
+                se3,
+            );
             while person1 < nused {
                 let i1 = d.sort1[person1];
                 if d.time1[i1] < ctime {
@@ -951,29 +953,15 @@ fn aj_kernel(d: &AJKernelData<'_>) -> AJCurveFit {
                         let (j, k) = d.trmat[jk];
                         let haz = ntrans[[i, jk]] / nrisk[[i, j]];
                         let htemp = haz / nrisk[[i, j]];
-                        for (x, &w) in row_mut(c, jk).iter_mut().zip(row(wg, j)) {
-                            if w > 0.0 {
-                                *x -= w * htemp;
-                            }
-                        }
+                        cluster_rows::remove_hazard(row_mut(c, jk), row(wg, j), htemp);
                         if j != k {
                             let (from, to) = rows_mut_pair(u, j, k);
-                            for ((x, y), &w) in from.iter_mut().zip(to).zip(row(wg, j)) {
-                                if w > 0.0 {
-                                    let term = w * phat[j] * htemp;
-                                    *x += term;
-                                    *y -= term;
-                                }
-                            }
+                            cluster_rows::move_hazard(from, to, row(wg, j), phat[j], htemp);
                         }
                     }
                 }
-                for (j, se) in se1.iter_mut().enumerate() {
-                    *se = row(u, j).iter().map(|v| v * v).sum::<f64>().sqrt();
-                }
-                for (jk, se) in se2.iter_mut().enumerate() {
-                    *se = row(c, jk).iter().map(|v| v * v).sum::<f64>().sqrt();
-                }
+                cluster_rows::row_norms(u.as_slice().expect("standard layout"), ngrp, se1);
+                cluster_rows::row_norms(c.as_slice().expect("standard layout"), ngrp, se2);
             }
         }
         if !skip_update {
@@ -1163,13 +1151,15 @@ pub fn survfitaj(
     let id: Vec<usize> = rows.iter().map(|&i| id_codes[i]).collect();
 
     let influence = options.influence && options.se_fit;
-    let cluster: Vec<usize> = match data.cluster.as_ref().or(data.id.as_ref()) {
-        Some(labels) => {
-            let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
-            first_appearance_codes(&subset).0
-        }
-        None => (0..n).collect(),
-    };
+    let (cluster, n_clusters): (Vec<usize>, usize) =
+        match data.cluster.as_ref().or(data.id.as_ref()) {
+            Some(labels) => {
+                let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
+                let (codes, unique) = first_appearance_codes(&subset);
+                (codes, unique.len())
+            }
+            None => ((0..n).collect(), n),
+        };
 
     let (samestate, stemp) = if !counting {
         (istate.iter().all(|&s| s == istate[0]), istate[0])
@@ -1262,29 +1252,42 @@ pub fn survfitaj(
         i0: Option<Array2<f64>>,
         fit: AJCurveFit,
     }
-    let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
-    let mut c2 = vec![0usize; n];
-    let mut is_atrisk = vec![false; n];
-    let mut row_offset = 0;
     let single = n_curves == 1;
     let min_start = (counting && p0_common.is_none())
         .then(|| time1.iter().copied().fold(f64::INFINITY, f64::min));
+    let mut c2 = vec![0usize; n];
+    let mut renumbering = SubsetRenumbering::new(n_clusters);
+    let mut planned = Vec::with_capacity(n_curves);
+    let mut row_offset = 0;
     for (&code, keep) in strata_levels.iter().zip(rows_by_curve(&x, n_curves)) {
         let curve_offset = row_offset;
         row_offset += keep.len();
         if keep.is_empty() {
             continue;
         }
+        let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| cluster[i]));
+        for (&i, code) in keep.iter().zip(renumbered) {
+            c2[i] = code;
+        }
+        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
+        planned.push((code, keep, curve_offset, clusters));
+    }
+    // A curve reads only its own rows of `c2`, so the curves are fitted in parallel once
+    // every curve's clusters are numbered (unless the fit is too small to repay waking the
+    // threads).
+    let fit_curve = |(code, keep, curve_offset, clusters): (i32, Vec<usize>, usize, Vec<i64>)| {
         let sort1 = ordered_subset(&keep, &time1, single);
         let sort2 = ordered_subset(&keep, &time, single);
-        let mut utime: Vec<f64> = keep
+        // Read in time order, so that sorting only merges the two sorted runs.
+        let mut utime: Vec<f64> = sort2
             .iter()
             .filter(|&&i| stat2[i] != 0 || position[i] > 1)
             .map(|&i| time[i])
             .collect();
         if entry {
             utime.extend(
-                keep.iter()
+                sort1
+                    .iter()
                     .filter(|&&i| position[i] & 1 == 1)
                     .map(|&i| time1[i]),
             );
@@ -1298,13 +1301,7 @@ pub fn survfitaj(
         } else {
             utime.into_iter().filter(|&t| t >= t0).collect()
         };
-        let subset: Vec<usize> = keep.iter().map(|&i| cluster[i]).collect();
-        let (renumbered, unique) = first_appearance_codes(&subset);
-        for (&i, code) in keep.iter().zip(renumbered) {
-            c2[i] = code;
-        }
-        let nclust = unique.len();
-        let clusters: Vec<i64> = unique.iter().map(|&code| code as i64 + 1).collect();
+        let nclust = clusters.len();
         let n_id = {
             let mut ids: Vec<usize> = keep.iter().map(|&i| id[i]).collect();
             ids.sort_unstable();
@@ -1345,21 +1342,17 @@ pub fn survfitaj(
                     *value /= wtsum;
                 }
                 if p00.iter().all(|&p| p < 1.0) && sefit > 0 {
-                    for &i in &atrisk {
-                        is_atrisk[i] = true;
-                    }
+                    // R reads the at-risk flag, weight and state at the curve's offset into
+                    // the data rather than at the curve's own row; `atrisk` is sorted.
                     for (k, &curve_row) in keep.iter().enumerate() {
                         let row = curve_offset + k;
-                        if !is_atrisk[row] {
+                        if atrisk.binary_search(&row).is_err() {
                             continue;
                         }
                         for j in 0..nstate {
                             let indicator = if istate[row] == j { 1.0 } else { 0.0 };
                             u0[[c2[curve_row], j]] += weights[row] * (indicator - p00[j]) / wtsum;
                         }
-                    }
-                    for &i in &atrisk {
-                        is_atrisk[i] = false;
                     }
                     sd0 = Some(
                         (0..nstate)
@@ -1393,7 +1386,7 @@ pub fn survfitaj(
             t0,
         };
         let fit = aj_kernel(&kernel_data);
-        curves.push(Curve {
+        Ok(Curve {
             code,
             n: keep.len(),
             n_id,
@@ -1403,8 +1396,15 @@ pub fn survfitaj(
             clusters,
             i0: has_i0.then_some(u0),
             fit,
-        });
-    }
+        })
+    };
+    let parallel = planned.len() > 1 && n > PARALLEL_THRESHOLD_LARGE;
+    let curves: SurvivalResult<Vec<Curve>> = if parallel {
+        planned.into_par_iter().map(fit_curve).collect()
+    } else {
+        planned.into_iter().map(fit_curve).collect()
+    };
+    let curves = curves?;
 
     let total: usize = curves.iter().map(|c| c.utime.len()).sum();
     let addcounts = weights.iter().any(|&w| w != 1.0);
@@ -2105,6 +2105,179 @@ mod tests {
                         assert_eq!(combined[range.clone()], *separate);
                     }
                 }
+            }
+        }
+    }
+
+    /// Weighted, clustered multi-state data in three strata, with enough subjects for the
+    /// curves to be fitted in parallel: competing risks, or (`counting`) subjects who all
+    /// start well at time 0 and may fall ill before they die.  Times are exact multiples of
+    /// 0.01, so that `timefix` merges no times.
+    fn three_strata(counting: bool, subjects: usize) -> SurvfitAJData {
+        let mut state = 7_u64;
+        let mut uniform = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let ticks = |u: f64| ((1.0 - u).ln() * -100.0).round() + 1.0;
+        let mut rows = Vec::new();
+        for subject in 0..subjects {
+            let first = ticks(uniform());
+            let draw = uniform();
+            if !counting {
+                let status = if draw < 0.35 {
+                    1
+                } else {
+                    2 * i32::from(draw < 0.7)
+                };
+                rows.push((subject, 0.0, first, status, "well"));
+            } else if draw < 0.4 {
+                let second = first + ticks(uniform());
+                rows.push((subject, 0.0, first, 2, "well"));
+                rows.push((subject, first, second, 3 * i32::from(draw < 0.2), "ill"));
+            } else {
+                rows.push((subject, 0.0, first, 3 * i32::from(draw < 0.7), "well"));
+            }
+        }
+        let weight: Vec<f64> = (0..subjects)
+            .map(|_| {
+                if uniform() < 0.05 {
+                    0.0
+                } else {
+                    0.5 + 1.5 * uniform()
+                }
+            })
+            .collect();
+        let cluster: Vec<i64> = (0..subjects)
+            .map(|_| {
+                if uniform() < 0.1 {
+                    0
+                } else {
+                    (uniform() * 300.0) as i64
+                }
+            })
+            .collect();
+        let states = if counting {
+            names(&["well", "ill", "dead"])
+        } else {
+            names(&["a", "b"])
+        };
+        SurvfitAJData::try_new(
+            counting.then(|| rows.iter().map(|row| row.1 / 100.0).collect()),
+            rows.iter().map(|row| row.2 / 100.0).collect(),
+            rows.iter().map(|row| row.3).collect(),
+            states.clone(),
+            Some(rows.iter().map(|row| weight[row.0]).collect()),
+            Some(rows.iter().map(|row| [4, -1, 9][row.0 % 3]).collect()),
+            counting.then(|| rows.iter().map(|row| row.0 as i64).collect()),
+            counting.then(|| rows.iter().map(|row| row.4.to_string()).collect()),
+            counting.then_some(states),
+            (!counting).then(|| rows.iter().map(|row| cluster[row.0]).collect()),
+        )
+        .unwrap()
+    }
+
+    /// The rows of `data` in stratum `code`, as a fit without strata.
+    fn stratum(data: &SurvfitAJData, code: i32) -> SurvfitAJData {
+        let strata = data.strata.as_ref().unwrap();
+        let rows: Vec<usize> = (0..data.time.len())
+            .filter(|&i| strata[i] == code)
+            .collect();
+        let pick = |values: &[f64]| rows.iter().map(|&i| values[i]).collect::<Vec<_>>();
+        let pick_i64 = |values: &[i64]| rows.iter().map(|&i| values[i]).collect::<Vec<_>>();
+        SurvfitAJData {
+            start: data.start.as_deref().map(pick),
+            time: pick(&data.time),
+            state: rows.iter().map(|&i| data.state[i]).collect(),
+            states: data.states.clone(),
+            weights: data.weights.as_deref().map(pick),
+            strata: None,
+            id: data.id.as_deref().map(pick_i64),
+            istate: data
+                .istate
+                .as_ref()
+                .map(|istate| rows.iter().map(|&i| istate[i].clone()).collect()),
+            istate_levels: data.istate_levels.clone(),
+            cluster: data.cluster.as_deref().map(pick_i64),
+        }
+    }
+
+    fn bits(rows: &[Vec<f64>]) -> Vec<Vec<u64>> {
+        rows.iter()
+            .map(|row| row.iter().map(|v| v.to_bits()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn stratified_curves_fitted_in_parallel_match_curves_fitted_alone() {
+        for counting in [false, true] {
+            let data = three_strata(counting, 1800);
+            assert!(data.time.len() > PARALLEL_THRESHOLD_LARGE);
+            let options = SurvfitAJOptions {
+                influence: true,
+                ..Default::default()
+            };
+            let grouped = survfitaj(&data, &options).unwrap();
+            let codes = grouped.strata_codes.clone().unwrap();
+            assert_eq!(codes, vec![-1, 4, 9]);
+            for (curve, range) in grouped.curve_ranges().into_iter().enumerate() {
+                let alone = survfitaj(&stratum(&data, codes[curve]), &options).unwrap();
+                assert_eq!(grouped.states, alone.states);
+                assert_eq!(grouped.hazard_to, alone.hazard_to);
+                assert_eq!(grouped.n[curve], alone.n[0]);
+                assert_eq!(grouped.n_id[curve], alone.n_id[0]);
+                assert_eq!(bits(&grouped.p0[curve..=curve]), bits(&alone.p0));
+                assert_eq!(
+                    bits(&[grouped.time[range.clone()].to_vec()]),
+                    bits(&[alone.time])
+                );
+                let grouped_counts = grouped.counts.as_ref().unwrap();
+                let alone_counts = alone.counts.as_ref().unwrap();
+                for (together, separate) in [
+                    (&grouped.n_risk, &alone.n_risk),
+                    (&grouped.n_event, &alone.n_event),
+                    (&grouped.n_censor, &alone.n_censor),
+                    (&grouped.n_transition, &alone.n_transition),
+                    (&grouped_counts.n_risk, &alone_counts.n_risk),
+                    (&grouped_counts.n_transition, &alone_counts.n_transition),
+                    (&grouped.pstate, &alone.pstate),
+                    (&grouped.cumhaz, &alone.cumhaz),
+                    (
+                        grouped.std_err.as_ref().unwrap(),
+                        alone.std_err.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.std_chaz.as_ref().unwrap(),
+                        alone.std_chaz.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.std_auc.as_ref().unwrap(),
+                        alone.std_auc.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.lower.as_ref().unwrap(),
+                        alone.lower.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.upper.as_ref().unwrap(),
+                        alone.upper.as_ref().unwrap(),
+                    ),
+                ] {
+                    assert_eq!(bits(&together[range.clone()]), bits(separate));
+                }
+                let together = &grouped.influence_pstate.as_ref().unwrap()[curve];
+                let separate = &alone.influence_pstate.as_ref().unwrap()[0];
+                assert_eq!(together.cluster.len(), separate.cluster.len());
+                assert!(
+                    together
+                        .values
+                        .iter()
+                        .zip(separate.values.iter())
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+                assert_eq!(together.values.dim(), separate.values.dim());
             }
         }
     }

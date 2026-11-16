@@ -5,9 +5,15 @@ use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use ndarray::Array2;
 use std::sync::OnceLock;
 
+#[cfg(test)]
+mod reference_tests;
 mod stable;
 #[cfg(test)]
 mod stable_tests;
+mod tied_frailty;
+
+use self::stable::OriginalOrder;
+use self::tied_frailty::TieSums;
 
 fn coxsafe(x: f64) -> f64 {
     x.clamp(-200.0, 22.0)
@@ -43,6 +49,13 @@ pub(super) struct InnerFit {
     pub iter: usize,
 }
 
+/// The penalized Cox likelihood sweeps (R's coxfit5 and agfit5).
+///
+/// Every per-observation array is stored in `sort1` order (stratum, then
+/// decreasing stop time, censored before deaths), so a sweep streams memory
+/// instead of gathering rows; `sort1` maps a position back to its input row.
+/// The arithmetic and its order are those of a sweep through the input rows
+/// by `sort1`.
 pub(super) struct Kernel {
     n: usize,
     nvar: usize,
@@ -59,11 +72,17 @@ pub(super) struct Kernel {
     stop: Vec<f64>,
     start: Option<Vec<f64>>,
     frail: Option<Vec<usize>>,
+    /// The input row at each position.
     sort1: Vec<usize>,
-    sort2: Vec<usize>,
+    /// Positions by stratum and decreasing entry time (counting data).
+    exits: Vec<usize>,
+    original: OnceLock<OriginalOrder>,
     strata_end: Vec<usize>,
     mark: Vec<usize>,
     wtave: Vec<f64>,
+    /// The deaths whose Efron second moments can reach a result; see
+    /// [`second_moment_deaths`].
+    second_moments: Vec<bool>,
     method: f64,
     score: Vec<f64>,
     a: Vec<f64>,
@@ -71,10 +90,50 @@ pub(super) struct Kernel {
     tmean: Vec<f64>,
     cmat: Array2<f64>,
     cmat2: Array2<f64>,
+    /// Whether `a2` or `cmat2` holds anything since it was last cleared.
+    second_pending: bool,
     running: Vec<RunningSum>,
     flushed: Vec<RunningSum>,
     tied: Vec<usize>,
     tied_mark: Vec<bool>,
+    /// The current tie set's corrections of the `tied` frailty groups.
+    tie_sums: TieSums,
+}
+
+/// Efron's second moments (`a2`, `cmat2`) enter death step `k` of a tie set
+/// of `d` only through `k / d` times them, which is zero for a lone death and
+/// for Breslow ties; while they stay finite, `x - 0 * a2` is `x` exactly (no
+/// running sum is ever -0), so those deaths need not accumulate them. They
+/// stay finite when `n` terms of the largest possible magnitude,
+/// `e^22 * weight * max(1, |x|)^2`, sum to a finite value with room to spare;
+/// otherwise every death accumulates them, keeping the NaN that
+/// `0 * inf` gives.
+fn second_moment_deaths(
+    status: &[i32],
+    stop: &[f64],
+    strata_end: &[usize],
+    efron: bool,
+    largest_term: f64,
+) -> Vec<bool> {
+    let n = status.len();
+    let bounded = (4.0 * n as f64 * largest_term).is_finite();
+    let mut deaths = vec![false; n];
+    let mut begin = 0;
+    for &end in strata_end {
+        let mut i = begin;
+        while i < end {
+            let mut j = i + 1;
+            if status[i] == 1 {
+                while j < end && status[j] == 1 && stop[j] == stop[i] {
+                    j += 1;
+                }
+                deaths[i..j].fill(!bounded || (efron && j - i > 1));
+            }
+            i = j;
+        }
+        begin = end;
+    }
+    deaths
 }
 
 pub(super) struct KernelData<'a> {
@@ -107,7 +166,13 @@ impl Kernel {
                 .then_with(|| data.stop[r].total_cmp(&data.stop[l]))
                 .then_with(|| data.status[l].cmp(&data.status[r]))
         });
-        let sort2 = match data.start {
+        let mut position = vec![0; n];
+        for (ip, &row) in sort1.iter().enumerate() {
+            position[row] = ip;
+        }
+        // A stable sort of the input rows: tied entries leave the risk set in
+        // input order.
+        let exits = match data.start {
             Some(start) => {
                 let mut order: Vec<usize> = (0..n).collect();
                 order.sort_by(|&l, &r| {
@@ -115,7 +180,7 @@ impl Kernel {
                         .cmp(&stratum(r))
                         .then_with(|| start[r].total_cmp(&start[l]))
                 });
-                order
+                order.into_iter().map(|row| position[row]).collect()
             }
             None => Vec::new(),
         };
@@ -126,29 +191,32 @@ impl Kernel {
             }
         }
 
+        let sorted =
+            |values: &[f64]| -> Vec<f64> { sort1.iter().map(|&row| values[row]).collect() };
+        let weights = sorted(data.weights);
+        let stop = sorted(data.stop);
+        let status: Vec<i32> = sort1.iter().map(|&row| data.status[row]).collect();
+
         let mut mark = vec![0usize; n];
         let mut wtave = vec![0.0; n];
         if data.start.is_none() {
             let mut istrat = 0;
             let mut i = 0;
             while i < n {
-                let p = sort1[i];
-                if data.status[p] == 1 {
+                if status[i] == 1 {
                     let mut ndead = 0;
                     let mut total = 0.0;
                     let mut j = i;
                     while j < n {
-                        let k = sort1[j];
-                        if data.stop[k] != data.stop[p] || j == strata_end[istrat] {
+                        if stop[j] != stop[i] || j == strata_end[istrat] {
                             break;
                         }
                         ndead += 1;
-                        total += data.weights[k];
+                        total += weights[j];
                         j += 1;
                     }
-                    let k = sort1[j - 1];
-                    mark[k] = ndead;
-                    wtave[k] = total / ndead as f64;
+                    mark[j - 1] = ndead;
+                    wtave[j - 1] = total / ndead as f64;
                     i = j;
                 } else {
                     i += 1;
@@ -159,40 +227,67 @@ impl Kernel {
             }
         }
 
-        let mut covar = data.x.clone();
-        let mut means = vec![0.0; nvar];
-        for (i, mean) in means.iter_mut().enumerate() {
-            if !data.docenter[i] {
-                continue;
+        // Each mean sums its column in input order and layout, which fixes
+        // its last bits; only then are the centred rows laid out by position.
+        let means: Vec<f64> = (0..nvar)
+            .map(|i| {
+                if data.docenter[i] {
+                    data.x.column(i).sum() / n as f64
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let mut covar = Array2::zeros((n, nvar));
+        for (mut target, &row) in covar.rows_mut().into_iter().zip(&sort1) {
+            for (((value, &x), &center), &docenter) in target
+                .iter_mut()
+                .zip(data.x.row(row))
+                .zip(&means)
+                .zip(data.docenter)
+            {
+                *value = if docenter { x - center } else { x };
             }
-            *mean = covar.column(i).sum() / n as f64;
-            let center = *mean;
-            covar.column_mut(i).mapv_inplace(|value| value - center);
         }
+        let covar_bounds: Vec<f64> = (0..nvar)
+            .map(|j| covar.column(j).iter().map(|x| x.abs()).fold(0.0, f64::max))
+            .collect();
+        let largest_risk =
+            coxsafe(f64::INFINITY).exp() * weights.iter().fold(0.0, |m: f64, w| m.max(w.abs()));
+        let largest_x = covar_bounds.iter().fold(1.0, |m: f64, &b| m.max(b));
+        let second_moments = second_moment_deaths(
+            &status,
+            &stop,
+            &strata_end,
+            data.efron,
+            largest_risk * largest_x * largest_x,
+        );
 
         Self {
             n,
             nvar,
             nf,
-            covar_bounds: (0..nvar)
-                .map(|j| covar.column(j).iter().map(|x| x.abs()).fold(0.0, f64::max))
-                .collect(),
+            covar_bounds,
             predictor_anchors: OnceLock::new(),
             unsafe_offsets: data.unsafe_offsets,
             stable_score: None,
             covar,
             means,
-            weights: data.weights.to_vec(),
-            offset: data.offset.to_vec(),
-            status: data.status.to_vec(),
-            stop: data.stop.to_vec(),
-            start: data.start.map(<[f64]>::to_vec),
-            frail: data.frail.map(<[usize]>::to_vec),
+            weights,
+            offset: sorted(data.offset),
+            status,
+            stop,
+            start: data.start.map(sorted),
+            frail: data
+                .frail
+                .map(|frail| sort1.iter().map(|&row| frail[row]).collect()),
             sort1,
-            sort2,
+            exits,
+            original: OnceLock::new(),
             strata_end,
             mark,
             wtave,
+            second_moments,
             method: f64::from(u8::from(data.efron)),
             score: vec![0.0; n],
             a: vec![0.0; nvar2],
@@ -200,10 +295,12 @@ impl Kernel {
             tmean: vec![0.0; nvar2],
             cmat: Array2::zeros((nvar, nvar2)),
             cmat2: Array2::zeros((nvar, nvar2)),
+            second_pending: false,
             running: vec![RunningSum::default(); nvar + 2],
             flushed: vec![RunningSum::default(); nf * (nvar + 2)],
             tied: Vec::new(),
             tied_mark: vec![false; nf],
+            tie_sums: TieSums::new(nvar),
         }
     }
 
@@ -211,13 +308,22 @@ impl Kernel {
         &self.means
     }
 
+    /// Observation `p`'s centred covariates.
+    fn row(&self, p: usize) -> &[f64] {
+        self.covar
+            .row(p)
+            .to_slice()
+            .expect("covariates are row-major")
+    }
+
     fn eta(&self, p: usize, beta: &[f64], fbeta: &[f64]) -> f64 {
+        debug_assert_eq!(beta.len(), self.nvar);
         let mut zbeta = self.offset[p];
         if let Some(frail) = &self.frail {
             zbeta += fbeta[frail[p]];
         }
-        for (i, b) in beta.iter().enumerate() {
-            zbeta += b * self.covar[(p, i)];
+        for (b, x) in beta.iter().zip(self.row(p)) {
+            zbeta += b * x;
         }
         coxsafe(zbeta)
     }
@@ -244,12 +350,11 @@ impl Kernel {
         let mut denom = 0.0;
         let mut efron_wt = 0.0;
         let mut istrat = 0;
-        for ii in 0..self.n {
-            if ii == self.strata_end[istrat] {
+        for p in 0..self.n {
+            if p == self.strata_end[istrat] {
                 denom = 0.0;
                 istrat += 1;
             }
-            let p = self.sort1[ii];
             let zbeta = self.eta(p, beta, fbeta);
             let risk = zbeta.exp() * self.weights[p];
             denom += risk;
@@ -278,14 +383,13 @@ impl Kernel {
         let mut denom = 0.0;
         let mut person = 0;
         while person < self.n {
-            let p = self.sort1[person];
-            if self.status[p] == 0 {
-                denom += score[p].exp() * self.weights[p];
+            if self.status[person] == 0 {
+                denom += score[person].exp() * self.weights[person];
                 person += 1;
             } else {
-                let time = self.stop[p];
+                let time = self.stop[person];
                 while indx2 < self.strata_end[istrat] {
-                    let q = self.sort2[indx2];
+                    let q = self.exits[indx2];
                     if start[q] < time {
                         break;
                     }
@@ -297,28 +401,26 @@ impl Kernel {
                 let mut deaths = 0.0;
                 let mut k = person;
                 while k < self.strata_end[istrat] {
-                    let q = self.sort1[k];
-                    if self.stop[q] < time {
+                    if self.stop[k] < time {
                         break;
                     }
-                    let risk = score[q].exp() * self.weights[q];
+                    let risk = score[k].exp() * self.weights[k];
                     denom += risk;
-                    if self.status[q] == 1 {
+                    if self.status[k] == 1 {
                         deaths += 1.0;
                         efron_wt += risk;
-                        meanwt += self.weights[q];
+                        meanwt += self.weights[k];
                     }
                     k += 1;
                 }
                 meanwt /= deaths;
                 let mut itemp = -1.0;
                 while person < k {
-                    let q = self.sort1[person];
-                    if self.status[q] == 1 {
+                    if self.status[person] == 1 {
                         itemp += 1.0;
                         let temp = itemp * self.method / deaths;
-                        loglik +=
-                            self.weights[q] * score[q] - meanwt * (denom - temp * efron_wt).ln();
+                        loglik += self.weights[person] * score[person]
+                            - meanwt * (denom - temp * efron_wt).ln();
                     }
                     person += 1;
                 }
@@ -335,6 +437,7 @@ impl Kernel {
     fn accumulate(&mut self, p: usize, risk: f64, sign: f64, second: bool) {
         let nf = self.nf;
         let fgrp = self.frail.as_ref().map(|f| f[p]);
+        self.second_pending |= second;
         if second
             && let Some(g) = fgrp
             && !self.tied_mark[g]
@@ -342,26 +445,32 @@ impl Kernel {
             self.tied_mark[g] = true;
             self.tied.push(g);
         }
-        let target = if second { &mut self.a2 } else { &mut self.a };
-        if let Some(g) = fgrp {
-            target[g] += sign * risk;
-        }
-        for i in 0..self.nvar {
-            let xi = self.covar[(p, i)];
-            target[i + nf] += sign * risk * xi;
-        }
-        let cmat = if second {
-            &mut self.cmat2
+        let row = self.covar.row(p);
+        let x = row.to_slice().expect("covariates are row-major");
+        let (target, cmat) = if second {
+            (&mut self.a2, &mut self.cmat2)
         } else {
-            &mut self.cmat
+            (&mut self.a, &mut self.cmat)
         };
-        for i in 0..self.nvar {
-            let xi = self.covar[(p, i)];
+        // Each product keeps the association ((sign * risk) * x_i) * x_j.
+        let risk = sign * risk;
+        if let Some(g) = fgrp {
+            target[g] += risk;
+        }
+        for (sum, &xi) in target[nf..].iter_mut().zip(x) {
+            *sum += risk * xi;
+        }
+        for (i, &xi) in x.iter().enumerate() {
+            let weighted = risk * xi;
+            let cross = cmat
+                .row_mut(i)
+                .into_slice()
+                .expect("moment matrices are row-major");
             if let Some(g) = fgrp {
-                cmat[(i, g)] += sign * risk * xi;
+                cross[g] += weighted;
             }
-            for j in 0..=i {
-                cmat[(i, j + nf)] += sign * risk * xi * self.covar[(p, j)];
+            for (sum, &xj) in cross[nf..=nf + i].iter_mut().zip(&x[..=i]) {
+                *sum += weighted * xj;
             }
         }
     }
@@ -395,6 +504,10 @@ impl Kernel {
         }
     }
 
+    /// Death step `k` of a tie set of `ndead`: its log-likelihood term, with
+    /// its score and information added in. The Efron corrections of the tied
+    /// frailty groups are only summed here; [`Self::finish_tie_set`] applies
+    /// them once the set's steps are done.
     #[allow(clippy::too_many_arguments)]
     fn death_step(
         &mut self,
@@ -405,24 +518,32 @@ impl Kernel {
         meanwt: f64,
         u: &mut [f64],
         jmat: &mut Array2<f64>,
-        fdiag: &mut [f64],
     ) -> f64 {
         let nf = self.nf;
         let nvar = self.nvar;
         let temp = k as f64 * self.method / ndead;
         let d2 = denom - temp * efron_wt;
-        for ii in 0..nvar {
-            let i = ii + nf;
-            let temp2 = (self.a[i] - temp * self.a2[i]) / d2;
-            self.tmean[i] = temp2;
-            u[i] -= meanwt * temp2;
+        for (((mean, score), &a), &a2) in self.tmean[nf..]
+            .iter_mut()
+            .zip(&mut u[nf..])
+            .zip(&self.a[nf..])
+            .zip(&self.a2[nf..])
+        {
+            let temp2 = (a - temp * a2) / d2;
+            *mean = temp2;
+            *score -= meanwt * temp2;
         }
-        for ii in 0..nvar {
-            let i = ii + nf;
-            for j in nf..=i {
-                jmat[(ii, j)] += meanwt
-                    * ((self.cmat[(ii, j)] - temp * self.cmat2[(ii, j)]) / d2
-                        - self.tmean[i] * self.tmean[j]);
+        let means = &self.tmean[nf..];
+        for (ii, &mean_i) in means.iter().enumerate() {
+            let span = nf..=nf + ii;
+            let cmat = self.cmat.row(ii);
+            let cmat2 = self.cmat2.row(ii);
+            let mut info = jmat.row_mut(ii);
+            let info = &mut info.as_slice_mut().expect("information is row-major")[span.clone()];
+            let cmat = &cmat.to_slice().expect("moment matrices are row-major")[span.clone()];
+            let cmat2 = &cmat2.to_slice().expect("moment matrices are row-major")[span];
+            for (((value, &c), &c2), &mean_j) in info.iter_mut().zip(cmat).zip(cmat2).zip(means) {
+                *value += meanwt * ((c - temp * c2) / d2 - mean_i * mean_j);
             }
         }
         if nf > 0 {
@@ -433,17 +554,8 @@ impl Kernel {
                 self.running[ii + 2].add(weight * self.tmean[ii + nf]);
             }
             if temp != 0.0 {
-                for &g in &self.tied {
-                    let plain = self.a[g] / d2;
-                    let tied = (self.a[g] - temp * self.a2[g]) / d2;
-                    u[g] -= meanwt * (tied - plain);
-                    fdiag[g] += meanwt * (tied * (1.0 - tied) - plain * (1.0 - plain));
-                    for ii in 0..nvar {
-                        jmat[(ii, g)] += meanwt
-                            * (-temp * self.cmat2[(ii, g)] / d2
-                                - self.tmean[ii + nf] * (tied - plain));
-                    }
-                }
+                self.tie_sums
+                    .add(meanwt, temp, denom, d2, &self.tmean[nf..]);
             }
         }
         -meanwt * d2.ln()
@@ -451,6 +563,9 @@ impl Kernel {
 
     fn reset_sums(&mut self, second: bool) {
         if second {
+            if !std::mem::take(&mut self.second_pending) {
+                return;
+            }
             for &g in &self.tied {
                 self.a2[g] = 0.0;
                 self.cmat2.column_mut(g).fill(0.0);
@@ -484,18 +599,17 @@ impl Kernel {
         let mut efron_wt = 0.0;
         let mut istrat = 0;
         self.reset_running();
-        for ip in 0..self.n {
-            if ip == 0 || ip == self.strata_end[istrat] {
+        for p in 0..self.n {
+            if p == 0 || p == self.strata_end[istrat] {
                 efron_wt = 0.0;
                 denom = 0.0;
                 self.flush_all(u, jmat, fdiag);
                 self.reset_sums(false);
                 self.reset_sums(true);
             }
-            if ip == self.strata_end[istrat] {
+            if p == self.strata_end[istrat] {
                 istrat += 1;
             }
-            let p = self.sort1[ip];
             let zbeta = self.eta(p, beta, fbeta);
             self.score[p] = zbeta.exp();
             let risk = self.score[p] * self.weights[p];
@@ -508,17 +622,20 @@ impl Kernel {
                 if let Some(frail) = &self.frail {
                     u[frail[p]] += self.weights[p];
                 }
-                for i in 0..self.nvar {
-                    u[i + nf] += self.weights[p] * self.covar[(p, i)];
+                for (score, &x) in u[nf..].iter_mut().zip(self.row(p)) {
+                    *score += self.weights[p] * x;
                 }
-                self.accumulate(p, risk, 1.0, true);
+                if self.second_moments[p] {
+                    self.accumulate(p, risk, 1.0, true);
+                }
             }
             if self.mark[p] > 0 {
                 let ndead = self.mark[p] as f64;
                 let wtave = self.wtave[p];
                 for k in 0..self.mark[p] {
-                    newlk += self.death_step(denom, efron_wt, k, ndead, wtave, u, jmat, fdiag);
+                    newlk += self.death_step(denom, efron_wt, k, ndead, wtave, u, jmat);
                 }
+                self.finish_tie_set(denom, u, jmat, fdiag);
                 efron_wt = 0.0;
                 self.reset_sums(true);
             }
@@ -548,17 +665,16 @@ impl Kernel {
         self.reset_sums(true);
         let mut person = 0;
         while person < self.n {
-            let p = self.sort1[person];
-            if self.status[p] == 0 {
-                let risk = self.score[p].exp() * self.weights[p];
+            if self.status[person] == 0 {
+                let risk = self.score[person].exp() * self.weights[person];
                 denom += risk;
-                self.flush_person(p, u, jmat, fdiag);
-                self.accumulate(p, risk, 1.0, false);
+                self.flush_person(person, u, jmat, fdiag);
+                self.accumulate(person, risk, 1.0, false);
                 person += 1;
             } else {
-                let time = self.stop[p];
+                let time = self.stop[person];
                 while indx2 < self.strata_end[istrat] {
-                    let q = self.sort2[indx2];
+                    let q = self.exits[indx2];
                     if self.start.as_ref().expect("counting-process data")[q] < time {
                         break;
                     }
@@ -574,40 +690,40 @@ impl Kernel {
                 self.reset_sums(true);
                 let mut k = person;
                 while k < self.strata_end[istrat] {
-                    let q = self.sort1[k];
-                    if self.stop[q] < time {
+                    if self.stop[k] < time {
                         break;
                     }
-                    let risk = self.score[q].exp() * self.weights[q];
+                    let risk = self.score[k].exp() * self.weights[k];
                     denom += risk;
-                    self.flush_person(q, u, jmat, fdiag);
-                    self.accumulate(q, risk, 1.0, false);
-                    if self.status[q] == 1 {
+                    self.flush_person(k, u, jmat, fdiag);
+                    self.accumulate(k, risk, 1.0, false);
+                    if self.status[k] == 1 {
                         deaths += 1.0;
                         efron_wt += risk;
-                        meanwt += self.weights[q];
+                        meanwt += self.weights[k];
                         if let Some(frail) = &self.frail {
-                            u[frail[q]] += self.weights[q];
+                            u[frail[k]] += self.weights[k];
                         }
-                        for i in 0..self.nvar {
-                            u[i + nf] += self.weights[q] * self.covar[(q, i)];
+                        for (score, &x) in u[nf..].iter_mut().zip(self.row(k)) {
+                            *score += self.weights[k] * x;
                         }
-                        self.accumulate(q, risk, 1.0, true);
+                        if self.second_moments[k] {
+                            self.accumulate(k, risk, 1.0, true);
+                        }
                     }
                     k += 1;
                 }
                 meanwt /= deaths;
                 let mut itemp = 0;
                 while person < k {
-                    let q = self.sort1[person];
-                    if self.status[q] == 1 {
-                        newlk += self.weights[q] * self.score[q];
-                        newlk +=
-                            self.death_step(denom, efron_wt, itemp, deaths, meanwt, u, jmat, fdiag);
+                    if self.status[person] == 1 {
+                        newlk += self.weights[person] * self.score[person];
+                        newlk += self.death_step(denom, efron_wt, itemp, deaths, meanwt, u, jmat);
                         itemp += 1;
                     }
                     person += 1;
                 }
+                self.finish_tie_set(denom, u, jmat, fdiag);
             }
             if person == self.strata_end[istrat] {
                 istrat += 1;
@@ -773,9 +889,8 @@ impl Kernel {
         let mut hazard_jump = vec![0.0; n];
         let mut istrat = 0;
         let mut denom = 0.0;
-        for ip in 0..n {
-            let p = self.sort1[ip];
-            if ip == self.strata_end[istrat] {
+        for p in 0..n {
+            if p == self.strata_end[istrat] {
                 denom = 0.0;
                 istrat += 1;
             }
@@ -784,8 +899,7 @@ impl Kernel {
                 let ndead = self.mark[p];
                 let mut wtsum = 0.0;
                 let mut efron_wt = 0.0;
-                for j in 0..ndead {
-                    let i = self.sort1[ip - j];
+                for i in (p + 1 - ndead..=p).rev() {
                     efron_wt += self.score[i] * self.weights[i];
                     wtsum += self.weights[i];
                 }
@@ -810,14 +924,14 @@ impl Kernel {
         let mut istrat = self.strata_end.len() - 1;
         let mut ip = n as isize - 1;
         while ip >= 0 {
-            let p = self.sort1[ip as usize];
+            let p = ip as usize;
             if self.status[p] > 0 {
                 let ndead = self.mark[p];
                 let jump = expect[p];
                 let hazard2 = hazard_jump[p];
-                for j in 0..ndead {
-                    let i = self.sort1[ip as usize - j];
-                    expect[i] = self.score[i] * (hazard + hazard2);
+                let tie = p + 1 - ndead..=p;
+                for (expected, &score) in expect[tie.clone()].iter_mut().zip(&self.score[tie]) {
+                    *expected = score * (hazard + hazard2);
                 }
                 ip -= ndead as isize;
                 hazard += jump;
@@ -830,7 +944,16 @@ impl Kernel {
                 istrat -= 1;
             }
         }
-        Ok(expect)
+        Ok(self.unsorted(&expect))
+    }
+
+    /// `values`, one per position, in input row order.
+    fn unsorted<T: Copy + Default>(&self, values: &[T]) -> Vec<T> {
+        let mut rows = vec![T::default(); self.n];
+        for (&row, &value) in self.sort1.iter().zip(values) {
+            rows[row] = value;
+        }
+        rows
     }
 }
 
@@ -843,5 +966,24 @@ mod tests {
         assert_eq!(coxsafe(30.0), 22.0);
         assert_eq!(coxsafe(-300.0), -200.0);
         assert_eq!(coxsafe(1.5), 1.5);
+    }
+
+    #[test]
+    fn only_tied_efron_deaths_accumulate_second_moments_while_they_stay_finite() {
+        // Positions in risk-set order: a tie of two deaths at 5, a lone death
+        // at 4 after a censoring, and a tie at 3 split by the stratum boundary.
+        let status = [1, 1, 0, 1, 1, 1, 0];
+        let stop = [5., 5., 4., 4., 3., 3., 3.];
+        let strata_end = [5, 7];
+        let flags =
+            |efron, largest| second_moment_deaths(&status, &stop, &strata_end, efron, largest);
+        assert_eq!(
+            flags(true, 1e9),
+            [true, true, false, false, false, false, false]
+        );
+        assert_eq!(flags(false, 1e9), [false; 7]);
+        let deaths = status.map(|s| s == 1);
+        assert_eq!(flags(true, f64::MAX / 8.0), deaths);
+        assert_eq!(flags(false, f64::INFINITY), deaths);
     }
 }

@@ -129,6 +129,16 @@ class _SurvfitData:
     def cluster_codes(self) -> list[int] | None:
         return None if self.cluster is None else _encode_labels(self.cluster, "cluster")
 
+    def id_labels(self) -> list[int] | None:
+        """The ids for an engine that numbers them by first appearance itself."""
+
+        return None if self.id is None else _engine_labels(self.id, "id")
+
+    def cluster_labels(self) -> list[int] | None:
+        """The clusters for an engine that numbers them by first appearance itself."""
+
+        return None if self.cluster is None else _engine_labels(self.cluster, "cluster")
+
     def clname(self) -> tuple[Any, ...] | None:
         """``survfitKM``'s ``clname``: the cluster (else id) levels the engine's codes index.
 
@@ -161,6 +171,18 @@ def _curve_factor(
     return _complete_codes(factor, "missing values in the grouping variables"), factor.levels
 
 
+def _engine_labels(values: Sequence[Any], name: str) -> list[int]:
+    """Labels for an engine that numbers them by first appearance (``match(x, unique(x))``)
+    itself: plain 64-bit integers pass as they are, which saves numbering them here; other
+    labels pass as their codes."""
+
+    # The type test is exact (``bool`` and NumPy integers are numbered here), so the
+    # shortcut relies on ``_aligned`` materializing integer columns as Python ints.
+    if set(map(type, values)) == {int} and -(2**63) <= min(values) <= max(values) < 2**63:
+        return list(values)
+    return _encode_labels(values, name)
+
+
 def _case_weights(weights: Any | None, n: int) -> list[float] | None:
     if weights is None:
         return None
@@ -170,9 +192,10 @@ def _case_weights(weights: Any | None, n: int) -> list[float] | None:
         raise TypeError("weights must be numeric") from exc
     if len(values) != n:
         raise ValueError("weights must have the same length as the Surv response")
-    if any(not math.isfinite(value) for value in values):
+    array = np.asarray(values)
+    if not np.isfinite(array).all():
         raise ValueError("weights must be finite")
-    if any(value < 0.0 for value in values):
+    if (array < 0.0).any():
         raise ValueError("weights must be non-negative")
     return values
 
@@ -626,14 +649,15 @@ def _km_engine(
         if influence > 0 and not robust:
             _warn_outside_package("robust=FALSE implies influence=FALSE")
     start = _start_time_value(start_time, allow_infinite=True)
+    # The engine numbers the labels itself, but names influence rows by the label codes.
     engine = _core.survfitkm(
         frame.y.time,
         frame.y._event_codes(),
         start=frame.y.start,
         weights=frame.weights,
         strata=frame.strata_codes,
-        id=frame.id_codes(),
-        cluster=frame.cluster_codes(),
+        id=frame.id_codes() if influence else frame.id_labels(),
+        cluster=frame.cluster_codes() if influence else frame.cluster_labels(),
         stype=stype,
         ctype=ctype,
         se_fit=se_fit,
@@ -798,10 +822,10 @@ def _survfitAJ(
         start=None if frame.y.start is None else list(frame.y.start),
         weights=frame.weights,
         strata=frame.strata_codes,
-        id=frame.id_codes(),
+        id=frame.id_labels(),
         istate=istate,
         istate_levels=istate_levels,
-        cluster=frame.cluster_codes(),
+        cluster=frame.cluster_labels(),
         se_fit=se_fit,
         conf_int=conf_int,
         conf_type=conf_type,
@@ -984,14 +1008,6 @@ def _engine_of(x: Any) -> Any:
 
 def _is_matrix(values: Any) -> bool:
     return bool(values) and isinstance(values[0], list)
-
-
-def _cox_columns(values: Any) -> list[list[float]]:
-    """The columns of an ``ntime x ncurve`` matrix (a vector is one column)."""
-
-    if _is_matrix(values):
-        return [list(column) for column in zip(*values, strict=True)]
-    return [list(values)]
 
 
 def _cox_subset_positions(
@@ -1248,33 +1264,25 @@ def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:
     """One engine per curve column of ``x``.  A ``survfitcox`` object has no ``t0``, so
     ``survfit0`` and ``survmean`` start it at ``min(0, time)``."""
 
-    ncurve = x.ncurve
-    columns: dict[str, list[list[float]] | list[None]] = {
-        name: _cox_columns(values) if (values := getattr(x, name)) else [None] * ncurve
-        for name in ("cumhaz", "std_err", "std_chaz", "lower", "upper")
-    }
-    return [
-        _core.SurvfitKMResult.from_stacked(
-            x.time,
-            x.n_risk,
-            x.n_event,
-            surv,
-            x.n,
-            strata=list(x.strata.values()) if x.strata else None,
-            n_censor=x.n_censor,
-            std_err=columns["std_err"][curve],
-            cumhaz=columns["cumhaz"][curve],
-            std_chaz=columns["std_chaz"][curve],
-            lower=columns["lower"][curve],
-            upper=columns["upper"][curve],
-            logse=x.logse is not False,
-            conf_int=0.95 if x.conf_int is None else x.conf_int,
-            conf_type=x.conf_type or "none",
-            type=x.type,
-            t0=min([0.0, *x.time]),
-        )
-        for curve, surv in enumerate(_cox_columns(x.surv))
-    ]
+    return _core.SurvfitKMResult._from_stacked_columns(
+        x.time,
+        x.n_risk,
+        x.n_event,
+        x.surv,
+        x.n,
+        strata=list(x.strata.values()) if x.strata else None,
+        n_censor=x.n_censor,
+        std_err=x.std_err or None,
+        cumhaz=x.cumhaz or None,
+        std_chaz=x.std_chaz or None,
+        lower=x.lower or None,
+        upper=x.upper or None,
+        logse=x.logse is not False,
+        conf_int=0.95 if x.conf_int is None else x.conf_int,
+        conf_type=x.conf_type or "none",
+        type=x.type,
+        t0=min([0.0, *x.time]),
+    )
 
 
 def _joined_columns(columns: Sequence[Sequence[float] | None], matrix: bool) -> Any:

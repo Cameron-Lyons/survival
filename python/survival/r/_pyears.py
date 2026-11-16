@@ -10,6 +10,7 @@ tabulation, ``match.ratetable`` and the expected-survival curves are the
 from __future__ import annotations
 
 import math
+import sys
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -17,14 +18,13 @@ from datetime import UTC
 from datetime import date as _Date
 from datetime import datetime as _DateTime
 from datetime import timedelta as _TimeDelta
-from itertools import pairwise
+from itertools import chain, pairwise
 from typing import Any
 
 import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
-    _warn_outside_package,
     _as_character,
     _categories,
     _coerce_array_like,
@@ -40,12 +40,14 @@ from ._coerce import (
     _materialize_labels,
     _normalize_bool_option,
     _normalize_positive_scale,
+    _PLAIN_REALS_OR_BOOL,
     _pop_dotted_keyword,
     _r_factor,
     _r_format_number,
     _rows_of,
     _scalar_or_vector,
     _subset_sequence,
+    _warn_outside_package,
 )
 from ._fit import _excluded_rows, _pad_rows
 from ._formula import (
@@ -424,6 +426,33 @@ def _rate_positions(mf: ModelFrame, ratetable: RateTable) -> list[list[float]]:
     return _match_rate_columns(mf.extra, ratetable).r
 
 
+_NS_PER_DAY = 86_400_000_000_000
+
+
+def _timestamp_days(values: list[Any]) -> list[float] | None:
+    """:func:`_ratetable_day` of a column of pandas ``Timestamp`` and ``NaT`` values, or
+    ``None`` for any other column.
+
+    A model frame keeps a date column as ``Timestamp`` objects. ``Timestamp.value``
+    counts nanoseconds since 1970-01-01 UTC, so floor division gives the UTC day that
+    ``astimezone(UTC).toordinal()`` reads, before 1970 too. A ``Timestamp`` outside the
+    nanosecond range has no ``value`` and the column keeps the per-value path.
+    """
+
+    pandas = sys.modules.get("pandas")
+    if pandas is None or not values:
+        return None
+    if not set(map(type, values)) <= {pandas.Timestamp, type(pandas.NaT)}:
+        return None
+    try:
+        ns = np.fromiter((value.value for value in values), np.int64, len(values))
+    except OverflowError:
+        return None
+    days = (ns // _NS_PER_DAY).astype(float)
+    days[ns == pandas.NaT.value] = math.nan
+    return days.tolist()
+
+
 def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetableResult:
     """Shared date/factor coercion for public matching and population model frames."""
     names = ratetable.dimid
@@ -465,7 +494,10 @@ def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetable
                 raise ValueError(f"The variable {name} contains missing values")
             columns.append([str(value) for value in column])
         elif code > 2:
-            columns.append([_ratetable_day(value) for value in column])
+            days = _timestamp_days(column)
+            columns.append([_ratetable_day(value) for value in column] if days is None else days)
+        elif set(map(type, column)) <= _PLAIN_REALS_OR_BOOL:
+            columns.append(list(map(float, column)))
         else:
             columns.append([_day_count(value) for value in column])
     return _core.match_ratetable(ratetable, names, columns)
@@ -1037,14 +1069,16 @@ def _population_match_summary(table: RateTable, positions: list[list[float]]) ->
     age_low = year_low = math.inf
     age_high = year_high = -math.inf
     male = female = white = black = 0
-    for row in positions:
-        age_low, age_high = min(age_low, row[0]), max(age_high, row[0])
-        year_low, year_high = min(year_low, row[-1]), max(year_high, row[-1])
-        male += row[1] == 1
-        female += row[1] == 2
+    # One pass per column, seeded like a running ``min``/``max``: the same comparisons
+    # in the same order, so a signed zero and NaN are kept or skipped as row by row.
+    columns = list(zip(*positions, strict=True))
+    if columns:
+        ages, sexes, years = columns[0], columns[1], columns[-1]
+        age_low, age_high = min(chain((age_low,), ages)), max(chain((age_high,), ages))
+        year_low, year_high = min(chain((year_low,), years)), max(chain((year_high,), years))
+        male, female = sexes.count(1), sexes.count(2)
         if source == "survexp.usr":
-            white += row[2] == 1
-            black += row[2] == 2
+            white, black = columns[2].count(1), columns[2].count(2)
     if positions:
         dates = [_core.days_to_date(math.floor(value)) for value in (year_low, year_high)]
         first, last = [f"{day.year:04d}-{day.month:02d}-{day.day:02d}" for day in dates]

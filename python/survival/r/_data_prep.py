@@ -38,9 +38,10 @@ from ._coerce import (
     _materialize_labels,
     _missing_flags,
     _normalize_bool_option,
-    _PLAIN_SCALARS,
     _normalize_positive_scale,
     _numeric_ndarray,
+    _PLAIN_REALS_BOOL_OR_NONE,
+    _PLAIN_SCALARS,
     _pop_dotted_keyword,
     _rows_of,
     _scalar_or_vector,
@@ -81,14 +82,11 @@ _NEARDATE_EPOCH = datetime(1970, 1, 1)
 _NEARDATE_UTC_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
-_PLAIN_NUMBERS = frozenset({float, int, bool, type(None)})
-
-
 def _numeric_or_nan(values: Any, name: str) -> list[float]:
     """A numeric vector with ``NaN`` for missing values (dates arrive as day counts)."""
 
     materialized = _materialize_1d(values, name)
-    if set(map(type, materialized)) <= _PLAIN_NUMBERS:
+    if set(map(type, materialized)) <= _PLAIN_REALS_BOOL_OR_NONE:
         return [
             math.nan if value is None or value != value else float(value) for value in materialized
         ]
@@ -1412,7 +1410,7 @@ def _as_mode(value: Any, mode: str) -> Any:
 def _numeric_values(values: Sequence[Any]) -> list[float] | None:
     """The numeric view of an argument's values (``NaN`` for ``NA``), or ``None``."""
 
-    if set(map(type, values)) <= _PLAIN_NUMBERS:
+    if set(map(type, values)) <= _PLAIN_REALS_BOOL_OR_NONE:
         return [math.nan if value is None or value != value else float(value) for value in values]
     result: list[float] = []
     for value in values:

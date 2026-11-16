@@ -1,13 +1,14 @@
-use crate::core::strata_order::rowsum;
+use crate::core::strata_order::DenseGroups;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::match_arg::match_arg;
-use crate::internal::matrix::{matrix_from_rows, matrix_rows};
+use crate::internal::matrix::matrix_rows;
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::{
     SurvregDensity, SurvregDistribution, SurvregFamily,
 };
-use ndarray::ArrayView1;
+use crate::regression::survreg_kernels::{BuiltinKernel, with_builtin_kernel};
+use ndarray::{Array2, ArrayView1};
 use pyo3::prelude::*;
 
 #[doc = " The `type` argument of `residuals.survreg`."]
@@ -82,8 +83,12 @@ impl SurvregResiduals {
     }
 }
 
-pub(crate) fn survreg_deriv(
-    distribution: &SurvregDistribution,
+/// R's `survreg` derivative matrix for one observation under a builtin family:
+/// `g, dg, ddg, ds, dds, dsg`.  Generic over the family so that loops over the
+/// observations compile the family's density inline.
+#[inline(always)]
+pub(crate) fn survreg_deriv<K: BuiltinKernel>(
+    kernel: K,
     y1: f64,
     y2: f64,
     status: i32,
@@ -91,14 +96,86 @@ pub(crate) fn survreg_deriv(
     sigma: f64,
 ) -> [f64; 6] {
     let z = (y1 - eta) / sigma;
-    let dmat = distribution.builtin_density(z);
+    let dmat = kernel.density(z);
     let (z2, dmat2) = if status == 3 {
         let z2 = (y2 - eta) / sigma;
-        (z2, distribution.builtin_density(z2))
+        (z2, kernel.density(z2))
     } else {
         (0.0, dmat)
     };
     deriv_from_density(dmat, dmat2, z, z2, status, sigma)
+}
+
+/// The `dg` and `ddg` columns of [`survreg_deriv`] alone, which is all that
+/// `survreg`'s starting values read: the logarithm and the scale derivatives
+/// are not computed.
+#[inline(always)]
+pub(crate) fn location_deriv<K: BuiltinKernel>(
+    kernel: K,
+    y1: f64,
+    y2: f64,
+    status: i32,
+    eta: f64,
+    sigma: f64,
+) -> (f64, f64) {
+    let z = (y1 - eta) / sigma;
+    let dmat = kernel.density(z);
+    let dmat2 = if status == 3 {
+        kernel.density((y2 - eta) / sigma)
+    } else {
+        dmat
+    };
+    let (_, dg, ddg) = LocationTerms::new(dmat, dmat2, z, status).derivatives(sigma);
+    (dg, ddg - dg * dg)
+}
+
+/// What every column of the derivative matrix is built from: the probability
+/// `tdenom` of a censored observation (1 for an exact one), the numerators of
+/// `dg` and `ddg`, and the density derivative `f'` at each end of the interval.
+struct LocationTerms {
+    tdenom: f64,
+    numerator_dg: f64,
+    numerator_ddg: f64,
+    dtemp: f64,
+    dtemp2: f64,
+}
+
+impl LocationTerms {
+    #[inline(always)]
+    fn new(dmat: SurvregDensity, dmat2: SurvregDensity, z: f64, status: i32) -> Self {
+        let dtemp = dmat.distribution_kernel()[3];
+        let dtemp2 = dmat2.distribution_kernel()[3];
+        let (tdenom, numerator_dg, numerator_ddg) = match status {
+            0 => (dmat.survival, -dmat.pdf, -dtemp),
+            1 => (1.0, dmat.score, dmat.curvature),
+            2 => (dmat.cdf, dmat.pdf, dtemp),
+            _ => (
+                if z > 0.0 {
+                    dmat.survival - dmat2.survival
+                } else {
+                    dmat2.cdf - dmat.cdf
+                },
+                dmat2.pdf - dmat.pdf,
+                dtemp2 - dtemp,
+            ),
+        };
+        Self {
+            tdenom,
+            numerator_dg,
+            numerator_ddg,
+            dtemp,
+            dtemp2,
+        }
+    }
+
+    /// `1 / tdenom`, `dg` and the uncentred `ddg` at scale `sigma`.
+    #[inline(always)]
+    fn derivatives(&self, sigma: f64) -> (f64, f64, f64) {
+        let tdenom = 1.0 / self.tdenom;
+        let dg = -(tdenom / sigma) * self.numerator_dg;
+        let ddg = (tdenom / (sigma * sigma)) * self.numerator_ddg;
+        (tdenom, dg, ddg)
+    }
 }
 
 fn deriv_from_density(
@@ -109,30 +186,14 @@ fn deriv_from_density(
     status: i32,
     sigma: f64,
 ) -> [f64; 6] {
-    let dtemp = dmat.distribution_kernel()[3];
-    let dtemp2 = dmat2.distribution_kernel()[3];
-    let (tdenom, numerator_dg, numerator_ddg) = match status {
-        0 => (dmat.survival, -dmat.pdf, -dtemp),
-        1 => (1.0, dmat.score, dmat.curvature),
-        2 => (dmat.cdf, dmat.pdf, dtemp),
-        _ => (
-            if z > 0.0 {
-                dmat.survival - dmat2.survival
-            } else {
-                dmat2.cdf - dmat.cdf
-            },
-            dmat2.pdf - dmat.pdf,
-            dtemp2 - dtemp,
-        ),
-    };
+    let terms = LocationTerms::new(dmat, dmat2, z, status);
     let g = if status == 1 {
         (dmat.pdf / sigma).ln()
     } else {
-        tdenom.ln()
+        terms.tdenom.ln()
     };
-    let tdenom = 1.0 / tdenom;
-    let dg = -(tdenom / sigma) * numerator_dg;
-    let ddg = (tdenom / (sigma * sigma)) * numerator_ddg;
+    let (tdenom, dg, ddg) = terms.derivatives(sigma);
+    let (dtemp, dtemp2) = (terms.dtemp, terms.dtemp2);
     let (ds, dds, dsg) = if status < 3 {
         (dg * sigma * z, ddg * (sigma * z).powi(2), ddg * sigma * z)
     } else {
@@ -161,9 +222,11 @@ pub(crate) fn survreg_derivatives(
     scale: &[f64],
 ) -> SurvivalResult<Vec<[f64; 6]>> {
     if distribution.family != SurvregFamily::Custom && distribution.callbacks.is_none() {
-        return Ok((0..y1.len())
-            .map(|i| survreg_deriv(distribution, y1[i], y2[i], status[i], eta[i], scale[i]))
-            .collect());
+        return Ok(with_builtin_kernel!(distribution, kernel => {
+            (0..y1.len())
+                .map(|i| survreg_deriv(kernel, y1[i], y2[i], status[i], eta[i], scale[i]))
+                .collect()
+        }));
     }
     let n = y1.len();
     let mut z = Vec::with_capacity(n + status.iter().filter(|&&s| s == 3).count());
@@ -193,16 +256,21 @@ fn r_sign(value: f64) -> f64 {
     if value == 0.0 { 0.0 } else { value.signum() }
 }
 
+/// `out = score %*% matrix`, for the leading `out.len()` columns.
+fn row_times_matrix_into(out: &mut [f64], score: &[f64], matrix: &[Vec<f64>]) {
+    for (col, value) in out.iter_mut().enumerate() {
+        *value = score
+            .iter()
+            .zip(matrix)
+            .map(|(s, row)| s * row[col])
+            .sum::<f64>();
+    }
+}
+
 fn row_times_matrix(score: &[f64], matrix: &[Vec<f64>]) -> Vec<f64> {
-    (0..score.len())
-        .map(|col| {
-            score
-                .iter()
-                .zip(matrix)
-                .map(|(s, row)| s * row[col])
-                .sum::<f64>()
-        })
-        .collect()
+    let mut out = vec![0.0; score.len()];
+    row_times_matrix_into(&mut out, score, matrix);
+    out
 }
 
 fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
@@ -213,6 +281,26 @@ fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
         .sum()
 }
 
+/// Writes one observation's score row into `row`: `eta_part` times its
+/// covariates, then, when the row has `Log(scale)` columns, `scale_part` in its
+/// stratum's column and zero in the others.
+fn fill_score_row(
+    row: &mut [f64],
+    x: ArrayView1<'_, f64>,
+    eta_part: f64,
+    scale_part: f64,
+    stratum: usize,
+) {
+    let (location, scales) = row.split_at_mut(x.len());
+    for (out, value) in location.iter_mut().zip(x) {
+        *out = eta_part * value;
+    }
+    if !scales.is_empty() {
+        scales.fill(0.0);
+        scales[stratum] = scale_part;
+    }
+}
+
 fn score_row(
     x: ArrayView1<'_, f64>,
     eta_part: f64,
@@ -221,24 +309,128 @@ fn score_row(
     nstrata: usize,
     rsigma: bool,
 ) -> Vec<f64> {
-    let mut row: Vec<f64> = x.iter().map(|value| eta_part * value).collect();
-    if rsigma {
-        let start = row.len();
-        row.resize(start + nstrata, 0.0);
-        row[start + stratum] = scale_part;
-    }
+    let mut row = vec![0.0; x.len() + if rsigma { nstrata } else { 0 }];
+    fill_score_row(&mut row, x, eta_part, scale_part, stratum);
     row
 }
 
+/// Rows summed by `collapse` group as R's `rowsum` sums them: one row per
+/// distinct code in ascending order, each adding its rows in observation order.
+///
+/// A row is added straight into its group's sum, found by the code's rank, so
+/// no sorted copy of the rows is made.
+struct CollapsedRows {
+    ranks: Vec<usize>,
+    sums: Array2<f64>,
+}
+
+impl CollapsedRows {
+    fn new(collapse: &[usize], rows: usize, width: usize) -> SurvivalResult<Self> {
+        validate_length(rows, collapse.len(), "collapse")?;
+        let codes = collapse
+            .iter()
+            .map(|&code| i32::try_from(code))
+            .collect::<Result<Vec<i32>, _>>()
+            .map_err(|_| SurvivalError::invalid_input("collapse codes must fit in 32 bits"))?;
+        let groups = DenseGroups::new(&codes);
+        Ok(Self {
+            ranks: groups.ids,
+            sums: Array2::zeros((groups.count, width)),
+        })
+    }
+
+    fn add(&mut self, row: usize, values: &[f64]) {
+        for (total, value) in self.sums.row_mut(self.ranks[row]).iter_mut().zip(values) {
+            *total += value;
+        }
+    }
+}
+
 fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<Vec<f64>>> {
-    validate_length(rows.len(), collapse.len(), "collapse")?;
-    let codes = collapse
-        .iter()
-        .map(|&code| i32::try_from(code))
-        .collect::<Result<Vec<i32>, _>>()
-        .map_err(|_| SurvivalError::invalid_input("collapse codes must fit in 32 bits"))?;
-    let rows = matrix_from_rows(&rows, "residuals")?;
-    Ok(matrix_rows(&rowsum(rows.view(), &codes)))
+    let width = rows.first().map_or(0, Vec::len);
+    let mut collapsed = CollapsedRows::new(collapse, rows.len(), width)?;
+    for (index, row) in rows.iter().enumerate() {
+        collapsed.add(index, row);
+    }
+    Ok(matrix_rows(&collapsed.sums))
+}
+
+/// The variance the influence residuals are scaled by (the model-based one of a
+/// robust fit), whether they include the `Log(scale)` columns, and their width.
+fn influence_variance(
+    fit: &SurvregFit,
+    rsigma: bool,
+) -> SurvivalResult<(&[Vec<f64>], bool, usize)> {
+    let nvar = fit.nvar();
+    let rsigma = rsigma && fit.variance_matrix.len() != nvar;
+    let vv = fit
+        .naive_variance_matrix
+        .as_deref()
+        .unwrap_or(&fit.variance_matrix);
+    let width = nvar + if rsigma { fit.nstrata() } else { 0 };
+    if vv.len() < width || vv.iter().any(|row| row.len() < width) {
+        return Err(SurvivalError::invalid_input(format!(
+            "variance matrix must be at least {width} x {width} for these residuals"
+        )));
+    }
+    Ok((vv, rsigma, width))
+}
+
+/// Calls `visit` with each row of `residuals(fit, "dfbeta", collapse = cluster,
+/// weighted = TRUE)`, in order, without materializing them: the input of the
+/// robust variance.
+///
+/// The rows hold the same values, summed in the same order, as those of
+/// [`residuals_survreg`], so anything accumulated from them is bitwise the
+/// same; but each observation's row is built in one reused buffer, and with a
+/// cluster it is added straight into its cluster's sum.
+pub(crate) fn visit_weighted_dfbeta(
+    fit: &SurvregFit,
+    cluster: Option<&[usize]>,
+    mut visit: impl FnMut(&[f64]),
+) -> SurvivalResult<()> {
+    let n = fit.n;
+    let (vv, _, width) = influence_variance(fit, true)?;
+    let distribution = &fit.distribution;
+    let (y1, y2) =
+        distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
+    let scales: Vec<_> = (0..n).map(|i| fit.scale[fit.strata[i]]).collect();
+    let deriv = survreg_derivatives(
+        distribution,
+        &y1,
+        &y2,
+        &fit.status,
+        &fit.linear_predictors,
+        &scales,
+    )?;
+    let mut collapsed = cluster
+        .map(|cluster| CollapsedRows::new(cluster, n, width))
+        .transpose()?;
+    let mut score = vec![0.0; width];
+    let mut row = vec![0.0; width];
+    for (i, deriv) in deriv.iter().enumerate() {
+        fill_score_row(
+            &mut score,
+            fit.covariates.row(i),
+            deriv[1],
+            deriv[3],
+            fit.strata[i],
+        );
+        row_times_matrix_into(&mut row, &score, vv);
+        if let Some(weights) = &fit.weights {
+            row.iter_mut().for_each(|value| *value *= weights[i]);
+        }
+        match collapsed.as_mut() {
+            Some(collapsed) => collapsed.add(i, &row),
+            None => visit(&row),
+        }
+    }
+    if let Some(collapsed) = collapsed {
+        for sum in collapsed.sums.outer_iter() {
+            visit(sum.as_slice().expect("standard layout"));
+        }
+    }
+    Ok(())
 }
 
 pub fn residuals_survreg(
@@ -249,20 +441,9 @@ pub fn residuals_survreg(
     weighted: bool,
 ) -> SurvivalResult<SurvregResiduals> {
     let n = fit.n;
-    let nvar = fit.nvar();
     let nstrata = fit.nstrata();
     let distribution = &fit.distribution;
-    let rsigma = rsigma && fit.variance_matrix.len() != nvar;
-    let vv = fit
-        .naive_variance_matrix
-        .as_deref()
-        .unwrap_or(&fit.variance_matrix);
-    let width = nvar + if rsigma { nstrata } else { 0 };
-    if vv.len() < width || vv.iter().any(|row| row.len() < width) {
-        return Err(SurvivalError::invalid_input(format!(
-            "variance matrix must be at least {width} x {width} for these residuals"
-        )));
-    }
+    let (vv, rsigma, width) = influence_variance(fit, rsigma)?;
 
     let (y1, y2) =
         distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
@@ -369,9 +550,12 @@ pub fn residuals_survreg(
 }
 
 #[cfg(test)]
+mod reference_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::regression::survreg_distributions::SurvregDistribution;
+    use crate::regression::survreg_kernels::{ExtremeValue, Gaussian};
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -402,10 +586,9 @@ mod tests {
 
     #[test]
     fn deriv_matches_the_gaussian_closed_form() {
-        let gaussian = SurvregDistribution::from_name("gaussian", None).unwrap();
         let z = 0.5;
         let sigma = 2.0;
-        let d = survreg_deriv(&gaussian, 1.0 + z * sigma, 0.0, 1, 1.0, sigma);
+        let d = survreg_deriv(Gaussian, 1.0 + z * sigma, 0.0, 1, 1.0, sigma);
         assert_close(
             d[0],
             (crate::internal::dist::dnorm(z, false) / sigma).ln(),
@@ -420,15 +603,14 @@ mod tests {
 
     #[test]
     fn deriv_matches_finite_differences_for_censored_rows() {
-        let weibull = SurvregDistribution::from_name("weibull", None).unwrap();
         let h = 1e-5;
         for status in [0, 2, 3] {
             let (y1, y2) = (0.4, 1.1);
             let g = |eta: f64, log_sigma: f64| {
-                survreg_deriv(&weibull, y1, y2, status, eta, log_sigma.exp())[0]
+                survreg_deriv(ExtremeValue, y1, y2, status, eta, log_sigma.exp())[0]
             };
             let (eta, log_sigma): (f64, f64) = (-0.2, 0.15);
-            let d = survreg_deriv(&weibull, y1, y2, status, eta, log_sigma.exp());
+            let d = survreg_deriv(ExtremeValue, y1, y2, status, eta, log_sigma.exp());
             let dg = (g(eta + h, log_sigma) - g(eta - h, log_sigma)) / (2.0 * h);
             let ddg = (g(eta + h, log_sigma) - 2.0 * d[0] + g(eta - h, log_sigma)) / (h * h);
             let ds = (g(eta, log_sigma + h) - g(eta, log_sigma - h)) / (2.0 * h);
