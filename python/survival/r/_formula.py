@@ -811,6 +811,20 @@ def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
         type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
     ):
         return None
+    kind = type(index).__name__
+    if kind in {"Index", "RangeIndex"}:
+        dtype = getattr(index, "dtype", None)
+        if isinstance(dtype, np.dtype) and dtype.kind in "iu":
+            # An integer label is never missing, and str() is its as.character, one to one,
+            # so the index's own uniqueness check stands for the labels'.
+            if len(index) != n or not index.is_unique:
+                return None
+            return tuple(map(str, index.tolist()))
+        if kind == "Index":
+            values = index.tolist()
+            if values and set(map(type, values)) == {str}:
+                # Plain strings are their own as.character and are never missing.
+                return tuple(values) if len(values) == n and len(set(values)) == n else None
     labels = tuple(_as_character(value) for value in index)
     if len(labels) == n and len(set(labels)) == n and not any(map(_is_missing_value, index)):
         return labels
