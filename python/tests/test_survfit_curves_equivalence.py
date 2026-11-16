@@ -39,10 +39,11 @@ def _identical(a, b):
 def _clustered_km_data(last_status, n=3000, seed=6):
     """Hundreds of clusters of mixed sizes, ties, zero weights and a last time at which
     everyone still at risk has ``last_status``, so that the curve (with ``reverse``, the
-    censoring curve for a status of 0) ends at zero."""
+    censoring curve for a status of 0) ends at zero.  Times on a grid of 0.01 give each
+    curve enough distinct times for the running sums to replace the dense loop."""
 
     rng = np.random.default_rng(seed)
-    time = np.round(rng.exponential(1.0, n), 1) + 0.1
+    time = np.round(rng.exponential(1.0, n), 2) + 0.01
     status = rng.integers(0, 2, n)
     last = rng.random(n) < 0.02
     time[last], status[last] = time.max() + 1.0, last_status
@@ -72,6 +73,9 @@ def test_clustered_robust_variance_matches_the_dense_cluster_loop(options):
     fast = r.survfit("Surv(time, status) ~ g", data=data, cluster="cl", **options)
     dense = r.survfit("Surv(time, status) ~ g", data=data, cluster="cl", influence=True, **options)
     assert _identical(fast.surv, dense.surv)
+    # The running sums round differently from the dense loop: equal standard errors
+    # everywhere would mean that the fit never took them.
+    assert (np.array(fast.std_err) != np.array(dense.std_err)).any()
     for field in ("std_err", "std_chaz", "lower", "upper"):
         actual, expected = np.array(getattr(fast, field)), np.array(getattr(dense, field))
         np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-14, err_msg=field)
