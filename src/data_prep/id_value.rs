@@ -229,9 +229,12 @@ fn dense_first_appearance_codes<I: SubjectId>(values: &[I]) -> Option<(Vec<usize
     Some((codes, representatives))
 }
 
+/// [`first_appearance_codes`] through a hash map.  The map starts with room for at most
+/// 65536 ids and grows from there: room for every row would allocate many times what it
+/// holds when the ids repeat, as they do over the rows of a subject's intervals.
 fn hashed_first_appearance_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
     let mut seen: std::collections::HashMap<I::Key, usize> =
-        std::collections::HashMap::with_capacity(values.len());
+        std::collections::HashMap::with_capacity(values.len().min(1 << 16));
     let mut representatives = Vec::new();
     let codes = values
         .iter()
