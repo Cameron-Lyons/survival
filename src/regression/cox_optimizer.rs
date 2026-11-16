@@ -3,7 +3,7 @@ use crate::core::risk_sweep::{RecenteredRiskSet, RiskSetSums, spans_a_death};
 use crate::core::time_order::stratum_time_order;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, CowArray, Ix1, Ix2};
+use ndarray::{Array1, Array2, ArrayView2, CowArray, Ix1, Ix2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,7 @@ use workspace::EvaluationWorkspace;
 mod log_risk;
 mod precision;
 mod predictors;
+mod scaling;
 pub(crate) use predictors::{
     add_predictor_parts, bounds_need_anchor, covariate_anchor_needed, predictor_bound_needs_anchor,
     relative_covariate_scale,
@@ -261,10 +262,13 @@ impl<'a> CoxFitBuilder<'a> {
             .weights
             .as_ref()
             .map_or_else(|| Array1::ones(n), gather);
-        let mut covar = Array2::zeros((n, nvar));
-        for (position, &row) in order.iter().enumerate() {
-            covar.row_mut(position).assign(&self.covar.row(row));
+        let unsorted_covar = self.covar.as_standard_layout();
+        let unsorted_rows = unsorted_covar.as_slice().expect("standard layout");
+        let mut covar = Vec::with_capacity(n * nvar);
+        for &row in &order {
+            covar.extend_from_slice(&unsorted_rows[row * nvar..(row + 1) * nvar]);
         }
+        let covar = Array2::from_shape_vec((n, nvar), covar).expect("one sorted row per input row");
         let fitter = match (self.method, self.entry_times.as_ref().map(gather)) {
             (TieMethod::Exact, None) => Fitter::Coxexact,
             (TieMethod::Exact, Some(entry)) => Fitter::Agexact {
@@ -528,20 +532,6 @@ fn add_scaled(u: &mut [f64], w: f64, x: &[f64]) {
     for (u, &x) in u.iter_mut().zip(x) {
         *u += w * x;
     }
-}
-
-fn mean_abs_scale(
-    weights: &Array1<f64>,
-    column: ArrayView1<'_, f64>,
-    rows: impl Iterator<Item = usize>,
-) -> f64 {
-    let (weight, abs_sum) = rows.fold((0.0, 0.0), |(weight, abs_sum), person| {
-        (
-            weight + weights[person],
-            abs_sum + weights[person] * column[person].abs(),
-        )
-    });
-    if abs_sum > 0.0 { weight / abs_sum } else { 1.0 }
 }
 
 /// Adds the score and information terms of the `ndead` deaths at one time,
@@ -1080,68 +1070,6 @@ impl CoxData {
 }
 
 impl CoxFit {
-    fn scale_center(&mut self, doscale: &[bool]) {
-        let CoxData {
-            ref mut covar,
-            ref weights,
-            ref mut predictor_bounds,
-            ..
-        } = self.data;
-        let fitter = &self.fitter;
-        let nused = covar.nrows();
-        let total_weight: f64 = weights.sum();
-        for (i, &scale_column) in doscale.iter().enumerate() {
-            if !scale_column {
-                self.means[i] = 0.0;
-                self.scale[i] = 1.0;
-                predictor_bounds[i] = covar.column(i).iter().map(|x| x.abs()).fold(0.0, f64::max);
-                continue;
-            }
-            let plain_mean = covar.column(i).sum() / nused as f64;
-            let (center, mean) = match fitter {
-                Fitter::Coxfit6 { .. } => {
-                    let weighted_mean = (0..nused)
-                        .map(|person| weights[person] * covar[(person, i)])
-                        .sum::<f64>()
-                        / total_weight;
-                    (weighted_mean, weighted_mean)
-                }
-                Fitter::Agfit4 { walk, .. } => (
-                    walk.by_stop
-                        .first()
-                        .map_or(0.0, |first| covar[(first.row, i)]),
-                    plain_mean,
-                ),
-                Fitter::Coxexact | Fitter::Agexact { .. } => (plain_mean, plain_mean),
-            };
-            covar.column_mut(i).mapv_inplace(|value| value - center);
-            self.means[i] = mean;
-            let column = covar.column(i);
-            let scale = match fitter {
-                Fitter::Coxfit6 { .. } => mean_abs_scale(weights, column, 0..nused),
-                Fitter::Agfit4 { walk, .. } => {
-                    mean_abs_scale(weights, column, walk.by_stop.iter().map(|j| j.row))
-                }
-                Fitter::Coxexact => {
-                    let sd = (column.mapv(|v| v * v).sum() / (nused as f64 - 1.0)).sqrt();
-                    if sd > 0.0 { 1.0 / sd } else { 1.0 }
-                }
-                Fitter::Agexact { .. } => 1.0,
-            };
-            let mut bound = 0.0_f64;
-            covar.column_mut(i).mapv_inplace(|value| {
-                let value = value * scale;
-                bound = bound.max(value.abs());
-                value
-            });
-            predictor_bounds[i] = bound;
-            self.scale[i] = scale;
-        }
-        for (beta, &scale) in self.beta.iter_mut().zip(&self.scale) {
-            *beta /= scale;
-        }
-    }
-
     fn evaluate(&mut self, beta: &[f64]) -> SurvivalResult<f64> {
         self.u.fill(0.0);
         self.imat.fill(0.0);
@@ -1990,3 +1918,6 @@ mod workspace_tests;
 
 #[cfg(test)]
 mod tied_sums_tests;
+
+#[cfg(test)]
+mod scaling_tests;
