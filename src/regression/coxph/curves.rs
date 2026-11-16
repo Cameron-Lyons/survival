@@ -1,4 +1,4 @@
-use super::log_curves::CachedCurves;
+use super::log_curves::{CachedCurves, LogCurve};
 use super::scaling::{PredictionRisks, PredictorOrigin};
 use super::{Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, SurvfitOptions};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -12,8 +12,64 @@ use crate::surv_analysis::agsurv::{
     expand_curve_log_kp, expand_curve_validated, individual_curve_validated,
 };
 use ndarray::{Array2, ArrayView2};
+use rayon::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
+
+/// Fewest predicted values (times x rows) worth filling on several threads.
+const PARALLEL_PREDICTION_THRESHOLD: usize = 16_384;
+
+/// The rows survival is predicted for: their design, strata codes and offsets, and
+/// whether they are the training rows (whose saved risk scales are reused).
+pub(super) struct PredictionDesign<'a> {
+    pub x: ArrayView2<'a, f64>,
+    pub strata: Option<&'a [i32]>,
+    pub offset: Option<&'a [f64]>,
+    pub training: bool,
+}
+
+/// The survival curves of a set of rows: their strata's baseline curves and their
+/// relative risks, read one output time at a time.
+pub(super) struct SurvivalAtTimes<'a> {
+    curves: &'a CachedCurves,
+    rows_by_stratum: Vec<Vec<usize>>,
+    log_risk: PredictionRisks,
+    risk: Vec<f64>,
+    /// The log-scale curves, when a risk or baseline would lose range when
+    /// exponentiated.
+    logs: Option<&'a [LogCurve]>,
+}
+
+impl SurvivalAtTimes<'_> {
+    /// Writes the survival of every row at time `at` into `out`.
+    pub fn fill(&self, at: f64, out: &mut [f64]) {
+        for (position, (curve, rows)) in self.curves.iter().zip(&self.rows_by_stratum).enumerate() {
+            if rows.is_empty() {
+                continue;
+            }
+            let index = find_interval(&curve.time, at, false);
+            if index == 0 {
+                for &row in rows {
+                    out[row] = 1.0;
+                }
+                continue;
+            }
+            let cumhaz = curve.cumhaz[index - 1];
+            let baseline = (-cumhaz).exp();
+            for &row in rows {
+                out[row] = match self.logs {
+                    Some(logs) => (-logs[position].log_cumulative[index - 1]
+                        .exp_at_scale(self.log_risk.scale(row)))
+                    .exp(),
+                    None if baseline == 0.0 && cumhaz.is_finite() => {
+                        (-cumhaz * self.risk[row]).exp()
+                    }
+                    None => baseline.powf(self.risk[row]),
+                };
+            }
+        }
+    }
+}
 
 impl CoxPHFit {
     fn default_survtype(&self) -> CoxSurvType {
@@ -351,14 +407,13 @@ impl CoxPHFit {
         Ok(result)
     }
 
-    pub fn predict_survival_at(
-        &self,
-        times: &[f64],
-        newdata: Option<&CoxNewData>,
-    ) -> SurvivalResult<Array2<f64>> {
-        self.check_prediction_dimensions()?;
-        validate_finite(times, "times")?;
-        let (x, strata, offset) = match newdata {
+    /// The design, strata codes and offsets of survival predictions: those of
+    /// `newdata` once checked, else the training rows'.
+    pub(super) fn survival_design<'a>(
+        &'a self,
+        newdata: Option<&'a CoxNewData>,
+    ) -> SurvivalResult<PredictionDesign<'a>> {
+        match newdata {
             Some(newdata) => {
                 self.check_newdata(newdata, false)?;
                 if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
@@ -366,26 +421,31 @@ impl CoxPHFit {
                         "newdata must carry the strata for survival predictions",
                     ));
                 }
-                (
-                    newdata.x.view(),
-                    newdata.strata.as_deref(),
-                    newdata.offset.as_deref(),
-                )
+                Ok(PredictionDesign {
+                    x: newdata.x.view(),
+                    strata: newdata.strata.as_deref(),
+                    offset: newdata.offset.as_deref(),
+                    training: false,
+                })
             }
-            None => (
-                self.x.view(),
-                self.strata.as_deref(),
-                Some(self.offset.as_slice()),
-            ),
-        };
-        let mut result = Array2::ones((times.len(), x.nrows()));
-        if times.is_empty() {
-            return Ok(result);
+            None => Ok(PredictionDesign {
+                x: self.x.view(),
+                strata: self.strata.as_deref(),
+                offset: Some(self.offset.as_slice()),
+                training: true,
+            }),
         }
+    }
+
+    /// The survival curves of the rows of `design`, ready to be read at any time.
+    pub(super) fn survival_at_times(
+        &self,
+        design: &PredictionDesign<'_>,
+    ) -> SurvivalResult<SurvivalAtTimes<'_>> {
         let curves = self.baseline_curves()?;
         let mut rows_by_stratum = vec![Vec::new(); curves.len()];
-        for row in 0..x.nrows() {
-            let position = match strata {
+        for row in 0..design.x.nrows() {
+            let position = match design.strata {
                 Some(codes) => self.sorted.position_of(codes[row]).ok_or_else(|| {
                     SurvivalError::invalid_input(format!(
                         "fit stratum {} is not a fitted stratum",
@@ -396,35 +456,49 @@ impl CoxPHFit {
             };
             rows_by_stratum[position].push(row);
         }
-        let log_risk = if newdata.is_none() && self.has_curve_origins() {
+        let log_risk = if design.training && self.has_curve_origins() {
             self.training_prediction_risks(&curves.origins)
         } else {
-            self.prediction_log_risks_at(x, offset, &curves.origins, strata)
+            self.prediction_log_risks_at(design.x, design.offset, &curves.origins, design.strata)
         };
         let risk = log_risk.risks();
-        let stable = log_risk.needs_logs(curves.stable);
-        for (position, (curve, rows)) in curves.iter().zip(rows_by_stratum).enumerate() {
-            if rows.is_empty() {
-                continue;
-            }
-            for (i, &at) in times.iter().enumerate() {
-                let index = find_interval(&curve.time, at, false);
-                if index == 0 {
-                    continue;
-                }
-                let baseline = (-curve.cumhaz[index - 1]).exp();
-                let mut output = result.row_mut(i);
-                for &row in &rows {
-                    output[row] = if stable {
-                        (-curves.logs()[position].log_cumulative[index - 1]
-                            .exp_at_scale(log_risk.scale(row)))
-                        .exp()
-                    } else if baseline == 0.0 && curve.cumhaz[index - 1].is_finite() {
-                        (-curve.cumhaz[index - 1] * risk[row]).exp()
-                    } else {
-                        baseline.powf(risk[row])
-                    };
-                }
+        let logs = log_risk.needs_logs(curves.stable).then(|| curves.logs());
+        Ok(SurvivalAtTimes {
+            curves,
+            rows_by_stratum,
+            log_risk,
+            risk,
+            logs,
+        })
+    }
+
+    pub fn predict_survival_at(
+        &self,
+        times: &[f64],
+        newdata: Option<&CoxNewData>,
+    ) -> SurvivalResult<Array2<f64>> {
+        self.check_prediction_dimensions()?;
+        validate_finite(times, "times")?;
+        let design = self.survival_design(newdata)?;
+        let ncols = design.x.nrows();
+        if times.is_empty() {
+            return Ok(Array2::ones((0, ncols)));
+        }
+        let survival = self.survival_at_times(&design)?;
+        // `fill` writes every entry of a row, and each row on its own, so filling
+        // them in parallel leaves every value as the serial loop computes it.
+        let mut result = Array2::zeros((times.len(), ncols));
+        let cells = result
+            .as_slice_mut()
+            .expect("a new array is in standard layout");
+        if ncols > 0 && times.len().saturating_mul(ncols) >= PARALLEL_PREDICTION_THRESHOLD {
+            cells
+                .par_chunks_mut(ncols)
+                .zip(times)
+                .for_each(|(row, &at)| survival.fill(at, row));
+        } else {
+            for (row, &at) in cells.chunks_mut(ncols.max(1)).zip(times) {
+                survival.fill(at, row);
             }
         }
         Ok(result)

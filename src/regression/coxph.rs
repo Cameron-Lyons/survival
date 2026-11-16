@@ -25,4 +25,6 @@ pub(crate) use types::SortedRows;
 #[cfg(test)]
 mod input_tests;
 #[cfg(test)]
+mod prediction_rows_tests;
+#[cfg(test)]
 mod tests;
