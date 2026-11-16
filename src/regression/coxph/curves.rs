@@ -1,6 +1,7 @@
 use super::log_curves::{CachedCurves, LogCurve};
 use super::scaling::{PredictionRisks, PredictorOrigin};
 use super::{Basehaz, CoxNewData, CoxPHFit, CoxSurvfitCurve, SurvfitOptions};
+use crate::constants::PARALLEL_CELL_THRESHOLD;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::find_interval;
 use crate::internal::validation::validate_finite;
@@ -15,9 +16,6 @@ use ndarray::{Array2, ArrayView2};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
-
-/// Fewest predicted values (times x rows) worth filling on several threads.
-const PARALLEL_PREDICTION_THRESHOLD: usize = 16_384;
 
 /// The rows survival is predicted for: their design, strata codes and offsets, and
 /// whether they are the training rows (whose saved risk scales are reused).
@@ -491,7 +489,7 @@ impl CoxPHFit {
         let cells = result
             .as_slice_mut()
             .expect("a new array is in standard layout");
-        if ncols > 0 && times.len().saturating_mul(ncols) >= PARALLEL_PREDICTION_THRESHOLD {
+        if ncols > 0 && times.len().saturating_mul(ncols) >= PARALLEL_CELL_THRESHOLD {
             cells
                 .par_chunks_mut(ncols)
                 .zip(times)

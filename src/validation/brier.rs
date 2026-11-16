@@ -1,3 +1,4 @@
+use crate::constants::PARALLEL_CELL_THRESHOLD;
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::step::step_at;
@@ -5,8 +6,6 @@ use crate::internal::validation::{validate_binary_i32, validate_finite, validate
 use crate::surv_analysis::{HazardType, SurvType, SurvfitKMData, SurvfitKMOptions, survfitkm};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
-const PARALLEL_WORK_THRESHOLD: usize = 8_192;
 
 #[derive(Debug, Clone)]
 pub struct BrierInput<'a> {
@@ -276,7 +275,7 @@ pub fn brier(input: BrierInput<'_>) -> SurvivalResult<BrierResult> {
     let score = |i: usize| scoring.score_at(i, input.times[i], &input.phat[i]);
     let n_times = input.times.len();
     let rows: Vec<(f64, f64, f64)> =
-        if input.time.len().saturating_mul(n_times) >= PARALLEL_WORK_THRESHOLD {
+        if input.time.len().saturating_mul(n_times) >= PARALLEL_CELL_THRESHOLD {
             (0..n_times).into_par_iter().map(score).collect()
         } else {
             (0..n_times).map(score).collect()
@@ -323,7 +322,7 @@ where
         Ok(scoring.score_at(i, outcomes.times[i], row))
     };
     let rows: Vec<SurvivalResult<(f64, f64, f64)>> =
-        if n.saturating_mul(n_times) >= PARALLEL_WORK_THRESHOLD {
+        if n.saturating_mul(n_times) >= PARALLEL_CELL_THRESHOLD {
             (0..n_times)
                 .into_par_iter()
                 .map_init(|| vec![0.0; n], score)

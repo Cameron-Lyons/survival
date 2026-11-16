@@ -145,6 +145,9 @@ pub fn exp_ci_bounds(
 pub const PARALLEL_THRESHOLD_SMALL: usize = 100;
 pub const PARALLEL_THRESHOLD_MEDIUM: usize = 500;
 pub const PARALLEL_THRESHOLD_LARGE: usize = 1000;
+/// Fewest cells (subjects times output times) worth predicting or scoring on several
+/// threads, for per-cell work as light as one survival probability.
+pub const PARALLEL_CELL_THRESHOLD: usize = 8_192;
 
 pub const COX_MAX_ITER: usize = 20;
 pub const COX_CONVERGENCE_TOLERANCE: f64 = 1e-9;
