@@ -2180,6 +2180,20 @@ class CoxMartInput:
 
 class CoxPHFit:
     def basehaz(self, centered: bool = True) -> Basehaz: ...
+    def brier(
+        self,
+        time: ArrayLike,
+        status: ArrayLike,
+        times: ArrayLike,
+        weights: ArrayLike | None = None,
+        ties: bool = True,
+        efron: bool = False,
+        timefix: bool = True,
+        start: ArrayLike | None = None,
+        newdata: ArrayLike | None = None,
+        new_strata: ArrayLike | None = None,
+        new_offset: ArrayLike | None = None,
+    ) -> BrierResult: ...
     def deviance_residuals(
         self,
         weighted: bool = False,

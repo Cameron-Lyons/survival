@@ -9,6 +9,8 @@ use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::validate_length;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxph_diagnostics::SchoenfeldResiduals;
+use crate::validation::BrierResult;
+use crate::validation::brier::BrierOutcomes;
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
@@ -242,6 +244,41 @@ impl CoxPHFit {
         Ok(FloatMatrix::new(py.detach(|| {
             self.predict_survival_at(&times, newdata.as_ref())
         })?))
+    }
+
+    #[doc = " `brier(time, status, times, ...)` with `phat` this fit's event"]
+    #[doc = " probabilities, `1 - predict_survival_at(times, newdata)`. Each row of"]
+    #[doc = " probabilities is scored as it is evaluated and never stored, so the"]
+    #[doc = " result's `phat` is empty. Omit newdata to score the training rows."]
+    #[pyo3(name = "brier", signature = (time, status, times, weights=None, ties=true, efron=false, timefix=true, start=None, newdata=None, new_strata=None, new_offset=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn brier_py(
+        &self,
+        py: Python<'_>,
+        time: FloatVec,
+        status: IntVec,
+        times: FloatVec,
+        weights: Option<FloatVec>,
+        ties: bool,
+        efron: bool,
+        timefix: bool,
+        start: Option<FloatVec>,
+        newdata: Option<FloatMatrix>,
+        new_strata: Option<IntVec>,
+        new_offset: Option<FloatVec>,
+    ) -> PyResult<BrierResult> {
+        let newdata = newdata_from_python(newdata, new_strata, new_offset, None, None)?;
+        let outcomes = BrierOutcomes {
+            start: start.as_deref(),
+            time: &time,
+            status: &status,
+            weights: weights.as_deref(),
+            times: &times,
+            ties,
+            efron,
+            timefix,
+        };
+        Ok(py.detach(|| self.brier_scores(outcomes, newdata.as_ref()))?)
     }
 
     #[pyo3(name = "expected_survival", signature = (newdata, group, weights, new_strata=None, new_offset=None, y=None, times=None, method="ederer"))]

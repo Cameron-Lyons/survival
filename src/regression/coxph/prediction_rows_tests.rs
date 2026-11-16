@@ -1,5 +1,5 @@
 //! Survival predictions filled one time row at a time, checked bit for bit against
-//! the per-stratum loop they replace.
+//! the per-stratum loop they replace, and the Brier scores computed from them.
 
 use super::*;
 use crate::error::SurvivalResult;
@@ -7,6 +7,8 @@ use crate::internal::rng::Rng;
 use crate::internal::step::find_interval;
 use crate::internal::validation::validate_finite;
 use crate::regression::cox_optimizer::TieMethod;
+use crate::validation::brier::BrierOutcomes;
+use crate::validation::{BrierInput, BrierResult, brier};
 use ndarray::Array2;
 
 /// `predict_survival_at` as one loop per stratum over every time, writing into a
@@ -199,4 +201,137 @@ fn row_by_row_survival_matches_the_per_stratum_loop_bitwise() {
         assert!(log_risk.needs_logs(false));
         assert_eq!(fit.predict_survival_at(&[], None).unwrap().dim(), (0, 250));
     }
+}
+
+#[test]
+fn cox_brier_scores_match_brier_of_the_prediction_matrix_bitwise() {
+    let mut rng = Rng::with_seed(9_001);
+    for case in cases() {
+        let fit = random_fit(&mut rng, 220, &case);
+        let times = requested_times(&mut rng);
+        let newdata = random_newdata(&mut rng, &fit, 180, true);
+        let new_time: Vec<f64> = (0..180).map(|_| 0.1 + rng.f64() * 5.0).collect();
+        let new_status: Vec<i32> = (0..180).map(|_| i32::from(rng.f64() < 0.6)).collect();
+        // Brier weights may be zero, unlike the fit's.
+        let weights: Vec<f64> = (0..220)
+            .map(|i| if i % 5 == 0 { 0.0 } else { rng.f64() })
+            .collect();
+        let targets = [
+            (
+                None,
+                fit.time.as_slice(),
+                fit.status.as_slice(),
+                fit.entry.as_deref(),
+            ),
+            (Some(&newdata), &new_time[..], &new_status[..], None),
+        ];
+        for (newdata, time, status, start) in targets {
+            let weights = (newdata.is_none() && case.weighted).then_some(&weights[..]);
+            for (ties, efron, timefix) in [(true, false, true), (false, true, false)] {
+                let outcomes = BrierOutcomes {
+                    start,
+                    time,
+                    status,
+                    weights,
+                    times: &times,
+                    ties,
+                    efron,
+                    timefix,
+                };
+                let survival = fit.predict_survival_at(&times, newdata).unwrap();
+                let phat = survival
+                    .rows()
+                    .into_iter()
+                    .map(|row| row.iter().map(|s| 1.0 - s).collect())
+                    .collect();
+                let expected = brier(BrierInput {
+                    start,
+                    time,
+                    status,
+                    weights,
+                    times: &times,
+                    phat,
+                    ties,
+                    efron,
+                    timefix,
+                })
+                .unwrap();
+                let actual = fit.brier_scores(outcomes, newdata).unwrap();
+                assert_eq!(bits(actual.brier), bits(expected.brier));
+                assert_eq!(bits(actual.rsquared), bits(expected.rsquared));
+                assert_eq!(bits(actual.eff_n), bits(expected.eff_n));
+                assert_eq!(bits(actual.p0), bits(expected.p0));
+                assert_eq!(actual.times, expected.times);
+                assert!(actual.phat.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn cox_brier_scores_report_prediction_errors_first() {
+    let mut rng = Rng::with_seed(5);
+    let fit = random_fit(
+        &mut rng,
+        40,
+        &Case {
+            method: TieMethod::Efron,
+            stratified: true,
+            weighted: false,
+            counting: false,
+        },
+    );
+    const NAN_TIMES: [f64; 2] = [1.0, f64::NAN];
+    let outcomes = |times: &'static [f64]| BrierOutcomes {
+        start: None,
+        time: &fit.time,
+        status: &fit.status,
+        weights: None,
+        times,
+        ties: true,
+        efron: false,
+        timefix: true,
+    };
+    let message = |result: SurvivalResult<BrierResult>| result.unwrap_err().to_string();
+    assert_eq!(
+        message(fit.brier_scores(outcomes(&NAN_TIMES), None)),
+        fit.predict_survival_at(&NAN_TIMES, None)
+            .unwrap_err()
+            .to_string()
+    );
+    let mut newdata = random_newdata(&mut rng, &fit, 12, false);
+    newdata.strata = None;
+    assert_eq!(
+        message(fit.brier_scores(outcomes(&[1.0]), Some(&newdata))),
+        fit.predict_survival_at(&[1.0], Some(&newdata))
+            .unwrap_err()
+            .to_string()
+    );
+    newdata.strata = Some(vec![17; 12]);
+    assert_eq!(
+        message(fit.brier_scores(outcomes(&[1.0]), Some(&newdata))),
+        fit.predict_survival_at(&[1.0], Some(&newdata))
+            .unwrap_err()
+            .to_string()
+    );
+    newdata.strata = Some(vec![4; 12]);
+    // No requested times: nothing is predicted, as for an empty prediction matrix.
+    let empty = fit.brier_scores(outcomes(&[]), Some(&newdata)).unwrap();
+    assert!(empty.brier.is_empty() && empty.times.is_empty());
+    // Training outcomes against new rows: `brier`'s row length error.
+    let stored = brier(BrierInput {
+        start: None,
+        time: &fit.time,
+        status: &fit.status,
+        weights: None,
+        times: &[1.0],
+        phat: vec![vec![0.5; 12]],
+        ties: true,
+        efron: false,
+        timefix: true,
+    });
+    assert_eq!(
+        message(fit.brier_scores(outcomes(&[1.0]), Some(&newdata))),
+        message(stored)
+    );
 }

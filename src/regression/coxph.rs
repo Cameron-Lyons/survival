@@ -1,4 +1,5 @@
 mod bindings;
+mod brier;
 mod curves;
 mod fitting;
 mod log_curves;

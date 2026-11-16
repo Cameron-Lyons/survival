@@ -73,6 +73,10 @@ def test_brier_only_predicts_at_requested_times(monkeypatch, formula):
             calls.append(list(times))
             return self._engine.predict_survival_at(times, **kwargs)
 
+        def brier(self, time, status, times, **kwargs):
+            calls.append(list(times))
+            return self._engine.brier(time, status, times, **kwargs)
+
     engine_of = r_misc._coxph_engine
     monkeypatch.setattr(
         r_misc, "_coxph_engine", lambda fit, message: Engine(engine_of(fit, message))

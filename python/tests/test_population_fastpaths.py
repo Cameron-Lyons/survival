@@ -1,9 +1,10 @@
-"""Vectorised paths of the population front end.
+"""Vectorised paths of the population front end and the Cox Brier score.
 
 Date rate variables skip the per-row ``Timestamp`` work (the ``NaT`` scan of the
-``na.action`` and ``ratetableDate``) and the match summary reads whole columns.
-Every result must be bit for bit the one of the per-element path each replaces,
-which the tests run by switching the fast paths off.
+``na.action`` and ``ratetableDate``), the match summary reads whole columns, and
+``brier(detail = FALSE)`` scores the Cox predictions without storing them.  Every
+result must be bit for bit the one of the per-element path each replaces, which
+the tests run by switching the fast paths off.
 """
 
 from __future__ import annotations
@@ -230,3 +231,44 @@ def test_match_summary_reads_columns_as_the_row_loop(table):
     for positions in (rows, signed_zero, signed_zero[::-1], []):
         expected = _summary_reference(rate_table, positions)
         assert r_pyears._population_match_summary(rate_table, positions) == expected
+
+
+def _brier_fit(stratified):
+    rng = np.random.default_rng(8)
+    n = 400
+    x = rng.normal(size=n)
+    data = {
+        "time": np.round(rng.exponential(np.exp(-0.5 * x)), 2) + 0.01,
+        "status": (rng.uniform(size=n) < 0.7).astype(int),
+        "x": x,
+        "z": rng.normal(size=n),
+        "g": np.array(["a", "b", "c"])[rng.integers(0, 3, n)],
+        "w": rng.uniform(0.2, 2.0, n),
+    }
+    formula = "Surv(time, status) ~ x + z" + (" + strata(g)" if stratified else "")
+    return data, r.coxph(formula, data=data, weights="w", ties="efron")
+
+
+@pytest.mark.parametrize("stratified", [False, True])
+@pytest.mark.parametrize("efron", [False, True])
+@pytest.mark.parametrize("ties", [True, False])
+def test_brier_scores_without_the_prediction_matrix_match_the_detailed_path(
+    stratified, efron, ties
+):
+    data, fit = _brier_fit(stratified)
+    newdata = {name: values[:150] for name, values in data.items()}
+    for kwargs in ({}, {"times": [0.05, 0.5, 0.5, 1.0, 3.0, 50.0]}, {"newdata": newdata}):
+        scores = r.brier(fit, ties=ties, efron=efron, **kwargs)
+        detailed = r.brier(fit, ties=ties, efron=efron, detail=True, **kwargs)
+        assert scores.p0 is None
+        assert scores.phat is None
+        for name in ("times", "brier", "rsquared"):
+            assert _bits(getattr(scores, name)) == _bits(getattr(detailed, name))
+
+
+def test_brier_detail_is_still_checked_after_scoring():
+    _, fit = _brier_fit(False)
+    with pytest.raises(TypeError, match="detail must be True or False"):
+        r.brier(fit, detail="yes")
+    assert r.brier(fit, detail=np.False_).p0 is None
+    assert r.brier(fit, detail=None).p0 is None
