@@ -4,7 +4,7 @@ use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
-use crate::internal::numpy_utils::{FloatVec, IntVec};
+use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_empty,
@@ -531,6 +531,73 @@ pub struct StackedCurves {
     pub t0: f64,
 }
 
+/// The `ntime x ncurve` matrices of `survfit.coxph` curves for several new subjects: each
+/// column is one curve set beside the times and counts the columns share.
+#[derive(Debug, Clone)]
+struct CurveColumns {
+    surv: Array2<f64>,
+    std_err: Option<Array2<f64>>,
+    cumhaz: Option<Array2<f64>>,
+    std_chaz: Option<Array2<f64>>,
+    lower: Option<Array2<f64>>,
+    upper: Option<Array2<f64>>,
+}
+
+impl CurveColumns {
+    /// One copy of `shared` per column, holding that column's vectors (its own `surv`
+    /// and optional curve vectors are replaced).  An empty `surv` is one empty column.
+    fn split(self, shared: &StackedCurves) -> SurvivalResult<Vec<StackedCurves>> {
+        let shape = self.surv.dim();
+        let ncurve = if shape.0 == 0 { 1 } else { shape.1 };
+        let columns = |matrix: Array2<f64>| -> Vec<Vec<f64>> {
+            if shape.0 == 0 {
+                return vec![Vec::new()];
+            }
+            let by_column = matrix.reversed_axes();
+            by_column
+                .as_standard_layout()
+                .rows()
+                .into_iter()
+                .map(|column| column.to_vec())
+                .collect()
+        };
+        let optional = |matrix: Option<Array2<f64>>, name: &str| {
+            matrix
+                .map(|matrix| {
+                    if matrix.dim() == shape {
+                        Ok(columns(matrix).into_iter().map(Some).collect())
+                    } else {
+                        Err(SurvivalError::invalid_input(format!(
+                            "{name} must have the same shape as surv"
+                        )))
+                    }
+                })
+                .unwrap_or_else(|| Ok(vec![None; ncurve]))
+        };
+        let parts: [Vec<Option<Vec<f64>>>; 5] = [
+            optional(self.std_err, "std_err")?,
+            optional(self.cumhaz, "cumhaz")?,
+            optional(self.std_chaz, "std_chaz")?,
+            optional(self.lower, "lower")?,
+            optional(self.upper, "upper")?,
+        ];
+        let [mut std_err, mut cumhaz, mut std_chaz, mut lower, mut upper] =
+            parts.map(Vec::into_iter);
+        Ok(columns(self.surv)
+            .into_iter()
+            .map(|surv| StackedCurves {
+                surv,
+                std_err: std_err.next().flatten(),
+                cumhaz: cumhaz.next().flatten(),
+                std_chaz: std_chaz.next().flatten(),
+                lower: lower.next().flatten(),
+                upper: upper.next().flatten(),
+                ..shared.clone()
+            })
+            .collect())
+    }
+}
+
 impl StackedCurves {
     pub fn new(
         time: Vec<f64>,
@@ -641,6 +708,66 @@ impl SurvfitKMResult {
             type_: r#type.to_string(),
             t0,
         })?)
+    }
+
+    #[doc = " [`SurvfitKMResult::from_stacked`] of each column of `surv`, an `ntime x ncurve`"]
+    #[doc = " matrix (or one vector), with the matching columns of the other matrices: the"]
+    #[doc = " curves of `survfit.coxph` for several new subjects, one curve set each."]
+    #[staticmethod]
+    #[pyo3(name = "_from_stacked_columns", signature = (
+        time, n_risk, n_event, surv, n, *, strata=None, n_censor=None, std_err=None,
+        cumhaz=None, std_chaz=None, lower=None, upper=None, logse=true, conf_int=0.95,
+        conf_type="log", r#type="right", t0=0.0
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn py_from_stacked_columns(
+        time: FloatVec,
+        n_risk: FloatVec,
+        n_event: FloatVec,
+        surv: FloatMatrix,
+        n: Vec<usize>,
+        strata: Option<Vec<usize>>,
+        n_censor: Option<FloatVec>,
+        std_err: Option<FloatMatrix>,
+        cumhaz: Option<FloatMatrix>,
+        std_chaz: Option<FloatMatrix>,
+        lower: Option<FloatMatrix>,
+        upper: Option<FloatMatrix>,
+        logse: bool,
+        conf_int: f64,
+        conf_type: &str,
+        r#type: &str,
+        t0: f64,
+    ) -> PyResult<Vec<Self>> {
+        let shared = StackedCurves {
+            n_censor: n_censor.map(FloatVec::into_inner),
+            logse,
+            conf_int,
+            conf_type: conf_type.to_string(),
+            type_: r#type.to_string(),
+            t0,
+            ..StackedCurves::new(
+                time.into_inner(),
+                n_risk.into_inner(),
+                n_event.into_inner(),
+                Vec::new(),
+                strata,
+                n,
+            )
+        };
+        let columns = CurveColumns {
+            surv: surv.into_inner(),
+            std_err: std_err.map(FloatMatrix::into_inner),
+            cumhaz: cumhaz.map(FloatMatrix::into_inner),
+            std_chaz: std_chaz.map(FloatMatrix::into_inner),
+            lower: lower.map(FloatMatrix::into_inner),
+            upper: upper.map(FloatMatrix::into_inner),
+        };
+        Ok(columns
+            .split(&shared)?
+            .into_iter()
+            .map(Self::from_stacked)
+            .collect::<SurvivalResult<_>>()?)
     }
 }
 
@@ -1835,6 +1962,71 @@ mod tests {
         );
         let wrong_n = StackedCurves { n: vec![4], ..base };
         assert!(SurvfitKMResult::from_stacked(wrong_n).is_err());
+    }
+
+    #[test]
+    fn curve_columns_split_into_one_curve_set_per_column() {
+        let shared = StackedCurves {
+            n_censor: Some(vec![0.0, 1.0, 0.0]),
+            logse: false,
+            ..StackedCurves::new(
+                vec![1.0, 2.0, 4.0],
+                vec![5.0, 4.0, 2.0],
+                vec![1.0, 0.0, 1.0],
+                Vec::new(),
+                None,
+                vec![5],
+            )
+        };
+        let matrix = |offset: f64| {
+            Array2::from_shape_fn((3, 2), |(t, j)| offset + (t * 2 + j) as f64 / 10.0)
+        };
+        let columns = CurveColumns {
+            surv: matrix(0.0),
+            std_err: Some(matrix(1.0)),
+            cumhaz: None,
+            std_chaz: Some(matrix(2.0)),
+            lower: Some(matrix(3.0)),
+            upper: Some(matrix(4.0)),
+        };
+        let split = columns.clone().split(&shared).unwrap();
+        assert_eq!(split.len(), 2);
+        for (j, curves) in split.iter().enumerate() {
+            let column = |m: &Array2<f64>| m.column(j).to_vec();
+            assert_eq!(curves.surv, column(&columns.surv));
+            assert_eq!(curves.std_err, columns.std_err.as_ref().map(column));
+            assert_eq!(curves.cumhaz, None);
+            assert_eq!(curves.std_chaz, columns.std_chaz.as_ref().map(column));
+            assert_eq!(curves.lower, columns.lower.as_ref().map(column));
+            assert_eq!(curves.upper, columns.upper.as_ref().map(column));
+            assert_eq!(
+                (&curves.time, &curves.n_censor),
+                (&shared.time, &shared.n_censor)
+            );
+            assert!(!curves.logse);
+        }
+        let ragged = CurveColumns {
+            lower: Some(Array2::zeros((3, 1))),
+            ..columns
+        };
+        assert!(
+            ragged
+                .split(&shared)
+                .unwrap_err()
+                .to_string()
+                .contains("lower")
+        );
+        let empty = CurveColumns {
+            surv: Array2::zeros((0, 0)),
+            std_err: None,
+            cumhaz: None,
+            std_chaz: None,
+            lower: None,
+            upper: None,
+        };
+        let split = empty.split(&shared).unwrap();
+        assert_eq!(split.len(), 1);
+        assert!(split[0].surv.is_empty() && split[0].std_err.is_none());
     }
 
     #[test]

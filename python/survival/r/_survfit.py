@@ -986,14 +986,6 @@ def _is_matrix(values: Any) -> bool:
     return bool(values) and isinstance(values[0], list)
 
 
-def _cox_columns(values: Any) -> list[list[float]]:
-    """The columns of an ``ntime x ncurve`` matrix (a vector is one column)."""
-
-    if _is_matrix(values):
-        return [list(column) for column in zip(*values, strict=True)]
-    return [list(values)]
-
-
 def _cox_subset_positions(
     selection: Any, count: int, labels: Sequence[str], name: str
 ) -> list[int]:
@@ -1248,33 +1240,25 @@ def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:
     """One engine per curve column of ``x``.  A ``survfitcox`` object has no ``t0``, so
     ``survfit0`` and ``survmean`` start it at ``min(0, time)``."""
 
-    ncurve = x.ncurve
-    columns: dict[str, list[list[float]] | list[None]] = {
-        name: _cox_columns(values) if (values := getattr(x, name)) else [None] * ncurve
-        for name in ("cumhaz", "std_err", "std_chaz", "lower", "upper")
-    }
-    return [
-        _core.SurvfitKMResult.from_stacked(
-            x.time,
-            x.n_risk,
-            x.n_event,
-            surv,
-            x.n,
-            strata=list(x.strata.values()) if x.strata else None,
-            n_censor=x.n_censor,
-            std_err=columns["std_err"][curve],
-            cumhaz=columns["cumhaz"][curve],
-            std_chaz=columns["std_chaz"][curve],
-            lower=columns["lower"][curve],
-            upper=columns["upper"][curve],
-            logse=x.logse is not False,
-            conf_int=0.95 if x.conf_int is None else x.conf_int,
-            conf_type=x.conf_type or "none",
-            type=x.type,
-            t0=min([0.0, *x.time]),
-        )
-        for curve, surv in enumerate(_cox_columns(x.surv))
-    ]
+    return _core.SurvfitKMResult._from_stacked_columns(
+        x.time,
+        x.n_risk,
+        x.n_event,
+        x.surv,
+        x.n,
+        strata=list(x.strata.values()) if x.strata else None,
+        n_censor=x.n_censor,
+        std_err=x.std_err or None,
+        cumhaz=x.cumhaz or None,
+        std_chaz=x.std_chaz or None,
+        lower=x.lower or None,
+        upper=x.upper or None,
+        logse=x.logse is not False,
+        conf_int=0.95 if x.conf_int is None else x.conf_int,
+        conf_type=x.conf_type or "none",
+        type=x.type,
+        t0=min([0.0, *x.time]),
+    )
 
 
 def _joined_columns(columns: Sequence[Sequence[float] | None], matrix: bool) -> Any:

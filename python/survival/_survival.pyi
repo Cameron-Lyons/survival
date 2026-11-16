@@ -9313,6 +9313,27 @@ class SurvfitInfluence:
 
 class SurvfitKMResult:
     @staticmethod
+    def _from_stacked_columns(
+        time: ArrayLike,
+        n_risk: ArrayLike,
+        n_event: ArrayLike,
+        surv: ArrayLike,
+        n: Sequence[int],
+        *,
+        strata: Sequence[int] | None = None,
+        n_censor: ArrayLike | None = None,
+        std_err: ArrayLike | None = None,
+        cumhaz: ArrayLike | None = None,
+        std_chaz: ArrayLike | None = None,
+        lower: ArrayLike | None = None,
+        upper: ArrayLike | None = None,
+        logse: bool = True,
+        conf_int: float = 0.95,
+        conf_type: str = "log",
+        type: str = "right",
+        t0: float = 0.0,
+    ) -> list[SurvfitKMResult]: ...
+    @staticmethod
     def from_stacked(
         time: Sequence[float],
         n_risk: Sequence[float],
