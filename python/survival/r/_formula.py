@@ -1279,9 +1279,16 @@ def _data_rows(
     columns: Sequence[str],
     rows: Sequence[int],
     n: int,
+    *,
+    row_names: bool = True,
+    response: bool = True,
 ) -> _FormulaRows:
     """``data[rows, columns]``, the columns in *data*'s order; factor and ``tcut`` columns
-    keep their attributes, and numeric columns stay numpy arrays."""
+    keep their attributes, and numeric columns stay numpy arrays.
+
+    ``row_names=False`` leaves the rows unnamed and ``response=False`` drops the cached
+    response, for a caller that reads neither (the ``tt()`` expansion, whose rows
+    outnumber the data's many times over)."""
 
     index = np.asarray(rows, dtype=np.intp)
     frame = {
@@ -1291,7 +1298,7 @@ def _data_rows(
     selected = _FormulaRows(
         frame,
         len(rows),
-        _selected_row_names(_data_row_labels(data, n), rows, index),
+        _selected_row_names(_data_row_labels(data, n), rows, index) if row_names else None,
     )
     if isinstance(data, _FormulaRows):
         selected.strata_cache = {
@@ -1299,9 +1306,9 @@ def _data_rows(
             for spec, factor in data.strata_cache.items()
             if set(spec.columns) <= frame.keys()
         }
-        response = getattr(data, "response_cache", None)
-        if response is not None and set(response[0].columns) <= frame.keys():
-            selected.response_cache = (response[0], _subset_surv(response[1], list(rows)))
+        cached = getattr(data, "response_cache", None) if response else None
+        if cached is not None and set(cached[0].columns) <= frame.keys():
+            selected.response_cache = (cached[0], _subset_surv(cached[1], list(rows)))
         missing_rows = bool(np.any(index < 0))
         selected.variable_cache = {
             term: values.take(rows)
@@ -1360,16 +1367,26 @@ def _formula_data_rows(
     data: Any,
     rows: list[int],
     n: int,
+    *,
+    row_names: bool = True,
+    response: bool = True,
 ) -> _FormulaRows:
     """``data[rows, ]`` restricted to the variables *formula* uses.
 
     R's ``model.frame`` evaluates only the formula's variables, so ``subset`` and
     ``na.action`` never copy the other columns of *data* (nor require them to be
     row-aligned).  The columns keep *data*'s order, so a ``.`` expands to the same
-    terms afterwards.
+    terms afterwards.  ``row_names`` and ``response`` are :func:`_data_rows`'s.
     """
 
-    return _data_rows(data, _formula_columns(formula, data), rows, n)
+    return _data_rows(
+        data,
+        _formula_columns(formula, data),
+        rows,
+        n,
+        row_names=row_names,
+        response=response,
+    )
 
 
 def _subset_formula_inputs(

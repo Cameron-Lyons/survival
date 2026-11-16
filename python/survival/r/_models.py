@@ -578,6 +578,8 @@ def _model_matrix_cox(
             if fit._matrix_rows is not None:
                 labels = list(fit._matrix_rows)
             else:
+                # The tt() expansion's row names are make.unique of its source rows'
+                # names, rebuilt from the fit's frame rather than stored with the fit.
                 frame = _fit_frame(fit)
                 response = aeqSurv(frame.y) if fit.timefix else frame.y
                 if response.start is None:

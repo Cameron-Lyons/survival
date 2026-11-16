@@ -85,8 +85,8 @@ from ._formula import (
     _data_row_count,
     _data_row_labels,
     _data_rows,
+    _design_array_from_spec,
     _design_contrasts,
-    _design_rows_from_spec,
     _design_term_name,
     _formula_data_rows,
     _formula_design_row_count,
@@ -174,6 +174,8 @@ class CoxphModel:
     id_levels: tuple[Any, ...] | None = field(default=None, repr=False)
     _sparse_values: tuple[float, ...] | None = field(default=None, repr=False, compare=False)
     _prediction_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
+    # The tt() expansion's row names, which fits pickled by earlier versions stored;
+    # model_matrix now rebuilds them from the frame on demand.
     _matrix_rows: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -477,7 +479,6 @@ class _CoxData:
     cluster: list[Any] | None
     id: list[Any] | None
     design: _FormulaDesign | None = None
-    row_names: tuple[str, ...] | None = None
 
 
 def _time_transform_design(
@@ -640,9 +641,20 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     tindex = [int(idx) for idx in counts.index]
     nrisk = [int(value) for value in counts.nrisk]
     new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
-    new_y = Surv(new_time, [int(value) for value in counts.status])
+    # coxcount's times are finite and its statuses 0/1, which Surv() would keep as they are.
+    new_y = Surv._from_normalized(
+        time=new_time,
+        event=[int(value) for value in counts.status],
+        start=None,
+        time2=None,
+        surv_type="right",
+    )
     riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
-    data = _formula_data_rows(frame.formula, frame.data, tindex, frame.n)
+    # Neither the expanded rows' names nor their response is read here; model_matrix
+    # rebuilds the names from the fit's frame when it is asked for them.
+    data = _formula_data_rows(
+        frame.formula, frame.data, tindex, frame.n, row_names=False, response=False
+    )
     weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
     transformed: dict[_CovariateTerm, Any] = {}
     replacements: dict[_CovariateTerm, _SingleDesignTerm] = {}
@@ -689,7 +701,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
     )
     return _CoxData(
         y=new_y,
-        x=_design_rows_from_spec(
+        x=_design_array_from_spec(
             data, design, len(tindex), evaluated=transformed, factor_values=categorical
         ),
         strata=riskset,
@@ -698,7 +710,6 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
         cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
         id=None if frame.id is None else [frame.id[idx] for idx in tindex],
         design=design,
-        row_names=_data_row_labels(data, len(tindex)),
     )
 
 
@@ -1055,7 +1066,6 @@ def _coxph_fit_frame(
         _frame=replace(frame, x=[]),
         _sparse_values=sparse_values,
         _prediction_rows=frame.row_names,
-        _matrix_rows=data.row_names,
     )
 
 
