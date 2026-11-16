@@ -2109,6 +2109,179 @@ mod tests {
         }
     }
 
+    /// Weighted, clustered multi-state data in three strata, with enough subjects for the
+    /// curves to be fitted in parallel: competing risks, or (`counting`) subjects who all
+    /// start well at time 0 and may fall ill before they die.  Times are exact multiples of
+    /// 0.01, so that `timefix` merges no times.
+    fn three_strata(counting: bool, subjects: usize) -> SurvfitAJData {
+        let mut state = 7_u64;
+        let mut uniform = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let ticks = |u: f64| ((1.0 - u).ln() * -100.0).round() + 1.0;
+        let mut rows = Vec::new();
+        for subject in 0..subjects {
+            let first = ticks(uniform());
+            let draw = uniform();
+            if !counting {
+                let status = if draw < 0.35 {
+                    1
+                } else {
+                    2 * i32::from(draw < 0.7)
+                };
+                rows.push((subject, 0.0, first, status, "well"));
+            } else if draw < 0.4 {
+                let second = first + ticks(uniform());
+                rows.push((subject, 0.0, first, 2, "well"));
+                rows.push((subject, first, second, 3 * i32::from(draw < 0.2), "ill"));
+            } else {
+                rows.push((subject, 0.0, first, 3 * i32::from(draw < 0.7), "well"));
+            }
+        }
+        let weight: Vec<f64> = (0..subjects)
+            .map(|_| {
+                if uniform() < 0.05 {
+                    0.0
+                } else {
+                    0.5 + 1.5 * uniform()
+                }
+            })
+            .collect();
+        let cluster: Vec<i64> = (0..subjects)
+            .map(|_| {
+                if uniform() < 0.1 {
+                    0
+                } else {
+                    (uniform() * 300.0) as i64
+                }
+            })
+            .collect();
+        let states = if counting {
+            names(&["well", "ill", "dead"])
+        } else {
+            names(&["a", "b"])
+        };
+        SurvfitAJData::try_new(
+            counting.then(|| rows.iter().map(|row| row.1 / 100.0).collect()),
+            rows.iter().map(|row| row.2 / 100.0).collect(),
+            rows.iter().map(|row| row.3).collect(),
+            states.clone(),
+            Some(rows.iter().map(|row| weight[row.0]).collect()),
+            Some(rows.iter().map(|row| [4, -1, 9][row.0 % 3]).collect()),
+            counting.then(|| rows.iter().map(|row| row.0 as i64).collect()),
+            counting.then(|| rows.iter().map(|row| row.4.to_string()).collect()),
+            counting.then_some(states),
+            (!counting).then(|| rows.iter().map(|row| cluster[row.0]).collect()),
+        )
+        .unwrap()
+    }
+
+    /// The rows of `data` in stratum `code`, as a fit without strata.
+    fn stratum(data: &SurvfitAJData, code: i32) -> SurvfitAJData {
+        let strata = data.strata.as_ref().unwrap();
+        let rows: Vec<usize> = (0..data.time.len())
+            .filter(|&i| strata[i] == code)
+            .collect();
+        let pick = |values: &[f64]| rows.iter().map(|&i| values[i]).collect::<Vec<_>>();
+        let pick_i64 = |values: &[i64]| rows.iter().map(|&i| values[i]).collect::<Vec<_>>();
+        SurvfitAJData {
+            start: data.start.as_deref().map(pick),
+            time: pick(&data.time),
+            state: rows.iter().map(|&i| data.state[i]).collect(),
+            states: data.states.clone(),
+            weights: data.weights.as_deref().map(pick),
+            strata: None,
+            id: data.id.as_deref().map(pick_i64),
+            istate: data
+                .istate
+                .as_ref()
+                .map(|istate| rows.iter().map(|&i| istate[i].clone()).collect()),
+            istate_levels: data.istate_levels.clone(),
+            cluster: data.cluster.as_deref().map(pick_i64),
+        }
+    }
+
+    fn bits(rows: &[Vec<f64>]) -> Vec<Vec<u64>> {
+        rows.iter()
+            .map(|row| row.iter().map(|v| v.to_bits()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn stratified_curves_fitted_in_parallel_match_curves_fitted_alone() {
+        for counting in [false, true] {
+            let data = three_strata(counting, 1800);
+            assert!(data.time.len() > PARALLEL_THRESHOLD_LARGE);
+            let options = SurvfitAJOptions {
+                influence: true,
+                ..Default::default()
+            };
+            let grouped = survfitaj(&data, &options).unwrap();
+            let codes = grouped.strata_codes.clone().unwrap();
+            assert_eq!(codes, vec![-1, 4, 9]);
+            for (curve, range) in grouped.curve_ranges().into_iter().enumerate() {
+                let alone = survfitaj(&stratum(&data, codes[curve]), &options).unwrap();
+                assert_eq!(grouped.states, alone.states);
+                assert_eq!(grouped.hazard_to, alone.hazard_to);
+                assert_eq!(grouped.n[curve], alone.n[0]);
+                assert_eq!(grouped.n_id[curve], alone.n_id[0]);
+                assert_eq!(bits(&grouped.p0[curve..=curve]), bits(&alone.p0));
+                assert_eq!(
+                    bits(&[grouped.time[range.clone()].to_vec()]),
+                    bits(&[alone.time])
+                );
+                let grouped_counts = grouped.counts.as_ref().unwrap();
+                let alone_counts = alone.counts.as_ref().unwrap();
+                for (together, separate) in [
+                    (&grouped.n_risk, &alone.n_risk),
+                    (&grouped.n_event, &alone.n_event),
+                    (&grouped.n_censor, &alone.n_censor),
+                    (&grouped.n_transition, &alone.n_transition),
+                    (&grouped_counts.n_risk, &alone_counts.n_risk),
+                    (&grouped_counts.n_transition, &alone_counts.n_transition),
+                    (&grouped.pstate, &alone.pstate),
+                    (&grouped.cumhaz, &alone.cumhaz),
+                    (
+                        grouped.std_err.as_ref().unwrap(),
+                        alone.std_err.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.std_chaz.as_ref().unwrap(),
+                        alone.std_chaz.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.std_auc.as_ref().unwrap(),
+                        alone.std_auc.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.lower.as_ref().unwrap(),
+                        alone.lower.as_ref().unwrap(),
+                    ),
+                    (
+                        grouped.upper.as_ref().unwrap(),
+                        alone.upper.as_ref().unwrap(),
+                    ),
+                ] {
+                    assert_eq!(bits(&together[range.clone()]), bits(separate));
+                }
+                let together = &grouped.influence_pstate.as_ref().unwrap()[curve];
+                let separate = &alone.influence_pstate.as_ref().unwrap()[0];
+                assert_eq!(together.cluster.len(), separate.cluster.len());
+                assert!(
+                    together
+                        .values
+                        .iter()
+                        .zip(separate.values.iter())
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+                );
+                assert_eq!(together.values.dim(), separate.values.dim());
+            }
+        }
+    }
+
     #[test]
     fn initial_state_estimation_uses_entry_minimum_across_curves() {
         let mut data = SurvfitAJData::try_new(
