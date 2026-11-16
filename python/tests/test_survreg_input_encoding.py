@@ -1,5 +1,5 @@
-"""The survreg response arrays against a reference copy of their element-by-element
-definition."""
+"""The survreg response arrays and the first-appearance label codes against reference
+copies of their element-by-element definitions."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ import pytest
 from .helpers import setup_survival_import
 
 survival = setup_survival_import()
+r = survival.r
 core = survival._survival
+r_coerce = importlib.import_module("survival.r._coerce")
 r_surv = importlib.import_module("survival.r._surv")
 Surv = r_surv.Surv
 
@@ -79,3 +81,45 @@ def test_response_arrays_reject_a_missing_status():
     assert None in response.event
     with pytest.raises(ValueError, match="missing values in the response"):
         r_surv._survreg_response_arrays(response)
+
+
+def _reference_codes(values: list[Any], name: str) -> list[int]:
+    labels = {value: idx for idx, value in enumerate(r_coerce._label_levels(values, name))}
+    return [labels[value] for value in values]
+
+
+def test_label_codes_match_the_two_pass_reference():
+    nan = float("nan")
+    rng = np.random.default_rng(8)
+    cases: list[list[Any]] = [
+        [],
+        rng.integers(0, 50, 1000).tolist(),
+        rng.integers(-5, 5, 300).astype(float).tolist(),
+        ["b", "a", "b", "c", "a"],
+        [1, 1.0, True, 0, False, 0.0, -0.0, 2],
+        [nan, nan, 1.0, nan],
+        np.array([1.0, np.nan, np.nan, 2.0]).tolist(),
+        [None, "x", None, 3, (1, 2), (1, 2)],
+    ]
+    for values in cases:
+        assert r_coerce._encode_labels(values, "cluster") == _reference_codes(values, "cluster")
+
+
+def test_label_codes_reject_unhashable_labels():
+    with pytest.raises(TypeError, match="cluster contains unhashable labels"):
+        r_coerce._encode_labels([1, [2], 3], "cluster")
+
+
+def test_survreg_cluster_codes_follow_first_appearance():
+    rng = np.random.default_rng(12)
+    n = 120
+    x = rng.normal(size=n)
+    data = {
+        "time": np.exp(0.4 * x + rng.normal(size=n)),
+        "status": rng.integers(0, 2, n),
+        "x": x,
+        "site": [f"site{code}" for code in rng.integers(0, 9, n)],
+    }
+    model = r.survreg("Surv(time, status) ~ x + cluster(site)", data=data)
+    assert list(model.fit.cluster) == _reference_codes(data["site"], "cluster")
+    assert model.naive_var is not None

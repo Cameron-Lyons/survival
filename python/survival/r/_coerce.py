@@ -686,8 +686,14 @@ def _label_levels(values: Sequence[Any], name: str) -> tuple[Any, ...]:
 
 
 def _encode_labels(values: Sequence[Any], name: str) -> list[int]:
-    labels = {value: idx for idx, value in enumerate(_label_levels(values, name))}
-    return [labels[value] for value in values]
+    """Zero-based codes in order of first appearance (the codes of ``_label_levels``),
+    found in one pass over ``values``."""
+
+    codes: dict[Any, int] = {}
+    try:
+        return [codes.setdefault(value, len(codes)) for value in values]
+    except TypeError as exc:
+        raise TypeError(f"{name} contains unhashable labels") from exc
 
 
 _GROUP_NAN = object()
