@@ -929,8 +929,9 @@ impl Kernel {
                 let ndead = self.mark[p];
                 let jump = expect[p];
                 let hazard2 = hazard_jump[p];
-                for i in p + 1 - ndead..=p {
-                    expect[i] = self.score[i] * (hazard + hazard2);
+                let tie = p + 1 - ndead..=p;
+                for (expected, &score) in expect[tie.clone()].iter_mut().zip(&self.score[tie]) {
+                    *expected = score * (hazard + hazard2);
                 }
                 ip -= ndead as isize;
                 hazard += jump;
