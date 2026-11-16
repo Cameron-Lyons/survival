@@ -544,17 +544,23 @@ fn mean_abs_scale(
     if abs_sum > 0.0 { weight / abs_sum } else { 1.0 }
 }
 
+/// Adds the score and information terms of the `ndead` deaths at one time,
+/// whose case weights total `death_weight`, and returns their log-likelihood
+/// term. Only Efron's steps after the first read the deaths' own
+/// risk-weighted sums `tied`, so callers accumulate those only when `efron`
+/// and `ndead > 1`: Breslow fits and untied deaths skip that work.
 fn death_time_update(
     efron: bool,
     risk_set: &RiskSetSums,
+    ndead: usize,
+    death_weight: f64,
     tied: &RiskSetSums,
     u: &mut [f64],
     imat: &mut Array2<f64>,
 ) -> f64 {
     let nvar = u.len();
-    let ndead = tied.count;
     let steps = if efron { ndead } else { 1 };
-    let wtave = tied.weight / steps as f64;
+    let wtave = death_weight / steps as f64;
     let (cmat, cmat2) = (&risk_set.cmat, &tied.cmat);
     let imat = imat.as_slice_mut().expect("standard layout");
     let mut loglik = 0.0;
@@ -692,16 +698,26 @@ impl CoxData {
         } = workspace;
         self.fill_linear_predictors(beta, eta);
         risk_set.clear();
-        tied.clear();
         let mut loglik = 0.0;
-        let mut person = self.time.len();
-        while person > 0 {
-            if self.stratum_end[person - 1] == 1 {
+        let mut end = self.time.len();
+        while end > 0 {
+            if self.stratum_end[end - 1] == 1 {
                 risk_set.clear();
             }
-            let time = self.time[person - 1];
-            loop {
-                person -= 1;
+            let time = self.time[end - 1];
+            let mut start = end - 1;
+            while start > 0 && self.stratum_end[start - 1] != 1 && self.time[start - 1] == time {
+                start -= 1;
+            }
+            let ndead = (start..end)
+                .filter(|&person| self.status[person] != 0)
+                .count();
+            let tied_sums = self.efron && ndead > 1;
+            if tied_sums {
+                tied.clear();
+            }
+            let mut death_weight = 0.0;
+            for person in (start..end).rev() {
                 let (weight, x) = (self.weights[person], row(person));
                 let risk = eta[person].exp() * weight;
                 if !(1e-100..=1e100).contains(&risk) {
@@ -713,19 +729,19 @@ impl CoxData {
                 }
                 risk_set.add(weight, risk, x);
                 if self.status[person] != 0 {
-                    tied.add(weight, risk, x);
+                    if tied_sums {
+                        tied.add(weight, risk, x);
+                    }
+                    death_weight += weight;
                     loglik += weight * eta[person];
                     add_scaled(u, weight, x);
                 }
-                if person == 0 || self.stratum_end[person - 1] == 1 || self.time[person - 1] != time
-                {
-                    break;
-                }
             }
-            if tied.count > 0 {
-                loglik += death_time_update(self.efron, risk_set, tied, u, imat);
-                tied.clear();
+            if ndead > 0 {
+                loglik +=
+                    death_time_update(self.efron, risk_set, ndead, death_weight, tied, u, imat);
             }
+            end = start;
         }
         loglik
     }
@@ -746,7 +762,6 @@ impl CoxData {
             eta, risk, tied, ..
         } = workspace;
         self.fill_linear_predictors(beta, eta);
-        tied.clear();
         if eta.iter().all(|eta| eta.abs() < 199.0) {
             risk.resize(eta.len(), 0.0);
             risk_set.sums.clear();
@@ -798,15 +813,32 @@ impl CoxData {
                     risk_set.add(person, row(person))?;
                     joined += 1;
                 }
-                tied.clear();
-                for joining in by_stop[first_death..joined].iter().filter(|j| j.death) {
+                let deaths = || by_stop[first_death..joined].iter().filter(|j| j.death);
+                let ndead = deaths().count();
+                let tied_sums = self.efron && ndead > 1;
+                if tied_sums {
+                    tied.clear();
+                }
+                let mut death_weight = 0.0;
+                for joining in deaths() {
                     let person = joining.row;
                     let (weight, x) = (self.weights[person], row(person));
-                    tied.add(weight, risk_set.risk(person), x);
+                    if tied_sums {
+                        tied.add(weight, risk_set.risk(person), x);
+                    }
+                    death_weight += weight;
                     loglik += weight * (eta[person] - risk_set.recenter());
                     add_scaled(u, weight, x);
                 }
-                loglik += death_time_update(self.efron, risk_set.sums(), tied, u, imat);
+                loglik += death_time_update(
+                    self.efron,
+                    risk_set.sums(),
+                    ndead,
+                    death_weight,
+                    tied,
+                    u,
+                    imat,
+                );
             }
         }
         Ok(loglik)
@@ -1955,3 +1987,6 @@ mod tests {
 
 #[cfg(test)]
 mod workspace_tests;
+
+#[cfg(test)]
+mod tied_sums_tests;
