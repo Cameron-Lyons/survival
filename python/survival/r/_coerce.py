@@ -691,6 +691,13 @@ def _rowsum_groups(
     if len(values) != n:
         raise ValueError(message)
     declared = _categories(source) if levels is None else levels
+    if declared is None and values and set(map(type, values)) == {int}:
+        # Plain integer labels (cluster or id codes): numpy's sorted unique values
+        # are the ascending order below, and ``str`` is their ``as.character``.
+        labels = np.asarray(values)
+        if labels.dtype.kind in "iu":
+            distinct, codes = np.unique(labels, return_inverse=True)
+            return codes.tolist(), [str(value) for value in distinct.tolist()]
     unique = _label_levels(values, "collapse")
     keys = {
         value: _GROUP_NAN
