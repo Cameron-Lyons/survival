@@ -229,7 +229,7 @@ pub fn grouped_sum(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::common::Draws;
+    use crate::internal::rng::Rng;
 
     #[test]
     fn run_markers_follow_label_changes() {
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn dense_groups_rank_labels_like_the_sorted_groups() {
-        let mut draws = Draws(7);
+        let mut draws = Rng::with_seed(7);
         let values = [
             1e16,
             -1e16,
@@ -358,13 +358,13 @@ mod tests {
             f64::INFINITY,
         ];
         for case in 0..400 {
-            let n = draws.below(40);
-            let ncols = draws.below(4);
+            let n = draws.usize(0..40);
+            let ncols = draws.usize(0..4);
             let scale = [1, 3, 1000, 1 << 20][case % 4];
             let group: Vec<i32> = (0..n)
                 .map(|_| match case % 5 {
                     4 => draws.pick(&[i32::MIN, -1, 0, i32::MAX]),
-                    _ => (draws.below(6) as i32 - 2) * scale,
+                    _ => (draws.usize(0..6) as i32 - 2) * scale,
                 })
                 .collect();
             let matrix = Array2::from_shape_fn((n, ncols), |_| {
@@ -414,9 +414,9 @@ mod tests {
 
     #[test]
     fn events_first_within_ties_matches_the_status_sort() {
-        let mut draws = Draws(11);
+        let mut draws = Rng::with_seed(11);
         for case in 0..2000_usize {
-            let n = draws.below(30);
+            let n = draws.usize(0..30);
             let strata: Vec<i32> = (0..n)
                 .map(|_| {
                     if case.is_multiple_of(2) {

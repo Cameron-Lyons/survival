@@ -619,13 +619,13 @@ mod tests {
     use super::*;
     use crate::core::coxscho::coxscho;
     use crate::core::strata_order::order_within_strata;
+    use crate::internal::rng::Rng;
     use crate::regression::cox_optimizer::TieMethod;
     use crate::regression::coxph::{CoxphData, CoxphOptions};
     use crate::regression::coxph_wtest::wald_tests;
     use crate::residuals::agmart::agmart_rows;
     use crate::scoring::agscore3::agscore3_rows;
     use crate::scoring::coxscore2::coxscore2_rows;
-    use crate::tests::common::Draws;
 
     fn bits(values: &Array2<f64>) -> Array2<u64> {
         values.mapv(f64::to_bits)
@@ -641,8 +641,8 @@ mod tests {
 
     /// A robust fit over random tied data; `case` picks the response type,
     /// ties, weights, strata and the kind of cluster labels.
-    fn random_robust_fit(draws: &mut Draws, case: usize) -> CoxPHFit {
-        let n = 8 + draws.below(40);
+    fn random_robust_fit(draws: &mut Rng, case: usize) -> CoxPHFit {
+        let n = 8 + draws.usize(0..40);
         let time: Vec<f64> = (0..n).map(|_| draws.pick(&TIMES)).collect();
         let entry: Vec<f64> = time
             .iter()
@@ -650,16 +650,16 @@ mod tests {
             .collect();
         let mut status: Vec<i32> = (0..n).map(|_| draws.pick(&[0, 1, 1])).collect();
         status[0] = 1;
-        let x = Array2::from_shape_fn((n, 2), |_| draws.uniform() - 0.5);
+        let x = Array2::from_shape_fn((n, 2), |_| draws.f64() - 0.5);
         let weights = (!case.is_multiple_of(3))
             .then(|| (0..n).map(|_| draws.pick(&[0.5, 1.0, 2.0])).collect());
         let strata = (case % 4 >= 2).then(|| (0..n).map(|_| draws.pick(&[-2, 0, 5])).collect());
         let cluster = match case % 3 {
             0 => None,
-            1 => Some((0..n).map(|_| draws.below(n / 3 + 1) as i32).collect()),
+            1 => Some((0..n).map(|_| draws.usize(0..n / 3 + 1) as i32).collect()),
             _ => Some(
                 (0..n)
-                    .map(|_| draws.below(5) as i32 * 1_000_003 - 7)
+                    .map(|_| draws.usize(0..5) as i32 * 1_000_003 - 7)
                     .collect(),
             ),
         };
@@ -735,10 +735,10 @@ mod tests {
 
     #[test]
     fn fit_ordered_kernels_match_their_sorting_versions_bitwise() {
-        let mut draws = Draws(17);
+        let mut draws = Rng::with_seed(17);
         for case in 0..240 {
             let model = random_robust_fit(&mut draws, case);
-            let lp: Vec<f64> = (0..model.n).map(|_| draws.uniform() - 0.5).collect();
+            let lp: Vec<f64> = (0..model.n).map(|_| draws.f64() - 0.5).collect();
             assert_eq!(
                 bits(&score_residuals_at(&model, &lp).unwrap()),
                 bits(&sorted_score_residuals(&model, &lp)),
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn robust_variance_matches_the_sorting_collapse_bitwise() {
-        let mut draws = Draws(29);
+        let mut draws = Rng::with_seed(29);
         let mut sorted_kernel_cases = 0;
         for case in 0..240 {
             let model = random_robust_fit(&mut draws, case);
@@ -838,9 +838,9 @@ mod tests {
 
     #[test]
     fn counting_martingale_order_matches_the_sorting_kernel_with_zero_weights() {
-        let mut draws = Draws(41);
+        let mut draws = Rng::with_seed(41);
         for case in 0..3000_usize {
-            let n = draws.below(30);
+            let n = draws.usize(0..30);
             let stop: Vec<f64> = (0..n).map(|_| draws.pick(&TIMES)).collect();
             let start: Vec<f64> = stop
                 .iter()

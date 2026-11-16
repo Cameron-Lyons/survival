@@ -767,11 +767,11 @@ pub(crate) fn cox_zph_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal::rng::Rng;
     use crate::regression::coxpenal::{
         CoxpenalData, CoxpenalOptions, FrailtyFamily, ModelTerm, PenaltyTerm,
     };
     use crate::regression::coxph::{CoxphData, CoxphOptions};
-    use crate::tests::common::Draws;
 
     const TIME: [f64; 10] = [1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0, 7.0, 8.0];
     const START: [f64; 10] = [0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 0.0];
@@ -883,15 +883,17 @@ mod tests {
 
     #[test]
     fn km_transform_over_the_fit_order_matches_its_own_sort() {
-        let mut draws = Draws(5);
+        let mut draws = Rng::with_seed(5);
         for case in 0..60_usize {
-            let n = 20 + draws.below(40);
+            let n = 20 + draws.usize(0..40);
             let time: Vec<f64> = (0..n)
-                .map(|_| [-0.0, 0.0, 1.0, 1.5, 2.0, 3.0][draws.below(6)] + 4.0 * (case % 2) as f64)
+                .map(|_| {
+                    [-0.0, 0.0, 1.0, 1.5, 2.0, 3.0][draws.usize(0..6)] + 4.0 * (case % 2) as f64
+                })
                 .collect();
-            let entry: Vec<f64> = time.iter().map(|t| t - 1.0 - draws.uniform()).collect();
+            let entry: Vec<f64> = time.iter().map(|t| t - 1.0 - draws.f64()).collect();
             let status: Vec<i32> = (0..n).map(|i| i32::from(i % 3 != 2)).collect();
-            let x = Array2::from_shape_fn((n, 1), |_| draws.uniform());
+            let x = Array2::from_shape_fn((n, 1), |_| draws.f64());
             let strata = case
                 .is_multiple_of(3)
                 .then(|| (0..n).map(|i| (i % 4) as i32).collect());
@@ -965,19 +967,20 @@ mod tests {
 
     #[test]
     fn standardised_residuals_match_the_per_stratum_scan() {
-        let mut draws = Draws(3);
+        let mut draws = Rng::with_seed(3);
         for case in 0..500_usize {
-            let ncol = 1 + draws.below(4);
-            let nstrata = 1 + draws.below(12);
-            let ndeath = draws.below(40);
-            let mut death_strata: Vec<usize> = (0..ndeath).map(|_| draws.below(nstrata)).collect();
+            let ncol = 1 + draws.usize(0..4);
+            let nstrata = 1 + draws.usize(0..12);
+            let ndeath = draws.usize(0..40);
+            let mut death_strata: Vec<usize> =
+                (0..ndeath).map(|_| draws.usize(0..nstrata)).collect();
             if case.is_multiple_of(2) {
                 death_strata.sort_unstable();
             }
             let used =
-                Array2::from_shape_fn((nstrata, ncol), |_| [0.0, 1.0, 2.0, 5.0][draws.below(4)]);
-            let mut sresid = Array2::from_shape_fn((ndeath, ncol), |_| draws.uniform() - 0.5);
-            let base = Array2::from_shape_fn((ncol, ncol), |_| draws.uniform() - 0.5);
+                Array2::from_shape_fn((nstrata, ncol), |_| [0.0, 1.0, 2.0, 5.0][draws.usize(0..4)]);
+            let mut sresid = Array2::from_shape_fn((ndeath, ncol), |_| draws.f64() - 0.5);
+            let base = Array2::from_shape_fn((ncol, ncol), |_| draws.f64() - 0.5);
             let mut vmean = base.t().dot(&base) + Array2::<f64>::eye(ncol) * 0.1;
             match case % 25 {
                 // A singular block of two identical terms.

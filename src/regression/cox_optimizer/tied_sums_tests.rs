@@ -166,8 +166,15 @@ fn reference_evaluate(fit: &CoxFit, beta: &[f64]) -> (SurvivalResult<f64>, Vec<f
     (loglik, u, imat)
 }
 
+/// The bits of each value, with every NaN as `f64::NAN`. Rust leaves the
+/// sign and payload of a NaN that arithmetic produces to the target (x86
+/// gives `inf - inf` the sign bit, AArch64 does not), so only NaN-ness is
+/// comparable across platforms.
 fn bits(values: &[f64]) -> Vec<u64> {
-    values.iter().map(|value| value.to_bits()).collect()
+    values
+        .iter()
+        .map(|value| if value.is_nan() { f64::NAN } else { *value }.to_bits())
+        .collect()
 }
 
 fn assert_same_evaluation(fit: &mut CoxFit, beta: &[f64], label: &str) {
