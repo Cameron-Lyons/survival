@@ -125,6 +125,15 @@ pub(super) fn use_cluster_sums(nid: usize, ntime: usize, nused: usize) -> bool {
     nid > 64 && (nid as f64) * (ntime as f64) > 32.0 * nused as f64
 }
 
+/// How close to zero the survival factor `f = 1 - hazard` of an event time must be for
+/// [`cluster_variance`] to take the dense loop's survival step there.  A cluster whose rows
+/// all have the event then leaves behind the residue of terms about `1 / |f|` times larger,
+/// which the running sums would hold only to `eps / |f|` of its size.  The weight at risk
+/// falls by a factor of at least `1 / |f|` at such a time, so there are few of them: usually
+/// only the last time of a curve, at which `f` is zero or, for a weighted censoring curve,
+/// the rounding residue of `n.risk - n.event`.
+const DENSE_STEP_FACTOR: f64 = 1e-3;
+
 /// The clustered robust variance of right-censored data without influence matrices, in
 /// `O(n + ntime + nid log n)` rather than the dense loop's `O(ntime x nid)`.
 ///
@@ -136,9 +145,12 @@ pub(super) fn use_cluster_sums(nid: usize, ntime: usize, nused: usize) -> bool {
 /// expands into running sums of `W^2`, `W E` and `E^2` that change only when a row leaves.
 /// The sums are recomputed whenever `sum W^2` halves, so that the residue of the
 /// subtractions stays small against what is left, and a variance that cancels to below a
-/// millionth of its terms is summed cluster by cluster.  A time at which everyone at risk
-/// dies (`f == 0`) has the dense loop's survival variance, computed as it does, so the
-/// exact zero (or rounding residue) the confidence limits branch on is the same.
+/// millionth of its terms is summed cluster by cluster.  A time at which nearly all the
+/// weight at risk has the event ([`DENSE_STEP_FACTOR`]) takes the dense loop's survival
+/// step instead, from each cluster's `W a + E` and in the dense loop's order, and the sums
+/// restart from its result.  Where everyone at risk has the event (`f == 0`) this is the
+/// dense loop's variance bit for bit, the exact zero (or rounding residue) that the
+/// confidence limits branch on.
 pub(super) fn cluster_variance(
     data: &KernelData<'_>,
     rows: &CurveRows,
@@ -178,10 +190,10 @@ pub(super) fn cluster_variance(
             let scaled_nrisk = nrisk / scale;
             let (event_derivative, risk_derivative) =
                 hazard_influence_terms(d0, d1 / scale, scaled_nrisk, options.ctype);
+            let mut dense_surv = (kaplan_meier && factor.abs() < DENSE_STEP_FACTOR)
+                .then(|| sums.dense_surv(a_surv, factor, km, hazard, nrisk));
             a_surv = a_surv * factor + km * hazard / scaled_nrisk;
             a_chaz -= risk_derivative;
-            let mut dense_surv =
-                (kaplan_meier && factor == 0.0).then(|| sums.dense_surv(km, hazard, nrisk));
             sums.decay_surv(factor);
             let event_influence = [km / scaled_nrisk, event_derivative];
             while person < order.len() && data.time2[order[person]] <= time {
@@ -196,12 +208,17 @@ pub(super) fn cluster_variance(
                 person += 1;
             }
             km *= factor;
-            sums.keep_accurate();
-            if kaplan_meier {
-                var_surv = match dense_surv {
-                    Some(dense) => dense.iter().fold(0.0, |sum, x| sum + x * x),
-                    None => sums.surv_variance(a_surv),
-                };
+            match dense_surv {
+                Some(dense) => {
+                    var_surv = dense.iter().fold(0.0, |sum, x| sum + x * x);
+                    sums.restart_surv(&dense, a_surv);
+                }
+                None => {
+                    sums.keep_accurate();
+                    if kaplan_meier {
+                        var_surv = sums.surv_variance(a_surv);
+                    }
+                }
             }
             var_chaz = sums.chaz_variance(a_chaz);
         }
@@ -212,6 +229,8 @@ pub(super) fn cluster_variance(
         std_chaz[i] = var_chaz.sqrt();
     }
 }
+
+const KEEPS_SURV: &str = "a Kaplan-Meier curve keeps its survival influences";
 
 /// [`cluster_variance`]'s state: each cluster's weight at risk, the departed influences
 /// and the running sums over the clusters (weights divided by `scale`).
@@ -296,14 +315,33 @@ impl ClusterSums {
             .depart(g, [old_weight, new_weight], moved * a[1], unit * leaving[1]);
     }
 
-    /// The dense loop's survival influences at a time whose survival factor is zero,
-    /// before the corrections of the rows that die then: each cluster's old influence
-    /// times zero plus its share of the hazard.
-    fn dense_surv(&self, km: f64, hazard: f64, nrisk: f64) -> Vec<f64> {
+    /// The dense loop's survival influences at an event time, before the corrections of
+    /// the rows with the event: each cluster's influence `W a + E` times the survival
+    /// factor, plus its share of the hazard.
+    fn dense_surv(&self, a: f64, factor: f64, km: f64, hazard: f64, nrisk: f64) -> Vec<f64> {
+        let surv = self.surv.as_ref().expect(KEEPS_SURV);
         self.weight
             .iter()
-            .map(|&weight| weight * km * hazard / nrisk)
+            .zip(&surv.values)
+            .map(|(&weight, &value)| {
+                let influence = weight / self.scale * a + value * surv.decay;
+                influence * factor + weight * km * hazard / nrisk
+            })
             .collect()
+    }
+
+    /// Ends a dense step: each cluster's departed survival influence becomes what its
+    /// dense influence leaves beside the weight still at risk, and the sums are recomputed,
+    /// so that the running sums go on from the dense loop's values.
+    fn restart_surv(&mut self, influences: &[f64], a: f64) {
+        let surv = self.surv.as_mut().expect(KEEPS_SURV);
+        for ((value, &weight), &influence) in
+            surv.values.iter_mut().zip(&self.weight).zip(influences)
+        {
+            *value = influence - weight / self.scale * a;
+        }
+        surv.decay = 1.0;
+        self.refresh();
     }
 
     fn decay_surv(&mut self, factor: f64) {
@@ -342,12 +380,7 @@ impl ClusterSums {
     }
 
     fn surv_variance(&self, a: f64) -> f64 {
-        self.variance(
-            self.surv
-                .as_ref()
-                .expect("a Kaplan-Meier curve keeps its survival influences"),
-            a,
-        )
+        self.variance(self.surv.as_ref().expect(KEEPS_SURV), a)
     }
 
     fn chaz_variance(&self, a: f64) -> f64 {
@@ -394,8 +427,9 @@ impl Departed {
         self.values[g] = new / self.decay;
     }
 
-    /// Every departed influence is multiplied by `factor`; a zero factor wipes them out,
-    /// which the running product could not express.
+    /// Every departed influence is multiplied by `factor`.  A zero factor, which only a
+    /// dense step has, wipes them out (the running product could not express it) until
+    /// [`ClusterSums::restart_surv`] sets them from the dense influences.
     fn decay(&mut self, factor: f64) {
         if factor == 0.0 {
             self.values.fill(0.0);
