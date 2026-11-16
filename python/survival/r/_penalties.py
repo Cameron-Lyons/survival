@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import pairwise
+from itertools import chain, pairwise, repeat
 from typing import Any
 
 import numpy as np
@@ -28,6 +28,7 @@ from ._coerce import (
     _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
+    _missing_flags,
     _normalize_bool_option,
     _scalar_or_vector,
     _strata_level_sort_key,
@@ -47,6 +48,9 @@ PENALTY_FUNCTIONS = (
 )
 
 _FRAILTY_PREFIX = {"gamma": "gamma", "gaussian": "gauss", "t": "t"}
+
+_PLAIN_NUMBERS = frozenset({float, int})
+_EXACT_INTEGER = 2**53
 
 
 @dataclass(frozen=True)
@@ -378,7 +382,7 @@ def _fit_pspline(
     penalized = _normalize_bool_option(kwargs.pop("penalty", True), "penalty")
     intercept = _normalize_bool_option(kwargs.pop("intercept", False), "intercept")
     penalty = _core.CoxPenalty.pspline(intercept=intercept, **kwargs)
-    knots = _pspline_boundary(boundary, _observed(x))
+    knots = _pspline_boundary(boundary, _observed_range(_observed(x)))
     nterm = penalty.nterm
     if nterm is None:
         raise RuntimeError("native pspline penalty has no basis dimension")
@@ -414,9 +418,9 @@ def _fit_frailty(
     """frailty.gamma/gaussian/t: the groups are the levels of ``factor(x)``, their number
     sets the ``sparse`` default and ``length(x)`` the start of the ``df`` search."""
 
-    present = {value for value in x if not _is_missing_value(value)}
+    present = {value for value, missing in zip(x, _missing_flags(x), strict=True) if not missing}
     groups = tuple(
-        sorted(present, key=_strata_level_sort_key)
+        _sorted_levels(present)
         if levels is None
         else (level for level in levels if level in present)
     )
@@ -443,20 +447,47 @@ def _fit_frailty(
     return _PenaltyDesignTerm(term, (column,), names, penalty, levels=groups)
 
 
-def _observed(values: Sequence[Any]) -> list[float]:
-    """``x[!is.na(x)]`` as numbers."""
+def _sorted_levels(present: set[Any]) -> list[Any]:
+    """*present* in R's level order. Plain floats, and ints of at most 2**53 in
+    magnitude, sort as their exact float values, which is that order, so they
+    need no key per level."""
 
-    return [float(value) for value in values if not _is_missing_value(value)]
+    if set(map(type, present)) <= _PLAIN_NUMBERS and all(
+        abs(value) <= _EXACT_INTEGER for value in present if type(value) is int
+    ):
+        return sorted(present)
+    return sorted(present, key=_strata_level_sort_key)
 
 
-def _r_var(values: Sequence[float]) -> float:
+def _observed(values: Sequence[Any]) -> np.ndarray:
+    """``x[!is.na(x)]`` as numbers. Plain Python numbers are missing only when NaN,
+    so they convert in one step."""
+
+    if set(map(type, values)) <= _PLAIN_NUMBERS:
+        array = np.asarray(values, dtype=float)
+        return array[~np.isnan(array)]
+    return np.asarray(
+        [float(value) for value in values if not _is_missing_value(value)], dtype=float
+    )
+
+
+def _observed_range(observed: np.ndarray) -> list[float]:
+    """The first smallest and first largest of *observed*, as ``min`` and ``max``
+    pick them; empty when there is no observed value."""
+
+    if not observed.size:
+        return []
+    return [float(observed[np.argmin(observed)]), float(observed[np.argmax(observed)])]
+
+
+def _r_var(values: np.ndarray) -> float:
     """R's ``var(x)``: the ``n - 1`` denominator, ``NA`` below two values."""
 
-    if len(values) < 2 or any(not math.isfinite(value) for value in values):
+    if len(values) < 2 or not np.isfinite(values).all():
         return math.nan
-    if all(value == values[0] for value in values):
+    if (values == values[0]).all():
         return 0.0
-    array = np.asarray(values, dtype=np.longdouble)
+    array = values.astype(np.longdouble)
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         mean = np.sum(array) / len(values)
         mean += np.sum(array - mean) / len(values)
@@ -522,8 +553,11 @@ def _pspline_cbase(
 
 
 def penalty_columns(
-    spec: _PenaltyDesignTerm, values: Mapping[str, Sequence[Any]]
-) -> list[list[float]]:
+    spec: _PenaltyDesignTerm, values: Mapping[str, Sequence[Any]], *, as_arrays: bool = False
+) -> list[Any]:
+    """The design columns of a penalty term; the pspline and sparse frailty columns are
+    float arrays when *as_arrays* is set, lists otherwise."""
+
     if spec.kind == "ridge":
         return [[float(value) for value in values[column]] for column in spec.columns]
     x = values[spec.columns[0]]
@@ -540,10 +574,18 @@ def penalty_columns(
         first = 0 if spec.intercept else 1
         if not basis:
             return []
-        return np.asarray(basis, dtype=float)[:, first:].T.tolist()
+        rows, width = len(basis), len(basis[0])
+        matrix = np.fromiter(chain.from_iterable(basis), dtype=float, count=rows * width)
+        columns = matrix.reshape(rows, width)[:, first:].T
+        return list(columns) if as_arrays else columns.tolist()
     lookup = {level: i + 1 for i, level in enumerate(spec.levels)}
+    if spec.penalty.sparse:
+        codes = np.fromiter(map(lookup.get, x, repeat(0)), dtype=float, count=len(x))
+        if not codes.all():
+            raise ValueError(
+                f"newdata column {spec.columns[0]!r} contains an unknown frailty level"
+            )
+        return [codes] if as_arrays else [codes.tolist()]
     if any(value not in lookup for value in x):
         raise ValueError(f"newdata column {spec.columns[0]!r} contains an unknown frailty level")
-    if spec.penalty.sparse:
-        return [[float(lookup[value]) for value in x]]
     return [[float(value == level) for value in x] for level in spec.levels]

@@ -2556,7 +2556,7 @@ def _single_design_columns(
                     for row, penalty_value in zip(kept, source, strict=True):
                         target[row] = penalty_value
                 return result
-        return penalty_columns(spec, penalty_values)
+        return penalty_columns(spec, penalty_values, as_arrays=as_arrays)
     if isinstance(spec, _NumericDesignTerm):
         term = spec.term
         if as_arrays and not (
