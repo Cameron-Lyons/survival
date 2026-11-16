@@ -1,5 +1,6 @@
 use crate::constants::{COX_CONVERGENCE_TOLERANCE, COX_MAX_ITER, COX_RANK_TOLERANCE};
 use crate::core::risk_sweep::{RecenteredRiskSet, RiskSetSums, spans_a_death};
+use crate::core::time_order::stratum_time_order;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::{chinv2, cholesky2, chsolve2};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2, CowArray, Ix1, Ix2};
@@ -235,14 +236,12 @@ impl<'a> CoxFitBuilder<'a> {
             ));
         }
 
-        let codes = self.strata.as_ref();
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&lhs, &rhs| {
-            codes
-                .map_or(std::cmp::Ordering::Equal, |c| c[lhs].cmp(&c[rhs]))
-                .then_with(|| self.time[lhs].total_cmp(&self.time[rhs]))
-                .then_with(|| lhs.cmp(&rhs))
-        });
+        let unsorted_time = self.time.as_standard_layout();
+        let strata = self.strata.as_ref().map(|codes| codes.as_standard_layout());
+        let codes = strata
+            .as_ref()
+            .map(|codes| codes.as_slice().expect("standard layout"));
+        let order = stratum_time_order(unsorted_time.as_slice().expect("standard layout"), codes);
         let mut stratum_end = vec![0i32; n];
         for (position, &row) in order.iter().enumerate() {
             let last = position + 1 == n || codes.is_some_and(|c| c[row] != c[order[position + 1]]);
