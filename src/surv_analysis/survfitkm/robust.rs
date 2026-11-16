@@ -160,7 +160,7 @@ pub(super) fn cluster_variance(
         return;
     }
     let kaplan_meier = options.stype == SurvType::KaplanMeier;
-    let mut sums = ClusterSums::new(data, order, cluster, nid, scale);
+    let mut sums = ClusterSums::new(data, order, cluster, nid, scale, kaplan_meier);
     let mut person = 0;
     let (mut a_surv, mut a_chaz) = (0.0_f64, 0.0_f64);
     let (mut var_surv, mut var_chaz) = (0.0_f64, 0.0_f64);
@@ -182,7 +182,7 @@ pub(super) fn cluster_variance(
             a_chaz -= risk_derivative;
             let mut dense_surv =
                 (kaplan_meier && factor == 0.0).then(|| sums.dense_surv(km, hazard, nrisk));
-            sums.decay(factor);
+            sums.decay_surv(factor);
             let event_influence = [km / scaled_nrisk, event_derivative];
             while person < order.len() && data.time2[order[person]] <= time {
                 let row = order[person];
@@ -213,26 +213,30 @@ pub(super) fn cluster_variance(
     }
 }
 
-/// [`cluster_variance`]'s state: each cluster's weight at risk and departed influences,
+/// [`cluster_variance`]'s state: each cluster's weight at risk, the departed influences
 /// and the running sums over the clusters (weights divided by `scale`).
 struct ClusterSums {
     scale: f64,
     count: Vec<usize>,
     /// The weight at risk, unscaled and updated exactly as the dense loop updates it.
     weight: Vec<f64>,
-    /// The departed survival influence, divided by `decay`.
-    surv: Vec<f64>,
-    /// The departed cumulative-hazard influence.
-    chaz: Vec<f64>,
-    /// The product of the survival factors since `surv` was last rescaled.
-    decay: f64,
     weight_weight: f64,
-    weight_surv: f64,
-    surv_surv: f64,
-    weight_chaz: f64,
-    chaz_chaz: f64,
     /// `weight_weight` when the sums were last recomputed.
     refreshed: f64,
+    /// The departed survival influences, which only a Kaplan-Meier curve's variance needs.
+    surv: Option<Departed>,
+    /// The departed cumulative-hazard influences, which no factor multiplies.
+    chaz: Departed,
+}
+
+/// One influence's departed parts `E` and their running sums `sum W E` and `sum E^2`.
+struct Departed {
+    /// Each cluster's departed influence, divided by `decay`.
+    values: Vec<f64>,
+    /// The product of the factors since `values` was last rescaled.
+    decay: f64,
+    weight_value: f64,
+    value_value: f64,
 }
 
 impl ClusterSums {
@@ -242,6 +246,7 @@ impl ClusterSums {
         cluster: &[usize],
         nid: usize,
         scale: f64,
+        kaplan_meier: bool,
     ) -> Self {
         let mut count = vec![0; nid];
         let mut weight = vec![0.0; nid];
@@ -253,15 +258,10 @@ impl ClusterSums {
             scale,
             count,
             weight,
-            surv: vec![0.0; nid],
-            chaz: vec![0.0; nid],
-            decay: 1.0,
             weight_weight: 0.0,
-            weight_surv: 0.0,
-            surv_surv: 0.0,
-            weight_chaz: 0.0,
-            chaz_chaz: 0.0,
             refreshed: 0.0,
+            surv: kaplan_meier.then(|| Departed::new(nid)),
+            chaz: Departed::new(nid),
         };
         sums.refresh();
         sums
@@ -283,17 +283,17 @@ impl ClusterSums {
         let new_weight = self.weight[g] / self.scale;
         let moved = old_weight - new_weight;
         let unit = weight / self.scale;
-        let old_surv = self.surv[g] * self.decay;
-        let new_surv = old_surv + moved * a[0] - unit * leaving[0];
-        let old_chaz = self.chaz[g];
-        let new_chaz = old_chaz + moved * a[1] + unit * leaving[1];
         self.weight_weight += new_weight * new_weight - old_weight * old_weight;
-        self.weight_surv += new_weight * new_surv - old_weight * old_surv;
-        self.surv_surv += new_surv * new_surv - old_surv * old_surv;
-        self.weight_chaz += new_weight * new_chaz - old_weight * old_chaz;
-        self.chaz_chaz += new_chaz * new_chaz - old_chaz * old_chaz;
-        self.surv[g] = new_surv / self.decay;
-        self.chaz[g] = new_chaz;
+        if let Some(surv) = &mut self.surv {
+            surv.depart(
+                g,
+                [old_weight, new_weight],
+                moved * a[0],
+                -(unit * leaving[0]),
+            );
+        }
+        self.chaz
+            .depart(g, [old_weight, new_weight], moved * a[1], unit * leaving[1]);
     }
 
     /// The dense loop's survival influences at a time whose survival factor is zero,
@@ -306,29 +306,22 @@ impl ClusterSums {
             .collect()
     }
 
-    /// Every departed survival influence is multiplied by `factor`; a zero factor wipes
-    /// them out, which the running product could not express.
-    fn decay(&mut self, factor: f64) {
-        if factor == 0.0 {
-            self.surv.fill(0.0);
-            self.decay = 1.0;
-            self.weight_surv = 0.0;
-            self.surv_surv = 0.0;
-        } else {
-            self.decay *= factor;
-            self.weight_surv *= factor;
-            self.surv_surv *= factor * factor;
+    fn decay_surv(&mut self, factor: f64) {
+        if let Some(surv) = &mut self.surv {
+            surv.decay(factor);
         }
     }
 
     /// Folds a vanishing decay into the stored influences and recomputes the sums once
     /// the weight at risk has halved.
     fn keep_accurate(&mut self) {
-        if self.decay.abs() < 1e-100 {
-            for value in &mut self.surv {
-                *value *= self.decay;
+        if let Some(surv) = &mut self.surv
+            && surv.decay.abs() < 1e-100
+        {
+            for value in &mut surv.values {
+                *value *= surv.decay;
             }
-            self.decay = 1.0;
+            surv.decay = 1.0;
         }
         if self.weight_weight < 0.5 * self.refreshed {
             self.refresh();
@@ -336,55 +329,93 @@ impl ClusterSums {
     }
 
     fn refresh(&mut self) {
-        let mut sums = [0.0; 5];
-        for ((&weight, &surv), &chaz) in self.weight.iter().zip(&self.surv).zip(&self.chaz) {
-            let weight = weight / self.scale;
-            let surv = surv * self.decay;
-            sums[0] += weight * weight;
-            sums[1] += weight * surv;
-            sums[2] += surv * surv;
-            sums[3] += weight * chaz;
-            sums[4] += chaz * chaz;
-        }
-        [
-            self.weight_weight,
-            self.weight_surv,
-            self.surv_surv,
-            self.weight_chaz,
-            self.chaz_chaz,
-        ] = sums;
+        let scale = self.scale;
+        self.weight_weight = self.weight.iter().fold(0.0, |sum, &weight| {
+            let weight = weight / scale;
+            sum + weight * weight
+        });
         self.refreshed = self.weight_weight;
+        if let Some(surv) = &mut self.surv {
+            surv.refresh(&self.weight, scale);
+        }
+        self.chaz.refresh(&self.weight, scale);
     }
 
     fn surv_variance(&self, a: f64) -> f64 {
-        let squares = a * a * self.weight_weight + self.surv_surv;
-        let variance = squares + 2.0 * a * self.weight_surv;
-        if variance >= 1e-6 * squares {
-            variance
-        } else {
-            self.summed_variance(a, &self.surv, self.decay)
-        }
+        self.variance(
+            self.surv
+                .as_ref()
+                .expect("a Kaplan-Meier curve keeps its survival influences"),
+            a,
+        )
     }
 
     fn chaz_variance(&self, a: f64) -> f64 {
-        let squares = a * a * self.weight_weight + self.chaz_chaz;
-        let variance = squares + 2.0 * a * self.weight_chaz;
-        if variance >= 1e-6 * squares {
-            variance
-        } else {
-            self.summed_variance(a, &self.chaz, 1.0)
-        }
+        self.variance(&self.chaz, a)
     }
 
-    /// `sum (W a + E)^2` cluster by cluster, for a variance whose expansion cancels.
-    fn summed_variance(&self, a: f64, departed: &[f64], decay: f64) -> f64 {
+    /// `sum (W a + E)^2` from the running sums or, when their expansion cancels, cluster by
+    /// cluster.
+    fn variance(&self, departed: &Departed, a: f64) -> f64 {
+        let squares = a * a * self.weight_weight + departed.value_value;
+        let variance = squares + 2.0 * a * departed.weight_value;
+        if variance >= 1e-6 * squares {
+            return variance;
+        }
         self.weight
             .iter()
-            .zip(departed)
-            .map(|(&weight, &departed)| {
-                let influence = weight / self.scale * a + departed * decay;
+            .zip(&departed.values)
+            .map(|(&weight, &value)| {
+                let influence = weight / self.scale * a + value * departed.decay;
                 influence * influence
             })
             .sum()
+    }
+}
+
+impl Departed {
+    fn new(nid: usize) -> Self {
+        Self {
+            values: vec![0.0; nid],
+            decay: 1.0,
+            weight_value: 0.0,
+            value_value: 0.0,
+        }
+    }
+
+    /// Cluster `g`'s scaled weight at risk goes from `weights[0]` to `weights[1]` and its
+    /// departed influence grows by `moved` (the weight that left times `a`) and `left`.
+    fn depart(&mut self, g: usize, weights: [f64; 2], moved: f64, left: f64) {
+        let [old_weight, new_weight] = weights;
+        let old = self.values[g] * self.decay;
+        let new = old + moved + left;
+        self.weight_value += new_weight * new - old_weight * old;
+        self.value_value += new * new - old * old;
+        self.values[g] = new / self.decay;
+    }
+
+    /// Every departed influence is multiplied by `factor`; a zero factor wipes them out,
+    /// which the running product could not express.
+    fn decay(&mut self, factor: f64) {
+        if factor == 0.0 {
+            self.values.fill(0.0);
+            self.decay = 1.0;
+            self.weight_value = 0.0;
+            self.value_value = 0.0;
+        } else {
+            self.decay *= factor;
+            self.weight_value *= factor;
+            self.value_value *= factor * factor;
+        }
+    }
+
+    fn refresh(&mut self, weight: &[f64], scale: f64) {
+        let (mut weight_value, mut value_value) = (0.0, 0.0);
+        for (&weight, &value) in weight.iter().zip(&self.values) {
+            let (weight, value) = (weight / scale, value * self.decay);
+            weight_value += weight * value;
+            value_value += value * value;
+        }
+        (self.weight_value, self.value_value) = (weight_value, value_value);
     }
 }
