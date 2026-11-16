@@ -148,3 +148,22 @@ pub(crate) fn ovarian_data() -> (Vec<f64>, Vec<i32>, Vec<i32>) {
         ],
     )
 }
+
+/// A deterministic generator for randomized equivalence tests.
+pub(crate) struct Draws(pub u64);
+
+impl Draws {
+    pub(crate) fn below(&mut self, n: usize) -> usize {
+        crate::internal::statistical::lcg64_next(&mut self.0);
+        (self.0 >> 33) as usize % n
+    }
+
+    pub(crate) fn pick<T: Copy>(&mut self, choices: &[T]) -> T {
+        choices[self.below(choices.len())]
+    }
+
+    /// A multiple of 2^-20 in [0, 1).
+    pub(crate) fn uniform(&mut self) -> f64 {
+        self.below(1 << 20) as f64 / f64::from(1 << 20)
+    }
+}

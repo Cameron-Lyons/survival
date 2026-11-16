@@ -1,18 +1,21 @@
-use crate::core::coxscho::{CoxschoResiduals, coxscho};
-use crate::core::strata_order::{rowsum, stratum_groups};
+use crate::core::coxscho::{CoxschoResiduals, coxscho_ordered};
+use crate::core::strata_order::{
+    DenseGroups, events_first_within_ties, stratum_groups, weighted_rowsum,
+};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::regression::coxph::{CoxPHFit, PredictReference, default_assign, validate_assign};
 use crate::regression::log_risk_sweep::{
     LogMomentTree, LogMoments, LogRiskSweep, has_common_entry, needs_log_risk,
 };
 use crate::regression::log_scale::LogScale;
-use crate::residuals::agmart::agmart_rows;
+use crate::residuals::agmart::agmart_rows_ordered;
 use crate::residuals::coxmart::coxmart_rows;
 use crate::residuals::martingale_log::{martingale_log_predictors, martingale_log_scales};
-use crate::scoring::agscore3::agscore3_rows;
-use crate::scoring::coxscore2::coxscore2_rows;
+use crate::scoring::agscore3::{agscore3_rows_ordered, agscore3_start_order};
+use crate::scoring::coxscore2::coxscore2_rows_ordered;
 use ndarray::Array2;
 use pyo3::prelude::*;
+use std::cell::OnceCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoxResidualType {
@@ -107,7 +110,8 @@ pub(crate) fn martingale_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalRes
     }
     let risk = risk_scores(lp);
     Ok(match &fit.entry {
-        Some(entry) => agmart_rows(
+        Some(entry) => agmart_rows_ordered(
+            &fit.sorted.order,
             entry,
             &fit.time,
             &fit.status,
@@ -143,15 +147,51 @@ pub(crate) fn martingale_residuals_at_scales(
     )
 }
 
+/// The row orders of the score kernels, derived from the fit's sorted rows
+/// rather than sorted again: (stratum, time, status descending, row), and for
+/// counting-process data agscore3's start order of those positions.
+pub(crate) struct ScoreOrder {
+    order: Vec<usize>,
+    start_order: Option<Vec<usize>>,
+}
+
+impl ScoreOrder {
+    fn new(fit: &CoxPHFit) -> Self {
+        let strata = fit.kernel_strata();
+        let order = events_first_within_ties(&fit.sorted.order, &strata, &fit.time, &fit.status);
+        let start_order = fit
+            .entry
+            .as_deref()
+            .map(|entry| agscore3_start_order(&order, entry, &strata));
+        Self { order, start_order }
+    }
+}
+
 pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<Array2<f64>> {
+    score_residuals_in_order(fit, lp, &OnceCell::new())
+}
+
+/// [`score_residuals_at`] for calls that share `order`, which the first call
+/// to need it builds, so the robust variance derives its row orders once.
+pub(crate) fn score_residuals_in_order(
+    fit: &CoxPHFit,
+    lp: &[f64],
+    order: &OnceCell<ScoreOrder>,
+) -> SurvivalResult<Array2<f64>> {
     fit.method.reject_exact("score")?;
     if needs_log_risk(lp, &fit.weights) {
         return log_diagnostics(fit, lp, None, true).map(|(score, _)| score);
     }
     let risk = risk_scores(lp);
     let strata = fit.kernel_strata();
+    let order = order.get_or_init(|| ScoreOrder::new(fit));
     Ok(match &fit.entry {
-        Some(entry) => agscore3_rows(
+        Some(entry) => agscore3_rows_ordered(
+            &order.order,
+            order
+                .start_order
+                .as_deref()
+                .expect("a counting-process fit has a start order"),
             entry,
             &fit.time,
             &fit.status,
@@ -161,7 +201,8 @@ pub(crate) fn score_residuals_at(fit: &CoxPHFit, lp: &[f64]) -> SurvivalResult<A
             &strata,
             fit.method,
         ),
-        None => coxscore2_rows(
+        None => coxscore2_rows_ordered(
+            &order.order,
             &fit.time,
             &fit.status,
             fit.x.view(),
@@ -318,21 +359,21 @@ fn log_diagnostics(
     Ok((scores, schoenfeld))
 }
 
-pub(crate) fn collapse_rows(
+fn collapse_rows(
     rows: &Array2<f64>,
     weights: Option<&[f64]>,
     collapse: Option<&[i32]>,
 ) -> Array2<f64> {
+    if let Some(collapse) = collapse {
+        return weighted_rowsum(rows.view(), weights, &DenseGroups::new(collapse));
+    }
     let mut weighted = rows.clone();
     if let Some(weights) = weights {
         for (i, mut row) in weighted.outer_iter_mut().enumerate() {
             row.mapv_inplace(|value| value * weights[i]);
         }
     }
-    match collapse {
-        Some(collapse) => rowsum(weighted.view(), collapse),
-        None => weighted,
-    }
+    weighted
 }
 
 fn collapse_vector(values: &[f64], weights: Option<&[f64]>, collapse: Option<&[i32]>) -> Vec<f64> {
@@ -460,7 +501,8 @@ impl CoxPHFit {
             log_diagnostics(self, lp, scales, false)?.1
         } else {
             let risk = risk_scores(lp);
-            coxscho(
+            coxscho_ordered(
+                &self.sorted.order,
                 self.entry.as_deref(),
                 &self.time,
                 &self.status,
@@ -575,8 +617,261 @@ impl CoxPHFit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::coxscho::coxscho;
+    use crate::core::strata_order::order_within_strata;
     use crate::regression::cox_optimizer::TieMethod;
     use crate::regression::coxph::{CoxphData, CoxphOptions};
+    use crate::regression::coxph_wtest::wald_tests;
+    use crate::residuals::agmart::agmart_rows;
+    use crate::scoring::agscore3::agscore3_rows;
+    use crate::scoring::coxscore2::coxscore2_rows;
+    use crate::tests::common::Draws;
+
+    fn bits(values: &Array2<f64>) -> Array2<u64> {
+        values.mapv(f64::to_bits)
+    }
+
+    fn vector_bits(values: &[f64]) -> Vec<u64> {
+        values.iter().map(|value| value.to_bits()).collect()
+    }
+
+    /// Tied times with -0.0 and +0.0 among them, so the derived orders must
+    /// split ties exactly as the kernels' own sorts do.
+    const TIMES: [f64; 7] = [-0.0, 0.0, 0.5, 1.0, 1.0, 2.0, 3.0];
+
+    /// A robust fit over random tied data; `case` picks the response type,
+    /// ties, weights, strata and the kind of cluster labels.
+    fn random_robust_fit(draws: &mut Draws, case: usize) -> CoxPHFit {
+        let n = 8 + draws.below(40);
+        let time: Vec<f64> = (0..n).map(|_| draws.pick(&TIMES)).collect();
+        let entry: Vec<f64> = time
+            .iter()
+            .map(|t| t - draws.pick(&[0.25, 0.5, 1.0, 2.5]))
+            .collect();
+        let mut status: Vec<i32> = (0..n).map(|_| draws.pick(&[0, 1, 1])).collect();
+        status[0] = 1;
+        let x = Array2::from_shape_fn((n, 2), |_| draws.uniform() - 0.5);
+        let weights = (!case.is_multiple_of(3))
+            .then(|| (0..n).map(|_| draws.pick(&[0.5, 1.0, 2.0])).collect());
+        let strata = (case % 4 >= 2).then(|| (0..n).map(|_| draws.pick(&[-2, 0, 5])).collect());
+        let cluster = match case % 3 {
+            0 => None,
+            1 => Some((0..n).map(|_| draws.below(n / 3 + 1) as i32).collect()),
+            _ => Some(
+                (0..n)
+                    .map(|_| draws.below(5) as i32 * 1_000_003 - 7)
+                    .collect(),
+            ),
+        };
+        let data = CoxphData::try_new(
+            time,
+            (case % 2 == 1).then_some(entry),
+            status,
+            x,
+            weights,
+            strata,
+            None,
+        )
+        .unwrap();
+        let options = CoxphOptions {
+            method: if case.is_multiple_of(5) {
+                TieMethod::Breslow
+            } else {
+                TieMethod::Efron
+            },
+            cluster,
+            robust: Some(true),
+            ..CoxphOptions::default()
+        };
+        CoxPHFit::fit(data, options).unwrap()
+    }
+
+    /// The score kernels with their own sorts, as the fit called them.
+    fn sorted_score_residuals(fit: &CoxPHFit, lp: &[f64]) -> Array2<f64> {
+        if needs_log_risk(lp, &fit.weights) {
+            return log_diagnostics(fit, lp, None, true).unwrap().0;
+        }
+        let risk = risk_scores(lp);
+        let strata = fit.kernel_strata();
+        match &fit.entry {
+            Some(entry) => agscore3_rows(
+                entry,
+                &fit.time,
+                &fit.status,
+                fit.x.view(),
+                &risk,
+                &fit.weights,
+                &strata,
+                fit.method,
+            ),
+            None => coxscore2_rows(
+                &fit.time,
+                &fit.status,
+                fit.x.view(),
+                &risk,
+                &fit.weights,
+                &strata,
+                fit.method,
+            ),
+        }
+    }
+
+    /// The collapse the robust variance used: scale a copy, then sum the
+    /// label-sorted groups.
+    fn collapse_by_sorting(rows: &Array2<f64>, weights: &[f64], labels: &[i32]) -> Array2<f64> {
+        let mut weighted = rows.clone();
+        for (mut row, weight) in weighted.outer_iter_mut().zip(weights) {
+            row.mapv_inplace(|value| value * weight);
+        }
+        let groups = stratum_groups(labels);
+        let mut sums = Array2::zeros((groups.len(), rows.ncols()));
+        for (mut sum, (_, members)) in sums.outer_iter_mut().zip(&groups) {
+            for &row in members {
+                sum += &weighted.row(row);
+            }
+        }
+        sums
+    }
+
+    #[test]
+    fn fit_ordered_kernels_match_their_sorting_versions_bitwise() {
+        let mut draws = Draws(17);
+        for case in 0..240 {
+            let model = random_robust_fit(&mut draws, case);
+            let lp: Vec<f64> = (0..model.n).map(|_| draws.uniform() - 0.5).collect();
+            assert_eq!(
+                bits(&score_residuals_at(&model, &lp).unwrap()),
+                bits(&sorted_score_residuals(&model, &lp)),
+                "case {case}"
+            );
+            let risk = risk_scores(&lp);
+            let strata = model.kernel_strata();
+            let sorted = coxscho(
+                model.entry.as_deref(),
+                &model.time,
+                &model.status,
+                model.x.view(),
+                &risk,
+                &model.weights,
+                &strata,
+                model.method,
+            );
+            let ordered = coxscho_ordered(
+                &model.sorted.order,
+                model.entry.as_deref(),
+                &model.time,
+                &model.status,
+                model.x.view(),
+                &risk,
+                &model.weights,
+                &strata,
+                model.method,
+            );
+            assert_eq!(vector_bits(&ordered.time), vector_bits(&sorted.time));
+            assert_eq!(ordered.index, sorted.index);
+            assert_eq!(ordered.strata, sorted.strata);
+            let flat = |rows: &[Vec<f64>]| vector_bits(&rows.concat());
+            assert_eq!(flat(&ordered.residuals), flat(&sorted.residuals));
+            if let Some(entry) = &model.entry {
+                assert_eq!(
+                    vector_bits(&martingale_residuals_at(&model, &lp).unwrap()),
+                    vector_bits(&agmart_rows(
+                        entry,
+                        &model.time,
+                        &model.status,
+                        &risk,
+                        &model.weights,
+                        &strata,
+                        model.method,
+                    )),
+                    "case {case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn robust_variance_matches_the_sorting_collapse_bitwise() {
+        let mut draws = Draws(29);
+        let mut sorted_kernel_cases = 0;
+        for case in 0..240 {
+            let model = random_robust_fit(&mut draws, case);
+            assert!(model.risk_predictors.is_none());
+            sorted_kernel_cases +=
+                usize::from(!needs_log_risk(&model.linear_predictors, &model.weights));
+            let naive = model.naive_var.as_ref().expect("a robust fit");
+            let labels = model
+                .cluster
+                .clone()
+                .unwrap_or_else(|| (0..model.n as i32).collect());
+            let dfbeta = collapse_by_sorting(
+                &sorted_score_residuals(&model, &model.linear_predictors).dot(naive),
+                &model.weights,
+                &labels,
+            );
+            assert_eq!(
+                bits(&model.var),
+                bits(&dfbeta.t().dot(&dfbeta)),
+                "case {case}"
+            );
+            let scores = collapse_by_sorting(
+                &sorted_score_residuals(&model, &vec![0.0; model.n]),
+                &model.weights,
+                &labels,
+            );
+            let u = Array2::from_shape_fn((model.nvar(), 1), |(j, _)| scores.column(j).sum());
+            let rscore = wald_tests(
+                &scores.t().dot(&scores),
+                &u,
+                CoxphOptions::default().toler_chol,
+            )
+            .unwrap()
+            .test[0];
+            assert_eq!(
+                model.rscore.map(f64::to_bits),
+                Some(rscore.to_bits()),
+                "case {case}"
+            );
+        }
+        assert!(sorted_kernel_cases > 200, "{sorted_kernel_cases}");
+    }
+
+    #[test]
+    fn counting_martingale_order_matches_the_sorting_kernel_with_zero_weights() {
+        let mut draws = Draws(41);
+        for case in 0..3000_usize {
+            let n = draws.below(30);
+            let stop: Vec<f64> = (0..n).map(|_| draws.pick(&TIMES)).collect();
+            let start: Vec<f64> = stop
+                .iter()
+                .map(|t| draws.pick(&[-0.0_f64, 0.0, -0.5, 0.5, 1.0]).min(t - 0.25))
+                .collect();
+            let event: Vec<i32> = (0..n).map(|_| draws.pick(&[0, 0, 1])).collect();
+            let score: Vec<f64> = (0..n).map(|_| draws.pick(&[0.5, 1.0, 1.5])).collect();
+            let weights: Vec<f64> = (0..n).map(|_| draws.pick(&[0.0, 0.5, 1.0, 2.0])).collect();
+            let strata: Vec<i32> = (0..n)
+                .map(|_| {
+                    if case.is_multiple_of(2) {
+                        0
+                    } else {
+                        draws.pick(&[-1, 3])
+                    }
+                })
+                .collect();
+            let order = order_within_strata(&strata, |a, b| stop[a].total_cmp(&stop[b]));
+            for method in [TieMethod::Breslow, TieMethod::Efron] {
+                assert_eq!(
+                    vector_bits(&agmart_rows_ordered(
+                        &order, &start, &stop, &event, &score, &weights, &strata, method,
+                    )),
+                    vector_bits(&agmart_rows(
+                        &start, &stop, &event, &score, &weights, &strata, method,
+                    )),
+                    "case {case}"
+                );
+            }
+        }
+    }
 
     fn fit(method: TieMethod, entry: Option<Vec<f64>>) -> CoxPHFit {
         let weighted = method != TieMethod::Exact;

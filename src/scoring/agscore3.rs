@@ -3,7 +3,7 @@ use crate::error::SurvivalResult;
 use crate::internal::typed_inputs::CountingProcessData;
 use crate::internal::validation::validate_binary_i32;
 use crate::regression::TieMethod;
-use crate::scoring::validate_score_inputs;
+use crate::scoring::{gather_rows, scatter_rows, validate_score_inputs};
 use ndarray::{Array2, ArrayView2};
 
 pub fn agscore3(
@@ -44,26 +44,50 @@ pub(crate) fn agscore3_rows(
     strata: &[i32],
     method: TieMethod,
 ) -> Array2<f64> {
-    let n = start.len();
-    let nvar = covariates.ncols();
     let order = order_within_strata(strata, |a, b| {
         stop[a]
             .total_cmp(&stop[b])
             .then_with(|| event[b].cmp(&event[a]))
     });
+    let sort1 = agscore3_start_order(&order, start, strata);
+    agscore3_rows_ordered(
+        &order, &sort1, start, stop, event, covariates, score, weights, strata, method,
+    )
+}
+
+/// The positions of `order` sorted by (stratum, start): the order in which
+/// [`agscore3_sorted`] drops rows from the risk set.  It depends only on the
+/// row order, so a fit computes it once for every score-residual call.
+pub(crate) fn agscore3_start_order(order: &[usize], start: &[f64], strata: &[i32]) -> Vec<usize> {
+    let sorted_start: Vec<f64> = order.iter().map(|&i| start[i]).collect();
+    let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
+    order_within_strata(&sorted_strata, |a, b| {
+        sorted_start[a].total_cmp(&sorted_start[b])
+    })
+}
+
+/// [`agscore3_rows`] for rows already in its (stratum, stop, event
+/// descending, row) order, with `sort1` from [`agscore3_start_order`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn agscore3_rows_ordered(
+    order: &[usize],
+    sort1: &[usize],
+    start: &[f64],
+    stop: &[f64],
+    event: &[i32],
+    covariates: ArrayView2<'_, f64>,
+    score: &[f64],
+    weights: &[f64],
+    strata: &[i32],
+    method: TieMethod,
+) -> Array2<f64> {
     let sorted_start: Vec<f64> = order.iter().map(|&i| start[i]).collect();
     let sorted_stop: Vec<f64> = order.iter().map(|&i| stop[i]).collect();
     let sorted_event: Vec<i32> = order.iter().map(|&i| event[i]).collect();
     let sorted_strata: Vec<i32> = order.iter().map(|&i| strata[i]).collect();
     let sorted_score: Vec<f64> = order.iter().map(|&i| score[i]).collect();
     let sorted_weights: Vec<f64> = order.iter().map(|&i| weights[i]).collect();
-    let mut sorted_covar = Array2::zeros((n, nvar));
-    for (row, &i) in order.iter().enumerate() {
-        sorted_covar.row_mut(row).assign(&covariates.row(i));
-    }
-    let sort1 = order_within_strata(&sorted_strata, |a, b| {
-        sorted_start[a].total_cmp(&sorted_start[b])
-    });
+    let sorted_covar = gather_rows(covariates, order);
 
     let sorted = agscore3_sorted(
         &sorted_start,
@@ -74,13 +98,9 @@ pub(crate) fn agscore3_rows(
         &sorted_score,
         &sorted_weights,
         method,
-        &sort1,
+        sort1,
     );
-    let mut resid = Array2::zeros((n, nvar));
-    for (row, &i) in order.iter().enumerate() {
-        resid.row_mut(i).assign(&sorted.row(row));
-    }
-    resid
+    scatter_rows(&sorted, order)
 }
 
 #[allow(clippy::too_many_arguments)]
