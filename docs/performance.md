@@ -75,7 +75,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   float rows fill one allocation. Results that consumers read as arrays are
   returned as NumPy arrays; several result types offer `to_arrays()` snapshots.
 - Formula calls add model-frame preparation in Python: expression evaluation,
-  factor coding and omission. Numeric columns stay NumPy arrays until they are
+  factor coding and omission. Row labels of integer- and string-indexed frames
+  are read in bulk, increasing row selections keep their labels without
+  `make.unique`, and `tt()` terms expand into an array design. Numeric columns stay NumPy arrays until they are
   copied into the design. The R bridge adds reticulate conversion, which is done in
   bulk for numeric columns and native results.
 - Because that preparation is a roughly fixed cost per call, stock R is faster for
@@ -175,6 +177,15 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   active risks change, using hazard interval queries. Efron ties accumulate block
   moments and visit each affected group once, avoiding a loop over every group for
   each tied death and a dense matrix of frailty indicators.
+- Fit preparation sorts packed (stratum, time) integer keys instead of row
+  indices through a comparator, and centres and scales covariates in row-major
+  passes. Tied-death second moments are accumulated only at Efron death times
+  with several deaths, the only place they are read.
+- Robust and cluster variances, counting-process martingale residuals, and
+  score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
+  sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in
+  one pass. `cox.zph` buckets deaths by stratum once, so standardization costs
+  O(n + d) instead of O(strata × d) for d deaths.
 - Breslow and Efron evaluations reuse predictor, risk and risk-set buffers for
   every trial coefficient vector. Exact ties use a subset dynamic program with
   `k + 1` states, `k = min(d, n - d)` for d deaths among n at risk, computing the
@@ -244,6 +255,12 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   multipliers once for all predictors; each predictor keeps its own rank tree, so
   several predictors cost much less than separate calls while one predictor costs
   the same.
+- The concordance risk-set and death-weight trees share one cache-aligned node
+  array, so each death, censoring or entry updates both in one walk. Once the
+  death tree is complete, its final influence sums are read once per tree node
+  instead of once per row. Predictor ranks and the sweep order come from sorts
+  of packed integer keys, avoiding comparisons that load random rows. Without
+  standard errors only the risk-set tree is kept.
 - Numeric NumPy concordance matrices pass through a typed native constructor,
   avoiding a nested Python list and its per-element conversions. Contiguous,
   strided and Fortran-ordered arrays retain the same row and column order.
