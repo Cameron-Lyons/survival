@@ -1,6 +1,9 @@
 //! The penalized Cox kernel as it stood before its loops were restructured for
 //! speed, kept verbatim as an oracle. Every case asserts the production kernel
-//! reproduces it bit for bit.
+//! reproduces it bit for bit, except for the frailty entries of Efron fits with
+//! tied deaths: the production kernel re-associates their tie corrections (see
+//! `tied_frailty.rs`), so those agree to [`EVALUATION_TOLERANCE`] of their
+//! scale instead, and Newton steps through them to [`FIT_TOLERANCE`].
 
 use super::*;
 use crate::internal::rng::Rng;
@@ -710,6 +713,21 @@ impl Case {
         }
     }
 
+    /// Whether two deaths of a stratum share an event time.
+    fn has_tied_deaths(&self) -> bool {
+        let mut events: Vec<(i32, u64)> = (0..self.stop.len())
+            .filter(|&i| self.status[i] == 1)
+            .map(|i| {
+                let stratum = self.strata.as_ref().map_or(0, |strata| strata[i]);
+                (stratum, self.stop[i].to_bits())
+            })
+            .collect();
+        let deaths = events.len();
+        events.sort_unstable();
+        events.dedup();
+        events.len() < deaths
+    }
+
     fn data(&self, efron: bool) -> KernelData<'_> {
         KernelData {
             stop: &self.stop,
@@ -754,11 +772,47 @@ fn assert_bits(label: &str, actual: &[f64], expected: &[f64]) {
     }
 }
 
+/// The largest difference allowed between re-associated sums of one
+/// evaluation, relative to the largest magnitude among the values compared;
+/// the randomized cases differ by at most about 1.5e-15.
+const EVALUATION_TOLERANCE: f64 = 1e-13;
+
+/// The same after Newton steps through such evaluations, which amplify the
+/// differences; the randomized cases differ by at most about 1.6e-14.
+const FIT_TOLERANCE: f64 = 1e-12;
+
+fn assert_close(label: &str, actual: &[f64], expected: &[f64]) {
+    assert_within(label, actual, expected, EVALUATION_TOLERANCE);
+}
+
+/// `actual` within `tolerance` of `expected` relative to its largest finite
+/// magnitude; non-finite values must match in kind.
+fn assert_within(label: &str, actual: &[f64], expected: &[f64], tolerance: f64) {
+    assert_eq!(actual.len(), expected.len(), "{label}");
+    let scale = expected
+        .iter()
+        .filter(|e| e.is_finite())
+        .fold(0.0, |m: f64, e| m.max(e.abs()));
+    for (i, (&a, &e)) in actual.iter().zip(expected).enumerate() {
+        let matches = if e.is_finite() {
+            (a - e).abs() <= tolerance * scale
+        } else {
+            a.is_nan() && e.is_nan() || a == e
+        };
+        assert!(matches, "{label}[{i}]: {a:e} != {e:e} (scale {scale:e})");
+    }
+}
+
 /// Compares the two kernels at two coefficient vectors and returns the
 /// reference's last evaluation.
 fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
     let nvar = case.x.ncols();
     let nf = case.nfrail;
+    let frailty_check = if efron && case.has_tied_deaths() {
+        assert_close
+    } else {
+        assert_bits
+    };
     let mut kernel = Kernel::new(case.data(efron));
     let mut reference = Reference::new(&case.data(efron));
     let means: Vec<f64> = (0..nvar)
@@ -798,18 +852,25 @@ fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
             &mut old.fdiag,
         );
         assert_bits(&format!("{label} loglik"), &[new.loglik], &[old.loglik]);
-        assert_bits(&format!("{label} u"), &new.u, &old.u);
-        assert_bits(
+        assert_bits(&format!("{label} u"), &new.u[nf..], &old.u[nf..]);
+        frailty_check(&format!("{label} frailty u"), &new.u[..nf], &old.u[..nf]);
+        frailty_check(
             &format!("{label} fdiag"),
             &new.fdiag[..nf],
             &old.fdiag[..nf],
         );
         for i in 0..nvar {
             let (new_row, old_row) = (new.jmat.row(i), old.jmat.row(i));
+            let (new_row, old_row) = (new_row.as_slice().unwrap(), old_row.as_slice().unwrap());
             assert_bits(
                 &format!("{label} jmat row {i}"),
-                &new_row.as_slice().unwrap()[..=nf + i],
-                &old_row.as_slice().unwrap()[..=nf + i],
+                &new_row[nf..=nf + i],
+                &old_row[nf..=nf + i],
+            );
+            frailty_check(
+                &format!("{label} frailty jmat row {i}"),
+                &new_row[..nf],
+                &old_row[..nf],
             );
         }
         if case.start.is_none() {
@@ -993,6 +1054,97 @@ fn kernel_matches_the_reference_when_second_moments_overflow() {
         for efron in [false, true] {
             let old = compare(&case, efron, &format!("counting {counting} efron {efron}"));
             assert!(old.u[2..].iter().any(|value| value.is_nan()));
+        }
+    }
+}
+
+/// The coefficients, frailties, final log-likelihood and inverted
+/// information that [`newton_steps`] reaches.
+struct NewtonFit {
+    beta: Vec<f64>,
+    fbeta: Vec<f64>,
+    loglik: f64,
+    fdiag: Vec<f64>,
+    hinv: Array2<f64>,
+}
+
+/// `steps` Newton steps from zero on the likelihood `evaluate` computes, with
+/// a ridge of `theta` on the frailties, as a gaussian frailty of fixed
+/// variance has.
+fn newton_steps(
+    nvar: usize,
+    nf: usize,
+    theta: f64,
+    steps: usize,
+    mut evaluate: impl FnMut(&[f64], &[f64], &mut [f64], &mut Array2<f64>, &mut [f64]) -> f64,
+) -> NewtonFit {
+    let mut beta = vec![0.0; nvar];
+    let mut fbeta = vec![0.0; nf];
+    let mut u = vec![0.0; nf + nvar];
+    let mut jmat = Array2::zeros((nvar, nf + nvar));
+    let mut fdiag = vec![0.0; nf + nvar];
+    let mut loglik = 0.0;
+    for _ in 0..steps {
+        loglik = evaluate(&beta, &fbeta, &mut u, &mut jmat, &mut fdiag);
+        for (g, &b) in fbeta.iter().enumerate() {
+            u[g] -= theta * b;
+            fdiag[g] += theta;
+            loglik -= theta * b * b / 2.0;
+        }
+        cholesky3(&mut jmat, nf, &mut fdiag, 1e-9);
+        chsolve3(&jmat, nf, &fdiag, &mut u);
+        for (b, step) in fbeta.iter_mut().chain(beta.iter_mut()).zip(&u) {
+            *b += step;
+        }
+    }
+    chinv3(&mut jmat, nf, &mut fdiag);
+    NewtonFit {
+        beta,
+        fbeta,
+        loglik,
+        fdiag: fdiag[..nf].to_vec(),
+        hinv: jmat,
+    }
+}
+
+#[test]
+fn newton_steps_with_reassociated_tie_corrections_match_the_reference() {
+    let mut rng = Rng::with_seed(0x7ead);
+    for counting in [false, true] {
+        for (distinct_times, nfrail) in [(Some(4), 40), (Some(15), 9), (Some(1), 25)] {
+            let case = Case::random(
+                &mut rng,
+                Shape {
+                    n: 400,
+                    nvar: 3,
+                    distinct_times,
+                    nstrata: 2,
+                    nfrail,
+                    counting,
+                },
+            );
+            assert!(case.has_tied_deaths());
+            let mut kernel = Kernel::new(case.data(true));
+            let mut reference = Reference::new(&case.data(true));
+            let new = newton_steps(3, nfrail, 2.0, 6, |beta, fbeta, u, jmat, fdiag| {
+                kernel.evaluate(beta, fbeta, u, jmat, fdiag).unwrap()
+            });
+            let old = newton_steps(3, nfrail, 2.0, 6, |beta, fbeta, u, jmat, fdiag| {
+                reference.evaluate(beta, fbeta, u, jmat, fdiag)
+            });
+            let label = format!("counting {counting} times {distinct_times:?} groups {nfrail}");
+            let close = |name: &str, actual: &[f64], expected: &[f64]| {
+                assert_within(&format!("{label} {name}"), actual, expected, FIT_TOLERANCE);
+            };
+            close("beta", &new.beta, &old.beta);
+            close("fbeta", &new.fbeta, &old.fbeta);
+            close("loglik", &[new.loglik], &[old.loglik]);
+            close("fdiag", &new.fdiag, &old.fdiag);
+            close(
+                "inverse",
+                new.hinv.as_slice().unwrap(),
+                old.hinv.as_slice().unwrap(),
+            );
         }
     }
 }

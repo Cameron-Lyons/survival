@@ -10,8 +10,10 @@ mod reference_tests;
 mod stable;
 #[cfg(test)]
 mod stable_tests;
+mod tied_frailty;
 
 use self::stable::OriginalOrder;
+use self::tied_frailty::TieSums;
 
 fn coxsafe(x: f64) -> f64 {
     x.clamp(-200.0, 22.0)
@@ -94,6 +96,8 @@ pub(super) struct Kernel {
     flushed: Vec<RunningSum>,
     tied: Vec<usize>,
     tied_mark: Vec<bool>,
+    /// The current tie set's corrections of the `tied` frailty groups.
+    tie_sums: TieSums,
 }
 
 /// Efron's second moments (`a2`, `cmat2`) enter death step `k` of a tie set
@@ -296,6 +300,7 @@ impl Kernel {
             flushed: vec![RunningSum::default(); nf * (nvar + 2)],
             tied: Vec::new(),
             tied_mark: vec![false; nf],
+            tie_sums: TieSums::new(nvar),
         }
     }
 
@@ -499,6 +504,10 @@ impl Kernel {
         }
     }
 
+    /// Death step `k` of a tie set of `ndead`: its log-likelihood term, with
+    /// its score and information added in. The Efron corrections of the tied
+    /// frailty groups are only summed here; [`Self::finish_tie_set`] applies
+    /// them once the set's steps are done.
     #[allow(clippy::too_many_arguments)]
     fn death_step(
         &mut self,
@@ -509,7 +518,6 @@ impl Kernel {
         meanwt: f64,
         u: &mut [f64],
         jmat: &mut Array2<f64>,
-        fdiag: &mut [f64],
     ) -> f64 {
         let nf = self.nf;
         let nvar = self.nvar;
@@ -546,17 +554,8 @@ impl Kernel {
                 self.running[ii + 2].add(weight * self.tmean[ii + nf]);
             }
             if temp != 0.0 {
-                for &g in &self.tied {
-                    let plain = self.a[g] / d2;
-                    let tied = (self.a[g] - temp * self.a2[g]) / d2;
-                    u[g] -= meanwt * (tied - plain);
-                    fdiag[g] += meanwt * (tied * (1.0 - tied) - plain * (1.0 - plain));
-                    for ii in 0..nvar {
-                        jmat[(ii, g)] += meanwt
-                            * (-temp * self.cmat2[(ii, g)] / d2
-                                - self.tmean[ii + nf] * (tied - plain));
-                    }
-                }
+                self.tie_sums
+                    .add(meanwt, temp, denom, d2, &self.tmean[nf..]);
             }
         }
         -meanwt * d2.ln()
@@ -634,8 +633,9 @@ impl Kernel {
                 let ndead = self.mark[p] as f64;
                 let wtave = self.wtave[p];
                 for k in 0..self.mark[p] {
-                    newlk += self.death_step(denom, efron_wt, k, ndead, wtave, u, jmat, fdiag);
+                    newlk += self.death_step(denom, efron_wt, k, ndead, wtave, u, jmat);
                 }
+                self.finish_tie_set(denom, u, jmat, fdiag);
                 efron_wt = 0.0;
                 self.reset_sums(true);
             }
@@ -718,12 +718,12 @@ impl Kernel {
                 while person < k {
                     if self.status[person] == 1 {
                         newlk += self.weights[person] * self.score[person];
-                        newlk +=
-                            self.death_step(denom, efron_wt, itemp, deaths, meanwt, u, jmat, fdiag);
+                        newlk += self.death_step(denom, efron_wt, itemp, deaths, meanwt, u, jmat);
                         itemp += 1;
                     }
                     person += 1;
                 }
+                self.finish_tie_set(denom, u, jmat, fdiag);
             }
             if person == self.strata_end[istrat] {
                 istrat += 1;
