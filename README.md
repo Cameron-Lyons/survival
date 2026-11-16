@@ -173,8 +173,10 @@ of float rows fill a single Rust matrix allocation. See
 
 For right-censored curves with independent observations, robust standard errors
 use a linear sweep after sorting, including when fractional case weights select
-robust variance automatically. Repeated clusters, counting-process data, and
-explicit influence matrices use the general influence calculation. Run
+robust variance automatically. Right-censored curves with repeated clusters keep
+running sums over the clusters instead of updating every cluster at every event
+time. Counting-process data, explicit influence matrices and fits with few
+clusters use the general influence calculation. Run
 `PYTHONPATH=python python scripts/bench_survival_curves.py` against a release build
 to measure the Python calls, or
 `cargo bench --bench survival_benchmarks -- kaplan_meier` for the Rust kernels.
