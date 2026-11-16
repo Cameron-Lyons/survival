@@ -1256,6 +1256,24 @@ def _formula_columns(formula: str, data: Any) -> list[str]:
     return list(dict.fromkeys(columns))
 
 
+def _selected_row_names(
+    labels: tuple[str, ...] | None, rows: Sequence[int], index: np.ndarray
+) -> tuple[str, ...]:
+    """The row names of ``data[rows, ]`` (*index* is *rows* as an array): R's
+    ``make.unique`` of the selected names, with ``"NA"`` for a missing row."""
+
+    if index.size == 0 or (index[0] >= 0 and bool((np.diff(index) > 0).all())):
+        # Increasing rows are distinct, and so are their automatic names.
+        if labels is None:
+            return tuple(map(str, (index + 1).tolist()))
+        return tuple(_make_unique(list(map(labels.__getitem__, rows))))
+    return tuple(
+        _make_unique(
+            ["NA" if row < 0 else str(row + 1) if labels is None else labels[row] for row in rows]
+        )
+    )
+
+
 def _data_rows(
     data: Any,
     columns: Sequence[str],
@@ -1270,18 +1288,10 @@ def _data_rows(
         name: _column_rows(_column_source(data, name), name, rows, index, n)
         for name in _data_order(data, columns)
     }
-    labels = _data_row_labels(data, n)
     selected = _FormulaRows(
         frame,
         len(rows),
-        tuple(
-            _make_unique(
-                [
-                    "NA" if row < 0 else str(row + 1) if labels is None else labels[row]
-                    for row in rows
-                ]
-            )
-        ),
+        _selected_row_names(_data_row_labels(data, n), rows, index),
     )
     if isinstance(data, _FormulaRows):
         selected.strata_cache = {

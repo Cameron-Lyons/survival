@@ -402,10 +402,10 @@ class Surv(_SurvivalOperations):
 
         rows = list(indices)
         return Surv._from_normalized(
-            time=[self.time[idx] for idx in rows],
-            event=[self.event[idx] for idx in rows],
-            start=None if self.start is None else [self.start[idx] for idx in rows],
-            time2=None if self.time2 is None else [self.time2[idx] for idx in rows],
+            time=tuple(map(self.time.__getitem__, rows)),
+            event=tuple(map(self.event.__getitem__, rows)),
+            start=None if self.start is None else tuple(map(self.start.__getitem__, rows)),
+            time2=None if self.time2 is None else tuple(map(self.time2.__getitem__, rows)),
             surv_type=self.type,
             states=self.states,
             clabel=self.clabel,
@@ -876,8 +876,8 @@ class Surv2(_SurvivalOperations):
 
         rows = list(indices)
         return Surv2._from_normalized(
-            time=[self.time[idx] for idx in rows],
-            status=[self.status[idx] for idx in rows],
+            time=tuple(map(self.time.__getitem__, rows)),
+            status=tuple(map(self.status.__getitem__, rows)),
             states=self.states,
             repeated=self.repeated,
             clabel=self.clabel,

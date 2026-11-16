@@ -47,6 +47,8 @@ def _make_unique(names: Sequence[str]) -> list[str]:
     name already in *names* or given out earlier."""
 
     taken = set(names)
+    if len(taken) == len(names):
+        return list(names)
     seen: set[str] = set()
     counts: dict[str, int] = {}
     out: list[str] = []
@@ -56,9 +58,10 @@ def _make_unique(names: Sequence[str]) -> list[str]:
             out.append(name)
             continue
         count = counts.get(name, 1)
-        while f"{name}.{count}" in taken:
-            count += 1
         unique = f"{name}.{count}"
+        while unique in taken:
+            count += 1
+            unique = f"{name}.{count}"
         taken.add(unique)
         counts[name] = count + 1
         out.append(unique)

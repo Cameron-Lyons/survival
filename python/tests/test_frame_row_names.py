@@ -1,7 +1,9 @@
-"""Row names of formula data from integer and plain-string pandas indexes.
+"""Row names of formula data: the index fast paths and the selected-row names.
 
-``_data_row_labels`` reads such an index without a call per label, and must give
-exactly what the per-value algorithm (kept here as the reference) gives.
+``_data_row_labels`` reads integer and plain-string pandas indexes without a call per
+label, ``data[rows, ]`` names increasing rows without ``make.unique``, and
+``make.unique`` returns distinct names unchanged.  Each must give exactly what the
+per-value algorithm (kept here as the reference) gives.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ survival = setup_survival_import()
 r = survival.r
 r_coerce = importlib.import_module("survival.r._coerce")
 r_formula = importlib.import_module("survival.r._formula")
+r_names = importlib.import_module("survival.r._names")
 
 
 def reference_data_row_labels(data, n):
@@ -38,6 +41,34 @@ def reference_data_row_labels(data, n):
     ):
         return labels
     return None
+
+
+def reference_make_unique(names):
+    taken = set(names)
+    seen = set()
+    counts = {}
+    out = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+            continue
+        count = counts.get(name, 1)
+        while f"{name}.{count}" in taken:
+            count += 1
+        unique = f"{name}.{count}"
+        taken.add(unique)
+        counts[name] = count + 1
+        out.append(unique)
+    return out
+
+
+def reference_selected_names(labels, rows):
+    return tuple(
+        reference_make_unique(
+            ["NA" if row < 0 else str(row + 1) if labels is None else labels[row] for row in rows]
+        )
+    )
 
 
 def _indexes(pd, n):
@@ -123,3 +154,38 @@ def test_fits_on_filtered_sliced_and_string_indexed_frames_keep_their_row_names(
         assert matrix_names == [labels[i] for i in keep], name
         aft = r.survreg("Surv(time, status) ~ x", frame)
         assert aft._prediction_rows == labels, name
+
+
+def test_selected_row_names_match_make_unique_of_the_selected_names():
+    rng = np.random.default_rng(3)
+    n = 40
+    unique_labels = tuple(f"r{i}" for i in range(n))
+    clashing_labels = tuple(f"r{i % 7}" if i % 3 else f"r{i % 7}.1" for i in range(n))
+    for labels in (None, unique_labels, clashing_labels):
+        cases = [
+            [],
+            [5],
+            sorted(rng.choice(n, 25, replace=False).tolist()),
+            list(range(n)),
+            rng.choice(n, 25, replace=False).tolist(),
+            rng.integers(n, size=30).tolist(),
+            sorted(rng.integers(n, size=30).tolist()),
+            [-1, 3, -1, 4],
+            [2, 2, 3],
+        ]
+        for rows in cases:
+            index = np.asarray(rows, dtype=np.intp)
+            assert r_formula._selected_row_names(labels, rows, index) == reference_selected_names(
+                labels, rows
+            ), (labels and labels[:2], rows)
+
+
+def test_make_unique_matches_r_make_unique():
+    rng = np.random.default_rng(7)
+    pool = ["a", "b", "a.1", "a.2", "b.1", "c", "NA", ""]
+    for size in range(0, 30):
+        names = [pool[i] for i in rng.integers(len(pool), size=size).tolist()]
+        assert r_names._make_unique(names) == reference_make_unique(names)
+    distinct = [f"n{i}" for i in range(50)]
+    assert r_names._make_unique(distinct) == distinct
+    assert r_names._make_unique(("x", "x", "x.1")) == ["x", "x.2", "x.1"]
