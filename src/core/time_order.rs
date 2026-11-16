@@ -42,6 +42,7 @@ pub(crate) fn stratum_time_order(time: &[f64], strata: Option<&[i32]>) -> Vec<us
             keyed.sort_by_key(|&(code, key, _)| (code, key));
             keyed.into_iter().map(|(_, _, row)| row as usize).collect()
         }
+        // Rows beyond 32-bit indices sort through the comparator instead.
         Some(strata) => order_within_strata(strata, |a, b| time[a].total_cmp(&time[b])),
     }
 }
