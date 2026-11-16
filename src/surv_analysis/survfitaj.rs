@@ -6,6 +6,7 @@ use super::survfit_summary::{RmeanOption, survfit0_aj_rows};
 use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -1272,7 +1273,8 @@ pub fn survfitaj(
         planned.push((code, keep, curve_offset, clusters));
     }
     // A curve reads only its own rows of `c2`, so the curves are fitted in parallel once
-    // every curve's clusters are numbered.
+    // every curve's clusters are numbered (unless the fit is too small to repay waking the
+    // threads).
     let fit_curve = |(code, keep, curve_offset, clusters): (i32, Vec<usize>, usize, Vec<i64>)| {
         let sort1 = ordered_subset(&keep, &time1, single);
         let sort2 = ordered_subset(&keep, &time, single);
@@ -1396,7 +1398,8 @@ pub fn survfitaj(
             fit,
         })
     };
-    let curves: SurvivalResult<Vec<Curve>> = if planned.len() > 1 {
+    let parallel = planned.len() > 1 && n > PARALLEL_THRESHOLD_LARGE;
+    let curves: SurvivalResult<Vec<Curve>> = if parallel {
         planned.into_par_iter().map(fit_curve).collect()
     } else {
         planned.into_iter().map(fit_curve).collect()

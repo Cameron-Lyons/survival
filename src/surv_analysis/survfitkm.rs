@@ -1,4 +1,5 @@
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
+use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
@@ -1445,7 +1446,8 @@ pub fn survfitkm(
         curves.push((curve, rows, curve_clusters));
     }
     // A curve's kernel reads only its own rows of `ctemp`, so the curves are fitted in
-    // parallel once every curve's clusters are numbered.
+    // parallel once every curve's clusters are numbered (unless the fit is too small to
+    // repay waking the threads).
     let fit_curve = |(curve, rows, curve_clusters): (usize, CurveRows, Option<Vec<i64>>)| {
         let kernel_data = KernelData {
             time1: start.as_deref(),
@@ -1460,7 +1462,8 @@ pub fn survfitkm(
         let fit = kernel(&kernel_data, &rows, kernel_options);
         (curve, fit, curve_clusters.unwrap_or_default())
     };
-    let fits: Vec<(usize, CurveFit, Vec<i64>)> = if curves.len() > 1 {
+    let parallel = curves.len() > 1 && n > PARALLEL_THRESHOLD_LARGE;
+    let fits: Vec<(usize, CurveFit, Vec<i64>)> = if parallel {
         curves.into_par_iter().map(fit_curve).collect()
     } else {
         curves.into_iter().map(fit_curve).collect()
