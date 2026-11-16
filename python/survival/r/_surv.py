@@ -511,11 +511,21 @@ def is_surv(value: Any = _MISSING, **kwargs: Any) -> bool:
 def _missing_rows(x: Surv | Surv2) -> np.ndarray:
     """``is.na(x)`` as a boolean array: a missing entry in any column of the response."""
 
-    columns = (x.time, x.status) if isinstance(x, Surv2) else (x.start, x.time, x.time2, x.event)
+    columns: tuple[Sequence[Any] | None, ...] = (
+        (x.time, x.status) if isinstance(x, Surv2) else (x.start, x.time, x.time2, x.event)
+    )
     missing = np.zeros(len(x), dtype=bool)
     for column in columns:
-        if column is not None:
-            missing |= np.isnan(np.array(column, dtype=np.float64))
+        if column is None:
+            continue
+        try:
+            # A NaN entry makes the sum NaN, so a sum that is not NaN proves the column
+            # complete; a missing status (None) or inf - inf takes the array scan.
+            if not math.isnan(sum(column)):
+                continue
+        except (TypeError, OverflowError):
+            pass
+        missing |= np.isnan(np.array(column, dtype=np.float64))
     return missing
 
 

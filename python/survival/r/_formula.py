@@ -5,10 +5,10 @@ from __future__ import annotations
 import math
 import sys
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from itertools import combinations, compress, product, repeat
+from itertools import combinations, product, repeat
 from operator import add, mul, sub
 from typing import Any
 
@@ -60,11 +60,11 @@ from ._surv import (
     Surv2,
     _formula_response_argument_name,
     _match_response_arguments,
+    _missing_rows,
     _normalize_surv_type,
     _repeated_option,
     _strata,
     _subset_surv,
-    is_na_surv,
 )
 from ._types import (
     _MISSING,
@@ -110,6 +110,18 @@ def _column_source(data: Any, name: str) -> Any:
 
 def _column(data: Any, name: str) -> list[Any]:
     return _materialize_1d(_column_source(data, name), name)
+
+
+def _column_length(
+    source: Any, name: str, materialize: Callable[[Any, str], list[Any]] = _materialize_1d
+) -> int:
+    """``len(materialize(source, name))``, without the copy for a one-dimensional numeric
+    array or column, whose values are scalars that neither reader would reject."""
+
+    dtype = getattr(source, "dtype", None)
+    if isinstance(dtype, np.dtype) and dtype.kind in "biuf" and getattr(source, "ndim", None) == 1:
+        return len(source)
+    return len(materialize(source, name))
 
 
 def _formula_name(name: str) -> tuple[str, bool]:
@@ -569,7 +581,7 @@ def _response_arg_values(data: Any, part: str, inferred_length: int | None = Non
 def _formula_response_values(data: Any, spec: _SurvResponseSpec) -> list[Any]:
     inferred_length: int | None = None
     if spec.columns:
-        inferred_length = len(_column(data, spec.columns[0]))
+        inferred_length = _column_length(_column_source(data, spec.columns[0]), spec.columns[0])
     return [_response_arg_values(data, argument, inferred_length) for argument in spec.arguments]
 
 
@@ -849,7 +861,7 @@ def _data_row_count(data: Any, formula: str | None = None) -> int:
         source = _column_source(data, name)
         if isinstance(source, np.ndarray) and source.ndim >= 1:
             return len(source)
-        return len(_coerce_array_like(source, name))
+        return _column_length(source, name, _coerce_array_like)
     if formula is not None and isinstance(data, Mapping):
         return 0
     try:
@@ -867,7 +879,7 @@ def _formula_input_row_count(data: Any, formula: str, row_aligned: Mapping[str, 
     for name, values in row_aligned.items():
         if values is not None:
             source = _column_source(data, values) if isinstance(values, str) else values
-            return len(_coerce_array_like(source, name))
+            return _column_length(source, name, _coerce_array_like)
     return _data_row_count(data, formula)
 
 
@@ -1555,7 +1567,8 @@ def _apply_formula_na_action(
         )
     missing = _formula_missing_rows(data, columns, variables, n, required=required)
     if normalized and response_spec is not None:
-        missing.update(compress(range(n), is_na_surv(_surv_from_spec(data, response_spec))))
+        flags = _missing_rows(_surv_from_spec(data, response_spec))[:n]
+        missing.update(np.flatnonzero(flags).tolist())
     missing.update(
         _missing_row_indices(
             [(name, values) for name, values in row_aligned.items() if values is not None],
@@ -2820,7 +2833,7 @@ def _formula_model_frame(
 def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     columns = _formula_design_columns(design, include_unused=True)
     if columns:
-        return len(_column(data, columns[0]))
+        return _column_length(_column_source(data, columns[0]), columns[0])
     if isinstance(data, _FormulaRows) or hasattr(data, "columns"):
         return _data_row_count(data)
     if isinstance(data, Mapping):
