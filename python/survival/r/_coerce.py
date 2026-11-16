@@ -604,7 +604,14 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
 def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
     """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does."""
 
-    selected = list(map(values.__getitem__, rows))
+    # The factor classes' own __getitem__ is Python code; their storage's is not.
+    if type(values) is _RFactorVector:
+        getter = values._values.__getitem__
+    elif type(values) is Factor:
+        getter = list.__getitem__.__get__(values)
+    else:
+        getter = values.__getitem__
+    selected = list(map(getter, rows))
     categories = _categories(values)
     if categories is None:
         return selected

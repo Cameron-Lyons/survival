@@ -25,6 +25,7 @@ from .._factor import Factor
 from ._coerce import (
     _as_character,
     _categories,
+    _category_codes,
     _DEFAULT_NA_ACTION,
     _factor_levels,
     _finite_float,
@@ -612,21 +613,36 @@ def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> d
 
 
 def _split_data(data: Any, rows: Sequence[int]) -> dict[str, list[Any]]:
-    """``data[rows, ]`` column by column; plain numeric arrays are indexed directly."""
+    """``data[rows, ]`` column by column; plain numeric arrays, and pandas columns of a
+    numpy numeric dtype or with categorical codes, are indexed directly."""
 
     sources = _data_column_sources(data, "data")
     index = np.asarray(rows, dtype=np.intp)
+    top = index.max() if len(index) else -1
     frame: dict[str, list[Any]] = {}
     for column, source in sources.items():
+        array = source if type(source) is np.ndarray else None
+        if type(source).__name__ == "Series" and isinstance(source.dtype, np.dtype):
+            # Only a numpy dtype: a nullable column's to_numpy() would turn its NA into NaN.
+            array = source.to_numpy()
         if (
-            type(source) is np.ndarray
-            and source.ndim == 1
-            and source.dtype.kind in "biuf"
-            and len(source) > (index.max() if len(index) else -1)
+            array is not None
+            and array.ndim == 1
+            and array.dtype.kind in "biuf"
+            and len(array) > top
         ):
-            frame[column] = source[index].tolist()
-        else:
-            frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
+            frame[column] = array[index].tolist()
+            continue
+        categories = _categories(source)
+        if categories is not None:
+            codes = _category_codes(source, categories)
+            if codes is not None and len(codes) > top:
+                ordered = getattr(source, "ordered", getattr(source.dtype, "ordered", False))
+                labels = [*categories, None]
+                selected = list(map(labels.__getitem__, codes[index].tolist()))
+                frame[column] = Factor(selected, categories, bool(ordered))
+                continue
+        frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
     if len({len(values) for values in frame.values()}) > 1:
         raise ValueError("data columns must have equal lengths")
     return frame
@@ -968,7 +984,7 @@ def _row_codes(columns: Sequence[Sequence[Any]]) -> list[int]:
 
     keyed = [
         [None if value != value else value for value in column]
-        if set(map(type, column)) <= {float, int}
+        if set(map(type, column)) <= _PLAIN_SCALARS
         else [None if _is_missing_value(value) else value for value in column]
         for column in columns
     ]
@@ -1010,8 +1026,10 @@ def survcondense(
         raise ValueError("the response must be a Surv object")
     if response.type not in {"counting", "mcounting"}:
         raise ValueError("invalid survival type")
-    if any(math.isnan(value) for value in (*response.time, *(response.start or ()))) or any(
-        value is None for value in response.event
+    if (
+        any(map(math.isnan, response.time))
+        or any(map(math.isnan, response.start or ()))
+        or any(value is None for value in response.event)
     ):
         raise ValueError("response cannot have missing values")
     if mf.id is None:
