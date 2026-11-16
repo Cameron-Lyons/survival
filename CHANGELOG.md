@@ -61,8 +61,18 @@ replacement. Numerical corrections are described under Fixed below.
   count rows and missing responses without copying columns, and `survSplit`,
   `tmerge` and `survcondense` select rows through storage, not value by value
   (1.3-2x faster).
-- `survreg` likelihood evaluations compute each stratum's scale and its
-  logarithm once, not once per observation.
+- `survreg` is 1.2-1.5x faster with bitwise-identical results. Each built-in
+  family's likelihood sweep is compiled separately, each stratum's scale and
+  its logarithm are computed once per evaluation, the robust and cluster
+  sandwich is built without materializing dfbeta rows, the response reaches
+  the native fit as NumPy arrays, and labels are encoded in one pass.
+- Penalized Cox fits stream their data in risk-set order with vectorized inner
+  loops, skip Efron second moments that are multiplied by zero, and set up
+  ridge, pspline and frailty terms without per-element Python loops: pspline
+  fits are 2.1-2.7x and ridge fits 1.6x faster, with identical results.
+  Frailty fits apply Efron's tie correction once per tie set instead of once
+  per death, which makes tied frailty fits 2.5x faster at 10^5 rows and about
+  10x faster at 10^6. Their results change only at rounding level.
 - `interaction(..., drop=TRUE)` builds only observed factor combinations,
   avoiding Cartesian products of unused levels while retaining R's level order.
 - Multistate summaries select rows directly from the fitted curve and synthesize

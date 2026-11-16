@@ -172,6 +172,11 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   product of its largest risks. For r active rows and k = min(d, r - d), this
   fallback uses O(r log r + r k p²) work and O(r + k p²) storage. Event likelihoods
   cancel each selected predictor against its reference before summing.
+- Penalized fits store their rows in risk-set order once per fit, so each
+  Newton evaluation streams covariates, weights and offsets instead of
+  gathering them through the sort order. Efron's frailty tie correction adds
+  each death step to a few running sums and corrects every tied group once per
+  tie set: O(d) instead of O(d²) group updates for d tied deaths.
 - Penalized fits use the same risk representation for extreme predictors.
   Sparse frailty groups integrate score and information updates only when their
   active risks change, using hazard interval queries. Efron ties accumulate block
@@ -237,8 +242,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - Formula designs are built as owned contiguous NumPy arrays, avoiding Python
   row lists and per-element conversion at the native boundary. Retained model
   matrices (`x=True`) still expose the existing list representation.
-- Built-in families select their scalar kernels once per likelihood evaluation and
-  allocate no endpoint or density buffers; callback families use workspace linear
+- Built-in families have one compiled likelihood sweep each, with the stratum
+  scales and their logarithms computed once per evaluation. They allocate no
+  endpoint or density buffers; callback families use workspace linear
   in the number of rows plus interval endpoints, and the Python adapter reacquires
   the GIL once per batch.
 - Built-in distribution queries compose recycling indices and allocate the result
