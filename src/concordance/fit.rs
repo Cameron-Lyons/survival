@@ -1,6 +1,5 @@
-use crate::concordance::kernels::{
-    FastKm, SweepInput, SweepOutput, btree, concordance_sweep, fastkm,
-};
+use crate::concordance::kernels::{FastKm, SweepInput, SweepOutput, concordance_sweep, fastkm};
+use crate::concordance::rank_tree::btree;
 use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};

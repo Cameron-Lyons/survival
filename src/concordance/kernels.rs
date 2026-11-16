@@ -1,80 +1,4 @@
-pub(crate) fn btree(n: usize) -> Vec<usize> {
-    fn tfun(n: usize, id: usize, power: usize, out: &mut Vec<usize>) {
-        match n {
-            0 => {}
-            1 => out.push(id),
-            2 => out.extend([2 * id + 1, id]),
-            3 => out.extend([2 * id + 1, id, 2 * id + 2]),
-            _ => {
-                let nleft = if n == power * 2 {
-                    power
-                } else {
-                    (power - 1).min(n - power / 2)
-                };
-                tfun(nleft, 2 * id + 1, power / 2, out);
-                out.push(id);
-                tfun(n - (nleft + 1), 2 * id + 2, power / 2, out);
-            }
-        }
-    }
-    let power = if n > 1 {
-        1usize << ((n - 1).ilog2())
-    } else {
-        0
-    };
-    let mut out = Vec::with_capacity(n);
-    tfun(n, 0, power, &mut out);
-    out
-}
-
-struct RankTree {
-    nwt: Vec<f64>,
-    twt: Vec<f64>,
-}
-
-impl RankTree {
-    fn new(ntree: usize) -> Self {
-        Self {
-            nwt: vec![0.0; ntree],
-            twt: vec![0.0; ntree],
-        }
-    }
-
-    fn walkup(&self, mut index: usize) -> [f64; 3] {
-        let ntree = self.nwt.len();
-        let mut sums = [0.0, 0.0, self.nwt[index]];
-        let right = 2 * index + 2;
-        if right < ntree {
-            sums[0] += self.twt[right];
-        }
-        if right <= ntree {
-            sums[1] += self.twt[right - 1];
-        }
-        while index > 0 {
-            let parent = (index - 1) / 2;
-            if index % 2 == 1 {
-                sums[0] += self.twt[parent] - self.twt[index];
-            } else {
-                sums[1] += self.twt[parent] - self.twt[index];
-            }
-            index = parent;
-        }
-        sums
-    }
-
-    fn addin(&mut self, mut index: usize, wt: f64) {
-        self.nwt[index] += wt;
-        while index > 0 {
-            self.twt[index] += wt;
-            index = (index - 1) / 2;
-        }
-        self.twt[0] += wt;
-    }
-
-    fn total(&self) -> f64 {
-        self.twt[0]
-    }
-}
+use crate::concordance::rank_tree::{PairedRankTree, RankTree};
 
 fn cox_variance_term(wt: f64, wsum: [f64; 3]) -> f64 {
     wt * (wsum[0] * (wt + 2.0 * (wsum[1] + wsum[2]))
@@ -97,23 +21,124 @@ pub(crate) struct SweepInput<'a> {
     pub(crate) weight: &'a [f64],
     pub(crate) timewt: &'a [f64],
     pub(crate) sort_start: Option<&'a [usize]>,
+    /// A permutation of the rows: descending stop time, censored rows before
+    /// deaths at each time.
     pub(crate) sort_stop: &'a [usize],
 }
 
 pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bool) -> SweepOutput {
+    if std_err {
+        influence_sweep(input, ranks)
+    } else {
+        SweepOutput {
+            count: count_sweep(input),
+            influence: Vec::new(),
+            resid: Vec::new(),
+        }
+    }
+}
+
+fn tree_size(node: &[usize]) -> usize {
+    node.iter().map(|&x| x + 1).max().unwrap_or(0)
+}
+
+/// The pair counts alone (`std.err = FALSE`).  They need only the risk-set
+/// tree, kept in its own compact arrays: a walk then reads 8 bytes per node
+/// rather than the 32 of a [`PairedRankTree`] node.
+fn count_sweep(input: &SweepInput<'_>) -> [f64; 6] {
     let n = input.stop.len();
-    let ntree = input.node.iter().map(|&x| x + 1).max().unwrap_or(0);
+    let x = input.node;
+    let wt = input.weight;
+    let time = input.stop;
+    let status = input.status;
+    let sort2 = input.sort_stop;
+    let mut tree = RankTree::new(tree_size(x));
+    let mut count = [0.0; 6];
+    let mut utime = 0;
+    let mut i2 = 0;
+
+    let mut i = 0;
+    while i < n {
+        let ii = sort2[i];
+        if status[ii] == 0 {
+            tree.addin(x[ii], wt[ii]);
+            i += 1;
+            continue;
+        }
+
+        if let (Some(start), Some(sort1)) = (input.start, input.sort_start) {
+            while i2 < n && start[sort1[i2]] >= time[ii] {
+                let jj = sort1[i2];
+                tree.addin(x[jj], -wt[jj]);
+                i2 += 1;
+            }
+        }
+
+        let mut ndeath = 0;
+        let mut dwt = 0.0;
+        let mut dwt2 = 0.0;
+        let mut xsave = x[ii];
+        let adjtimewt = input.timewt[utime];
+        utime += 1;
+
+        let mut j = i;
+        while j < n && time[sort2[j]] == time[ii] {
+            let jj = sort2[j];
+            ndeath += 1;
+            count[3] += wt[jj] * dwt * adjtimewt;
+            dwt += wt[jj];
+            if x[jj] != xsave {
+                dwt2 = 0.0;
+                xsave = x[jj];
+            }
+            count[4] += wt[jj] * dwt2 * adjtimewt;
+            dwt2 += wt[jj];
+
+            let wsum = tree.walkup(x[jj]);
+            for k in 0..3 {
+                count[k] += wt[jj] * wsum[k] * adjtimewt;
+            }
+            j += 1;
+        }
+        for &jj in &sort2[i..i + ndeath] {
+            tree.addin(x[jj], wt[jj]);
+        }
+        i += ndeath;
+    }
+    count[3] -= count[4];
+    count
+}
+
+/// A row joining the risk set takes off the death-tree sums of that moment,
+/// so that its influence counts only the deaths while it is at risk.
+fn enter_risk_set(row: &mut [f64; 5], death: [f64; 3]) {
+    row[0] -= death[1];
+    row[1] -= death[0];
+    row[2] -= death[2];
+}
+
+/// A row leaving the risk set adds back the death-tree sums of that moment.
+fn leave_risk_set(row: &mut [f64; 5], death: [f64; 3]) {
+    row[0] += death[1];
+    row[1] += death[0];
+    row[2] += death[2];
+}
+
+/// The counts with each row's influence on them, the Cox variance and, with
+/// `ranks`, the per-event residuals.
+fn influence_sweep(input: &SweepInput<'_>, ranks: bool) -> SweepOutput {
+    let n = input.stop.len();
+    let ntree = tree_size(input.node);
     let nevent = input.status.iter().filter(|&&s| s == 1).count();
     let x = input.node;
     let wt = input.weight;
     let time = input.stop;
     let status = input.status;
     let sort2 = input.sort_stop;
-    let mut tree = RankTree::new(ntree);
-    let mut dtree = RankTree::new(ntree);
+    let mut trees = PairedRankTree::new(ntree);
     let mut count = [0.0; 6];
-    let mut imat = vec![[0.0; 5]; if std_err { n } else { 0 }];
-    let mut resid = vec![[0.0; 3]; if std_err && ranks { nevent } else { 0 }];
+    let mut imat = vec![[0.0; 5]; n];
+    let mut resid = vec![[0.0; 3]; if ranks { nevent } else { 0 }];
     let mut nevent_left = nevent;
     let mut z2 = 0.0;
     let mut utime = 0;
@@ -123,14 +148,9 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
     while i < n {
         let ii = sort2[i];
         if status[ii] == 0 {
-            if std_err {
-                let wsum = dtree.walkup(x[ii]);
-                imat[ii][0] -= wsum[1];
-                imat[ii][1] -= wsum[0];
-                imat[ii][2] -= wsum[2];
-                z2 += cox_variance_term(wt[ii], tree.walkup(x[ii]));
-            }
-            tree.addin(x[ii], wt[ii]);
+            let (death, risk) = trees.walkup_both_add_risk(x[ii], wt[ii]);
+            enter_risk_set(&mut imat[ii], death);
+            z2 += cox_variance_term(wt[ii], risk);
             i += 1;
             continue;
         }
@@ -138,16 +158,9 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
         if let (Some(start), Some(sort1)) = (input.start, input.sort_start) {
             while i2 < n && start[sort1[i2]] >= time[ii] {
                 let jj = sort1[i2];
-                if std_err {
-                    let wsum = dtree.walkup(x[jj]);
-                    imat[jj][0] += wsum[1];
-                    imat[jj][1] += wsum[0];
-                    imat[jj][2] += wsum[2];
-                }
-                tree.addin(x[jj], -wt[jj]);
-                if std_err {
-                    z2 -= cox_variance_term(wt[jj], tree.walkup(x[jj]));
-                }
+                let (death, risk) = trees.walkup_death_add_risk_walkup_risk(x[jj], -wt[jj]);
+                leave_risk_set(&mut imat[jj], death);
+                z2 -= cox_variance_term(wt[jj], risk);
                 i2 += 1;
             }
         }
@@ -167,7 +180,7 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             count[3] += wt[jj] * dwt * adjtimewt;
             dwt += wt[jj];
             if x[jj] != xsave {
-                if std_err && wt[sort2[j2]] < dwt2 {
+                if wt[sort2[j2]] < dwt2 {
                     while j2 < j {
                         let kk = sort2[j2];
                         imat[kk][4] += (dwt2 - wt[kk]) * adjtimewt;
@@ -183,19 +196,14 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
             count[4] += wt[jj] * dwt2 * adjtimewt;
             dwt2 += wt[jj];
 
-            let wsum = tree.walkup(x[jj]);
+            let wsum = trees.walkup_risk_add_death(x[jj], adjtimewt * wt[jj]);
             for k in 0..3 {
                 count[k] += wt[jj] * wsum[k] * adjtimewt;
-                if std_err {
-                    imat[jj][k] += wsum[k] * adjtimewt;
-                }
-            }
-            if std_err {
-                dtree.addin(x[jj], adjtimewt * wt[jj]);
+                imat[jj][k] += wsum[k] * adjtimewt;
             }
             j += 1;
         }
-        if std_err && wt[sort2[j2]] < dwt2 {
+        if wt[sort2[j2]] < dwt2 {
             while j2 < j {
                 let kk = sort2[j2];
                 imat[kk][4] += (dwt2 - wt[kk]) * adjtimewt;
@@ -205,51 +213,39 @@ pub(crate) fn concordance_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bo
         }
 
         for &jj in &sort2[i..i + ndeath] {
-            if std_err {
-                let wsum = dtree.walkup(x[jj]);
-                imat[jj][0] -= wsum[1];
-                imat[jj][1] -= wsum[0];
-                imat[jj][2] -= wsum[2];
-                imat[jj][3] += (dwt - wt[jj]) * adjtimewt;
-                z2 += cox_variance_term(wt[jj], tree.walkup(x[jj]));
-            }
-            tree.addin(x[jj], wt[jj]);
+            let (death, risk) = trees.walkup_both_add_risk(x[jj], wt[jj]);
+            enter_risk_set(&mut imat[jj], death);
+            imat[jj][3] += (dwt - wt[jj]) * adjtimewt;
+            z2 += cox_variance_term(wt[jj], risk);
         }
-        if std_err {
-            let risk_weight = tree.total();
-            if risk_weight > 0.0 {
-                count[5] += dwt * adjtimewt * z2 / risk_weight;
-            }
-            if ranks {
-                for &jj in &sort2[i..i + ndeath] {
-                    let wsum = tree.walkup(x[jj]);
-                    nevent_left -= 1;
-                    resid[nevent_left] = [
-                        if risk_weight > 0.0 {
-                            (wsum[0] - wsum[1]) / risk_weight
-                        } else {
-                            0.0
-                        },
-                        risk_weight * adjtimewt,
-                        wt[jj],
-                    ];
-                }
+        let risk_weight = trees.total_risk();
+        if risk_weight > 0.0 {
+            count[5] += dwt * adjtimewt * z2 / risk_weight;
+        }
+        if ranks {
+            for &jj in &sort2[i..i + ndeath] {
+                let wsum = trees.walkup_risk(x[jj]);
+                nevent_left -= 1;
+                resid[nevent_left] = [
+                    if risk_weight > 0.0 {
+                        (wsum[0] - wsum[1]) / risk_weight
+                    } else {
+                        0.0
+                    },
+                    risk_weight * adjtimewt,
+                    wt[jj],
+                ];
             }
         }
         i += ndeath;
     }
 
-    if std_err {
-        let remaining: &[usize] = match input.sort_start {
-            Some(sort1) => &sort1[i2..],
-            None => sort2,
-        };
-        for &ii in remaining {
-            let wsum = dtree.walkup(x[ii]);
-            imat[ii][0] += wsum[1];
-            imat[ii][1] += wsum[0];
-            imat[ii][2] += wsum[2];
-        }
+    let remaining: &[usize] = match input.sort_start {
+        Some(sort1) => &sort1[i2..],
+        None => sort2,
+    };
+    for &ii in remaining {
+        leave_risk_set(&mut imat[ii], trees.walkup_death(x[ii]));
     }
     count[3] -= count[4];
     SweepOutput {
@@ -378,48 +374,8 @@ pub(crate) fn fastkm(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn btree_matches_r() {
-        assert_eq!(btree(1), vec![0]);
-        assert_eq!(btree(2), vec![1, 0]);
-        assert_eq!(btree(3), vec![1, 0, 2]);
-        assert_eq!(btree(4), vec![3, 1, 0, 2]);
-        assert_eq!(btree(5), vec![3, 1, 4, 0, 2]);
-        assert_eq!(btree(6), vec![3, 1, 4, 0, 5, 2]);
-        assert_eq!(btree(7), vec![3, 1, 4, 0, 5, 2, 6]);
-        assert_eq!(btree(8), vec![7, 3, 1, 4, 0, 5, 2, 6]);
-        assert_eq!(btree(10), vec![7, 3, 8, 1, 9, 4, 0, 5, 2, 6]);
-        assert_eq!(btree(13), vec![7, 3, 8, 1, 9, 4, 10, 0, 11, 5, 12, 2, 6]);
-        for n in 1..40 {
-            let tree = btree(n);
-            let mut nodes = tree.clone();
-            nodes.sort_unstable();
-            assert_eq!(nodes, (0..n).collect::<Vec<_>>(), "btree({n})");
-            let mut rank_tree = RankTree::new(n);
-            for (rank, &node) in tree.iter().enumerate() {
-                let sums = rank_tree.walkup(node);
-                assert_eq!(sums, [0.0, rank as f64, 0.0], "btree({n}) rank {rank}");
-                rank_tree.addin(node, 1.0);
-            }
-        }
-    }
-
-    #[test]
-    fn rank_tree_walkup_partitions_weights() {
-        let tree_index = btree(5);
-        let mut tree = RankTree::new(5);
-        let weights = [1.0, 2.0, 3.0, 4.0, 5.0];
-        for (rank, &w) in weights.iter().enumerate() {
-            tree.addin(tree_index[rank], w);
-        }
-        assert_eq!(tree.walkup(tree_index[2]), [9.0, 3.0, 3.0]);
-        assert_eq!(tree.walkup(tree_index[0]), [14.0, 0.0, 1.0]);
-        assert_eq!(tree.walkup(tree_index[4]), [0.0, 10.0, 5.0]);
-        tree.addin(tree_index[4], -5.0);
-        assert_eq!(tree.walkup(tree_index[4]), [0.0, 10.0, 0.0]);
-        assert_eq!(tree.total(), 10.0);
-    }
+    use crate::concordance::rank_tree::btree;
+    use crate::internal::rng::Rng;
 
     fn sweep_right(time: &[f64], status: &[i32], x: &[f64], std_err: bool) -> SweepOutput {
         let n = time.len();
@@ -506,6 +462,271 @@ mod tests {
         }
         let fast = sweep_right(&time, &status, &x, false);
         assert!(fast.influence.is_empty() && fast.resid.is_empty());
+    }
+
+    /// The sweep before the risk-set and death trees shared one array: two
+    /// separate [`RankTree`]s, walked and updated one call at a time.
+    fn separate_tree_sweep(input: &SweepInput<'_>, std_err: bool, ranks: bool) -> SweepOutput {
+        let n = input.stop.len();
+        let ntree = input.node.iter().map(|&x| x + 1).max().unwrap_or(0);
+        let nevent = input.status.iter().filter(|&&s| s == 1).count();
+        let x = input.node;
+        let wt = input.weight;
+        let time = input.stop;
+        let status = input.status;
+        let sort2 = input.sort_stop;
+        let mut tree = RankTree::new(ntree);
+        let mut dtree = RankTree::new(ntree);
+        let mut count = [0.0; 6];
+        let mut imat = vec![[0.0; 5]; if std_err { n } else { 0 }];
+        let mut resid = vec![[0.0; 3]; if std_err && ranks { nevent } else { 0 }];
+        let mut nevent_left = nevent;
+        let mut z2 = 0.0;
+        let mut utime = 0;
+        let mut i2 = 0;
+
+        let mut i = 0;
+        while i < n {
+            let ii = sort2[i];
+            if status[ii] == 0 {
+                if std_err {
+                    let wsum = dtree.walkup(x[ii]);
+                    imat[ii][0] -= wsum[1];
+                    imat[ii][1] -= wsum[0];
+                    imat[ii][2] -= wsum[2];
+                    z2 += cox_variance_term(wt[ii], tree.walkup(x[ii]));
+                }
+                tree.addin(x[ii], wt[ii]);
+                i += 1;
+                continue;
+            }
+
+            if let (Some(start), Some(sort1)) = (input.start, input.sort_start) {
+                while i2 < n && start[sort1[i2]] >= time[ii] {
+                    let jj = sort1[i2];
+                    if std_err {
+                        let wsum = dtree.walkup(x[jj]);
+                        imat[jj][0] += wsum[1];
+                        imat[jj][1] += wsum[0];
+                        imat[jj][2] += wsum[2];
+                    }
+                    tree.addin(x[jj], -wt[jj]);
+                    if std_err {
+                        z2 -= cox_variance_term(wt[jj], tree.walkup(x[jj]));
+                    }
+                    i2 += 1;
+                }
+            }
+
+            let mut ndeath = 0;
+            let mut dwt = 0.0;
+            let mut dwt2 = 0.0;
+            let mut xsave = x[ii];
+            let mut j2 = i;
+            let adjtimewt = input.timewt[utime];
+            utime += 1;
+
+            let mut j = i;
+            while j < n && time[sort2[j]] == time[ii] {
+                let jj = sort2[j];
+                ndeath += 1;
+                count[3] += wt[jj] * dwt * adjtimewt;
+                dwt += wt[jj];
+                if x[jj] != xsave {
+                    if std_err && wt[sort2[j2]] < dwt2 {
+                        while j2 < j {
+                            let kk = sort2[j2];
+                            imat[kk][4] += (dwt2 - wt[kk]) * adjtimewt;
+                            imat[kk][3] -= (dwt2 - wt[kk]) * adjtimewt;
+                            j2 += 1;
+                        }
+                    } else {
+                        j2 = j;
+                    }
+                    dwt2 = 0.0;
+                    xsave = x[jj];
+                }
+                count[4] += wt[jj] * dwt2 * adjtimewt;
+                dwt2 += wt[jj];
+
+                let wsum = tree.walkup(x[jj]);
+                for k in 0..3 {
+                    count[k] += wt[jj] * wsum[k] * adjtimewt;
+                    if std_err {
+                        imat[jj][k] += wsum[k] * adjtimewt;
+                    }
+                }
+                if std_err {
+                    dtree.addin(x[jj], adjtimewt * wt[jj]);
+                }
+                j += 1;
+            }
+            if std_err && wt[sort2[j2]] < dwt2 {
+                while j2 < j {
+                    let kk = sort2[j2];
+                    imat[kk][4] += (dwt2 - wt[kk]) * adjtimewt;
+                    imat[kk][3] -= (dwt2 - wt[kk]) * adjtimewt;
+                    j2 += 1;
+                }
+            }
+
+            for &jj in &sort2[i..i + ndeath] {
+                if std_err {
+                    let wsum = dtree.walkup(x[jj]);
+                    imat[jj][0] -= wsum[1];
+                    imat[jj][1] -= wsum[0];
+                    imat[jj][2] -= wsum[2];
+                    imat[jj][3] += (dwt - wt[jj]) * adjtimewt;
+                    z2 += cox_variance_term(wt[jj], tree.walkup(x[jj]));
+                }
+                tree.addin(x[jj], wt[jj]);
+            }
+            if std_err {
+                let risk_weight = tree.total();
+                if risk_weight > 0.0 {
+                    count[5] += dwt * adjtimewt * z2 / risk_weight;
+                }
+                if ranks {
+                    for &jj in &sort2[i..i + ndeath] {
+                        let wsum = tree.walkup(x[jj]);
+                        nevent_left -= 1;
+                        resid[nevent_left] = [
+                            if risk_weight > 0.0 {
+                                (wsum[0] - wsum[1]) / risk_weight
+                            } else {
+                                0.0
+                            },
+                            risk_weight * adjtimewt,
+                            wt[jj],
+                        ];
+                    }
+                }
+            }
+            i += ndeath;
+        }
+
+        if std_err {
+            let remaining: &[usize] = match input.sort_start {
+                Some(sort1) => &sort1[i2..],
+                None => sort2,
+            };
+            for &ii in remaining {
+                let wsum = dtree.walkup(x[ii]);
+                imat[ii][0] += wsum[1];
+                imat[ii][1] += wsum[0];
+                imat[ii][2] += wsum[2];
+            }
+        }
+        count[3] -= count[4];
+        SweepOutput {
+            count,
+            influence: imat,
+            resid,
+        }
+    }
+
+    fn assert_same_bits(actual: &SweepOutput, expected: &SweepOutput, case: &str) {
+        let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&actual.count), bits(&expected.count), "count {case}");
+        assert_eq!(
+            bits(actual.influence.as_flattened()),
+            bits(expected.influence.as_flattened()),
+            "influence {case}"
+        );
+        assert_eq!(
+            bits(actual.resid.as_flattened()),
+            bits(expected.resid.as_flattened()),
+            "resid {case}"
+        );
+    }
+
+    #[test]
+    fn sweep_matches_the_separate_tree_sweep_bit_for_bit() {
+        let mut rng = Rng::with_seed(0x00c0_ffee);
+        for trial in 0..3000 {
+            let n = 1 + rng.usize(0..if trial % 10 == 0 { 300 } else { 40 });
+            let ntime = 1 + rng.usize(0..n + 2);
+            let nx = 1 + rng.usize(0..if trial % 2 == 0 { 3 } else { n + 2 });
+            let counting = trial % 3 == 0;
+            let mut stop: Vec<f64> = (0..n).map(|_| (1 + rng.usize(0..ntime)) as f64).collect();
+            let status: Vec<i32> = (0..n).map(|_| i32::from(rng.usize(0..3) != 0)).collect();
+            let risk: Vec<f64> = (0..n).map(|_| rng.usize(0..nx) as f64 * 0.37).collect();
+            let weight: Vec<f64> = (0..n)
+                .map(|_| match (trial % 4, rng.usize(0..5)) {
+                    (0, _) => 1.0,
+                    (_, 0) => 0.0,
+                    (_, 1) => 1.0,
+                    _ => rng.f64() * 3.0,
+                })
+                .collect();
+            let start: Option<Vec<f64>> = counting.then(|| {
+                let lag = 1 + rng.usize(0..4);
+                stop.iter()
+                    .map(|&s| (s - rng.usize(1..=lag) as f64).max(-1.0))
+                    .collect()
+            });
+            if let Some(start) = &start {
+                for (s, &a) in stop.iter_mut().zip(start) {
+                    if a >= *s {
+                        *s = a + 1.0;
+                    }
+                }
+            }
+            let mut levels = risk.clone();
+            levels.sort_by(f64::total_cmp);
+            levels.dedup();
+            let tree = btree(levels.len());
+            let node: Vec<usize> = risk
+                .iter()
+                .map(|v| tree[levels.partition_point(|l| l < v)])
+                .collect();
+            let mut sort_stop: Vec<usize> = (0..n).collect();
+            sort_stop.sort_by(|&a, &b| {
+                stop[b]
+                    .total_cmp(&stop[a])
+                    .then_with(|| status[a].cmp(&status[b]))
+                    .then_with(|| risk[a].total_cmp(&risk[b]))
+            });
+            let sort_start: Option<Vec<usize>> = start.as_ref().map(|start| {
+                let mut order: Vec<usize> = (0..n).collect();
+                order.sort_by(|&a, &b| start[b].total_cmp(&start[a]));
+                order
+            });
+            let mut etimes: Vec<f64> = (0..n)
+                .filter(|&i| status[i] == 1)
+                .map(|i| stop[i])
+                .collect();
+            etimes.sort_by(f64::total_cmp);
+            etimes.dedup();
+            if etimes.is_empty() {
+                continue;
+            }
+            let timewt: Vec<f64> = etimes
+                .iter()
+                .map(|_| match (trial % 5, rng.usize(0..6)) {
+                    (0, _) => 1.0,
+                    (_, 0) => 0.0,
+                    _ => rng.f64() * 2.0,
+                })
+                .collect();
+            let input = SweepInput {
+                start: start.as_deref(),
+                stop: &stop,
+                status: &status,
+                node: &node,
+                weight: &weight,
+                timewt: &timewt,
+                sort_start: sort_start.as_deref(),
+                sort_stop: &sort_stop,
+            };
+            for (std_err, ranks) in [(true, true), (true, false), (false, true), (false, false)] {
+                assert_same_bits(
+                    &concordance_sweep(&input, std_err, ranks),
+                    &separate_tree_sweep(&input, std_err, ranks),
+                    &format!("trial {trial} counting {counting} std_err {std_err} ranks {ranks}"),
+                );
+            }
+        }
     }
 
     #[test]
