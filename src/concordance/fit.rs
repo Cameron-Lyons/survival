@@ -1,5 +1,5 @@
 use crate::concordance::kernels::{FastKm, SweepInput, SweepOutput, concordance_sweep, fastkm};
-use crate::concordance::rank_tree::btree;
+use crate::concordance::order::PredictorRanks;
 use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -582,14 +582,7 @@ fn docount(
         Cow::Owned(order)
     };
 
-    let mut levels = risk.to_vec();
-    levels.sort_by(f64::total_cmp);
-    levels.dedup();
-    let tree = btree(levels.len());
-    let node: Vec<usize> = risk
-        .iter()
-        .map(|value| tree[levels.partition_point(|level| level < value)])
-        .collect();
+    let node = PredictorRanks::new(risk).nodes();
 
     concordance_sweep(
         &SweepInput {
