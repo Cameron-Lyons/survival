@@ -352,7 +352,8 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
 
     Masked arrays, object, string, datetime and nullable extension columns (which
     ``to_numpy`` turns into object arrays) and factor-like columns get ``None``: they keep
-    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels.
+    the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels
+    (datetime columns can get their ``NaT`` flags from :func:`_datetime_missing_mask`).
     """
 
     if isinstance(values, np.ndarray):
