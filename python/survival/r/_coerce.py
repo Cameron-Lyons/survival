@@ -710,8 +710,8 @@ def _rowsum_groups(
         # are the ascending order below, and ``str`` is their ``as.character``.
         labels = np.asarray(values)
         if labels.dtype.kind in "iu":
-            distinct, codes = np.unique(labels, return_inverse=True)
-            return codes.tolist(), [str(value) for value in distinct.tolist()]
+            distinct, inverse = np.unique(labels, return_inverse=True)
+            return inverse.tolist(), [str(value) for value in distinct.tolist()]
     unique = _label_levels(values, "collapse")
     keys = {
         value: _GROUP_NAN

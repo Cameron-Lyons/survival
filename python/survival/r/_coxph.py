@@ -2293,7 +2293,7 @@ def _collapse_groups(
     return _rowsum_groups(collapse, n)
 
 
-def _drop_single_column(rows: list[list[float]], nvar: int) -> Any:
+def _drop_single_column(rows: list[Any], nvar: int) -> Any:
     return [row[0] for row in rows] if nvar == 1 else rows
 
 
