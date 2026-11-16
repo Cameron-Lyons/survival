@@ -845,11 +845,23 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
 
     let mut influence_surv = None;
     let mut influence_chaz = None;
-    if !counting
-        && options.influence == InfluenceRequest::None
-        && data.cluster.is_some_and(|(_, nid)| nid == nused)
-    {
+    let summable = !counting && options.influence == InfluenceRequest::None;
+    if summable && data.cluster.is_some_and(|(_, nid)| nid == nused) {
         robust::independent_variance(
+            data,
+            rows,
+            options,
+            &dtime,
+            event_terms,
+            &mut std_surv,
+            &mut std_chaz,
+        );
+    } else if summable
+        && data
+            .cluster
+            .is_some_and(|(_, nid)| robust::use_cluster_sums(nid, ntime, nused))
+    {
+        robust::cluster_variance(
             data,
             rows,
             options,
@@ -2334,6 +2346,151 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Clustered data the running-sum variance takes: a giant cluster, a few medium ones
+    /// and hundreds of singletons, ties, zero weights, and a final tied block in which
+    /// everyone at risk has the event (censoring, for `reverse`), so the curve ends at zero.
+    fn many_clusters(seed: usize, weighted: bool, strata: bool, reverse: bool) -> SurvfitKMData {
+        let n = 1600;
+        let mut data = SurvfitKMData::try_new(
+            None,
+            (0..n)
+                .map(|i| match i % 97 {
+                    5 => 200.0,
+                    _ => ((i * 37 + seed * 11) % 157 + 1) as f64,
+                })
+                .collect(),
+            (0..n)
+                .map(|i| match i % 97 {
+                    5 => i32::from(!reverse),
+                    _ => i32::from(!(i * 7 + seed).is_multiple_of(3)),
+                })
+                .collect(),
+            None,
+            strata.then(|| (0..n).map(|i| (i % 2) as i32).collect()),
+            None,
+            Some(
+                (0..n)
+                    .map(|i| match i % 10 {
+                        0 => 0,
+                        1..=3 => 1 + ((i / 10 + seed) % 7) as i64,
+                        _ => 100 + i as i64,
+                    })
+                    .collect(),
+            ),
+        )
+        .unwrap();
+        data.weights = weighted.then(|| {
+            (0..n)
+                .map(|i| ((i * 13 + seed) % 11) as f64 / 4.0)
+                .collect()
+        });
+        data
+    }
+
+    fn assert_close_or_both_nan(actual: &[f64], expected: &[f64], tol: f64, what: &str) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                (a.is_nan() && b.is_nan()) || (a - b).abs() <= tol,
+                "{what}[{i}]: {a} != {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_sum_variance_matches_the_dense_cluster_loop() {
+        for seed in 0..3 {
+            for (weighted, strata) in [(false, false), (true, false), (true, true)] {
+                for reverse in [false, true] {
+                    let data = many_clusters(seed, weighted, strata, reverse);
+                    for stype in [SurvType::KaplanMeier, SurvType::ExpCumhaz] {
+                        for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+                            let options = SurvfitKMOptions {
+                                stype,
+                                ctype,
+                                reverse,
+                                start_time: (seed == 2).then_some(3.0),
+                                ..Default::default()
+                            };
+                            let fast = survfitkm(&data, &options).unwrap();
+                            let dense = survfitkm(
+                                &data,
+                                &SurvfitKMOptions {
+                                    influence: InfluenceRequest::Both,
+                                    ..options.clone()
+                                },
+                            )
+                            .unwrap();
+                            for (curve, range) in fast.curve_ranges().into_iter().enumerate() {
+                                let code = fast.strata_codes.as_ref().map_or(0, |c| c[curve]);
+                                let rows = (0..data.time.len()).filter(|&i| {
+                                    data.strata.as_ref().is_none_or(|s| s[i] == code)
+                                        && options.start_time.is_none_or(|t| data.time[i] >= t)
+                                });
+                                let clusters = data.cluster.as_ref().unwrap();
+                                let nid = count_unique(rows.map(|i| clusters[i] as usize));
+                                assert!(robust::use_cluster_sums(nid, range.len(), fast.n[curve]));
+                            }
+                            assert_eq!(fast.time, dense.time);
+                            assert_eq!(fast.surv, dense.surv);
+                            assert!(fast.influence_surv.is_none());
+                            let what =
+                                format!("{seed} {weighted} {strata} {reverse} {stype:?} {ctype:?}");
+                            for (actual, expected) in [
+                                (&fast.std_err, &dense.std_err),
+                                (&fast.std_chaz, &dense.std_chaz),
+                                (&fast.lower, &dense.lower),
+                                (&fast.upper, &dense.upper),
+                            ] {
+                                let (actual, expected) =
+                                    (actual.as_ref().unwrap(), expected.as_ref().unwrap());
+                                assert_close_or_both_nan(actual, expected, 1e-11, &what);
+                            }
+                            let (fast_se, dense_se) =
+                                (fast.std_err.unwrap(), dense.std_err.unwrap());
+                            let ends_at_zero =
+                                (0..fast.surv.len()).filter(|&i| fast.surv[i] == 0.0);
+                            for i in ends_at_zero {
+                                assert_eq!(fast_se[i].to_bits(), dense_se[i].to_bits(), "{what}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cluster_sum_variance_is_invariant_to_weight_scale() {
+        let mut data = many_clusters(1, true, true, false);
+        let weights = data.weights.clone().unwrap();
+        for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+            let options = SurvfitKMOptions {
+                ctype,
+                ..Default::default()
+            };
+            data.weights = Some(weights.clone());
+            let reference = survfitkm(&data, &options).unwrap();
+            for scale in [1e-100, 1e100, 1e200] {
+                data.weights = Some(weights.iter().map(|w| w * scale).collect());
+                let actual = survfitkm(&data, &options).unwrap();
+                for (actual, expected) in [
+                    (&actual.std_err, &reference.std_err),
+                    (&actual.std_chaz, &reference.std_chaz),
+                ] {
+                    assert_vec_approx(actual.as_ref().unwrap(), expected.as_ref().unwrap(), 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cluster_sums_need_many_clusters_and_times() {
+        assert!(!robust::use_cluster_sums(64, 10_000, 100));
+        assert!(!robust::use_cluster_sums(1000, 10, 1000));
+        assert!(robust::use_cluster_sums(65, 1000, 2000));
     }
 
     #[test]
