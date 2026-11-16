@@ -1,6 +1,6 @@
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::core::strata_order::validate_intervals;
-use crate::data_prep::{aeq_counting, first_appearance_codes};
+use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -1270,6 +1270,9 @@ pub fn survfitkm(
     let mut n_id = has_id.then(|| vec![0usize; n_curves]);
     let mut fits: Vec<(usize, CurveFit, Vec<i64>)> = Vec::with_capacity(n_curves);
     let mut ctemp = vec![0usize; n];
+    let mut renumbering = cluster
+        .as_ref()
+        .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
     let inputs = curve_inputs(
         &x,
         n_curves,
@@ -1286,17 +1289,16 @@ pub fn survfitkm(
         if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
             n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
         }
-        let (kernel_cluster, curve_clusters) = match &cluster {
-            Some((codes, labels)) => {
-                let subset: Vec<usize> = keep.iter().map(|&i| codes[i]).collect();
-                let (renumbered, unique) = first_appearance_codes(&subset);
+        let (kernel_cluster, curve_clusters) = match (&cluster, &mut renumbering) {
+            (Some((codes, labels)), Some(renumbering)) => {
+                let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| codes[i]));
                 for (&i, code) in keep.iter().zip(renumbered) {
                     ctemp[i] = code;
                 }
                 let names = unique.iter().map(|&code| labels[code]).collect();
                 (Some((ctemp.as_slice(), unique.len())), names)
             }
-            None => (None, Vec::new()),
+            _ => (None, Vec::new()),
         };
         let kernel_data = KernelData {
             time1: start.as_deref(),

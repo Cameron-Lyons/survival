@@ -7,6 +7,13 @@ pub trait SubjectId: Clone {
     fn key(&self) -> Self::Key;
 
     fn label(&self) -> String;
+
+    /// The key as an integer, for ids that have one: two such ids have equal keys exactly
+    /// when these integers are equal.  Ids that are all integers in a narrow range (the
+    /// codes callers usually pass) are numbered through a table instead of a hash map.
+    fn integer_key(&self) -> Option<i64> {
+        None
+    }
 }
 
 impl SubjectId for i64 {
@@ -19,6 +26,10 @@ impl SubjectId for i64 {
     fn label(&self) -> String {
         self.to_string()
     }
+
+    fn integer_key(&self) -> Option<i64> {
+        Some(*self)
+    }
 }
 
 impl SubjectId for usize {
@@ -30,6 +41,10 @@ impl SubjectId for usize {
 
     fn label(&self) -> String {
         self.to_string()
+    }
+
+    fn integer_key(&self) -> Option<i64> {
+        i64::try_from(*self).ok()
     }
 }
 
@@ -159,6 +174,16 @@ impl SubjectId for IdValue {
             Self::Str(s) => s.clone(),
         }
     }
+
+    fn integer_key(&self) -> Option<i64> {
+        match self {
+            Self::Str(_) => None,
+            number => match number.key() {
+                IdKey::Int(v) => Some(v),
+                _ => None,
+            },
+        }
+    }
 }
 
 impl Hash for IdValue {
@@ -167,8 +192,46 @@ impl Hash for IdValue {
     }
 }
 
+/// R's `match(x, unique(x))` as 0-based codes, with the first id of each code.
 pub fn first_appearance_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
-    let mut seen: std::collections::HashMap<I::Key, usize> = std::collections::HashMap::new();
+    dense_first_appearance_codes(values).unwrap_or_else(|| hashed_first_appearance_codes(values))
+}
+
+/// [`first_appearance_codes`] through a table indexed by the integer keys, for ids whose
+/// keys span fewer than twice as many integers as there are ids; `None` otherwise.
+fn dense_first_appearance_codes<I: SubjectId>(values: &[I]) -> Option<(Vec<usize>, Vec<I>)> {
+    let (mut low, mut high) = (i64::MAX, i64::MIN);
+    for value in values {
+        let key = value.integer_key()?;
+        low = low.min(key);
+        high = high.max(key);
+    }
+    let span = usize::try_from(high.checked_sub(low)?).ok()?;
+    if span >= values.len().saturating_mul(2) {
+        return None;
+    }
+    let mut table = vec![usize::MAX; span + 1];
+    let mut representatives = Vec::new();
+    let codes = values
+        .iter()
+        .map(|value| {
+            let key = value
+                .integer_key()
+                .expect("every key was checked to be an integer");
+            let code = &mut table[(key - low) as usize];
+            if *code == usize::MAX {
+                *code = representatives.len();
+                representatives.push(value.clone());
+            }
+            *code
+        })
+        .collect();
+    Some((codes, representatives))
+}
+
+fn hashed_first_appearance_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
+    let mut seen: std::collections::HashMap<I::Key, usize> =
+        std::collections::HashMap::with_capacity(values.len());
     let mut representatives = Vec::new();
     let codes = values
         .iter()
@@ -182,9 +245,124 @@ pub fn first_appearance_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>
     (codes, representatives)
 }
 
+/// [`first_appearance_codes`] of several subsets of the codes `0..levels`, one subset at a
+/// time, through one table that is cleared after each: a subset then costs time in
+/// proportion to its own length however many levels there are (one curve's share of the
+/// clusters of a fit with many strata).
+pub(crate) struct SubsetRenumbering {
+    table: Vec<usize>,
+}
+
+impl SubsetRenumbering {
+    pub(crate) fn new(levels: usize) -> Self {
+        Self {
+            table: vec![usize::MAX; levels],
+        }
+    }
+
+    /// The new code of each of `codes`, and the original code of each new one.
+    pub(crate) fn renumber(
+        &mut self,
+        codes: impl IntoIterator<Item = usize>,
+    ) -> (Vec<usize>, Vec<usize>) {
+        let mut unique = Vec::new();
+        let renumbered = codes
+            .into_iter()
+            .map(|code| {
+                let slot = &mut self.table[code];
+                if *slot == usize::MAX {
+                    *slot = unique.len();
+                    unique.push(code);
+                }
+                *slot
+            })
+            .collect();
+        for &code in &unique {
+            self.table[code] = usize::MAX;
+        }
+        (renumbered, unique)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hash-map numbering every id type had before the table paths.
+    fn reference_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
+        let mut seen = std::collections::HashMap::new();
+        let mut representatives = Vec::new();
+        let codes = values
+            .iter()
+            .map(|value| {
+                *seen.entry(value.key()).or_insert_with(|| {
+                    representatives.push(value.clone());
+                    representatives.len() - 1
+                })
+            })
+            .collect();
+        (codes, representatives)
+    }
+
+    fn lcg(seed: u64) -> impl FnMut() -> u64 {
+        let mut state = seed;
+        move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state >> 33
+        }
+    }
+
+    #[test]
+    fn table_numbering_matches_hashed_numbering() {
+        let mut next = lcg(7);
+        for case in 0..60u64 {
+            let n = (next() % 50) as usize;
+            let spread = [1, 3, n as u64 + 1, 2 * n as u64 + 2, 1 << 40][case as usize % 5];
+            let offset = [0i64, -17, i64::MIN / 2, i64::MAX - (1 << 41)][case as usize % 4];
+            let ints: Vec<i64> = (0..n)
+                .map(|_| offset + (next() % spread.max(1)) as i64)
+                .collect();
+            assert_eq!(first_appearance_codes(&ints), reference_codes(&ints));
+            let codes: Vec<usize> = ints.iter().map(|&v| (v - offset) as usize).collect();
+            assert_eq!(first_appearance_codes(&codes), reference_codes(&codes));
+            let mixed: Vec<IdValue> = ints
+                .iter()
+                .map(|&v| match next() % 4 {
+                    0 => IdValue::Float(v as f64),
+                    1 if v % 3 == 0 => IdValue::Float(v as f64 + 0.5),
+                    2 if v % 5 == 0 => IdValue::Str(v.to_string()),
+                    _ => IdValue::Int(v),
+                })
+                .collect();
+            assert_eq!(first_appearance_codes(&mixed), reference_codes(&mixed));
+        }
+        let extremes = [i64::MIN, i64::MAX, 0, i64::MIN, -1];
+        assert_eq!(
+            first_appearance_codes(&extremes),
+            reference_codes(&extremes)
+        );
+        let wide = [usize::MAX, 0, usize::MAX, 3];
+        assert_eq!(first_appearance_codes(&wide), reference_codes(&wide));
+        assert_eq!(first_appearance_codes::<i64>(&[]), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn subset_renumbering_matches_first_appearance_codes() {
+        let mut next = lcg(11);
+        let levels = 40;
+        let mut renumbering = SubsetRenumbering::new(levels);
+        for _ in 0..50 {
+            let n = (next() % 30) as usize;
+            let subset: Vec<usize> = (0..n).map(|_| (next() % levels as u64) as usize).collect();
+            assert_eq!(
+                renumbering.renumber(subset.iter().copied()),
+                first_appearance_codes(&subset)
+            );
+        }
+        assert_eq!(renumbering.renumber([]), (Vec::new(), Vec::new()));
+    }
 
     #[test]
     fn integral_floats_equal_integers_and_numbers_sort_before_strings() {

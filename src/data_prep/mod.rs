@@ -17,6 +17,7 @@ pub(crate) use aeq_surv::aeq_surv_py;
 pub use aeq_surv::{AeqSurvResult, DEFAULT_TOLERANCE, aeq_counting, aeq_surv, aeq_times};
 pub(crate) use cluster::cluster_py;
 pub use cluster::{ClusterResult, cluster};
+pub(crate) use id_value::SubsetRenumbering;
 pub use id_value::{IdKey, IdValue, SubjectId, first_appearance_codes};
 pub use lvcf::lvcf;
 pub(crate) use lvcf::lvcf_py;

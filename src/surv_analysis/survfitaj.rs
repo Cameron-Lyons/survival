@@ -7,7 +7,7 @@ use super::survfitkm::{
     check_curve_indices, curve_ranges, rows_by_curve, select_items, strata_index, survflag,
 };
 use crate::core::strata_order::validate_intervals;
-use crate::data_prep::{aeq_counting, first_appearance_codes};
+use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
@@ -1163,13 +1163,15 @@ pub fn survfitaj(
     let id: Vec<usize> = rows.iter().map(|&i| id_codes[i]).collect();
 
     let influence = options.influence && options.se_fit;
-    let cluster: Vec<usize> = match data.cluster.as_ref().or(data.id.as_ref()) {
-        Some(labels) => {
-            let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
-            first_appearance_codes(&subset).0
-        }
-        None => (0..n).collect(),
-    };
+    let (cluster, n_clusters): (Vec<usize>, usize) =
+        match data.cluster.as_ref().or(data.id.as_ref()) {
+            Some(labels) => {
+                let subset: Vec<i64> = rows.iter().map(|&i| labels[i]).collect();
+                let (codes, unique) = first_appearance_codes(&subset);
+                (codes, unique.len())
+            }
+            None => ((0..n).collect(), n),
+        };
 
     let (samestate, stemp) = if !counting {
         (istate.iter().all(|&s| s == istate[0]), istate[0])
@@ -1265,6 +1267,7 @@ pub fn survfitaj(
     let mut curves: Vec<Curve> = Vec::with_capacity(n_curves);
     let mut c2 = vec![0usize; n];
     let mut is_atrisk = vec![false; n];
+    let mut renumbering = SubsetRenumbering::new(n_clusters);
     let mut row_offset = 0;
     let single = n_curves == 1;
     let min_start = (counting && p0_common.is_none())
@@ -1277,14 +1280,16 @@ pub fn survfitaj(
         }
         let sort1 = ordered_subset(&keep, &time1, single);
         let sort2 = ordered_subset(&keep, &time, single);
-        let mut utime: Vec<f64> = keep
+        // Read in time order, so that sorting only merges the two sorted runs.
+        let mut utime: Vec<f64> = sort2
             .iter()
             .filter(|&&i| stat2[i] != 0 || position[i] > 1)
             .map(|&i| time[i])
             .collect();
         if entry {
             utime.extend(
-                keep.iter()
+                sort1
+                    .iter()
                     .filter(|&&i| position[i] & 1 == 1)
                     .map(|&i| time1[i]),
             );
@@ -1298,8 +1303,7 @@ pub fn survfitaj(
         } else {
             utime.into_iter().filter(|&t| t >= t0).collect()
         };
-        let subset: Vec<usize> = keep.iter().map(|&i| cluster[i]).collect();
-        let (renumbered, unique) = first_appearance_codes(&subset);
+        let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| cluster[i]));
         for (&i, code) in keep.iter().zip(renumbered) {
             c2[i] = code;
         }
