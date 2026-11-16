@@ -3317,7 +3317,13 @@ def _strata_argument_values(data: Any, term: _CovariateTerm, n: int) -> Any:
                 values = ["NaN" if i in created else value for i, value in enumerate(values)]
     if term.categorical_wrapper is not None:
         materialized = _materialize_1d(values, term.column)
-        present = {value for value in materialized if not _is_missing_value(value)}
+        array = _numeric_ndarray(values)
+        # A numeric column without NaN has no missing value: the same set, built in C.
+        present = (
+            set(materialized)
+            if array is not None and not (array.dtype.kind == "f" and np.isnan(array).any())
+            else {value for value in materialized if not _is_missing_value(value)}
+        )
         declared = _mstate_categories(values)
         if term.categorical_wrapper == "as.factor" and declared is not None:
             return values

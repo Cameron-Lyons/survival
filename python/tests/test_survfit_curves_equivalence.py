@@ -1,9 +1,11 @@
 """survfit's faster paths against the code they replaced.
 
 Each test takes the previous path, or keeps a copy of the previous implementation, and
-checks the new one against it: the clustered Kaplan-Meier variance from running sums
-agrees with the dense loop over every cluster to rounding, and one native call building
-every Cox curve column's engine gives exactly the engines built one column at a time.
+checks the new one against it.  The clustered Kaplan-Meier variance from running sums
+agrees with the dense loop over every cluster to rounding; the rest give exactly the same
+numbers: one native call building every Cox curve column's engine, integer id and cluster
+labels numbered by the engine instead of in Python, the levels of ``factor()`` of a
+numeric column built as a set in C, and the case-weight checks done by NumPy.
 """
 
 from __future__ import annotations
@@ -203,3 +205,114 @@ def test_cox_engines_keep_one_curve_for_no_rows_and_reject_ragged_columns():
         core.SurvfitKMResult._from_stacked_columns(
             [1.0, 2.0], [2.0, 1.0], [1.0, 1.0], surv, [2], lower=[0.1, 0.2]
         )
+
+
+def test_engine_labels_pass_plain_integers_and_encode_everything_else():
+    assert _survfit._engine_labels([7, -3, 7, 2**63 - 1], "id") == [7, -3, 7, 2**63 - 1]
+    assert _survfit._engine_labels([2**63, 1, 2**63], "id") == [0, 1, 0]
+    assert _survfit._engine_labels([True, 1, 2], "id") == [0, 0, 1]
+    assert _survfit._engine_labels([1.0, 2.5, 1], "id") == [0, 1, 0]
+    assert _survfit._engine_labels(["b", "a", "b"], "id") == [0, 1, 0]
+
+
+def _ms_data(m=60, seed=2):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for subject in range(m):
+        ill = float(np.round(rng.exponential(1.0), 2) + 0.01)
+        end = float(np.round(rng.exponential(1.5), 2) + 0.01)
+        label = int(rng.integers(0, 3)) * 1000 + subject
+        if ill < end:
+            rows.append((label, 0.0, ill, 1))
+            rows.append((label, ill, ill + end, int(rng.integers(0, 2)) * 2))
+        else:
+            rows.append((label, 0.0, end, 2 * int(rng.integers(0, 2))))
+    data = pd.DataFrame(rows, columns=["id", "start", "stop", "st"])
+    data["g"] = np.where(data["id"] % 2 == 0, "even", "odd")
+    data["cl"] = data["id"] // 7 - 40
+    return data
+
+
+def _strings(values):
+    return [f"label {value}" for value in values]
+
+
+def test_integer_labels_fit_exactly_as_their_codes():
+    data = _cox_data(seed=5)
+    data["id"] = np.arange(len(data)) * 3 - 100
+    data["cl"] = np.random.default_rng(4).integers(-5, 90, len(data)) * 1_000_003
+    for formula, options in [
+        ("Surv(time, status) ~ g", {"cluster": "cl", "weights": "w"}),
+        ("Surv(time, status) ~ 1", {"cluster": "cl", "reverse": True}),
+        ("Surv(time, status) ~ g", {"id": "id", "weights": "w"}),
+        ("Surv(start, time, status) ~ 1", {"id": "id", "cluster": "cl"}),
+    ]:
+        labelled = r.survfit(formula, data=data, **options)
+        named = data.assign(id=_strings(data["id"]), cl=_strings(data["cl"]))
+        coded = r.survfit(formula, data=named, **options)
+        for field in ("time", "surv", "std_err", "std_chaz", "lower", "upper", "n_risk"):
+            assert _identical(getattr(labelled, field), getattr(coded, field)), (formula, field)
+    with_influence = r.survfit(
+        "Surv(time, status) ~ g", data=data, cluster="cl", weights="w", influence=True
+    )
+    assert (
+        with_influence.influence_surv[0].cluster[:3]
+        == list(dict.fromkeys(data["cl"][data["g"] == "a"]))[:3]
+    )
+
+    ms = _ms_data()
+    for formula, options in [
+        ("Surv(start, stop, factor(st)) ~ 1", {"id": "id"}),
+        ("Surv(start, stop, factor(st)) ~ g", {"id": "id", "cluster": "cl", "influence": True}),
+    ]:
+        labelled = r.survfit(formula, data=ms, **options)
+        named = ms.assign(id=_strings(ms["id"]), cl=_strings(ms["cl"]))
+        coded = r.survfit(formula, data=named, **options)
+        for field in ("time", "pstate", "std_err", "std_auc", "lower", "upper", "n_risk"):
+            assert _identical(getattr(labelled, field), getattr(coded, field)), (formula, field)
+        if options.get("influence"):
+            for left, right in zip(labelled.influence_pstate, coded.influence_pstate, strict=True):
+                assert left.cluster == right.cluster
+                np.testing.assert_array_equal(left.values, right.values)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        np.array([0, 2, 1, 2, 0, 1, 2, 2]),
+        np.array([0.0, 2.0, 1.0, 2.0, 0.0, 1.0, 2.0, -0.0]),
+        np.array([0, 2**53 + 1, 2**53, 2**53 + 1, 0, 2**53, 2**53 + 1, 0], dtype=np.int64),
+    ],
+)
+def test_factor_of_a_numeric_column_keeps_its_levels(status):
+    """A list takes the per-value missing test the NumPy column skips."""
+
+    data = {"time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], "st": status}
+    fit = r.survfit("Surv(time, factor(st)) ~ 1", data=data)
+    listed = r.survfit("Surv(time, factor(st)) ~ 1", data={**data, "st": status.tolist()})
+    assert len(fit.states) == 3
+    assert fit.states == listed.states
+    assert _identical(fit.pstate, listed.pstate)
+
+
+def test_factor_of_a_numeric_column_with_nan_drops_the_missing_rows():
+    status = np.array([0.0, 2.0, 1.0, np.nan, 0.0, 1.0, 2.0, 2.0])
+    data = {"time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], "st": status}
+    fit = r.survfit("Surv(time, factor(st)) ~ 1", data=data)
+    listed = r.survfit("Surv(time, factor(st)) ~ 1", data={**data, "st": status.tolist()})
+    assert fit.states == listed.states
+    assert fit.n == listed.n == [7]
+
+
+@pytest.mark.parametrize(
+    ("weights", "message"),
+    [
+        ([1.0, math.inf, 1.0], "weights must be finite"),
+        ([1.0, math.nan, -1.0], "weights must be finite"),
+        ([1.0, -0.5, 1.0], "weights must be non-negative"),
+    ],
+)
+def test_case_weights_reject_non_finite_then_negative_weights(weights, message):
+    with pytest.raises(ValueError, match=message):
+        _survfit._case_weights(weights, 3)
+    assert _survfit._case_weights([0.0, -0.0, 2], 3) == [0.0, -0.0, 2.0]

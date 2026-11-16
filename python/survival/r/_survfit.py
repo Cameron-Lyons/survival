@@ -129,6 +129,14 @@ class _SurvfitData:
     def cluster_codes(self) -> list[int] | None:
         return None if self.cluster is None else _encode_labels(self.cluster, "cluster")
 
+    def id_labels(self) -> list[int] | None:
+        """The ids for an engine that numbers them by first appearance itself."""
+
+        return None if self.id is None else _engine_labels(self.id, "id")
+
+    def cluster_labels(self) -> list[int] | None:
+        return None if self.cluster is None else _engine_labels(self.cluster, "cluster")
+
     def clname(self) -> tuple[Any, ...] | None:
         """``survfitKM``'s ``clname``: the cluster (else id) levels the engine's codes index.
 
@@ -161,6 +169,16 @@ def _curve_factor(
     return _complete_codes(factor, "missing values in the grouping variables"), factor.levels
 
 
+def _engine_labels(values: Sequence[Any], name: str) -> list[int]:
+    """Labels for an engine that numbers them by first appearance (``match(x, unique(x))``)
+    itself: plain 64-bit integers pass as they are, which saves numbering them here; other
+    labels pass as their codes."""
+
+    if set(map(type, values)) == {int} and -(2**63) <= min(values) <= max(values) < 2**63:
+        return list(values)
+    return _encode_labels(values, name)
+
+
 def _case_weights(weights: Any | None, n: int) -> list[float] | None:
     if weights is None:
         return None
@@ -170,9 +188,10 @@ def _case_weights(weights: Any | None, n: int) -> list[float] | None:
         raise TypeError("weights must be numeric") from exc
     if len(values) != n:
         raise ValueError("weights must have the same length as the Surv response")
-    if any(not math.isfinite(value) for value in values):
+    array = np.asarray(values)
+    if not np.isfinite(array).all():
         raise ValueError("weights must be finite")
-    if any(value < 0.0 for value in values):
+    if (array < 0.0).any():
         raise ValueError("weights must be non-negative")
     return values
 
@@ -626,14 +645,15 @@ def _km_engine(
         if influence > 0 and not robust:
             _warn_outside_package("robust=FALSE implies influence=FALSE")
     start = _start_time_value(start_time, allow_infinite=True)
+    # The engine numbers the labels itself, but names influence rows by the label codes.
     engine = _core.survfitkm(
         frame.y.time,
         frame.y._event_codes(),
         start=frame.y.start,
         weights=frame.weights,
         strata=frame.strata_codes,
-        id=frame.id_codes(),
-        cluster=frame.cluster_codes(),
+        id=frame.id_codes() if influence else frame.id_labels(),
+        cluster=frame.cluster_codes() if influence else frame.cluster_labels(),
         stype=stype,
         ctype=ctype,
         se_fit=se_fit,
@@ -798,10 +818,10 @@ def _survfitAJ(
         start=None if frame.y.start is None else list(frame.y.start),
         weights=frame.weights,
         strata=frame.strata_codes,
-        id=frame.id_codes(),
+        id=frame.id_labels(),
         istate=istate,
         istate_levels=istate_levels,
-        cluster=frame.cluster_codes(),
+        cluster=frame.cluster_labels(),
         se_fit=se_fit,
         conf_int=conf_int,
         conf_type=conf_type,
