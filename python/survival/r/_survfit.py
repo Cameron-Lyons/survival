@@ -135,6 +135,8 @@ class _SurvfitData:
         return None if self.id is None else _engine_labels(self.id, "id")
 
     def cluster_labels(self) -> list[int] | None:
+        """The clusters for an engine that numbers them by first appearance itself."""
+
         return None if self.cluster is None else _engine_labels(self.cluster, "cluster")
 
     def clname(self) -> tuple[Any, ...] | None:
@@ -174,6 +176,8 @@ def _engine_labels(values: Sequence[Any], name: str) -> list[int]:
     itself: plain 64-bit integers pass as they are, which saves numbering them here; other
     labels pass as their codes."""
 
+    # The type test is exact (``bool`` and NumPy integers are numbered here), so the
+    # shortcut relies on ``_aligned`` materializing integer columns as Python ints.
     if set(map(type, values)) == {int} and -(2**63) <= min(values) <= max(values) < 2**63:
         return list(values)
     return _encode_labels(values, name)

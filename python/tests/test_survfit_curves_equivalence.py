@@ -195,20 +195,23 @@ def test_cox_engines_match_one_from_stacked_per_column(name, curves):
             assert _identical(getattr(engine, field), getattr(expected, field)), (name, field)
 
 
-def test_cox_engines_keep_one_curve_for_no_rows_and_reject_ragged_columns():
+def test_cox_engines_keep_one_curve_for_no_rows_and_reject_misshapen_columns():
     engines = core.SurvfitKMResult._from_stacked_columns([], [], [], [], [0])
     assert len(engines) == 1
     assert engines[0].surv == []
+    times = ([1.0, 2.0], [2.0, 1.0], [1.0, 1.0])
     surv = [[0.9, 0.8], [0.7, 0.6]]
     engines = core.SurvfitKMResult._from_stacked_columns(
-        [1.0, 2.0], [2.0, 1.0], [1.0, 1.0], surv, [2], std_err=[[0.1, 0.2], [0.3, 0.4]]
+        *times, surv, [2], std_err=[[0.1, 0.2], [0.3, 0.4]]
     )
     assert [e.surv for e in engines] == [[0.9, 0.7], [0.8, 0.6]]
     assert [e.std_err for e in engines] == [[0.1, 0.3], [0.2, 0.4]]
     with pytest.raises(ValueError, match="same shape"):
-        core.SurvfitKMResult._from_stacked_columns(
-            [1.0, 2.0], [2.0, 1.0], [1.0, 1.0], surv, [2], lower=[0.1, 0.2]
-        )
+        core.SurvfitKMResult._from_stacked_columns(*times, surv, [2], lower=[0.1, 0.2])
+    with pytest.raises(ValueError, match="length mismatch"):
+        core.SurvfitKMResult._from_stacked_columns(*times, [[0.9, 0.8], [0.7]], [2])
+    with pytest.raises(ValueError, match="length mismatch"):
+        core.SurvfitKMResult._from_stacked_columns(*times, surv, [2], std_err=[[0.1, 0.2], [0.3]])
 
 
 def test_engine_labels_pass_plain_integers_and_encode_everything_else():
