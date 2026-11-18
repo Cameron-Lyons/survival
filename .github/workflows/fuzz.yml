@@ -12,6 +12,8 @@ jobs:
   fuzz:
     name: Fuzz Testing
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     strategy:
       fail-fast: false
       matrix:
