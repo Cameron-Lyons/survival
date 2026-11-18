@@ -1,9 +1,12 @@
-# Migrating to survival 3.0
+# Migrating from survival 2.0 to 2.1
 
-Version 3.0 makes the breaking clean-ups collected in the 3.0 plan: one R API at
-the package root and in `survival.r`, the raw native kernels in
-`survival.kernels`, R's names and meanings for result components, and a Rust
-crate whose public API is its typed functions rather than its Python bindings.
+**2.1.0 includes breaking API changes.** Python and Cargo dependency ranges that
+allow minor updates can select this version automatically. To keep 2.0.0 while
+migrating, use `survival==2.0.0` in Python or `survival = "=2.0.0"` in Cargo.
+
+Version 2.1 exposes one R API at the package root and in `survival.r`, places
+raw native kernels in `survival.kernels`, adopts R's names and meanings for
+result components, and exposes typed functions in the Rust crate.
 The API changes below cover names, result types and module locations. Numerical
 corrections included in this release are described in the
 [changelog](../CHANGELOG.md) and [R compatibility guide](r-compatibility.md).
@@ -17,13 +20,13 @@ Each section below lists what changed and what to write instead.
 `survival.r_api` was a second name for `survival.r`. Import `survival.r` (or use
 the package root for R's exported functions):
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `from survival import r_api` | `from survival import r` |
 | `survival.r_api.coxph(...)` | `survival.r.coxph(...)` |
 
 The private helpers the R bridge used through `r_api` are attributes of
-`survival.pybridge`. `survivalr` 0.2.0 requires survival 3.0 and checks the
+`survival.pybridge`. `survivalr` 0.2.0 requires survival 2.1 or later and checks the
 Python package version when it first loads it.
 
 ### Native kernels move to `survival.kernels`
@@ -31,7 +34,7 @@ Python package version when it first loads it.
 `survival.kernels` holds every core kernel. A kernel that shares a name with an
 R function exists only there, so the R function of that name is unambiguous:
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `survival.surv_analysis.survdiff(time, status, group)` | `survival.kernels.survdiff(...)` (or `survival.survdiff(formula, data)` for R's) |
 | `survival.regression.coxph_fit(...)`, `survreg_fit`, `survpenal_fit`, `cox_zph`, `coxph_detail`, `coxph_wtest`, `finegray`, `dsurvreg`/`psurvreg`/`qsurvreg`/`rsurvreg` | `survival.kernels.<name>` |
@@ -54,7 +57,7 @@ The other kernels stay in their domain modules and are also in
 
 ### Removed duplicate and internal kernels
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `survival.validation.logrank_test(time, status, group, entry_times=)` | `survival.kernels.survdiff(time, status, group, start=)`; `statistic`/`p_value` are `chisq`/`pvalue` |
 | `survival.surv_analysis.nelson_aalen(time, status)` | `survival.surv_analysis.survfitkm(time, status, stype=2, ctype=1)` (`cumhaz`) |
@@ -62,7 +65,7 @@ The other kernels stay in their domain modules and are also in
 
 ### Non-R helpers
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `survival.totimeline(start, stop, status, states=, id=)`, `survival.r.totimeline` | `survival.kernels.totimeline(id, time1, time2, status, istate)`; `totimeline` is an unexported draft in R |
 | `survival.r.Timeline` | removed with `totimeline` |
@@ -91,7 +94,7 @@ aliases for the old names, so saved Python class references still resolve.
 This does not guarantee compatibility of embedded native fitted state across
 package versions; see the [serialization requirements](r-bridge.md#model-persistence).
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `AaregModelResult`, `CchModelResult`, `SurvregModelResult` | `AaregModel`, `CchModel`, `SurvregModel` |
 | `YatesModel` (an input adapter, not a fit) | `YatesFitAdapter` |
@@ -117,7 +120,7 @@ spelling (`summary["conf.int"]`) works too. A component that R leaves out is
 None as an attribute and missing as a key. The components keep R's names and
 meanings, and table rows use R's column names:
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | Cox rows `exp_coef`, `se`, `p` (`naive_se`/`robust_se` when robust) | `exp(coef)`, `se(coef)`, `Pr(>\|z\|)`, plus `robust se`; as in R, `se(coef)` of a robust fit is the naive standard error |
 | Cox `conf_int` rows `lower`, `upper`, and `conf_level` | `lower .95`, `upper .95`, named for the level as in R |
@@ -139,7 +142,7 @@ replaces `AnovaCoxphResult` and `SurvregAnovaResult`. `columns` holds the table
 under R's column names, `row_names` the row names and `heading` R's heading.
 `result["Pr(>|Chi|)"]` reads a column, and `frame()` returns the columns.
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `anova(coxfit).rows[i].loglik`, `.chisq`, `.df`, `.p_value`, `.name` | `result.loglik`, `result["Chisq"]`, `result["Df"]`, `result["Pr(>\|Chi\|)"]`, `result.row_names` |
 | survreg `table.loglik` (which held -2 log-likelihood) | `result.neg2loglik` (the `-2*LL` column) |
@@ -152,10 +155,10 @@ under R's column names, `row_names` the row names and `heading` R's heading.
 On a penalized Cox fit, `pterms`, `assign2` and `history` are dicts keyed by
 term, like R's named vectors and lists. `assign2` is new. On a fit without a
 penalty, `df`, `var2`, `frail`, `fvar`, `penalty`, `pterms`, `assign2` and
-`history` are None (R's `NULL`); in 2.x they raised AttributeError. survreg
+`history` are None (R's `NULL`); in 2.0 they raised AttributeError. survreg
 fits already behaved this way.
 
-| 2.x | 3.0 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `fit.pterms == [1, 0]` | `fit.pterms == {"pspline(age, df=3)": 1, "sex": 0}` |
 | `fit.history[0]` | `fit.history["pspline(age, df=3)"]` |
@@ -166,7 +169,7 @@ fits already behaved this way.
 
 A one-shot iterator (a generator, `iter(list)`, ...) passed as a data column or a
 row-aligned argument is read into a list when the function is called, whether
-or not the formula uses it. In 2.x an unused iterator column stayed unread
+or not the formula uses it. In 2.0 an unused iterator column stayed unread
 through fitting, copying and pickling. An iterator's `dtype` attribute is no
 longer consulted; pass a NumPy array or floats for double storage. Lists,
 arrays and data frames are unaffected.

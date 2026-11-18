@@ -10,6 +10,15 @@ jobs:
   semver:
     name: Semver Check
     runs-on: ubuntu-latest
+    env:
+      # For the breaking 2.1.0 release, check for further changes to the
+      # accepted API. Every subsequent release uses the registry baseline.
+      RELEASE_2_1_BASE: ${{ github.head_ref == 'release/next-2x' && github.event.pull_request.base.sha == '05aaca349d0f8d898dbe50b2d2439e94095becee' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          baseline-rev: ${{ env.RELEASE_2_1_BASE }}
+          release-type: ${{ env.RELEASE_2_1_BASE != '' && 'patch' || '' }}
