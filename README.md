@@ -36,7 +36,10 @@ AFT models, multi-state Cox models and their curves, multistate summaries and
 expected survival from Cox models. [R compatibility](docs/r-compatibility.md)
 lists every known difference from R, the validation coverage and the
 [limitations of R itself](docs/r-compatibility.md#reference-limitations).
-Release notes are in the [changelog](CHANGELOG.md).
+**Upgrading from 2.0.0?** Version 2.1.0 includes breaking changes in the Python,
+Rust, and R bridge APIs. See the
+[migration guide](https://github.com/Cameron-Lyons/survival/blob/v2.1.0/docs/migration-2.1.md)
+for replacements and the [changelog](CHANGELOG.md) for the full release notes.
 
 ## Documentation
 

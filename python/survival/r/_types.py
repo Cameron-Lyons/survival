@@ -1728,7 +1728,7 @@ class PsplineResult:
 
 
 def _renamed_classes(namespace: dict[str, Any], renamed: dict[str, str]) -> Any:
-    """A module ``__getattr__`` that serves classes renamed in survival 3.0 under their
+    """A module ``__getattr__`` that serves classes renamed in survival 2.1 under their
     2.x names, so that pickles made by survival 2.x still load."""
 
     def module_getattr(name: str) -> Any:

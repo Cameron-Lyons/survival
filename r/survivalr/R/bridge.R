@@ -5,10 +5,10 @@
     if (is.null(module)) {
       survival <- reticulate::import("survival", convert = TRUE)
       version <- as.character(reticulate::py_get_attr(survival, "__version__"))
-      major <- suppressWarnings(as.integer(strsplit(version, ".", fixed = TRUE)[[1L]][[1L]]))
-      if (is.na(major) || major < 3L) {
+      installed <- numeric_version(version, strict = FALSE)
+      if (is.na(installed) || installed < "2.1.0") {
         stop(
-          "survivalr needs the Python survival package 3.0 or later; found ", version,
+          "survivalr needs the Python survival package 2.1.0 or later; found ", version,
           call. = FALSE
         )
       }

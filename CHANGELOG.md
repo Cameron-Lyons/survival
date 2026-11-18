@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased (3.0.0)
+## 2.1.0
 
 ### Breaking changes
 
-Version 3.0 changes names, result types and module locations.
-[Migrating to survival 3.0](docs/migration-3.0.md) lists each API change with its
-replacement. Numerical corrections are described under Fixed below.
+**2.1.0 is a breaking minor release.** It removes public Python and Rust APIs
+from 2.0.0 and changes the names and contents of some model results. Applications
+that rely on the 2.0.0 contract can pin `survival==2.0.0` in Python or
+`survival = "=2.0.0"` in Cargo until they migrate. The
+[migration guide](docs/migration-2.1.md) lists the affected APIs and their replacements.
+Numerical corrections are described under Fixed below.
 
 ### Added
 

@@ -1,6 +1,6 @@
 [package]
 name = "survival"
-version = "3.0.0"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Cameron Lyons <cameron.lyons2@gmail.com>"]
@@ -40,6 +40,7 @@ include = [
   "/pyproject.toml",
   "/README.md",
   "/CHANGELOG.md",
+  "/docs/migration-2.1.md",
   "/LICENSE",
 ]
 
