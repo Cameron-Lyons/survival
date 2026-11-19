@@ -6,6 +6,7 @@
   }
   expect_identical(dim(actual), dim(expected))
   expect_identical(is.na(actual), is.na(expected), ignore_attr = TRUE)
+  expect_identical(is.nan(actual), is.nan(expected), ignore_attr = TRUE)
   expect_equal(as.numeric(actual), as.numeric(expected), tolerance = 4e-7)
 }
 
@@ -21,12 +22,17 @@ test_that("AFT prediction probabilities preserve missing columns and ignore unus
     fit <- do.call(survreg, options)
     stock <- do.call(survival::survreg, options)
     for (type in c("quantile", "uquantile")) {
-      for (p in list(c(.2, NA_real_, .8), NA_real_)) for (se in c(FALSE, TRUE)) {
+      for (p in list(c(.2, NA_real_, NaN, .8), NA, NA_integer_, c(0L, NA_integer_),
+                     c(TRUE, NA), NA_real_)) for (se in c(FALSE, TRUE)) {
         .aft_probability_compare(
           predict(fit, newdata, type = type, p = p, se.fit = se),
           predict(stock, newdata, type = type, p = p, se.fit = se))
       }
+      .aft_probability_compare(fitted(fit, type = type, p = NA, se.fit = TRUE),
+                               predict(stock, type = type, p = NA, se.fit = TRUE))
     }
+    .aft_probability_compare(predict(fit, newdata, type = "response", p = NA),
+                             predict(stock, newdata, type = "response", p = NA))
     for (type in c("response", "link", "lp", "linear", "terms")) {
       for (se in c(FALSE, TRUE)) {
         .aft_probability_compare(

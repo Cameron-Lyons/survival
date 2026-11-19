@@ -8,7 +8,6 @@ the data to the Rust ports of ``rsurvpart1`` / ``rsurvpart2`` (``survfitresid``,
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
 from typing import Any
 
 from .. import _survival as _core
@@ -222,34 +221,31 @@ def _residuals_result(
     )
 
 
-def _residual_frame(result: ResidualsSurvfitResult) -> dict[str, list[Any]]:
+def _residual_frame(
+    result: ResidualsSurvfitResult, pseudo_values: list[Any] | None = None
+) -> dict[str, list[Any]]:
     """R's ``data.frame = TRUE`` layout: one row per (id, column, time), times slowest."""
 
     n = len(result.id)
-    columns: Sequence[str | None] = result.columns or [None]
-    frame: dict[str, list[Any]] = {
-        result.id_name or "(id)": [
-            value for _time in result.time for _column in columns for value in result.id
-        ]
-    }
+    ntime = len(result.time)
+    ncol = 1 if result.columns is None else len(result.columns)
+
+    def long_values(values: list[Any]) -> list[Any]:
+        if result.columns is None:
+            return [row[j] for j in range(ntime) for row in values]
+        return [row[k][j] for j in range(ntime) for k in range(ncol) for row in values]
+
+    frame: dict[str, list[Any]] = {result.id_name or "(id)": result.id * (ncol * ntime)}
     if result.columns is not None:
         frame[result.column_name or "state"] = [
-            column for _time in result.time for column in columns for _row in range(n)
-        ]
-    frame["time"] = [time for time in result.time for _column in columns for _row in range(n)]
-    if result.columns is None:
-        frame["resid"] = [row[j] for j in range(len(result.time)) for row in result.resid]
-    else:
-        frame["resid"] = [
-            row[k][j]
-            for j in range(len(result.time))
-            for k in range(len(columns))
-            for row in result.resid
-        ]
+            col for col in result.columns for _ in range(n)
+        ] * ntime
+    frame["time"] = [time for time in result.time for _ in range(ncol * n)]
+    frame["resid"] = long_values(result.resid)
     if result.curve is not None:
-        frame["curve"] = [
-            curve for _time in result.time for _column in columns for curve in result.curve
-        ]
+        frame["curve"] = result.curve * (ncol * ntime)
+    if pseudo_values is not None:
+        frame["pseudo"] = long_values(pseudo_values)
     return frame
 
 
@@ -361,12 +357,4 @@ def pseudo(
             excluded = []
         return _drop(_pad_survfit_rows(result.values, excluded), multistate, len(times))
     residuals = _kernel_residuals(fit, frame, times, type_, collapse=collapse, weighted=collapse)
-    frame_columns = _residual_frame(_residuals_result(fit, frame, residuals, type_))
-    columns = result.columns if multistate else [None]
-    frame_columns["pseudo"] = [
-        (row[k][j] if multistate else row[j])
-        for j in range(len(times))
-        for k in range(len(columns))
-        for row in result.values
-    ]
-    return frame_columns
+    return _residual_frame(_residuals_result(fit, frame, residuals, type_), result.values)

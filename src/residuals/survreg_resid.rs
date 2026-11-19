@@ -1,7 +1,6 @@
 use crate::core::strata_order::DenseGroups;
-use crate::error::{SurvivalError, SurvivalResult};
+use crate::error::SurvivalResult;
 use crate::internal::match_arg::match_arg;
-use crate::internal::matrix::matrix_rows;
 use crate::internal::validation::validate_length;
 use crate::regression::parametric_survival::SurvregFit;
 use crate::regression::survreg_distributions::{
@@ -258,27 +257,14 @@ fn r_sign(value: f64) -> f64 {
 
 /// `out = score %*% matrix`, for the leading `out.len()` columns.
 fn row_times_matrix_into(out: &mut [f64], score: &[f64], matrix: &[Vec<f64>]) {
-    for (col, value) in out.iter_mut().enumerate() {
-        *value = score
-            .iter()
-            .zip(matrix)
-            .map(|(s, row)| s * row[col])
-            .sum::<f64>();
+    // Each output column accumulates in score order while each covariance
+    // row is read contiguously. Match the initial value of f64::sum.
+    out.fill(-0.0);
+    for (&s, row) in score.iter().zip(matrix) {
+        for (value, &v) in out.iter_mut().zip(row) {
+            *value += s * v;
+        }
     }
-}
-
-fn row_times_matrix(score: &[f64], matrix: &[Vec<f64>]) -> Vec<f64> {
-    let mut out = vec![0.0; score.len()];
-    row_times_matrix_into(&mut out, score, matrix);
-    out
-}
-
-fn quadratic_form(score: &[f64], matrix: &[Vec<f64>]) -> f64 {
-    row_times_matrix(score, matrix)
-        .iter()
-        .zip(score)
-        .map(|(a, b)| a * b)
-        .sum()
 }
 
 /// Writes one observation's score row into `row`: `eta_part` times its
@@ -301,19 +287,6 @@ fn fill_score_row(
     }
 }
 
-fn score_row(
-    x: ArrayView1<'_, f64>,
-    eta_part: f64,
-    scale_part: f64,
-    stratum: usize,
-    nstrata: usize,
-    rsigma: bool,
-) -> Vec<f64> {
-    let mut row = vec![0.0; x.len() + if rsigma { nstrata } else { 0 }];
-    fill_score_row(&mut row, x, eta_part, scale_part, stratum);
-    row
-}
-
 /// Rows summed by `collapse` group as R's `rowsum` sums them: one row per
 /// distinct code in ascending order, each adding its rows in observation order.
 ///
@@ -327,12 +300,7 @@ struct CollapsedRows {
 impl CollapsedRows {
     fn new(collapse: &[usize], rows: usize, width: usize) -> SurvivalResult<Self> {
         validate_length(rows, collapse.len(), "collapse")?;
-        let codes = collapse
-            .iter()
-            .map(|&code| i32::try_from(code))
-            .collect::<Result<Vec<i32>, _>>()
-            .map_err(|_| SurvivalError::invalid_input("collapse codes must fit in 32 bits"))?;
-        let groups = DenseGroups::new(&codes);
+        let groups = DenseGroups::from_usize(collapse);
         Ok(Self {
             ranks: groups.ids,
             sums: Array2::zeros((groups.count, width)),
@@ -346,21 +314,9 @@ impl CollapsedRows {
     }
 }
 
-fn collapse_rows(rows: Vec<Vec<f64>>, collapse: &[usize]) -> SurvivalResult<Vec<Vec<f64>>> {
-    let width = rows.first().map_or(0, Vec::len);
-    let mut collapsed = CollapsedRows::new(collapse, rows.len(), width)?;
-    for (index, row) in rows.iter().enumerate() {
-        collapsed.add(index, row);
-    }
-    Ok(matrix_rows(&collapsed.sums))
-}
-
 /// The variance the influence residuals are scaled by (the model-based one of a
-/// robust fit), whether they include the `Log(scale)` columns, and their width.
-fn influence_variance(
-    fit: &SurvregFit,
-    rsigma: bool,
-) -> SurvivalResult<(&[Vec<f64>], bool, usize)> {
+/// robust fit), and the number of location and requested scale columns.
+fn influence_variance(fit: &SurvregFit, rsigma: bool) -> SurvivalResult<(&[Vec<f64>], usize)> {
     let nvar = fit.nvar();
     let rsigma = rsigma && fit.variance_matrix.len() != nvar;
     let vv = fit
@@ -368,69 +324,18 @@ fn influence_variance(
         .as_deref()
         .unwrap_or(&fit.variance_matrix);
     let width = nvar + if rsigma { fit.nstrata() } else { 0 };
-    if vv.len() < width || vv.iter().any(|row| row.len() < width) {
-        return Err(SurvivalError::invalid_input(format!(
-            "variance matrix must be at least {width} x {width} for these residuals"
-        )));
-    }
-    Ok((vv, rsigma, width))
+    fit.check_covariance(vv)?;
+    Ok((vv, width))
 }
 
-/// Calls `visit` with each row of `residuals(fit, "dfbeta", collapse = cluster,
-/// weighted = TRUE)`, in order, without materializing them: the input of the
-/// robust variance.
-///
-/// The rows hold the same values, summed in the same order, as those of
-/// [`residuals_survreg`], so anything accumulated from them is bitwise the
-/// same; but each observation's row is built in one reused buffer, and with a
-/// cluster it is added straight into its cluster's sum.
+/// The robust covariance consumes weighted dfbeta rows from the same calculation
+/// as the public residuals. Collapsed rows arrive in sorted group order.
 pub(crate) fn visit_weighted_dfbeta(
     fit: &SurvregFit,
     cluster: Option<&[usize]>,
-    mut visit: impl FnMut(&[f64]),
+    visit: impl FnMut(&[f64]),
 ) -> SurvivalResult<()> {
-    let n = fit.n;
-    let (vv, _, width) = influence_variance(fit, true)?;
-    let distribution = &fit.distribution;
-    let (y1, y2) =
-        distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
-    let scales: Vec<_> = (0..n).map(|i| fit.scale[fit.strata[i]]).collect();
-    let deriv = survreg_derivatives(
-        distribution,
-        &y1,
-        &y2,
-        &fit.status,
-        &fit.linear_predictors,
-        &scales,
-    )?;
-    let mut collapsed = cluster
-        .map(|cluster| CollapsedRows::new(cluster, n, width))
-        .transpose()?;
-    let mut score = vec![0.0; width];
-    let mut row = vec![0.0; width];
-    for (i, deriv) in deriv.iter().enumerate() {
-        fill_score_row(
-            &mut score,
-            fit.covariates.row(i),
-            deriv[1],
-            deriv[3],
-            fit.strata[i],
-        );
-        row_times_matrix_into(&mut row, &score, vv);
-        if let Some(weights) = &fit.weights {
-            row.iter_mut().for_each(|value| *value *= weights[i]);
-        }
-        match collapsed.as_mut() {
-            Some(collapsed) => collapsed.add(i, &row),
-            None => visit(&row),
-        }
-    }
-    if let Some(collapsed) = collapsed {
-        for sum in collapsed.sums.outer_iter() {
-            visit(sum.as_slice().expect("standard layout"));
-        }
-    }
-    Ok(())
+    visit_residuals(fit, SurvregResidType::Dfbeta, true, cluster, true, visit)
 }
 
 pub fn residuals_survreg(
@@ -440,113 +345,129 @@ pub fn residuals_survreg(
     collapse: Option<&[usize]>,
     weighted: bool,
 ) -> SurvivalResult<SurvregResiduals> {
-    let n = fit.n;
-    let nstrata = fit.nstrata();
-    let distribution = &fit.distribution;
-    let (vv, rsigma, width) = influence_variance(fit, rsigma)?;
+    let mut values = Vec::new();
+    visit_residuals(fit, residual_type, rsigma, collapse, weighted, |row| {
+        values.push(row.to_vec());
+    })?;
+    Ok(SurvregResiduals {
+        residual_type,
+        values,
+    })
+}
 
-    let (y1, y2) =
-        distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
-    let sigma = |i: usize| fit.scale[fit.strata[i]];
-    let eta = &fit.linear_predictors;
-
-    let rows: Vec<Vec<f64>> = match residual_type {
-        SurvregResidType::Response => {
-            let scales: Vec<_> = (0..n).map(sigma).collect();
-            let (centers, _) = distribution.deviance_batch(&y1, &y2, &fit.status, &scales)?;
-            distribution
-                .inverse_values(&centers)?
-                .into_iter()
-                .zip(distribution.inverse_values(eta)?)
-                .map(|(center, fitted)| vec![center - fitted])
-                .collect()
+fn visit_residuals(
+    fit: &SurvregFit,
+    residual_type: SurvregResidType,
+    rsigma: bool,
+    collapse: Option<&[usize]>,
+    weighted: bool,
+    mut visit: impl FnMut(&[f64]),
+) -> SurvivalResult<()> {
+    use SurvregResidType::*;
+    fit.check_residual_inputs()?;
+    let (variance, width) = influence_variance(fit, rsigma)?;
+    let output_width = match residual_type {
+        Dfbeta | Dfbetas => width,
+        Matrix => 6,
+        _ => 1,
+    };
+    let mut collapsed = collapse
+        .map(|groups| CollapsedRows::new(groups, fit.n, output_width))
+        .transpose()?;
+    let weights = if weighted {
+        fit.weights.as_deref()
+    } else {
+        None
+    };
+    let mut emit = |i: usize, row: &mut [f64]| {
+        if let Some(weights) = weights {
+            row.iter_mut().for_each(|v| *v *= weights[i]);
         }
-        _ => {
-            let scales: Vec<_> = (0..n).map(sigma).collect();
-            let deriv = survreg_derivatives(distribution, &y1, &y2, &fit.status, eta, &scales)?;
-            let working = |i: usize| -deriv[i][1] / deriv[i][2];
-            match residual_type {
-                SurvregResidType::Deviance => {
-                    let (_, saturated) =
-                        distribution.deviance_batch(&y1, &y2, &fit.status, &scales)?;
-                    (0..n)
-                        .map(|i| {
-                            let rr = working(i);
-                            vec![r_sign(rr) * (2.0 * (saturated[i] - deriv[i][0])).max(0.0).sqrt()]
-                        })
-                        .collect()
-                }
-                SurvregResidType::Working => (0..n).map(|i| vec![working(i)]).collect(),
-                SurvregResidType::Dfbeta | SurvregResidType::Dfbetas | SurvregResidType::Ldcase => {
-                    let standardize: Vec<f64> = if residual_type == SurvregResidType::Dfbetas {
-                        (0..width).map(|j| 1.0 / vv[j][j].sqrt()).collect()
-                    } else {
-                        vec![1.0; width]
-                    };
-                    (0..n)
-                        .map(|i| {
-                            let score = score_row(
-                                fit.covariates.row(i),
-                                deriv[i][1],
-                                deriv[i][3],
-                                fit.strata[i],
-                                nstrata,
-                                rsigma,
-                            );
-                            let rr = row_times_matrix(&score, vv);
-                            if residual_type == SurvregResidType::Ldcase {
-                                vec![rr.iter().zip(&score).map(|(a, b)| a * b).sum()]
-                            } else {
-                                rr.iter().zip(&standardize).map(|(a, b)| a * b).collect()
-                            }
-                        })
-                        .collect()
-                }
-                SurvregResidType::Ldresp => (0..n)
-                    .map(|i| {
-                        let score = score_row(
-                            fit.covariates.row(i),
-                            deriv[i][2] * sigma(i),
-                            deriv[i][5] * sigma(i),
-                            fit.strata[i],
-                            nstrata,
-                            rsigma,
-                        );
-                        vec![quadratic_form(&score, vv)]
-                    })
-                    .collect(),
-                SurvregResidType::Ldshape => (0..n)
-                    .map(|i| {
-                        let score = score_row(
-                            fit.covariates.row(i),
-                            deriv[i][5],
-                            deriv[i][4],
-                            fit.strata[i],
-                            nstrata,
-                            rsigma,
-                        );
-                        vec![quadratic_form(&score, vv)]
-                    })
-                    .collect(),
-                SurvregResidType::Matrix => deriv.iter().map(|row| row.to_vec()).collect(),
-                SurvregResidType::Response => unreachable!("handled above"),
-            }
+        match &mut collapsed {
+            Some(groups) => groups.add(i, row),
+            None => visit(row),
         }
     };
 
-    let mut rows = rows;
-    if weighted && let Some(weights) = &fit.weights {
-        for (row, &w) in rows.iter_mut().zip(weights) {
-            row.iter_mut().for_each(|value| *value *= w);
+    let distribution = &fit.distribution;
+    let (y1, y2) =
+        distribution.transformed_endpoints(&fit.time, fit.time2.as_deref(), &fit.status)?;
+    let sigma: Vec<_> = fit.strata.iter().map(|&s| fit.scale[s]).collect();
+    let eta = &fit.linear_predictors;
+    if residual_type == Response {
+        let (centers, _) = distribution.deviance_batch(&y1, &y2, &fit.status, &sigma)?;
+        let centers = distribution.inverse_values(&centers)?;
+        let predictions = distribution.inverse_values(eta)?;
+        for (i, (center, fitted)) in centers.iter().zip(predictions).enumerate() {
+            emit(i, &mut [center - fitted]);
+        }
+    } else {
+        let deriv = survreg_derivatives(distribution, &y1, &y2, &fit.status, eta, &sigma)?;
+        match residual_type {
+            Deviance => {
+                let (_, saturated) = distribution.deviance_batch(&y1, &y2, &fit.status, &sigma)?;
+                for (i, (d, sat)) in deriv.iter().zip(saturated).enumerate() {
+                    let working = -d[1] / d[2];
+                    emit(
+                        i,
+                        &mut [r_sign(working) * (2.0 * (sat - d[0])).max(0.0).sqrt()],
+                    );
+                }
+            }
+            Working => {
+                for (i, d) in deriv.iter().enumerate() {
+                    emit(i, &mut [-d[1] / d[2]]);
+                }
+            }
+            Matrix => {
+                for (i, mut d) in deriv.into_iter().enumerate() {
+                    emit(i, &mut d);
+                }
+            }
+            Dfbeta | Dfbetas | Ldcase | Ldresp | Ldshape => {
+                let standardize = (residual_type == Dfbetas).then(|| {
+                    (0..width)
+                        .map(|j| 1.0 / variance[j][j].sqrt())
+                        .collect::<Vec<_>>()
+                });
+                let mut score = vec![0.0; width];
+                let mut row = vec![0.0; width];
+                for (i, d) in deriv.iter().enumerate() {
+                    let (location, scale) = match residual_type {
+                        Ldresp => (d[2] * sigma[i], d[5] * sigma[i]),
+                        Ldshape => (d[5], d[4]),
+                        _ => (d[1], d[3]),
+                    };
+                    fill_score_row(
+                        &mut score,
+                        fit.covariates.row(i),
+                        location,
+                        scale,
+                        fit.strata[i],
+                    );
+                    row_times_matrix_into(&mut row, &score, variance);
+                    if let Some(factors) = &standardize {
+                        for (entry, factor) in row.iter_mut().zip(factors) {
+                            *entry *= factor;
+                        }
+                    }
+                    if matches!(residual_type, Dfbeta | Dfbetas) {
+                        emit(i, &mut row);
+                    } else {
+                        let displacement = row.iter().zip(&score).map(|(v, s)| v * s).sum();
+                        emit(i, &mut [displacement]);
+                    }
+                }
+            }
+            Response => unreachable!("handled above"),
         }
     }
-    if let Some(groups) = collapse {
-        rows = collapse_rows(rows, groups)?;
+    if let Some(groups) = collapsed {
+        for row in groups.sums.outer_iter() {
+            visit(row.as_slice().expect("standard layout"));
+        }
     }
-    Ok(SurvregResiduals {
-        residual_type,
-        values: rows,
-    })
+    Ok(())
 }
 
 #[cfg(test)]
@@ -640,33 +561,33 @@ mod tests {
 
     #[test]
     fn collapse_sums_rows_by_sorted_group() {
-        let rows = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
-        let out = collapse_rows(rows, &[7, 2, 7]).unwrap();
-        assert_eq!(out, vec![vec![3.0, 4.0], vec![6.0, 8.0]]);
-        assert!(collapse_rows(vec![vec![1.0]], &[1, 2]).is_err());
+        let mut groups = CollapsedRows::new(&[7, 2, 7], 3, 2).unwrap();
+        groups.add(0, &[1.0, 2.0]);
+        groups.add(1, &[3.0, 4.0]);
+        groups.add(2, &[5.0, 6.0]);
+        assert_eq!(groups.sums, ndarray::array![[3.0, 4.0], [6.0, 8.0]]);
+        assert!(CollapsedRows::new(&[1, 2], 1, 1).is_err());
     }
 
     #[test]
     fn score_rows_place_the_scale_term_in_the_stratum_column() {
-        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, true);
-        assert_eq!(row, vec![2.0, 8.0, 0.0, 5.0, 0.0]);
-        let row = score_row(ArrayView1::from(&[1.0, 4.0]), 2.0, 5.0, 1, 3, false);
-        assert_eq!(row, vec![2.0, 8.0]);
+        let mut row = [0.0; 5];
+        let x = ArrayView1::from(&[1.0, 4.0]);
+        fill_score_row(&mut row, x, 2.0, 5.0, 1);
+        assert_eq!(row, [2.0, 8.0, 0.0, 5.0, 0.0]);
+        fill_score_row(&mut row[..2], x, 2.0, 5.0, 1);
+        assert_eq!(row[..2], [2.0, 8.0]);
     }
 
     #[test]
-    fn quadratic_form_uses_the_full_matrix() {
+    fn score_product_uses_the_full_matrix_in_score_order() {
         let vv = vec![
             vec![1.0, 0.1, 0.2],
             vec![0.1, 2.0, 0.3],
             vec![0.2, 0.3, 3.0],
         ];
-        let score = [2.0, 8.0, 5.0];
-        assert_eq!(row_times_matrix(&score, &vv), vec![3.8, 17.7, 17.8]);
-        assert_close(
-            quadratic_form(&score, &vv),
-            2.0 * 3.8 + 8.0 * 17.7 + 5.0 * 17.8,
-            1e-12,
-        );
+        let mut row = [f64::NAN; 3];
+        row_times_matrix_into(&mut row, &[2.0, 8.0, 5.0], &vv);
+        assert_eq!(row, [3.8, 17.7, 17.8]);
     }
 }

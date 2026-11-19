@@ -189,6 +189,23 @@ def test_turnbull_start_time_keeps_intervals_ending_after_it():
     assert _turnbull(start_time=3).n == [6]
 
 
+def test_turnbull_start_time_drops_empty_stratum_and_keeps_case_weights_aligned():
+    data = {
+        "l": [1, 1, 1, 4, 2, 5],
+        "r": [4, 2, 3, 4, 2, None],
+        "g": ["c", "b", "a", "a", "b", "c"],
+        "w": [1.5, 2, 0.5, 1, 3, 2.5],
+    }
+    formula = "Surv(l, r, type = 'interval2') ~ g"
+    fit = _turnbull(data, formula, weights="w", start_time=3)
+    kept = {key: [values[i] for i in [0, 2, 3, 5]] for key, values in data.items()}
+    expected = _turnbull(kept, formula, weights="w")
+    assert list(fit.strata) == ["g=a", "g=c"]
+    assert fit.strata == expected.strata
+    for field in ("time", "n_risk", "n_event", "surv", "std_err"):
+        _close(getattr(fit, field), getattr(expected, field))
+
+
 def test_turnbull_refuses_a_cluster():
     data = {**_interval_data(), "cl": [1, 1, 2, 2, 3, 3, 4, 4]}
     with pytest.raises(ValueError, match="cluster is not supported for interval-censored data"):

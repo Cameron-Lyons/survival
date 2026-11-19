@@ -15,6 +15,7 @@ use ndarray::{Array2, ShapeBuilder};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 mod robust;
@@ -645,6 +646,13 @@ pub(crate) fn check_curve_indices(curves: &[usize], n_curves: usize) -> Survival
 
 pub(crate) fn select_items<T: Clone>(values: &[T], indices: &[usize]) -> Vec<T> {
     indices.iter().map(|&i| values[i].clone()).collect()
+}
+
+fn retained_rows<'a, T: Clone>(values: &'a [T], rows: Option<&[usize]>) -> Cow<'a, [T]> {
+    match rows {
+        Some(rows) => Cow::Owned(select_items(values, rows)),
+        None => Cow::Borrowed(values),
+    }
 }
 
 #[pymethods]
@@ -1291,14 +1299,26 @@ pub fn survfitkm(
     data: &SurvfitKMData,
     options: &SurvfitKMOptions,
 ) -> SurvivalResult<SurvfitKMResult> {
+    fit_with_counts(data, options, false)
+}
+
+/// Derived estimators need separate counts for any weight other than one.
+/// The public KM result follows R's tolerance for near-unit weights.
+pub(super) fn fit_with_counts(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+    require_counts: bool,
+) -> SurvivalResult<SurvfitKMResult> {
     data.validate()?;
     validate_conf_int(options.conf_int)?;
     let n_all = data.n();
     let counting = data.start.is_some();
+    let corrected;
     let (start, time) = if options.timefix {
-        aeq_counting(data.start.as_deref(), &data.time)?
+        corrected = aeq_counting(data.start.as_deref(), &data.time)?;
+        (corrected.0.as_deref(), corrected.1.as_slice())
     } else {
-        (data.start.clone(), data.time.clone())
+        (data.start.as_deref(), data.time.as_slice())
     };
 
     let t0 = match options.start_time {
@@ -1311,93 +1331,71 @@ pub fn survfitkm(
             start_time
         }
         None => start
-            .iter()
+            .into_iter()
             .flatten()
-            .chain(&time)
+            .chain(time)
             .fold(0.0_f64, |acc, &t| acc.min(t)),
     };
-    let rows: Vec<usize> = (0..n_all).filter(|&i| time[i] >= t0).collect();
-    if rows.is_empty() {
+    let rows = options.start_time.and_then(|_| {
+        let kept: Vec<_> = (0..n_all).filter(|&i| time[i] >= t0).collect();
+        (kept.len() < n_all).then_some(kept)
+    });
+    let n = rows.as_ref().map_or(n_all, Vec::len);
+    if n == 0 {
         return Err(SurvivalError::invalid_input(
             "all observations removed by start.time",
         ));
     }
-    let n = rows.len();
-    let pick = |values: &[f64]| -> Vec<f64> { rows.iter().map(|&i| values[i]).collect() };
-    let time = pick(&time);
-    let start = start.as_deref().map(pick);
-    let status: Vec<i32> = rows.iter().map(|&i| data.status[i]).collect();
-    let weights: Vec<f64> = match &data.weights {
-        Some(w) => pick(w),
-        None => vec![1.0; n],
-    };
-    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), data.time.len());
-    let x: Vec<usize> = rows.iter().map(|&i| curve_of[i]).collect();
+    let rows = rows.as_deref();
+    let time = retained_rows(time, rows);
+    let start = start.map(|s| retained_rows(s, rows));
+    let status = retained_rows(&data.status, rows);
+    let weights = data
+        .weights
+        .as_deref()
+        .map_or_else(|| Cow::Owned(vec![1.0; n]), |w| retained_rows(w, rows));
+    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), n_all);
+    let x = retained_rows(&curve_of, rows);
 
-    let has_cluster = data.cluster.is_some();
-    let has_id = data.id.is_some();
-    let has_rwt = weights.iter().any(|w| *w != w.floor());
-    let has_robust = options.robust.is_some();
-    let id_codes: Option<Vec<usize>> = data.id.as_ref().map(|id| {
-        let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
-        first_appearance_codes(&subset).0
-    });
+    let ids = data
+        .id
+        .as_deref()
+        .map(|id| first_appearance_codes(&retained_rows(id, rows)));
     let mut influence = options.influence;
-    let mut entry = options.entry && has_id;
-    let mut cluster_source: Option<Vec<i64>> = data
-        .cluster
-        .as_ref()
-        .map(|cluster| rows.iter().map(|&i| cluster[i]).collect());
-    let robust = match options.robust {
-        Some(robust) => robust,
-        None => {
-            if influence != InfluenceRequest::None {
-                if !(has_cluster || has_id) {
-                    cluster_source = Some((1..=n as i64).collect());
-                }
-                true
-            } else {
-                has_cluster
-                    || has_rwt
-                    || (has_id && {
-                        let ids = id_codes.as_ref().expect("id present");
-                        let events: Vec<usize> =
-                            (0..n).filter(|&i| status[i] == 1).map(|i| ids[i]).collect();
-                        count_unique(events.iter().copied()) < events.len()
-                    })
-            }
-        }
-    };
-    let cluster: Option<(Vec<usize>, Vec<i64>)> = if let Some(source) = &cluster_source {
-        robust.then(|| first_appearance_codes(source))
-    } else if robust {
-        if let Some(id) = &data.id {
-            let subset: Vec<i64> = rows.iter().map(|&i| id[i]).collect();
-            Some(first_appearance_codes(&subset))
-        } else if !counting || !has_robust {
-            Some(((0..n).collect(), (1..=n as i64).collect()))
-        } else {
-            return Err(SurvivalError::invalid_input(
-                "id or cluster option required",
-            ));
-        }
-    } else {
-        None
-    };
-    if !robust {
-        influence = InfluenceRequest::None;
+    let entry = options.entry && ids.is_some() && counting;
+    if options.robust == Some(true) && counting && ids.is_none() && data.cluster.is_none() {
+        return Err(SurvivalError::invalid_input(
+            "id or cluster option required",
+        ));
     }
-    let cluster = if options.se_fit {
-        cluster
-    } else {
+    let robust = options.se_fit
+        && options.robust.unwrap_or_else(|| {
+            influence != InfluenceRequest::None
+                || data.cluster.is_some()
+                || weights.iter().any(|w| *w != w.floor())
+                || ids.as_ref().is_some_and(|(codes, labels)| {
+                    let mut seen = vec![false; labels.len()];
+                    codes
+                        .iter()
+                        .zip(status.iter())
+                        .any(|(&id, &event)| event == 1 && std::mem::replace(&mut seen[id], true))
+                })
+        });
+    let cluster_data;
+    let cluster = if !robust {
         influence = InfluenceRequest::None;
         None
+    } else if let Some(source) = &data.cluster {
+        cluster_data = first_appearance_codes(&retained_rows(source, rows));
+        Some(&cluster_data)
+    } else if ids.is_some() {
+        ids.as_ref()
+    } else {
+        cluster_data = ((0..n).collect(), (1..=n as i64).collect());
+        Some(&cluster_data)
     };
-    if !counting {
-        entry = false;
-    }
-    let position: Vec<u8> = match (&start, &id_codes) {
-        (Some(start), Some(id)) => survflag(start, &time, id, &x),
+    let position: Vec<u8> = match (&start, &ids) {
+        (Some(start), Some((codes, _))) => survflag(start, &time, codes, &x),
         _ => vec![3; n],
     };
 
@@ -1418,40 +1416,45 @@ pub fn survfitkm(
         options.reverse,
     );
     let n_used: Vec<usize> = inputs.iter().map(|input| input.keep.len()).collect();
-    let mut n_id = has_id.then(|| vec![0usize; n_curves]);
-    let mut ctemp = vec![0usize; n];
+    let mut n_id = ids.as_ref().map(|_| vec![0usize; n_curves]);
+    let mut ctemp: Cow<'_, [usize]> = match cluster {
+        Some((codes, _)) if n_curves == 1 => Cow::Borrowed(codes),
+        Some(_) => Cow::Owned(vec![0; n]),
+        None => Cow::Borrowed(&[]),
+    };
     let mut renumbering = cluster
-        .as_ref()
+        .filter(|_| n_curves > 1)
         .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
     let mut curves = Vec::with_capacity(n_curves);
     for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
         if keep.is_empty() {
             continue;
         }
-        if let (Some(n_id), Some(id)) = (&mut n_id, &id_codes) {
-            n_id[curve] = count_unique(keep.iter().map(|&i| id[i]));
+        if let (Some(n_id), Some((codes, labels))) = (&mut n_id, &ids) {
+            n_id[curve] = if n_curves == 1 {
+                labels.len()
+            } else {
+                count_unique(keep.iter().map(|&i| codes[i]))
+            };
         }
-        let curve_clusters = match (&cluster, &mut renumbering) {
+        let curve_clusters = match (cluster, &mut renumbering) {
             (Some((codes, labels)), Some(renumbering)) => {
                 let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| codes[i]));
+                let ctemp = ctemp.to_mut();
                 for (&i, code) in keep.iter().zip(renumbered) {
                     ctemp[i] = code;
                 }
-                Some(
-                    unique
-                        .iter()
-                        .map(|&code| labels[code])
-                        .collect::<Vec<i64>>(),
-                )
+                Some(Cow::Owned(select_items(labels, &unique)))
             }
-            _ => None,
+            (Some((_, labels)), None) => Some(Cow::Borrowed(labels.as_slice())),
+            (None, _) => None,
         };
         curves.push((curve, rows, curve_clusters));
     }
     // A curve's kernel reads only its own rows of `ctemp`, so the curves are fitted in
     // parallel once every curve's clusters are numbered (unless the fit is too small to
     // repay waking the threads).
-    let fit_curve = |(curve, rows, curve_clusters): (usize, CurveRows, Option<Vec<i64>>)| {
+    let fit_curve = |(curve, rows, curve_clusters): (usize, CurveRows, Option<Cow<'_, [i64]>>)| {
         let kernel_data = KernelData {
             time1: start.as_deref(),
             time2: &time,
@@ -1460,10 +1463,17 @@ pub fn survfitkm(
             position: &position,
             cluster: curve_clusters
                 .as_ref()
-                .map(|names| (ctemp.as_slice(), names.len())),
+                .map(|names| (ctemp.as_ref(), names.len())),
         };
         let fit = kernel(&kernel_data, &rows, kernel_options);
-        (curve, fit, curve_clusters.unwrap_or_default())
+        (
+            curve,
+            fit,
+            curve_clusters
+                .filter(|_| influence != InfluenceRequest::None)
+                .map(Cow::into_owned)
+                .unwrap_or_default(),
+        )
     };
     let parallel = curves.len() > 1 && n > PARALLEL_THRESHOLD_LARGE;
     let fits: Vec<(usize, CurveFit, Vec<i64>)> = if parallel {
@@ -1499,7 +1509,12 @@ pub fn survfitkm(
         influence_surv: None,
         influence_chaz: None,
     };
-    let addcounts = has_nonunit_weights(&weights);
+    let addcounts = data.weights.is_some()
+        && if require_counts {
+            weights.iter().any(|&weight| weight != 1.0)
+        } else {
+            has_nonunit_weights(&weights)
+        };
     let mut counts = addcounts.then(|| SurvfitCounts {
         n_risk: Vec::with_capacity(total),
         n_event: Vec::with_capacity(total),

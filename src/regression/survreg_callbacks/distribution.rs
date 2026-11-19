@@ -204,18 +204,24 @@ impl SurvregDistribution {
     ) -> SurvivalResult<(Vec<f64>, Vec<f64>)> {
         let lower = self.transform_values(time)?;
         let mut upper = lower.clone();
-        let intervals: Vec<_> = status
+        let mut intervals = status
             .iter()
             .enumerate()
             .filter_map(|(i, &s)| (s == 3).then_some(i))
-            .collect();
-        if !intervals.is_empty() {
+            .peekable();
+        if intervals.peek().is_some() {
             let time2 = time2
                 .ok_or_else(|| SurvivalError::invalid_input("intervals require upper endpoints"))?;
-            let values: Vec<_> = intervals.iter().map(|&i| time2[i]).collect();
-            let transformed = self.transform_values(&values)?;
-            for (&i, value) in intervals.iter().zip(transformed) {
-                upper[i] = value;
+            if self.transform_callbacks.is_some() {
+                let values: Vec<_> = intervals.clone().map(|i| time2[i]).collect();
+                let transformed = self.transform_values(&values)?;
+                for (i, value) in intervals.zip(transformed) {
+                    upper[i] = value;
+                }
+            } else {
+                for i in intervals {
+                    upper[i] = self.transform.apply(time2[i])?;
+                }
             }
         }
         Ok((lower, upper))

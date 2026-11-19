@@ -820,8 +820,10 @@ def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
     if labels is not None:
         return tuple(labels)
     index = None if isinstance(data, Mapping) else getattr(data, "index", None)
-    if index is None or (
-        type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1
+    if (
+        index is None
+        or callable(index)
+        or (type(index).__name__ == "RangeIndex" and index.start == 0 and index.step == 1)
     ):
         return None
     kind = type(index).__name__
@@ -2328,24 +2330,6 @@ def _fit_single_design_term(
     return _CategoricalDesignTerm(term, _categorical_levels(values, term.column))
 
 
-def _fit_design_term(
-    data: Any,
-    term: _CovariateSpec,
-    n: int,
-    full_data: Any,
-    factor_order: Mapping[_CovariateTerm, int] | None = None,
-) -> _DesignTerm:
-    if isinstance(term, _InteractionTerm):
-        factors = term.factors
-        if factor_order is not None:
-            factors = tuple(sorted(factors, key=factor_order.__getitem__))
-        fitted = tuple(_fit_single_design_term(data, factor, n, full_data) for factor in factors)
-        if any(isinstance(factor, _PenaltyDesignTerm) and factor.penalized for factor in fitted):
-            raise ValueError("Penalty terms cannot be in an interaction")
-        return _InteractionDesignTerm(fitted)
-    return _fit_single_design_term(data, term, n, full_data)
-
-
 def _formula_factor_order(terms: Sequence[_CovariateSpec]) -> dict[_CovariateTerm, int]:
     order: dict[_CovariateTerm, int] = {}
     for term in terms:
@@ -2442,7 +2426,23 @@ def _fit_formula_design(
         for item in terms.model_terms
         if strata_margins and isinstance(item, _ModelStrataTerm)
     )
-    fitted = [_fit_design_term(data, term, n, full_data, factor_order) for term in ordered_terms]
+    factors: dict[_CovariateTerm, _SingleDesignTerm] = {}
+
+    def fit_factor(term: _CovariateTerm) -> _SingleDesignTerm:
+        if term not in factors:
+            factors[term] = _fit_single_design_term(data, term, n, full_data)
+        return factors[term]
+
+    fitted: list[_DesignTerm] = []
+    for term in ordered_terms:
+        if isinstance(term, _InteractionTerm):
+            ordered = sorted(term.factors, key=factor_order.__getitem__)
+            parts = tuple(fit_factor(factor) for factor in ordered)
+            if any(isinstance(factor, _PenaltyDesignTerm) and factor.penalized for factor in parts):
+                raise ValueError("Penalty terms cannot be in an interaction")
+            fitted.append(_InteractionDesignTerm(parts))
+        else:
+            fitted.append(fit_factor(term))
     design_terms = _design_contrasts(
         fitted, terms.intercept if include_intercept else True, covered_strata
     )
@@ -2572,7 +2572,7 @@ def _single_design_columns(
                 if evaluated is not None and term in evaluated
                 else _column_source(data, term.column)
             )
-            array = _numeric_ndarray(values)
+            array = _numeric_ndarray(values, preserve_na=True)
             if array is not None:
                 if len(array) != n:
                     raise ValueError(
@@ -2627,9 +2627,9 @@ def _level_codes(values: Sequence[Any], levels: Sequence[Any], column: str) -> n
     return codes
 
 
-def _design_term_columns(
+def _design_columns(
     data: Any,
-    spec: _DesignTerm,
+    design: _FormulaDesign,
     n: int,
     evaluated: Mapping[_CovariateTerm, Any] | None = None,
     factor_values: Mapping[_CovariateTerm, list[Any]] | None = None,
@@ -2637,20 +2637,47 @@ def _design_term_columns(
     *,
     as_arrays: bool = False,
 ) -> list[Any]:
-    if isinstance(spec, _InteractionDesignTerm):
-        factor_columns = [
-            _single_design_columns(
-                data, factor, n, evaluated, factor_values, allow_missing, as_arrays=as_arrays
-            )
-            for factor in spec.factors
-        ]
+    def single(spec: _SingleDesignTerm) -> list[Any]:
+        return _single_design_columns(
+            data, spec, n, evaluated, factor_values, allow_missing, as_arrays=as_arrays
+        )
+
+    def coding(spec: _SingleDesignTerm) -> object:
+        if isinstance(spec, _NumericDesignTerm):
+            return spec
+        if isinstance(spec, _CategoricalDesignTerm):
+            # Explicit contrast matrices can be wide and contain signed zeros.
+            return (spec.term, spec.levels, spec.full, id(spec.contrasts))
+        # Matrix and spline terms can have separately fitted bases or callbacks.
+        return id(spec)
+
+    # A main effect already owns its columns in the result. Reuse them when
+    # an interaction uses the same coding (full indicators can differ).
+    interacting = {
+        factor.term
+        for term in design.covariates
+        if isinstance(term, _InteractionDesignTerm)
+        for factor in term.factors
+    }
+    main_effects: dict[object, list[Any]] = {}
+    columns: list[Any] = []
+    for spec in design.covariates:
+        if not isinstance(spec, _InteractionDesignTerm):
+            main_columns = single(spec)
+            columns.extend(main_columns)
+            if interacting and spec.term in interacting:
+                main_effects[coding(spec)] = main_columns
+            continue
+        factor_columns = []
+        for factor in spec.factors:
+            main = main_effects.get(coding(factor))
+            factor_columns.append(main if main is not None else single(factor))
         if as_arrays:
             with np.errstate(over="ignore", under="ignore", invalid="ignore"):
                 factor_columns = [
                     [np.asarray(column, dtype=float) for column in columns]
                     for columns in factor_columns
                 ]
-        interaction_columns: list[Any] = []
         for reversed_combo in product(*reversed(factor_columns)):
             column_combo = tuple(reversed(reversed_combo))
             if as_arrays:
@@ -2658,15 +2685,12 @@ def _design_term_columns(
                 with np.errstate(over="ignore", under="ignore", invalid="ignore"):
                     for column in column_combo:
                         np.multiply(values, column, out=values)
-                interaction_columns.append(values)
+                columns.append(values)
             else:
-                interaction_columns.append(
+                columns.append(
                     [math.prod(column[idx] for column in column_combo) for idx in range(n)]
                 )
-        return interaction_columns
-    return _single_design_columns(
-        data, spec, n, evaluated, factor_values, allow_missing, as_arrays=as_arrays
-    )
+    return columns
 
 
 def _design_array_from_spec(
@@ -2682,13 +2706,9 @@ def _design_array_from_spec(
     arrays until copied into the matrix; other terms keep their formula evaluators.
     Interactions retain the fitted column order and scalar multiplication order."""
 
-    columns = [
-        column
-        for term in design.covariates
-        for column in _design_term_columns(
-            data, term, n, evaluated, factor_values, allow_missing, as_arrays=True
-        )
-    ]
+    columns = _design_columns(
+        data, design, n, evaluated, factor_values, allow_missing, as_arrays=True
+    )
     intercept = int(design.intercept)
     matrix = np.empty((n, len(columns) + intercept), dtype=float)
     if intercept:
@@ -2714,11 +2734,7 @@ def _design_rows_from_spec(
     supplies evaluated categorical variables for constructed populations, including
     compound strata whose labels cannot be reconstructed from one source column."""
 
-    columns = [
-        column
-        for term in design.covariates
-        for column in _design_term_columns(data, term, n, evaluated, factor_values, allow_missing)
-    ]
+    columns = _design_columns(data, design, n, evaluated, factor_values, allow_missing)
     if design.intercept:
         columns.insert(0, [1.0] * n)
     if not columns:

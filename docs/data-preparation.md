@@ -139,6 +139,14 @@ Empty inputs, unused factor levels, states without repeats and `single=True`
 remain supported where stock R can fail. The exact stock errors and intended
 factor results are recorded in the data-preparation label reference fixture.
 
+## Redistribution weights
+
+`r.rttright` returns one redistribution weight per retained observation when
+`times` is omitted. With several reporting times, it returns one row per
+observation and one column per time. An explicit empty request (`times=[]`)
+gives each row zero columns. With exactly one retained observation, the result
+is an empty list, following R's dimension dropping.
+
 ## Fine–Gray expansion
 
 `r.finegray` expands a multi-state response for the Fine–Gray model:

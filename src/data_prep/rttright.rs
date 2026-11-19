@@ -226,8 +226,14 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
     }
 
     let query_times: Vec<f64> = input.times.map_or_else(Vec::new, <[f64]>::to_vec);
-    let n_columns = query_times.len().max(1);
+    let n_columns = input.times.map_or(1, <[f64]>::len);
     let mut weights = vec![vec![0.0; n_columns]; n];
+    if n_columns == 0 {
+        return Ok(RttrightResult {
+            weights,
+            times: query_times,
+        });
+    }
     for rows in &stratum_rows {
         let curve = censoring_curve(rows, start.as_deref(), &stop, &censor, &casewt);
         if input.times.is_none() {
@@ -353,6 +359,10 @@ mod tests {
             vec![0.0, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
         );
         assert_eq!(column(&result, 1), vec![0.0, 1.0 / 3.0, 0.0, 2.0 / 3.0]);
+
+        let empty = simple(&time, &status, Some(&[]));
+        assert_eq!(empty.weights, vec![Vec::<f64>::new(); time.len()]);
+        assert!(empty.times.is_empty());
     }
 
     #[test]

@@ -929,14 +929,14 @@ def _aj_result(
     )
 
 
-def _interval_coding(y: Surv) -> tuple[list[float], list[float], list[int]]:
+def _interval_coding(y: Surv) -> tuple[Sequence[float], Sequence[float], list[int]]:
     """R's ``Surv(type = "interval")`` columns: time1, time2 (interval rows) and status."""
 
     status = y._event_codes()
     if y.type == "left":
-        return list(y.time), list(y.time), [2 if value == 0 else 1 for value in status]
+        return y.time, y.time, [2 if value == 0 else 1 for value in status]
     time2 = [math.nan if value is None else float(value) for value in y.time2 or ()]
-    return list(y.time), time2, status
+    return y.time, time2, status
 
 
 def _survfitTurnbull(
@@ -970,28 +970,39 @@ def _survfitTurnbull(
         raise ValueError("survfitTurnbull not appropriate for counting process data")
     start = _start_time_value(start_time)
     time1, time2, status = _interval_coding(frame.y)
-    rows = list(range(len(frame.y)))
+    strata_codes = frame.strata_codes
+    levels = frame.x_levels
+    weights = frame.weights
     if start is not None:
-        rows = [row for row in rows if (time2[row] if status[row] == 3 else time1[row]) >= start]
+        rows = [
+            row
+            for row, code in enumerate(status)
+            if (time2[row] if code == 3 else time1[row]) >= start
+        ]
         if not rows:
             label = _strata_value_label(start)
             raise ValueError(f"start.time = {label} is greater than all time points.")
-    strata_codes = frame.strata_codes
-    weights = frame.weights
+        if len(rows) != len(status):
+            time1 = [time1[row] for row in rows]
+            time2 = [time2[row] for row in rows]
+            status = [status[row] for row in rows]
+            if weights is not None:
+                weights = [weights[row] for row in rows]
+            if strata_codes is not None:
+                strata_codes = [strata_codes[row] for row in rows]
+                levels = [frame.x_levels[code] for code in sorted(set(strata_codes))]
     result = _core.turnbull(
-        [time1[row] for row in rows],
-        [time2[row] for row in rows],
-        [status[row] for row in rows],
-        weights=None if weights is None else [weights[row] for row in rows],
-        group=None if strata_codes is None else [strata_codes[row] for row in rows],
+        time1,
+        time2,
+        status,
+        weights=weights,
+        group=strata_codes,
         conf_level=conf_int,
         conf_type=conf_type,
         timefix=timefix,
         se_fit=se_fit,
         robust=robust,
     )
-    fitted = sorted({frame.x_codes[row] for row in rows})
-    levels = [frame.x_levels[code] for code in fitted]
     call = SurvfitCall(frame.terms, 1, 1, timefix, start, id=id_name)
     return _km_result(
         result.fit, levels, call, frame.model, se_fit, None, na_action=frame.na_action

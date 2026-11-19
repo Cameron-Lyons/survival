@@ -3,7 +3,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct SurvCheckIstate<'a> {
@@ -174,67 +174,83 @@ fn problem(rows: Vec<usize>, id: &[i64]) -> Option<SurvCheckProblem> {
     Some(SurvCheckProblem { row: rows, id: ids })
 }
 
-fn events_table(id: &[i64], status: &[i32], event_states: &[String]) -> Option<SurvCheckEvents> {
+fn events_table(
+    id: &[i64],
+    status: &[i32],
+    event_states: &[String],
+    order: &[usize],
+) -> Option<SurvCheckEvents> {
     let n_states = event_states.len();
-    let mut per_subject: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    for (&subject, &state) in id.iter().zip(status) {
-        let counts = per_subject
-            .entry(subject)
-            .or_insert_with(|| vec![0; n_states]);
-        if state > 0 {
-            counts[(state - 1) as usize] += 1;
+    let any = (n_states > 1).then_some(n_states);
+    let n_rows = n_states + usize::from(any.is_some());
+    let mut visits = vec![0usize; n_rows];
+    let mut touched = Vec::new();
+    let mut histograms = vec![Vec::new(); n_rows];
+    let mut n_subjects = 0;
+
+    // The observation order already groups each subject's records for multicheck.
+    // Tally only the states this subject visited; infer the zero bins at the end.
+    for subject in order.chunk_by(|&a, &b| id[a] == id[b]) {
+        n_subjects += 1;
+        let mut total = 0;
+        for &record in subject {
+            if status[record] > 0 {
+                let state = status[record] as usize - 1;
+                if visits[state] == 0 {
+                    touched.push(state);
+                }
+                visits[state] += 1;
+                total += 1;
+            }
+        }
+        if let Some(any) = any
+            && total > 0
+        {
+            visits[any] = total;
+            touched.push(any);
+        }
+        for state in touched.drain(..) {
+            let count = std::mem::take(&mut visits[state]);
+            let bins = &mut histograms[state];
+            if count >= bins.len() {
+                bins.resize(count + 1, 0usize);
+            }
+            bins[count] += 1;
         }
     }
-    let tab1: Vec<Vec<usize>> = per_subject.into_values().collect();
-    if tab1.iter().flatten().all(|&count| count == 0) {
+
+    let width = histograms.iter().map(Vec::len).max().unwrap_or(0);
+    if width == 0 {
         return None;
     }
-    if n_states == 1 {
-        let mut by_count: BTreeMap<usize, usize> = BTreeMap::new();
-        for counts in &tab1 {
-            *by_count.entry(counts[0]).or_insert(0) += 1;
-        }
-        return Some(SurvCheckEvents {
-            states: vec![event_states[0].clone()],
-            count: by_count.keys().copied().collect(),
-            subjects: vec![by_count.values().copied().collect()],
-        });
-    }
-    let with_any: Vec<Vec<usize>> = tab1
-        .iter()
-        .map(|counts| {
-            let mut row = counts.clone();
-            row.push(counts.iter().sum());
-            row
-        })
-        .collect();
-    let mut levels: Vec<usize> = with_any.iter().flatten().copied().collect();
-    levels.sort_unstable();
-    levels.dedup();
-    let mut states = Vec::with_capacity(n_states + 1);
-    let mut subjects = Vec::with_capacity(n_states + 1);
-    for column in 0..=n_states {
-        let row: Vec<usize> = levels
-            .iter()
-            .map(|&level| with_any.iter().filter(|r| r[column] == level).count())
-            .collect();
-        let visited = row
-            .iter()
-            .zip(&levels)
-            .any(|(&subjects, &level)| level > 0 && subjects > 0);
-        if !visited {
-            continue;
-        }
-        states.push(if column == n_states {
-            "(any)".to_string()
+    let mut observed = vec![false; width];
+    for bins in &mut histograms {
+        if bins.is_empty() {
+            // An unused declared state still contributes zero to the count axis.
+            observed[0] = true;
         } else {
-            event_states[column].clone()
-        });
-        subjects.push(row);
+            bins[0] = n_subjects - bins.iter().sum::<usize>();
+            for (present, &frequency) in observed.iter_mut().zip(bins.iter()) {
+                *present |= frequency > 0;
+            }
+        }
+    }
+    let count: Vec<usize> = (0..width).filter(|&k| observed[k]).collect();
+    let mut states = Vec::new();
+    let mut subjects = Vec::new();
+    for (state, bins) in histograms.into_iter().enumerate() {
+        if !bins.is_empty() {
+            states.push(if Some(state) == any {
+                "(any)".to_string()
+            } else {
+                event_states[state].clone()
+            });
+            subjects.push(count.iter().map(|&k| *bins.get(k).unwrap_or(&0)).collect());
+        }
     }
     Some(SurvCheckEvents {
         states,
-        count: levels,
+        count,
         subjects,
     })
 }
@@ -433,8 +449,6 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
         })
         .collect();
 
-    let events = events_table(input.id, input.status, input.states);
-
     let unique = unique_ids(input.id);
     let id_code: HashMap<i64, usize> = unique
         .iter()
@@ -443,6 +457,7 @@ pub fn survcheck(input: &SurvCheckInput<'_>) -> SurvivalResult<SurvCheckResult> 
         .collect();
     let id2: Vec<usize> = input.id.iter().map(|id| id_code[id]).collect();
     let order = observation_order(input.id, &time1, &time2);
+    let events = events_table(input.id, input.status, input.states, &order);
     let check = multicheck(&time1, &time2, &stat2, &id2, &cstate2, &order);
 
     let cstate2 = if input.istate.is_none() && counting {
@@ -703,6 +718,28 @@ mod tests {
         assert!(result.events.is_none());
         assert_eq!(result.n_transitions, 0);
         assert_eq!(result.transitions.to_states, names(&["(censored)"]));
+    }
+
+    #[test]
+    fn event_visit_counts_keep_sparse_levels_and_unused_state_zeros() {
+        let id = [9, 3, 9, 3, 3, 9, 3, 9];
+        let status = [2, 2, 1, 2, 1, 2, 2, 2];
+        let order = [1, 3, 4, 6, 0, 2, 5, 7];
+        let events = events_table(&id, &status, &names(&["a", "b"]), &order).unwrap();
+        assert_eq!(events.states, names(&["a", "b", "(any)"]));
+        assert_eq!(events.count, [1, 3, 4]);
+        assert_eq!(
+            events.subjects,
+            [vec![2, 0, 0], vec![0, 2, 0], vec![0, 0, 2]]
+        );
+
+        let unused = events_table(&id, &status, &names(&["a", "b", "unused"]), &order).unwrap();
+        assert_eq!(unused.states, events.states);
+        assert_eq!(unused.count, [0, 1, 3, 4]);
+        assert_eq!(
+            unused.subjects,
+            [vec![0, 2, 0, 0], vec![0, 0, 2, 0], vec![0, 0, 0, 2]]
+        );
     }
 
     #[test]

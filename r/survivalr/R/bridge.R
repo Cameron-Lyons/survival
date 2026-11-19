@@ -204,6 +204,17 @@ if (getRversion() >= "2.15.1") {
   if (is.factor(column)) value else as.list(value)
 }
 
+.as_python_aft_matrix <- function(data) {
+  # Reticulate exposes missing integers as INT_MIN in a NumPy integer matrix.
+  if ((is.integer(data) || is.logical(data)) && anyNA(data)) storage.mode(data) <- "double"
+  if (!is.null(dimnames(data))) {
+    return(.pybridge_attr("_r_design_matrix")(data,
+      if (!is.null(rownames(data))) as.list(rownames(data)),
+      if (!is.null(colnames(data))) as.list(colnames(data))))
+  }
+  data
+}
+
 .as_python_data <- function(data) {
   if (is.data.frame(data)) {
     columns <- lapply(data, .as_python_data_column)
@@ -1336,15 +1347,6 @@ attrassign <- function(object, tt) {
   .as_prediction_value(value, matrix_result = matrix_result, col.names = col.names)
 }
 
-.survreg_alias_prediction_missing <- function(value) {
-  if (is.numeric(value)) {
-    value[is.nan(value)] <- NA_real_
-  } else if (is.list(value)) {
-    value <- lapply(value, .survreg_alias_prediction_missing)
-  }
-  value
-}
-
 .model_term_names <- function(object, terms = NULL) {
   as.character(.call_r_api("model_term_names", object, terms = terms))
 }
@@ -1565,6 +1567,13 @@ attrassign <- function(object, tt) {
     arguments$terms <- .as_python_terms(arguments$terms)
   }
   if (name %in% c("predict", "fitted")) {
+    # Reticulate's logical and integer vectors cannot represent R's missing probability.
+    p <- arguments[["p"]]
+    if ((is.logical(p) || is.integer(p)) && !is.object(p) &&
+        inherits(arguments$fit, "survival_py_survreg") && anyNA(p)) {
+      storage.mode(p) <- "double"
+      arguments$p <- p
+    }
     for (key in intersect(c("na.action", "na_action"), names(arguments))) {
       arguments[[key]] <- .as_na_action(arguments[[key]])
     }
@@ -7831,9 +7840,10 @@ rttright <- function(formula, data, weights, subset, na.action,
     renorm = renorm,
     `_warn_offset` = FALSE
   )
-  if (missing(times)) {
+  if (missing(times) || is.null(times)) {
     .as_numeric_vector(result)
   } else if (length(times) == 0L) {
+    if (length(result) == 0L) return(numeric())
     matrix(numeric(), nrow = length(result), ncol = 0L)
   } else {
     .as_numeric_result(
@@ -8426,6 +8436,9 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
     vector_args = c("weights", "offset", "cluster")
   )
   evaluated_dots <- .normalize_survreg_distribution_dots(evaluated_dots)
+  if (inherits(formula, "survival_py_surv") && is.matrix(evaluated_dots$x)) {
+    evaluated_dots$x <- .as_python_aft_matrix(evaluated_dots$x)
+  }
   do.call(
     .call_r_api,
     c(
@@ -8966,6 +8979,9 @@ weights.survival_py_model <- function(object, ...) {
 
 model.matrix.survival_py_model <- function(object, data = NULL, ...) {
   dots <- list(...)
+  if (inherits(object, "survival_py_survreg") && is.matrix(data)) {
+    data <- .as_python_aft_matrix(data)
+  }
   if (!is.null(data)) dots$na.action <- NULL
   action <- if (is.null(data)) "omit" else .as_na_action(NULL)
   result <- do.call(.call_r_api, c(list("model_matrix", fit = object,
@@ -9062,9 +9078,6 @@ fitted.survival_py_model <- function(object, ..., type = NULL, se.fit = FALSE) {
     col.names = .predict_column_names(object, type,
       terms = if ("terms" %in% names(dots)) .as_python_terms(dots[["terms"]]) else NULL)
   )
-  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
-    value <- .survreg_alias_prediction_missing(value)
-  }
   value <- .attach_prediction_row_names(value, row_metadata)
   value
 }
@@ -9176,6 +9189,9 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
 
 predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, se.fit = FALSE) {
   dots <- list(...)
+  if (inherits(object, "survival_py_survreg") && is.matrix(newdata)) {
+    newdata <- .as_python_aft_matrix(newdata)
+  }
   if (inherits(object, "survival_py_survreg") && "p" %in% names(dots) && is.null(dots$p)) {
     dots["p"] <- list(numeric(0))
   }
@@ -9200,9 +9216,6 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
     col.names = .predict_column_names(object, type,
       terms = if ("terms" %in% names(dots)) .as_python_terms(dots[["terms"]]) else NULL)
   )
-  if (inherits(object, "survival_py_survreg") && anyNA(coef(object))) {
-    value <- .survreg_alias_prediction_missing(value)
-  }
   if (is.null(newdata) && !grouped) {
     value <- .excluded_rows_na(object, value)
   }
@@ -9211,11 +9224,18 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   .attach_term_prediction_constant(value, row_metadata[["terms_constant"]])
 }
 
+.prediction_labels <- function(labels) {
+  if (is.null(labels)) return(NULL)
+  if (!is.list(labels)) return(as.character(labels))
+  missing <- lengths(labels) == 0L
+  if (any(missing)) labels[missing] <- NA_character_
+  as.character(unlist(labels, use.names = FALSE))
+}
+
 .attach_prediction_row_names <- function(value, metadata) {
   if (is.null(metadata)) return(value)
-  convert <- function(labels) if (is.null(labels)) NULL else as.character(unlist(labels, use.names = FALSE))
-  fit_names <- convert(metadata[["fit_names"]])
-  se_names <- if (isTRUE(metadata[["shared_names"]])) fit_names else convert(metadata[["se_names"]])
+  fit_names <- .prediction_labels(metadata[["fit_names"]])
+  se_names <- if (isTRUE(metadata[["shared_names"]])) fit_names else .prediction_labels(metadata[["se_names"]])
   label <- function(x, labels) {
     if (is.null(labels)) {
       if (is.matrix(x) && isTRUE(metadata[["null_dimnames"]])) dimnames(x) <- list(NULL, NULL)
@@ -9243,8 +9263,7 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
 
 .attach_group_names <- function(value, group_names) {
   if (is.null(group_names)) return(value)
-  labels <- unname(vapply(group_names, function(label) if (is.null(label)) NA_character_ else
-    as.character(label)[[1L]], character(1)))
+  labels <- .prediction_labels(group_names)
   label <- function(x) {
     if (is.matrix(x)) {
       if (length(labels)) rownames(x) <- labels else x <- rowsum(x, labels)

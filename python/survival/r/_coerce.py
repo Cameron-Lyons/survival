@@ -346,7 +346,7 @@ def _row_has_missing(value: Any) -> bool:
     return _is_missing_value(value)
 
 
-def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
+def _numeric_ndarray(values: Any, *, ndim: int = 1, preserve_na: bool = False) -> np.ndarray | None:
     """*values* as an array of *ndim* dimensions (one by default), from a plain ndarray or column
     whose dtype kind is logical, integer or double, else ``None``.
 
@@ -354,8 +354,11 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
     ``to_numpy`` turns into object arrays) and factor-like columns get ``None``: they keep
     the per-element paths that know masks, ``None``, ``pd.NA``, ``NaT`` and declared levels
     (datetime columns can get their ``NaT`` flags from :func:`_datetime_missing_mask`).
+    With ``preserve_na``, extensions that can distinguish nulls from numerical NaN
+    retain R's NA payload at their null positions.
     """
 
+    null_mask = None
     if isinstance(values, np.ndarray):
         if isinstance(values, np.ma.MaskedArray):
             return None
@@ -363,6 +366,15 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
     elif hasattr(values, "to_numpy") and hasattr(values, "dtype"):
         if _categories(values) is not None:
             return None
+        if preserve_na and not isinstance(values.dtype, np.dtype):
+            null_count = getattr(values, "null_count", None)
+            if callable(null_count):
+                if null_count():
+                    return None
+            elif hasattr(values, "isna"):
+                null_mask = np.asarray(values.isna(), dtype=bool)
+            else:
+                return None
         array = values.to_numpy()
         if not isinstance(array, np.ndarray):
             return None
@@ -370,6 +382,9 @@ def _numeric_ndarray(values: Any, *, ndim: int = 1) -> np.ndarray | None:
         return None
     if array.ndim != ndim or array.dtype.kind not in "biuf":
         return None
+    if null_mask is not None and null_mask.any():
+        array = array.astype(np.float64, copy=True)
+        array[null_mask] = _NA_REAL
     return array
 
 

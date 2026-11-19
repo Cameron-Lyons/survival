@@ -182,6 +182,36 @@ intercept-only starting values need no initializer. Callback errors keep their
 messages, convergence warnings are R conditions, and there is no call to R's
 reference fitter.
 
+### Parametric regression from censoring bounds
+
+`survival.interval.interval_censored_regression` fits the same accelerated
+failure time models as `r.survreg` from a flat, row-major covariate matrix and
+two endpoint vectors. Pass one censoring code per row. This interface uses
+0 for an exact observation, 1 for right censoring, 2 for left censoring and
+3 for interval censoring.
+
+| Code | Bounds used for fitting | Time used for `survival_prob` |
+| --- | --- | --- |
+| 0 or 1 | `left` | `left` |
+| 2 | `right` | `right` |
+| 3 | `(left, right]` | Midpoint of the interval |
+
+Unused endpoints may be NaN or infinite. A code-3 interval must have
+`left < right`. Use code 0 to report an event observed at an exact time.
+
+Pass covariates without an intercept column. For an intercept-only fit, use
+`x=[]` and `n_vars=0`. The result's `scale` is the exponentiated intercept.
+`coefficients` holds the log-time slopes in input order and `std_errors` holds
+their model-based standard errors. As in R's `summary.survreg`, a redundant
+column has a NaN coefficient and a zero standard error.
+If σ is R's `survreg` scale, `shape` is
+1/σ for Weibull and log-logistic fits, σ for log-normal fits and 1 for
+exponential fits. The existing `Generalized` distribution name selects Weibull.
+
+Check `converged` before interpreting the fit. When the iteration limit stops
+Newton updates, `survreg` can report coefficients from the last step and a
+log likelihood from the preceding step. AIC and BIC use the reported likelihood.
+
 ## Bare penalized AFT fitting
 
 `r.survpenal_fit` fits prepared AFT matrices with ridge, spline, dense or sparse

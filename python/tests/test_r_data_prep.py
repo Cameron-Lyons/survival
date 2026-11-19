@@ -145,6 +145,8 @@ def test_rttright_matches_r_weights_and_time_matrix():
     assert matrix[3] == pytest.approx([0.09090909, 0.10227273], rel=1e-6)
     single = r.rttright("Surv(time, status) ~ x", aml, times=10)
     assert single == pytest.approx([row[0] for row in matrix])
+    assert r.rttright("Surv(time, status) ~ x", aml, times=[]) == [[] for _ in aml["time"]]
+    assert r.rttright("Surv(time, status) ~ 1", {"time": [1], "status": [1]}, times=[]) == []
     with pytest.raises(ValueError, match="Interaction terms are not valid"):
         r.rttright("Surv(time, status) ~ x:time", aml)
     with pytest.raises(ValueError, match="response must be right censored"):

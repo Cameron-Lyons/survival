@@ -185,11 +185,15 @@ fn reverse_cumsum(values: &mut [f64]) {
 }
 
 fn reverse_cumsum_columns(values: &mut Array2<f64>) {
-    for k in 0..values.ncols() {
-        let mut total = 0.0;
-        for g in (0..values.nrows()).rev() {
-            total += values[(g, k)];
-            values[(g, k)] = total;
+    if values.ncols() <= 1 {
+        reverse_cumsum(values.as_slice_mut().expect("contiguous risk sums"));
+        return;
+    }
+    let mut totals = vec![0.0; values.ncols()];
+    for mut row in values.rows_mut().into_iter().rev() {
+        for (value, total) in row.iter_mut().zip(&mut totals) {
+            *total += *value;
+            *value = *total;
         }
     }
 }
@@ -227,47 +231,34 @@ fn agsurv4(ndeath: &[usize], risk: &[f64], weights: &[f64], denom: &[f64]) -> Ve
     km
 }
 
-struct Agsurv5 {
-    sum1: Vec<f64>,
-    sum2: Vec<f64>,
-    xbar: Array2<f64>,
-}
-
-fn agsurv5(
-    ndeath: &[usize],
-    nrisk: &[f64],
-    erisk: &[f64],
-    xsum: &Array2<f64>,
-    xsum2: &Array2<f64>,
-) -> Agsurv5 {
-    let ntime = ndeath.len();
-    let nvar = xsum.ncols();
-    let mut sum1 = vec![0.0; ntime];
-    let mut sum2 = vec![0.0; ntime];
-    let mut xbar = Array2::zeros((ntime, nvar));
-    for i in 0..ntime {
-        let d = ndeath[i];
-        if d == 1 {
-            let temp = 1.0 / nrisk[i];
-            sum1[i] = temp;
-            sum2[i] = temp * temp;
-            for k in 0..nvar {
-                xbar[(i, k)] = xsum[(i, k)] * temp * temp;
-            }
-        } else if d > 1 {
-            let d_f = d as f64;
-            for j in 0..d {
-                let temp = 1.0 / (nrisk[i] - erisk[i] * j as f64 / d_f);
-                sum1[i] += temp / d_f;
-                sum2[i] += temp * temp / d_f;
-                for k in 0..nvar {
-                    xbar[(i, k)] +=
-                        (xsum[(i, k)] - xsum2[(i, k)] * j as f64 / d_f) * temp * temp / d_f;
-                }
-            }
+fn efron_sums(
+    deaths: usize,
+    risk: f64,
+    death_risk: f64,
+    risk_x: &[f64],
+    death_x: &[f64],
+    xbar: &mut [f64],
+) -> (f64, f64) {
+    if deaths == 1 {
+        let inv = 1.0 / risk;
+        for (out, &x) in xbar.iter_mut().zip(risk_x) {
+            *out = x * inv * inv;
+        }
+        return (inv, inv * inv);
+    }
+    let mut sum1 = 0.0;
+    let mut sum2 = 0.0;
+    xbar.fill(0.0);
+    let d = deaths as f64;
+    for j in 0..deaths {
+        let inv = 1.0 / (risk - death_risk * j as f64 / d);
+        sum1 += inv / d;
+        sum2 += inv * inv / d;
+        for ((out, &x), &dx) in xbar.iter_mut().zip(risk_x).zip(death_x) {
+            *out += (x - dx * j as f64 / d) * inv * inv / d;
         }
     }
-    Agsurv5 { sum1, sum2, xbar }
+    (sum1, sum2)
 }
 
 pub fn agsurv(
@@ -361,7 +352,13 @@ fn agsurv_of_rows(
     let mut irisk = vec![0.0; ntime];
     let mut ndeath = vec![0usize; ntime];
     let mut xsum = Array2::zeros((ntime, nvar));
-    let mut xsum2 = Array2::zeros((ntime, nvar));
+    // Only Efron variance needs the covariates of the tied deaths.
+    let death_columns = if vartype == CoxSurvType::Efron {
+        nvar
+    } else {
+        0
+    };
+    let mut xsum2 = Array2::zeros((ntime, death_columns));
     let mut erisk = vec![0.0; ntime];
     for &i in rows {
         let weighted_risk = data.weights[i] * data.risk[i];
@@ -371,7 +368,7 @@ fn agsurv_of_rows(
             n_event[g] += data.weights[i];
             ndeath[g] += 1;
             erisk[g] += weighted_risk;
-            for k in 0..nvar {
+            for k in 0..death_columns {
                 xsum2[(g, k)] += weighted_risk * data.centered(i, k);
             }
         } else {
@@ -447,18 +444,34 @@ fn agsurv_of_rows(
         agsurv4(&ndeath, &risk, &weights, &nrisk)
     });
 
-    let efron = (survtype == CoxSurvType::Efron || vartype == CoxSurvType::Efron)
-        .then(|| agsurv5(&ndeath, &nrisk, &erisk, &xsum, &xsum2));
-
-    let hazard: Vec<f64> = (0..ntime)
-        .map(|g| match (survtype, &efron) {
-            (CoxSurvType::Efron, Some(tsum)) => n_event[g] * tsum.sum1[g],
-            _ => n_event[g] / nrisk[g],
-        })
-        .collect();
-    let varhaz: Vec<f64> = (0..ntime)
-        .map(|g| match (vartype, &efron) {
-            (CoxSurvType::KalbfleischPrentice, _) => {
+    let use_efron = survtype == CoxSurvType::Efron || vartype == CoxSurvType::Efron;
+    let mut tied_xbar = vec![0.0; death_columns];
+    let mut hazard = Vec::with_capacity(ntime);
+    let mut varhaz = Vec::with_capacity(ntime);
+    let mut xbar = xsum;
+    for (g, mut row) in xbar.rows_mut().into_iter().enumerate() {
+        let row = row.as_slice_mut().expect("contiguous risk sums");
+        let (sum1, sum2) = if use_efron {
+            let death_x = xsum2.row(g);
+            efron_sums(
+                ndeath[g],
+                nrisk[g],
+                erisk[g],
+                row,
+                death_x.as_slice().expect("contiguous death sums"),
+                &mut tied_xbar,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let h = if survtype == CoxSurvType::Efron {
+            n_event[g] * sum1
+        } else {
+            n_event[g] / nrisk[g]
+        };
+        hazard.push(h);
+        varhaz.push(match vartype {
+            CoxSurvType::KalbfleischPrentice => {
                 let denom = if n_event[g] >= nrisk[g] {
                     nrisk[g]
                 } else {
@@ -466,17 +479,17 @@ fn agsurv_of_rows(
                 };
                 n_event[g] / (nrisk[g] * denom)
             }
-            (CoxSurvType::Efron, Some(tsum)) => n_event[g] * tsum.sum2[g],
-            _ => n_event[g] / (nrisk[g] * nrisk[g]),
-        })
-        .collect();
-    let mut xbar = Array2::zeros((ntime, nvar));
-    for g in 0..ntime {
-        for k in 0..nvar {
-            xbar[(g, k)] = match (vartype, &efron) {
-                (CoxSurvType::Efron, Some(tsum)) => n_event[g] * tsum.xbar[(g, k)],
-                _ => xsum[(g, k)] / nrisk[g] * hazard[g],
-            };
+            CoxSurvType::Efron => n_event[g] * sum2,
+            CoxSurvType::Breslow => n_event[g] / (nrisk[g] * nrisk[g]),
+        });
+        if vartype == CoxSurvType::Efron {
+            for (out, &tied) in row.iter_mut().zip(&tied_xbar) {
+                *out = n_event[g] * tied;
+            }
+        } else {
+            for value in row {
+                *value = *value / nrisk[g] * h;
+            }
         }
     }
     let mut cumhaz = hazard.clone();
@@ -1094,6 +1107,31 @@ mod tests {
         assert_close(curve.hazard[0], 2.0 * sum1);
         let sum2 = (1.0 / 36.0 + 1.0 / (4.5 * 4.5)) / 2.0;
         assert_close(curve.varhaz[0], 2.0 * sum2);
+
+        let efron_xbar = 8.0 / 36.0 + 7.0 / (4.5 * 4.5);
+        let mixed = agsurv(&data, CoxSurvType::Breslow, CoxSurvType::Efron).unwrap();
+        assert_close(mixed.hazard[0], 2.0 / 6.0);
+        assert_eq!(mixed.varhaz, curve.varhaz);
+        assert_close(mixed.xbar[(0, 0)], efron_xbar);
+        assert_eq!(mixed.xbar[(1, 0)], 0.0);
+        let mixed = agsurv(&data, CoxSurvType::Efron, CoxSurvType::Breslow).unwrap();
+        assert_eq!(mixed.hazard, curve.hazard);
+        assert_close(mixed.varhaz[0], 2.0 / 36.0);
+        assert_close(mixed.xbar[(0, 0)], 8.0 / 6.0 * mixed.hazard[0]);
+
+        let empty_design = Array2::zeros((3, 0));
+        let null = agsurv(
+            &AgsurvData {
+                x: empty_design.view(),
+                ..data
+            },
+            CoxSurvType::Efron,
+            CoxSurvType::Efron,
+        )
+        .unwrap();
+        assert_eq!(null.hazard, curve.hazard);
+        assert_eq!(null.varhaz, curve.varhaz);
+        assert_eq!(null.xbar.dim(), (2, 0));
     }
 
     #[test]

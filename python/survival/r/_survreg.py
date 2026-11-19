@@ -36,6 +36,7 @@ from ._coerce import (
     _float_vector,
     _floats_or_nan,
     _integer_scalar,
+    _materialize_1d,
     _materialize_labels,
     _matrix_input_column_names,
     _matrix_term_selection,
@@ -44,6 +45,7 @@ from ._coerce import (
     _normalize_conf_level,
     _normalize_na_action,
     _normalize_optional_bool_option,
+    _numeric_ndarray,
     _optional_float_vector,
     _pop_dotted_keyword,
     _quantile_vector,
@@ -69,7 +71,6 @@ from ._fit import (
 )
 from ._formula import (
     _apply_formula_na_action,
-    _column,
     _column_or_values,
     _column_source,
     _data_row_count,
@@ -676,16 +677,25 @@ def _design_output_names(design: _FormulaDesign) -> list[str]:
     return names
 
 
+@dataclass
+class _RDesignMatrix:
+    """A positional R design matrix with its dimnames retained across reticulate."""
+
+    values: np.ndarray
+    row_names: tuple[str, ...] | None
+    column_names: tuple[str, ...] | None
+
+
 def _matrix_frame(
     response: Surv, x: Any, *, weights: Any | None, offset: Any | None, cluster: Any | None
 ) -> _SurvregFrame:
     """``survreg(<Surv>, x=<matrix or data frame>)``: the design is used as given."""
 
-    rows = _as_rows(x, "x")
+    rows = _as_rows(x.values if isinstance(x, _RDesignMatrix) else x, "x")
     n = len(response)
     if len(rows) != n:
         raise ValueError("x must have the same number of rows as the Surv response")
-    names = _matrix_input_column_names(x)
+    names = x.column_names if isinstance(x, _RDesignMatrix) else _matrix_input_column_names(x)
     if names is None or len(names) != len(rows[0]):
         names = tuple(f"x{idx + 1}" for idx in range(len(rows[0])))
     return _SurvregFrame(
@@ -697,6 +707,7 @@ def _matrix_frame(
         weights=_optional_float_vector(weights, "weights", n),
         offset=_optional_float_vector(offset, "offset", n),
         cluster=_materialize_labels(cluster, "cluster") if cluster is not None else None,
+        row_names=_data_row_labels(x, n),
     )
 
 
@@ -986,6 +997,33 @@ def survreg_summary(fit: SurvregModel) -> dict[str, Any]:
     return summary
 
 
+def _matrix_newdata(newdata: Any, names: Sequence[str]) -> np.ndarray:
+    """Numeric design supplied without a formula, in fitted column order."""
+    if isinstance(newdata, _RDesignMatrix):
+        newdata = newdata.values
+    values: np.ndarray | list[list[float]]
+    if isinstance(newdata, Mapping) or hasattr(newdata, "columns"):
+        columns = []
+        for name in names:
+            source = _column_source(newdata, name)
+            numeric = _numeric_ndarray(source, preserve_na=True)
+            columns.append(
+                numeric if numeric is not None else _floats_or_nan(_materialize_1d(source, name))
+            )
+        values = np.column_stack(columns)
+    else:
+        matrix = _numeric_ndarray(newdata, ndim=2)
+        values = (
+            matrix
+            if matrix is not None and 0 not in matrix.shape
+            else _as_matrix_rows(
+                newdata, "newdata", allow_empty_columns=False, convert=_float_or_nan
+            )
+        )
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        return np.asarray(values, dtype=float, order="C")
+
+
 def _newdata_inputs(
     fit: SurvregModel,
     newdata: Any,
@@ -1001,27 +1039,22 @@ def _newdata_inputs(
 
     design = fit.design
     if design is None:
-        if isinstance(newdata, Mapping) or hasattr(newdata, "columns"):
-            columns = [_column(newdata, name) for name in fit.coefficient_names]
-            rows = [list(map(_float_or_nan, values)) for values in zip(*columns, strict=True)]
-        else:
-            rows = _as_matrix_rows(
-                newdata, "newdata", allow_empty_columns=False, convert=_float_or_nan
-            )
-        missing = [row for row, values in enumerate(rows) if any(map(math.isnan, values))]
-        if missing and na_action == "fail":
-            raise ValueError("missing values in newdata")
-        gaps = set(missing)
-        if na_action == "pass" and allow_missing_predictors:
-            gaps = set()
-            missing = []
+        rows = _matrix_newdata(newdata, fit.coefficient_names)
+        missing: tuple[int, ...] = ()
+        if na_action != "pass" or not allow_missing_predictors:
+            mask = np.isnan(rows).any(axis=1)
+            if mask.any():
+                if na_action == "fail":
+                    raise ValueError("missing values in newdata")
+                missing = tuple(np.flatnonzero(mask).tolist())
+                rows = rows[~mask]
         return _NewData(
             data=None,
-            x=[values for row, values in enumerate(rows) if row not in gaps],
+            x=rows if as_array else rows.tolist(),
             strata=None,
             offset=None,
             y=None,
-            missing=tuple(missing),
+            missing=missing,
         )
     if not (isinstance(newdata, Mapping) or hasattr(newdata, "columns")):
         raise TypeError("newdata must be a data frame with the model's columns")
@@ -1043,17 +1076,14 @@ def _newdata_inputs(
     )
 
 
-def _missing_prediction_rows(values: Any, rows: Sequence[int]) -> Any:
-    """*values* (a vector or matrix, lists or NumPy arrays) with NA at *rows*."""
+def _mask_prediction_rows(values: Any, rows: Sequence[int]) -> None:
+    """Mark missing rows in the independent matrix returned by the predictor."""
 
     if isinstance(values, np.ndarray):
-        values = values.copy()
         values[list(rows)] = _NA_REAL
-        return values
-    values = list(values)
-    for row in rows:
-        values[row] = [_NA_REAL] * len(values[row]) if isinstance(values[row], list) else _NA_REAL
-    return values
+    else:
+        for row in rows:
+            values[row] = [_NA_REAL] * len(values[row])
 
 
 def _term_selection(terms: Any | None, names: Sequence[str]) -> list[int] | None:
@@ -1136,7 +1166,7 @@ def predict_survreg(
             newdata,
             action,
             allow_missing_predictors=True,
-            allow_missing_strata=predict_type not in {"quantile", "uquantile"},
+            allow_missing_strata=True,
             allow_unknown_strata=True,
             as_array=True,
         )
@@ -1184,11 +1214,11 @@ def predict_survreg(
             new is not None
             and new.unknown_strata
             and predict_type in {"quantile", "uquantile"}
-            and _estimated_scale_count(fit.fit) > 1
+            and _estimated_scale_count(fit.fit) > 0
         ):
-            predictions = _missing_prediction_rows(predictions, new.unknown_strata)
+            _mask_prediction_rows(predictions, new.unknown_strata)
             if include_se:
-                se_values = _missing_prediction_rows(se_values, new.unknown_strata)
+                _mask_prediction_rows(se_values, new.unknown_strata)
     if selection is not None and any(value is None for value in selection):
 
         def missing_columns(rows: Any) -> Any:
@@ -1243,8 +1273,8 @@ def predict_survreg(
         labels = _prediction_row_labels(
             _data_row_labels(newdata, count), count, new.missing, action != "omit"
         )
-    fit_labels: list[str] | None
-    se_labels: list[str] | None
+    fit_labels: Sequence[str | None] | None
+    se_labels: Sequence[str | None] | None
     if predict_type == "terms":
         fit_labels = se_labels = labels
     elif predict_type in {"quantile", "uquantile"}:
@@ -1274,7 +1304,11 @@ def predict_survreg(
         ):
             codes = fit.fit.strata if new is None else new.strata
             if codes is not None:
-                scale_labels = iter(fit.strata_levels[code] for code in codes)
+                unknown = set(new.unknown_strata) if new is not None else set()
+                scale_labels = iter(
+                    None if row in unknown else fit.strata_levels[code]
+                    for row, code in enumerate(codes)
+                )
                 gaps_set = set(gaps)
                 fit_labels = [
                     label if row in gaps_set else next(scale_labels)
@@ -1796,9 +1830,7 @@ def model_matrix_survreg(
                 allow_missing_predictors=action == "pass",
             )
     result = {
-        "data": [[float(value) for value in row] for row in fit.fit.covariates]
-        if new is None
-        else new.x,
+        "data": fit.fit.covariates if new is None else new.x,
         "columns": list(fit.coefficient_names)
         if fit.design is None
         else _model_matrix_names_and_assign(fit.design)[0],
@@ -1809,6 +1841,11 @@ def model_matrix_survreg(
             missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
             labels = _prediction_row_labels(
                 fit._prediction_rows, len(result["data"]) + len(missing), missing, False
+            )
+        elif fit.design is None:
+            count = new.n + len(new.missing)
+            labels = _prediction_row_labels(
+                _data_row_labels(data, count), count, new.missing, False
             )
         else:
             labels = _prediction_row_labels(_data_row_labels(new.data, new.n), new.n, (), False)

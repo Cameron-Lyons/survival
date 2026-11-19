@@ -55,7 +55,7 @@ ndarray = { version = "0.17.2", features = ["serde"] }
 rayon = "1.12.0"
 burn = { version = "0.22.0", default-features = false, features = ["std", "autodiff", "ndarray", "optim"], optional = true }
 survival-pyo3-macros-shim = { version = "0.1.0", path = "survival-pyo3-macros-shim" }
-serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde = { version = "1.0.228", features = ["derive"] }
 bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"], optional = true }
 
 [features]
@@ -69,7 +69,7 @@ serde_json = { version = "1.0.150", features = ["float_roundtrip"] }
 divan = "0.1.21"
 
 [build-dependencies]
-pyo3-build-config = { version = "0.30.1", features = ["resolve-config"], optional = true }
+pyo3-build-config = { version = "0.29.3", features = ["resolve-config"], optional = true }
 
 [[bench]]
 name = "survival_benchmarks"

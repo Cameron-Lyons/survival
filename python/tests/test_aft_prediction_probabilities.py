@@ -92,6 +92,55 @@ def test_quantile_predictions_still_reject_nonnumeric_probability_strings(kind):
         r.predict(fitted("weibull/estimated"), type=kind, p="unused")
 
 
+@pytest.mark.parametrize(
+    ("dist", "nstrata", "valid", "errors"),
+    [
+        ("weibull", 2, [2.32765650911457, 7.06013564541330], [1.08745264398549, 3.41120697619828]),
+        ("weibull", 1, [2.44380219497899, 6.62131665041681], [0.99063591756730, 2.69118472044459]),
+        (
+            "exponential",
+            1,
+            [1.56200485919946, 11.2660653870387],
+            [1.10450422818628, 7.96631123246607],
+        ),
+    ],
+)
+@pytest.mark.parametrize("kind", ["quantile", "uquantile"])
+@pytest.mark.parametrize("arrays", [False, True])
+def test_quantiles_keep_rows_with_missing_or_unseen_scale_strata(
+    dist, nstrata, valid, errors, kind, arrays
+):
+    # stock survival 3.8-12: predict(f, newdata, type="quantile", p=c(.2,.8), se.fit=TRUE)
+    data = {
+        "t": [1, 2, 4, 5, 3, 8, 6, 4],
+        "s": [1, 0, 1, 1, 1, 0, 1, 0],
+        "x": [0, 1, 0, 1, 1, 0, 0, 1],
+        "g": [1, 2, 2, 1, 1, 2, 1, 2] if nstrata == 2 else [1] * 8,
+    }
+    fit = r.survreg("Surv(t,s) ~ x + strata(g)", data, dist=dist)
+    if kind == "uquantile":
+        errors, valid = np.divide(errors, valid), np.log(valid)
+    for strata in ([1, None], [1, 3], [None, 3]):
+        result = r.predict(
+            fit,
+            {"x": [1, 1], "g": strata},
+            type=kind,
+            p=[0.2, 0.8],
+            se_fit=True,
+            _as_arrays=arrays,
+            _with_row_names=True,
+        )
+        output = result["values"]
+        for actual, reference in ((output.fit, valid), (output.se_fit, errors)):
+            expected = [
+                reference if g == 1 or dist == "exponential" else [np.nan] * 2 for g in strata
+            ]
+            np.testing.assert_allclose(actual, expected, rtol=1e-10, equal_nan=True)
+        names = ["g=1" if g == 1 else None for g in strata] if nstrata == 2 else None
+        assert result["fit_names"] == names
+        assert result["shared_names"]
+
+
 def test_custom_quantile_callback_receives_missing_and_invalid_probabilities_in_one_batch():
     from .test_survreg_callbacks import REFERENCE as DENSITY_REFERENCE
     from .test_survreg_callbacks import definition, fit_case
