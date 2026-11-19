@@ -71,6 +71,12 @@ component removal or shape adjustments; its `method="exact"` selects the exact
 likelihood. Cluster and robust-variance options are refused. `resid=False` skips
 the residual pass. Both paths share the optimizer used by full `CoxPHFit` models.
 
+For a full fit, `kernels.coxph_fit` in Python and `CoxPHFit::fit` in Rust
+select robust coefficient covariance when a cluster is supplied or a case
+weight is fractional. A multistate Cox fit uses subject IDs as its default
+clusters. Set `robust=False` in Python or `robust: Some(false)` in Rust to
+request model-based covariance.
+
 ## Direct Kaplan–Meier fitting
 
 `r.survfitKM` fits a prepared factor and a right-censored or counting-process

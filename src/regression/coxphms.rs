@@ -469,6 +469,7 @@ fn take<T: Copy>(values: &[T], rows: &[usize]) -> Vec<T> {
 /// Both inputs are revalidated. `options.method` may be Breslow or Efron; exact
 /// ties are unsupported for multistate models. Cluster codes in either `data`
 /// or `options` refer to unstacked rows; supplying both is an error.
+/// Robust variance defaults to clustering by subject ID when no cluster is supplied.
 /// The returned `fit` uses stacked rows, mapped back by `stack.rindex`.
 pub fn coxphms_fit(
     data: &CoxphmsData,
@@ -525,6 +526,9 @@ pub fn coxphms_fit(
         Some(stack.strata.clone()),
         offset,
     )?;
+    // An explicit cluster also groups the concordance influence values when
+    // model-based coefficient variance is requested.
+    let cluster = cluster.or_else(|| options.robust.unwrap_or(true).then_some(data.id.as_slice()));
     let options = CoxphOptions {
         cluster: cluster.map(|cluster| take(cluster, rows)),
         ..options

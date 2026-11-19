@@ -168,7 +168,7 @@ def _neardate_labels(values: Any, name: str) -> list[Any]:
     return _materialize_labels(values, name)
 
 
-def _neardate_promote_numeric(values: list[Any]) -> list[Any]:
+def _promote_numeric_ids(values: list[Any]) -> list[Any]:
     """R promotes each numeric vector before matching it against character IDs."""
 
     if any(isinstance(value, float | np.floating) for value in values):
@@ -361,9 +361,9 @@ def neardate(
         # c(TRUE, 1.5) first becomes c(1, 1.5), but c(TRUE, 1.5, "a")
         # becomes character directly and retains the logical label "TRUE".
         if not character1:
-            id1_values = _neardate_promote_numeric(id1_values)
+            id1_values = _promote_numeric_ids(id1_values)
         if not character2:
-            id2_values = _neardate_promote_numeric(id2_values)
+            id2_values = _promote_numeric_ids(id2_values)
     # R's numeric NA and NaN have separate match groups. Categorical/string
     # containers use their NaN sentinel for NA; an actual numeric NaN becomes
     # the nonmissing label "NaN" when the common matching type is character.
@@ -1318,16 +1318,15 @@ def _tmerge_vector(
 
 def _first_call_frame(
     columns1: dict[str, list[Any]],
-    keys1: list[str],
-    keys2: list[str],
+    keys1: list[Any],
+    keys2: list[Any],
     tstart: list[float] | None,
     tstop: list[float],
     control: Mapping[str, Any],
 ) -> dict[str, list[Any]]:
     """R's first ``tmerge`` call: ``data1`` rows in ``data2`` order with the time range.
 
-    ``keys1`` and ``keys2`` are the ``as.character`` subject keys of the ``data1`` rows and
-    of the range rows.
+    ``keys2`` identifies the range rows using the subject IDs from ``data1``.
     """
 
     if any(_missing_flags(tstop)):
@@ -1652,10 +1651,61 @@ def _apply_tmerge_argument(
     return dict(zip(_TMERGE_COUNT_NAMES, step.tcount, strict=True))
 
 
+def _tmerge_ids(
+    base: list[Any],
+    updates: list[Any],
+    factor_updates: bool,
+    first_call: bool,
+    explicit_range: bool,
+) -> tuple[list[Any], list[Any]]:
+    """Return IDs for the update operations and the first-call time ranges.
+
+    R's match uses a common type for its forward lookup and reverse membership
+    check. Keep the actual base IDs in the kernel so numeric subjects stay
+    distinct even when their character labels coincide.
+    """
+    base_types = set(map(type, base))
+    update_types = set(map(type, updates))
+    base_character = _categories(base) is not None or any(issubclass(k, str) for k in base_types)
+    update_character = factor_updates or any(issubclass(k, str) for k in update_types)
+    base_keys, update_keys = base, updates
+    if base_character or update_character:
+        if not all(issubclass(k, str) for k in base_types):
+            values = base if base_character else _promote_numeric_ids(base)
+            base_keys = [None if _is_missing_value(v) else _as_character(v) for v in values]
+        if not all(issubclass(k, str) for k in update_types):
+            values = updates if update_character else _promote_numeric_ids(updates)
+            update_keys = [_as_character(v) for v in values]
+
+    if first_call:
+        keys1, keys2 = set(base_keys), set(update_keys)
+        # duplicated(baseid) is checked before the two vectors are matched.
+        distinct = set(base) if base_keys is not base and not base_character else keys1
+        if len(distinct) != len(base):
+            raise ValueError(
+                "for the first call (that establishes the time range) data1 must have no "
+                "duplicate identifiers"
+            )
+        if not keys2 <= keys1:
+            raise ValueError("setting the range, and data2 has id values not in data1")
+        if not keys1 <= keys2:
+            raise ValueError("setting the range, and data1 has id values not in data2")
+
+    if base_keys is base:
+        return update_keys, update_keys
+    by_label: dict[Any, Any] = {}
+    for key, original in zip(base_keys, base, strict=True):
+        by_label.setdefault(key, original)
+    matched = [by_label.get(key, key) for key in update_keys]
+    # With an explicit range and aligned IDs, R keeps the base rows in place.
+    ranges = base if first_call and explicit_range and base_keys == update_keys else matched
+    return matched, ranges
+
+
 def _tmerge_first_call(
-    data1: Any,
+    columns1: dict[str, list[Any]],
     data2: Any,
-    id: Any,
+    id: str,
     id2: list[Any],
     tstart: Any | None,
     tstop: Any | None,
@@ -1668,41 +1718,23 @@ def _tmerge_first_call(
     subject sets the range.
     """
 
-    if not isinstance(id, str):
-        raise ValueError("on the first call 'id' must be a single variable name")
-    columns1 = _data_columns(data1, "data1")
-    if id not in columns1:
-        raise ValueError("id variable not found in data1")
-    base_ids = list(columns1[id])
-    base_keys = [_as_character(value) for value in base_ids]
-    keys1 = set(base_keys)
-    if len(keys1) != len(base_ids):
-        raise ValueError(
-            "for the first call (that establishes the time range) data1 must have no "
-            "duplicate identifiers"
-        )
+    base_ids = columns1[id]
     idname = str(control["idname"])
     if idname != id:
-        columns1[idname] = list(base_ids)
-    id_keys = [_as_character(value) for value in id2]
-    keys2 = set(id_keys)
-    if keys2 - keys1:
-        raise ValueError("setting the range, and data2 has id values not in data1")
-    if keys1 - keys2:
-        raise ValueError("setting the range, and data1 has id values not in data2")
+        columns1[idname] = base_ids
     n2 = len(id2)
     if tstop is None:
         if first is None or first[1].kind != "event":
             raise ValueError("neither a tstop argument nor an initial event argument was found")
         name, operation = first
         times = _numeric_or_nan(_tmerge_vector(operation.time, data2, n2, name), "tstop")
-        seen: dict[str, int] = {}
-        for row, key in enumerate(id_keys):
+        seen: dict[Any, int] = {}
+        for row, key in enumerate(id2):
             seen.setdefault(key, row)
         range_keys = list(seen)
         range_stop = [times[row] for row in seen.values()]
     else:
-        range_keys = id_keys
+        range_keys = id2
         range_stop = _numeric_or_nan(
             _tmerge_vector(
                 tstop, data2, n2, "tstop", mismatch="tstop and id must be the same length"
@@ -1724,7 +1756,7 @@ def _tmerge_first_call(
             "tstart",
         )
     )
-    return _first_call_frame(columns1, base_keys, range_keys, start_values, range_stop, control)
+    return _first_call_frame(columns1, base_ids, range_keys, start_values, range_stop, control)
 
 
 def _tmerge_inputs(
@@ -1808,25 +1840,48 @@ def tmerge(
     if isinstance(id_source, str):
         if id_source not in data2:
             raise ValueError("id variable not found in data2")
-        id2 = _materialize_labels(data2[id_source], "id")
+        update_source = data2[id_source]
     else:
-        id2 = _materialize_labels(id_source, "id")
-        if data2_rows is not None and len(id2) != data2_rows:
-            raise ValueError("id variable not found in data2")
+        update_source = id_source
+    id2 = _materialize_labels(update_source, "id")
+    if not isinstance(id_source, str) and data2_rows is not None and len(id2) != data2_rows:
+        raise ValueError("id variable not found in data2")
     if any(_missing_flags(id2)):
         raise ValueError("id variable cannot have missing values")
 
+    newdata = _data_columns(data1, "data1")
     if first_call:
-        newdata = _tmerge_first_call(
-            data1, data2, id_source, id2, tstart, tstop, next(iter(parsed.items()), None), control
-        )
+        if not isinstance(id_source, str):
+            raise ValueError("on the first call 'id' must be a single variable name")
+        if id_source not in newdata:
+            raise ValueError("id variable not found in data1")
+        base_idname = id_source
     else:
         if tstart is not None or tstop is not None:
             raise ValueError("tstart and tstop arguments only apply to the first call")
-        newdata = _data_columns(data1, "data1")
         for key in ("idname", "tstartname", "tstopname"):
             if str(control[key]) not in newdata:
                 raise ValueError("tmerge object has been modified, missing variables")
+        base_idname = str(control["idname"])
+
+    id2, range_ids = _tmerge_ids(
+        newdata[base_idname],
+        id2,
+        _categories(update_source) is not None,
+        first_call,
+        tstop is not None,
+    )
+    if first_call:
+        newdata = _tmerge_first_call(
+            newdata,
+            data2,
+            base_idname,
+            range_ids,
+            tstart,
+            tstop,
+            next(iter(parsed.items()), None),
+            control,
+        )
 
     for name, operation in parsed.items():
         tcount[name] = _apply_tmerge_argument(

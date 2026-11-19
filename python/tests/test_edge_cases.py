@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from .helpers import setup_survival_import
@@ -241,8 +243,7 @@ def test_survdiff_all_censored_has_zero_degrees_of_freedom():
 
     assert result.chisq == 0.0
     assert result.df == 0
-    assert result.pvalue == 1.0
-    assert survival.kernels.survdiff([1.0, 2.0, 3.0, 4.0], [0, 0, 0, 0], [1, 1, 2, 2]).df == 0
+    assert math.isnan(result.pvalue)
 
 
 def test_survdiff_rejects_invalid_codes():

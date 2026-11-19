@@ -375,6 +375,8 @@ fn fit_cox(input: CoxInput, init: Option<Vec<f64>>, iter_max: usize) -> Survival
         method: TieMethod::Efron,
         init,
         iter_max,
+        // Case-cohort variance corrections use the inverse information from this fit.
+        robust: Some(false),
         ..CoxphOptions::default()
     };
     CoxPHFit::fit(data, options)

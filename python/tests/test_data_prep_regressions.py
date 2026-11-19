@@ -151,6 +151,88 @@ def _tmerge_updates():
 
 
 @pytest.mark.parametrize(
+    ("base_ids", "update_ids", "unknown"),
+    [
+        ([1.0, 2.0], ["2", "1"], "02"),
+        ([-0.0, 100000.0], ["1e+05", "0"], "100000"),
+        (["1", "2"], [2, 1], 20),
+        ([False, True], ["TRUE", "FALSE"], "1"),
+    ],
+)
+def test_tmerge_matches_subject_ids_using_the_common_r_type(base_ids, update_ids, unknown):
+    base = {"id": base_ids, "age": [20, 21]}
+    followup = {"id": update_ids, "end": [9, 10]}
+    first = r.tmerge(base, followup, id="id", death=r.event("end"))
+    assert first["death"] == [1, 1]
+    assert first.tcount["death"]["trailing"] == 2
+
+    updates = {
+        "id": [*update_ids, update_ids[0], unknown],
+        "t": [2, 1, 5, 7],
+        "x": [20, 10, 30, 40],
+    }
+    frame = r.tmerge(first, updates, id="id", lab=r.tdc("t", "x", 0), ev=r.event("t"))
+    expected_ids = [base_ids[1]] * 3 + [base_ids[0]] * 2
+    assert frame["id"] == expected_ids
+    assert list(map(type, frame["id"])) == list(map(type, expected_ids))
+    assert frame["tstart"] == [0, 2, 5, 0, 1]
+    assert frame["tstop"] == [2, 5, 9, 1, 10]
+    assert frame["death"] == [0, 0, 1, 0, 1]
+    assert frame["lab"] == [0, 20, 30, 0, 10]
+    assert frame["ev"] == [1, 1, 0, 1, 0]
+    assert frame.tcount["lab"]["within"] == frame.tcount["ev"]["boundary"] == 3
+    assert frame.tcount["lab"]["missid"] == frame.tcount["ev"]["missid"] == 1
+
+
+def test_tmerge_numeric_ids_remain_distinct_when_their_character_labels_round_together():
+    ids = [1.0, np.nextafter(1.0, 2.0)]
+    base = {"id": ids, "age": [20, 21]}
+    followup = {"id": ids[::-1], "end": [4, 5]}
+    frame = r.tmerge(base, followup, id="id", tstop="end", death=r.event("end"))
+    assert frame["id"] == ids[::-1]
+    assert frame["age"] == [21, 20]
+    assert frame["death"] == [1, 1]
+
+
+def test_tmerge_rounded_character_match_uses_first_subject_for_all_updates():
+    ids = [1.0, np.nextafter(1.0, 2.0)]
+    base = {"id": ids, "age": [20, 21]}
+    one_range = r.tmerge(base, {"id": ["1"], "end": [5]}, id="id", death=r.event("end"))
+    assert one_range["age"] == [20]
+    assert one_range["death"] == [1]
+
+    # Both labels compare equal in R's aligned, explicit range shortcut.
+    established = r.tmerge(base, {"id": ["1", "1"], "end": [4, 5]}, id="id", tstop="end")
+    assert established["id"] == ids
+    updates = {"id": ["1"], "time": [2], "x": [3]}
+    frame = r.tmerge(established, updates, id="id", visit=r.event("time"), x=r.tdc("time", "x", 0))
+    assert frame["id"] == [ids[0], ids[0], ids[1]]
+    assert frame["tstop"] == [2, 4, 5]
+    assert frame["visit"] == [1, 0, 0]
+    assert frame["x"] == [0, 3, 0]
+
+
+def test_tmerge_keeps_ordered_subject_levels_when_numeric_updates_match_a_factor():
+    pd = pytest.importorskip("pandas")
+    levels = ["3", "1", "2"]
+    base = pd.DataFrame(
+        {
+            "id": pd.Categorical(["2", "1"], categories=levels, ordered=True),
+            "age": [23, 24],
+        }
+    )
+    first = r.tmerge(
+        base, {"id": [1, 2], "stop": [5, 6]}, id="id", tstop="stop", options={"idname": "subject"}
+    )
+    frame = r.tmerge(first, {"id": [2, 1], "t": [1, 3]}, id="id", e=r.event("t"))
+    assert frame["e"] == [1, 0, 1, 0]
+    for column in ["id", "subject"]:
+        assert list(frame[column]) == ["1", "1", "2", "2"]
+        assert frame[column].levels == levels
+        assert frame[column].ordered
+
+
+@pytest.mark.parametrize(
     ("arguments", "message"),
     [
         ({"ev": ("t", "stauts")}, "object 'stauts' not found"),

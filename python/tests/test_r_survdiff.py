@@ -54,6 +54,19 @@ def test_survdiff_strata_terms_give_group_by_stratum_tables():
     assert result.df == 1
 
 
+def test_survdiff_single_observed_stratum_returns_group_vectors():
+    data = {
+        "time": range(1, 8),
+        "status": [0, 1, 1, 0, 1, 1, None],
+        "g": [0, 1, 1, 0, 0, 1, 0],
+        "s": ["s"] * 6 + ["lost"],
+    }
+    result = r.survdiff("Surv(time, status) ~ g + strata(s)", data)
+    assert result.strata == {"lost": 0, "s": 6}
+    assert result.obs == [1, 3]
+    assert result.exp == pytest.approx([1.4, 2.6])
+
+
 def test_survdiff_one_sample_test_uses_the_offset():
     data = _toy_data()
     data["expect"] = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]

@@ -160,6 +160,13 @@ impl CoxPHFit {
             centre_offset_by_stratum(data.offset.as_deref(), n, data.strata.as_deref());
         let (results, nocenter) = fit_cox_engine(&data, &options, Some(&centred_offset), false)?;
 
+        let robust = options.robust.unwrap_or_else(|| {
+            options.cluster.is_some()
+                || data
+                    .weights
+                    .as_ref()
+                    .is_some_and(|weights| weights.iter().any(|weight| weight.fract() != 0.0))
+        });
         let offset = data.offset.unwrap_or_else(|| vec![0.0; n]);
         let weights = data.weights.unwrap_or_else(|| vec![1.0; n]);
         let mut coefficients = results.coefficients;
@@ -268,7 +275,6 @@ impl CoxPHFit {
             martingale_residuals_at(&fit, &fit.linear_predictors)?
         };
 
-        let robust = options.robust.unwrap_or(fit.cluster.is_some());
         if !robust {
             fit.cluster = None;
         }
@@ -286,15 +292,12 @@ impl CoxPHFit {
                 None => DenseGroups::identity(n),
             };
             let score_order = OnceCell::new();
-            let naive_var = fit.var.clone();
             let scores = match &retained {
                 Some(saved) => score_residuals_at_scales(&fit, &saved.scales)?,
                 None => score_residuals_in_order(&fit, &fit.linear_predictors, &score_order)?,
             };
-            let dfbeta =
-                weighted_rowsum(scores.dot(&naive_var).view(), Some(&fit.weights), &groups);
-            fit.naive_var = Some(naive_var);
-            fit.var = crossprod(&dfbeta);
+            let dfbeta = weighted_rowsum(scores.dot(&fit.var).view(), Some(&fit.weights), &groups);
+            fit.naive_var = Some(std::mem::replace(&mut fit.var, crossprod(&dfbeta)));
             let lp0: Vec<f64> = match &options.init {
                 Some(init) => (0..n)
                     .map(|i| fit.x.row(i).iter().zip(init).map(|(x, b)| x * b).sum())

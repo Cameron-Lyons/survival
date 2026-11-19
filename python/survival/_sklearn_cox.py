@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,11 +21,19 @@ if TYPE_CHECKING:
 def _median_survival_times(
     times: NDArray[np.float64], survival: NDArray[np.float64]
 ) -> NDArray[np.float64]:
-    """R's median rule: the first time at which the survival curve reaches 0.5 or below."""
-    medians = np.empty(survival.shape[0], dtype=np.float64)
+    """R's ``median.survfit`` on the nonincreasing predicted curves."""
+    tolerance = np.sqrt(np.finfo(np.float64).eps)
+    medians = np.full(survival.shape[0], np.nan)
     for row_idx, curve in enumerate(survival):
-        crossing = np.flatnonzero(curve <= 0.5)
-        medians[row_idx] = times[crossing[0]] if crossing.size else np.nan
+        first = len(curve) - bisect_right(curve[::-1], 0.5 + tolerance)
+        if first == len(curve):
+            continue
+        if curve[first] < 0.5 - tolerance:
+            medians[row_idx] = times[first]
+        else:
+            # The R quantile kernel handles plateaus and their final censoring time.
+            quantiles = _surv.quantile_survfit_curves(times, curve, probs=[0.5], conf_int=False)
+            medians[row_idx] = quantiles.quantile[0][0]
     return medians
 
 
@@ -89,7 +98,7 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         )
 
         self.coef_ = np.asarray(self.model_.coefficients, dtype=np.float64)
-        self.event_times_ = np.sort(np.unique(time))
+        self.event_times_ = np.unique(time)
         self.is_fitted_ = True
         return self
 
@@ -151,7 +160,8 @@ class CoxPHEstimator(SurvivalScoreMixin, BaseEstimator, RegressorMixin):
         Returns
         -------
         median_times : ndarray of shape (n_samples,)
-            Predicted median survival times (NaN if survival never drops to 0.5).
+            Predicted median survival times, using the midpoint for a 0.5 plateau
+            and NaN when the curve never reaches 0.5.
         """
         times, survival = self.predict_survival_function(X)
         return _median_survival_times(times, survival)

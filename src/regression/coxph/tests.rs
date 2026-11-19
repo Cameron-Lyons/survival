@@ -241,6 +241,50 @@ fn default_rank_tolerance_preserves_near_collinear_columns() {
 }
 
 #[test]
+fn fractional_case_weights_select_r_robust_variance() {
+    let mut data = lung_like_data();
+    data.x = data.x.select(ndarray::Axis(1), &[0]);
+    data.weights = Some(vec![0.5, 1.0, 1.5, 2.0, 1.25, 0.75, 1.0, 1.0]);
+
+    // survival 3.8-11: coxph(Surv(time, status) ~ x, weights = w)
+    // and coxph(Surv(entry, time, status) ~ x, weights = w).
+    for (entry, variance, naive, score) in [
+        (
+            None,
+            0.9268167084491767,
+            1.3817118206857244,
+            0.7104951107486635,
+        ),
+        (
+            Some(vec![0., 0., 0., 0.5, 1., 2., 3., 2.]),
+            1.099929283541206,
+            1.958332942022061,
+            2.626340062745103,
+        ),
+    ] {
+        data.entry = entry;
+        let fit = CoxPHFit::fit(data.clone(), CoxphOptions::default()).unwrap();
+        assert!((fit.var[(0, 0)] - variance).abs() < 1e-12);
+        assert!((fit.naive_var.unwrap()[(0, 0)] - naive).abs() < 1e-12);
+        assert!((fit.rscore.unwrap() - score).abs() < 1e-12);
+
+        let model_based = CoxPHFit::fit(
+            data.clone(),
+            CoxphOptions {
+                robust: Some(false),
+                ..CoxphOptions::default()
+            },
+        )
+        .unwrap();
+        assert!((model_based.var[(0, 0)] - naive).abs() < 1e-12);
+        assert!(model_based.naive_var.is_none());
+    }
+    data.weights = Some(vec![1., 2., 1., 3., 1., 2., 1., 1.]);
+    let fit = CoxPHFit::fit(data, CoxphOptions::default()).unwrap();
+    assert!(fit.naive_var.is_none());
+}
+
+#[test]
 fn robust_variance_is_the_dfbeta_crossproduct() {
     let data = lung_like_data();
     let options = CoxphOptions {

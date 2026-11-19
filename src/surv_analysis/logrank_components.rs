@@ -186,21 +186,25 @@ fn survdiff_stratum(
                 left += 1;
             }
         }
-        let nrisk: f64 = risk.iter().sum();
-        if deaths > 0.0 {
-            for k in 0..ngroup {
-                exp[k][stratum] += wt * deaths * risk[k] / nrisk;
-            }
-            if nrisk == 1.0 {
+        if deaths == 0.0 {
+            continue;
+        }
+        let nrisk = (n - i - left) as f64;
+        let wt2 = wt * wt;
+        for (j, &nj) in risk.iter().enumerate() {
+            if nj == 0.0 {
                 continue;
             }
-            let wt2 = wt * wt;
-            for j in 0..ngroup {
-                let tmp = wt2 * deaths * risk[j] * (nrisk - deaths) / (nrisk * (nrisk - 1.0));
-                var[[j, j]] += tmp;
-                for k in 0..ngroup {
-                    var[[j, k]] -= tmp * risk[k] / nrisk;
-                }
+            exp[j][stratum] += wt * deaths * nj / nrisk;
+            if deaths == nrisk {
+                continue;
+            }
+            let tmp = wt2 * deaths * nj * (nrisk - deaths) / (nrisk * (nrisk - 1.0));
+            let mut row = var.row_mut(j);
+            let row = row.as_slice_mut().expect("row-major covariance matrix");
+            row[j] += tmp;
+            for (value, &nk) in row.iter_mut().zip(&risk) {
+                *value -= tmp * nk / nrisk;
             }
         }
     }
@@ -210,14 +214,12 @@ fn survdiff_chisq(
     obs_totals: &[f64],
     exp_totals: &[f64],
     var: &Array2<f64>,
-) -> SurvivalResult<(f64, usize)> {
-    let keep: Vec<usize> = (0..exp_totals.len())
-        .filter(|&k| exp_totals[k] > 0.0)
-        .collect();
-    let df = keep.len().saturating_sub(1);
+    keep: &[usize],
+) -> SurvivalResult<f64> {
     if keep.len() < 2 {
-        return Ok((0.0, df));
+        return Ok(0.0);
     }
+    let df = keep.len() - 1;
     let contrast: Vec<f64> = keep[1..]
         .iter()
         .map(|&k| obs_totals[k] - exp_totals[k])
@@ -234,7 +236,7 @@ fn survdiff_chisq(
         .zip(&contrast)
         .map(|(s, c)| s * c)
         .sum::<f64>();
-    Ok((chisq, df))
+    Ok(chisq)
 }
 
 pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<SurvDiffResult> {
@@ -299,7 +301,8 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     }
     let obs_totals: Vec<f64> = obs.iter().map(|row| row.iter().sum()).collect();
     let exp_totals: Vec<f64> = exp.iter().map(|row| row.iter().sum()).collect();
-    let (chisq, df) = survdiff_chisq(&obs_totals, &exp_totals, &var)?;
+    let keep: Vec<usize> = (0..ngroup).filter(|&k| exp_totals[k] > 0.0).collect();
+    let chisq = survdiff_chisq(&obs_totals, &exp_totals, &var, &keep)?;
     let mut counts = vec![0usize; ngroup];
     for &g in &group {
         counts[g] += 1;
@@ -310,8 +313,9 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
         exp,
         var: var.outer_iter().map(|row| row.to_vec()).collect(),
         chisq,
-        pvalue: pchisq(chisq, df as f64, false, false),
-        df,
+        // R evaluates the upper tail with df = -1 when every expected count is zero.
+        pvalue: pchisq(chisq, keep.len() as f64 - 1.0, false, false),
+        df: keep.len().saturating_sub(1),
         strata: data.strata.is_some().then_some(strata_counts),
         group_codes: group_levels,
     })
@@ -547,6 +551,41 @@ mod tests {
         .unwrap();
         assert_eq!(result.chisq, 0.0);
         assert_eq!(result.df, 0);
+        assert!(result.pvalue.is_nan());
+
+        let one_expected = survdiff(
+            &right(vec![1.0, 2.0, 3.0, 4.0], vec![0, 0, 1, 0], vec![1, 1, 2, 2]),
+            0.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(one_expected.chisq, 0.0);
+        assert_eq!(one_expected.df, 0);
+        assert_eq!(one_expected.pvalue, 1.0);
+    }
+
+    #[test]
+    fn weighted_covariance_with_different_groups_in_each_stratum_matches_r() {
+        let data = SurvdiffData::try_new(
+            None,
+            [1.0, 2.0, 2.0, 3.0, 4.0].repeat(3),
+            [1, 1, 0, 1, 1].repeat(3),
+            vec![1, 2, 1, 2, 2, 2, 3, 2, 3, 3, 3, 4, 3, 4, 4],
+            Some(vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3]),
+        )
+        .unwrap();
+        let fit = survdiff(&data, 0.5, true).unwrap();
+        let expected = [
+            [0.39, -0.39, 0.0, 0.0],
+            [-0.39, 0.78, -0.39, 0.0],
+            [0.0, -0.39, 0.78, -0.39],
+            [0.0, 0.0, -0.39, 0.39],
+        ];
+        for (row, expected) in fit.var.iter().zip(expected) {
+            assert!(row.iter().zip(expected).all(|(&x, y)| close(x, y)));
+        }
+        assert!(close(fit.chisq, 1.0897834053848148));
+        assert!(close(fit.pvalue, 0.779540965254935));
     }
 
     #[test]

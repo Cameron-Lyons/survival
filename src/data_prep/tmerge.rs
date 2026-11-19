@@ -4,7 +4,6 @@ use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{BoolVec, FloatVec};
 use crate::internal::validation::{validate_finite, validate_length};
 use pyo3::prelude::*;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TmergeKind {
@@ -191,10 +190,10 @@ enum Placement {
     Early,
     Late,
     Gap,
-    Within,
-    Boundary,
+    Within(usize),
+    Boundary(usize),
     Leading,
-    Trailing,
+    Trailing(usize),
 }
 
 impl Placement {
@@ -203,22 +202,12 @@ impl Placement {
             Self::Early => 0,
             Self::Late => 1,
             Self::Gap => 2,
-            Self::Within => 3,
-            Self::Boundary => 4,
+            Self::Within(_) => 3,
+            Self::Boundary(_) => 4,
             Self::Leading => 5,
-            Self::Trailing => 6,
+            Self::Trailing(_) => 6,
         }
     }
-
-    fn receives_event(self) -> bool {
-        matches!(self, Self::Boundary | Self::Trailing)
-    }
-}
-
-struct Classification {
-    indx1: Vec<Option<usize>>,
-    indx2: Vec<Option<usize>>,
-    placement: Vec<Placement>,
 }
 
 fn classify(
@@ -227,41 +216,32 @@ fn classify(
     stop: &[f64],
     event_keys: &[usize],
     etime: &[f64],
-) -> SurvivalResult<Classification> {
+) -> SurvivalResult<Vec<Placement>> {
     if etime.is_empty() {
-        return Ok(Classification {
-            indx1: Vec::new(),
-            indx2: Vec::new(),
-            placement: Vec::new(),
-        });
+        return Ok(Vec::new());
     }
     let indx1 = neardate(event_keys, etime, base_keys, start, NeardateBest::Prior)?;
     let indx2 = neardate(event_keys, etime, base_keys, stop, NeardateBest::After)?;
-    let placement = indx1
-        .iter()
-        .zip(&indx2)
+    Ok(indx1
+        .into_iter()
+        .zip(indx2)
         .zip(etime)
-        .map(|((&i1, &i2), &t)| match (i1, i2) {
+        .map(|((i1, i2), &t)| match (i1, i2) {
             (None, _) => Placement::Early,
             (_, None) => Placement::Late,
             (Some(i1), Some(i2)) if i2 > i1 => Placement::Gap,
             (Some(i1), Some(i2)) if t == start[i1] || t == stop[i2] => {
                 if i1 == i2 + 1 {
-                    Placement::Boundary
+                    Placement::Boundary(i2)
                 } else if t == start[i1] {
                     Placement::Leading
                 } else {
-                    Placement::Trailing
+                    Placement::Trailing(i2)
                 }
             }
-            _ => Placement::Within,
+            (Some(i1), Some(_)) => Placement::Within(i1),
         })
-        .collect();
-    Ok(Classification {
-        indx1,
-        indx2,
-        placement,
-    })
+        .collect())
 }
 
 pub fn tmerge_step<I: SubjectId>(
@@ -332,9 +312,11 @@ pub fn tmerge_step<I: SubjectId>(
         }
         kept.push((code, row));
     }
+    // Missing times were removed. Stable numeric order keeps tied updates in
+    // input order, including +0.0 and -0.0, so the last update wins.
     kept.sort_by(|a, b| {
         a.0.cmp(&b.0)
-            .then_with(|| update.time[a.1].total_cmp(&update.time[b.1]))
+            .then_with(|| update.time[a.1].partial_cmp(&update.time[b.1]).unwrap())
     });
     let event_codes: Vec<usize> = kept.iter().map(|(code, _)| *code).collect();
     let event_rows: Vec<usize> = kept.iter().map(|(_, row)| *row).collect();
@@ -352,11 +334,7 @@ pub fn tmerge_step<I: SubjectId>(
         }
     }
 
-    let Classification {
-        indx1,
-        mut indx2,
-        mut placement,
-    } = classify(&base_codes, base.start, base.stop, &event_codes, &etime)?;
+    let placement = classify(&base_codes, base.start, base.stop, &event_codes, &etime)?;
 
     let mut tcount = vec![0; 9];
     for p in &placement {
@@ -369,48 +347,36 @@ pub fn tmerge_step<I: SubjectId>(
         .count();
     tcount[8] = missid;
 
-    let mut cuts: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
-    for (k, p) in placement.iter().enumerate() {
-        if *p == Placement::Within {
-            let row = indx1[k].expect("within events have a prior interval");
-            let times = cuts.entry(row).or_default();
-            if times.last() != Some(&etime[k]) {
-                times.push(etime[k]);
-            }
-        }
-    }
-    let mut row = Vec::with_capacity(n);
-    let mut start = Vec::with_capacity(n);
-    let mut stop = Vec::with_capacity(n);
-    let mut censor_rows = Vec::new();
+    // A stable sort by base row keeps its cuts chronological.
+    let mut cuts: Vec<(usize, f64)> = placement
+        .iter()
+        .zip(&etime)
+        .filter_map(|(p, &t)| match p {
+            Placement::Within(row) => Some((*row, t)),
+            _ => None,
+        })
+        .collect();
+    cuts.sort_by_key(|&(row, _)| row);
+    cuts.dedup();
+    let n_out = n + cuts.len();
+    let mut row = Vec::with_capacity(n_out);
+    let mut start = Vec::with_capacity(n_out);
+    let mut stop = Vec::with_capacity(n_out);
+    let mut censor_rows = Vec::with_capacity(cuts.len());
+    let mut next_cut = cuts.iter().copied().peekable();
     for i in 0..n {
         let mut left = base.start[i];
-        if let Some(times) = cuts.get(&i) {
-            for &t in times {
-                censor_rows.push(row.len());
-                row.push(i);
-                start.push(left);
-                stop.push(t);
-                left = t;
-            }
+        while let Some((_, t)) = next_cut.next_if(|&(base_row, _)| base_row == i) {
+            censor_rows.push(row.len());
+            row.push(i);
+            start.push(left);
+            stop.push(t);
+            left = t;
         }
         row.push(i);
         start.push(left);
         stop.push(base.stop[i]);
     }
-    let out_codes: Vec<usize> = row.iter().map(|&i| base_codes[i]).collect();
-    if !cuts.is_empty() {
-        let refreshed = classify(&out_codes, &start, &stop, &event_codes, &etime)?;
-        indx2 = refreshed.indx2;
-        placement = refreshed.placement;
-        for p in placement.iter_mut() {
-            if *p == Placement::Within {
-                *p = Placement::Boundary;
-            }
-        }
-    }
-    let n_out = row.len();
-
     let mut step = TmergeStep {
         row,
         start,
@@ -423,9 +389,10 @@ pub fn tmerge_step<I: SubjectId>(
         event_source: Vec::new(),
         event_value: Vec::new(),
     };
+    let out_codes = || step.row.iter().map(|&i| base_codes[i]).collect::<Vec<_>>();
     match kind {
         TmergeKind::Tdc => {
-            let index = tmerge_lookup(&out_codes, &step.start, &event_codes, &etime)?;
+            let index = tmerge_lookup(&out_codes(), &step.start, &event_codes, &etime)?;
             step.source = index.iter().map(|k| k.map(|k| event_rows[k])).collect();
         }
         TmergeKind::Cumtdc => {
@@ -443,30 +410,41 @@ pub fn tmerge_step<I: SubjectId>(
                 None if update.value.is_none() => vec![0.0; n_out],
                 None => vec![default; n_out],
             };
-            step.cumulative =
-                tmerge_cumulative(&out_codes, &step.start, &newvar, &nid, &ntime, &increments)?;
+            step.cumulative = tmerge_cumulative(
+                &out_codes(),
+                &step.start,
+                &newvar,
+                &nid,
+                &ntime,
+                &increments,
+            )?;
         }
         TmergeKind::Event | TmergeKind::Cumevent => {
-            let mut values: Vec<f64> = event_rows
-                .iter()
-                .map(|&row| update.value.map_or(1.0, |v| v[row]))
-                .collect();
-            let mut ykeep = vec![true; values.len()];
-            if kind == TmergeKind::Cumevent {
-                let mut running = vec![0.0; representatives.len()];
-                for (k, value) in values.iter_mut().enumerate() {
-                    ykeep[k] = *value != 0.0;
-                    running[event_codes[k]] += *value;
-                    *value = running[event_codes[k]];
+            let mut running =
+                (kind == TmergeKind::Cumevent).then(|| vec![0.0; representatives.len()]);
+            for (k, &source) in event_rows.iter().enumerate() {
+                let mut value = update.value.map_or(1.0, |v| v[source]);
+                if let Some(totals) = &mut running {
+                    if value == 0.0 {
+                        continue;
+                    }
+                    totals[event_codes[k]] += value;
+                    value = totals[event_codes[k]];
                 }
-            }
-            for k in 0..values.len() {
-                if placement[k].receives_event() && ykeep[k] {
-                    step.event_row
-                        .push(indx2[k].expect("boundary events have an interval"));
-                    step.event_source.push(event_rows[k]);
-                    step.event_value.push(values[k]);
-                }
+                let base_row = match placement[k] {
+                    Placement::Within(row)
+                    | Placement::Boundary(row)
+                    | Placement::Trailing(row) => row,
+                    _ => continue,
+                };
+                // Each earlier cut inserted one row before this endpoint.
+                // An event on the cut itself belongs to the interval it ends.
+                let earlier = cuts.partition_point(|&(row, t)| {
+                    row < base_row || (row == base_row && t < etime[k])
+                });
+                step.event_row.push(base_row + earlier);
+                step.event_source.push(source);
+                step.event_value.push(value);
             }
         }
     }

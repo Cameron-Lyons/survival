@@ -113,27 +113,28 @@ pub enum IdKey {
     Str(String),
 }
 
-impl IdKey {
-    fn numeric(&self) -> Option<f64> {
-        match self {
-            Self::Int(v) => Some(*v as f64),
-            Self::Float(bits) => Some(f64::from_bits(*bits)),
-            Self::Str(_) => None,
-        }
-    }
+fn cmp_int_float(integer: i64, bits: u64) -> Ordering {
+    let float = f64::from_bits(bits);
+    (integer as f64).total_cmp(&float).then_with(|| {
+        // The cast of a large integer can round onto a neighboring float.
+        // Use i128 here because i64::MAX itself rounds up to 2^63.
+        i128::from(integer)
+            .cmp(&(float as i128))
+            // Public callers can construct a noncanonical Float key directly.
+            .then(Ordering::Less)
+    })
 }
 
 impl Ord for IdKey {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            (Self::Float(a), Self::Float(b)) => f64::from_bits(*a).total_cmp(&f64::from_bits(*b)),
+            (Self::Int(a), Self::Float(b)) => cmp_int_float(*a, *b),
+            (Self::Float(a), Self::Int(b)) => cmp_int_float(*b, *a).reverse(),
             (Self::Str(a), Self::Str(b)) => a.cmp(b),
             (Self::Str(_), _) => Ordering::Greater,
             (_, Self::Str(_)) => Ordering::Less,
-            _ => self
-                .numeric()
-                .unwrap_or(f64::NAN)
-                .total_cmp(&other.numeric().unwrap_or(f64::NAN)),
         }
     }
 }
@@ -157,7 +158,7 @@ impl SubjectId for IdValue {
         match self {
             Self::Int(v) => IdKey::Int(*v),
             Self::Float(v) => {
-                if v.fract() == 0.0 && v.abs() < 9.007_199_254_740_992e15 {
+                if v.fract() == 0.0 && (i64::MIN as f64..-(i64::MIN as f64)).contains(v) {
                     IdKey::Int(*v as i64)
                 } else {
                     IdKey::Float(v.to_bits())
@@ -290,6 +291,40 @@ impl SubsetRenumbering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_numeric_ids_match_only_exactly_represented_integers() {
+        let large = 1_i64 << 53;
+        for value in [i64::MIN, -large, large, large + 2, i64::MAX - 1023] {
+            assert_eq!(
+                IdValue::Float(value as f64).key(),
+                IdValue::Int(value).key()
+            );
+        }
+        assert_ne!(
+            IdValue::Float(large as f64).key(),
+            IdValue::Int(large + 1).key()
+        );
+        assert_ne!(
+            IdValue::Float(i64::MAX as f64).key(),
+            IdValue::Int(i64::MAX).key()
+        );
+
+        // A sorted map and a hash map must distinguish the same public keys,
+        // even when a caller constructs an integral Float key directly.
+        let keys = [
+            IdKey::Int(large),
+            IdKey::Float((large as f64).to_bits()),
+            IdKey::Int(large + 1),
+            IdKey::Int(i64::MAX),
+            IdKey::Float((i64::MAX as f64).to_bits()),
+        ];
+        for (i, left) in keys.iter().enumerate() {
+            for (j, right) in keys.iter().enumerate() {
+                assert_eq!(left.cmp(right), i.cmp(&j));
+            }
+        }
+    }
 
     /// The hash-map numbering every id type had before the table paths.
     fn reference_codes<I: SubjectId>(values: &[I]) -> (Vec<usize>, Vec<I>) {
