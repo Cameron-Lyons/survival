@@ -108,6 +108,9 @@ def test_surv_interval_and_interval2_match_r_columns():
     assert bad.event == (3, None)
     with pytest.warns(UserWarning, match="Invalid interval: start > stop"):
         assert r.Surv([5, 1], [2, 3], type="interval2").event == (None, 3)
+    with pytest.warns(UserWarning, match="Invalid interval: start > stop"):
+        invalid = r.Surv([math.inf, 2], [3, -math.inf], type="interval2")
+    assert invalid.as_matrix() == [[3.0, 1.0, None], [2.0, 1.0, None]]
 
 
 def test_surv_multistate_uses_factor_levels_and_states():

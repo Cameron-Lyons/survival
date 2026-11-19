@@ -1,4 +1,4 @@
-use super::survfitkm::{rows_by_curve, strata_index};
+use super::survfitkm::strata_index;
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
@@ -282,10 +282,12 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     if !rho.is_finite() {
         return Err(SurvivalError::invalid_input("rho must be finite"));
     }
+    let corrected;
     let (start, time) = if timefix {
-        aeq_counting(data.start.as_deref(), &data.time)?
+        corrected = aeq_counting(data.start.as_deref(), &data.time)?;
+        (corrected.0.as_deref(), corrected.1.as_slice())
     } else {
-        (data.start.clone(), data.time.clone())
+        (data.start.as_deref(), data.time.as_slice())
     };
     let n = time.len();
     let (group_levels, group) = strata_index(Some(&data.group), n);
@@ -295,22 +297,39 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     }
     let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
     let nstrat = strata_levels.len();
-    // Each tied time is consumed as a block, so status need not be a sort key.
-    let rows_by_stratum: Vec<Vec<usize>> = rows_by_curve(&stratum, nstrat)
-        .into_iter()
-        .map(|rows| ordered_subset(&rows, &time, true))
-        .collect();
+    let mut counts = vec![0; ngroup];
+    let mut event_counts = vec![0usize; nstrat];
+    let mut rows_by_stratum = vec![Vec::new(); nstrat];
+    for (i, &s) in stratum.iter().enumerate() {
+        counts[group[i]] += 1;
+        event_counts[s] += data.status[i] as usize;
+        rows_by_stratum[s].push(i);
+    }
 
     let mut obs = vec![vec![0.0; nstrat]; ngroup];
     let mut exp = vec![vec![0.0; nstrat]; ngroup];
     let mut var = Array2::zeros((ngroup, ngroup));
-    let strata_counts: Vec<usize> = rows_by_stratum.iter().map(Vec::len).collect();
-    for (s, rows) in rows_by_stratum.iter().enumerate() {
+    let strata_counts = rows_by_stratum.iter().map(Vec::len).collect();
+    for (s, mut rows) in rows_by_stratum.into_iter().enumerate() {
+        let events = event_counts[s];
+        if events == 0 {
+            continue;
+        }
+        // Early censors enter no event risk set. Only search for them when censors predominate.
+        if events < rows.len() - events {
+            let first_event = rows
+                .iter()
+                .filter(|&&i| data.status[i] == 1)
+                .map(|&i| time[i])
+                .fold(f64::INFINITY, f64::min);
+            rows.retain(|&i| time[i] >= first_event);
+        }
+        let rows = ordered_subset(&rows, time, true);
         survdiff_stratum(
-            rows,
+            &rows,
             s,
-            start.as_deref(),
-            &time,
+            start,
+            time,
             &data.status,
             &group,
             rho,
@@ -323,10 +342,6 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     let exp_totals: Vec<f64> = exp.iter().map(|row| row.iter().sum()).collect();
     let keep: Vec<usize> = (0..ngroup).filter(|&k| exp_totals[k] > 0.0).collect();
     let chisq = survdiff_chisq(&obs_totals, &exp_totals, &var, &keep)?;
-    let mut counts = vec![0usize; ngroup];
-    for &g in &group {
-        counts[g] += 1;
-    }
     Ok(SurvDiffResult {
         n: counts,
         obs,
@@ -639,6 +654,26 @@ mod tests {
                 assert_eq!(mixed.pvalue, event.pvalue);
             }
         }
+    }
+
+    #[test]
+    fn early_censors_count_toward_samples_and_rounded_event_ties() {
+        let data = SurvdiffData::try_new(
+            None,
+            vec![1.0, 2.0, 2.0 + 1e-12, 3.0, 4.0, 4.0, 5.0, 1.0, 4.0, 2.0],
+            vec![0, 0, 1, 1, 0, 1, 0, 0, 0, 0],
+            vec![25, 11, 17, 11, 17, 11, 17, 25, 17, 11],
+            Some(vec![7, 7, 7, 7, 7, 7, 7, 9, 9, 9]),
+        )
+        .unwrap();
+        // R survival 3.8-11, Surv(time, status) ~ group + strata(s), rho = .5.
+        let fit = survdiff(&data, 0.5, true).unwrap();
+        assert_eq!(fit.group_codes, vec![11, 17, 25]);
+        assert_eq!(fit.n, vec![4, 4, 2]);
+        assert_eq!(fit.strata, Some(vec![7, 3]));
+        assert!(close(fit.exp[0][0], 1.219958602935));
+        assert_eq!(fit.exp[2], vec![0.0, 0.0]);
+        assert!(close(fit.chisq, 0.391403041373187));
     }
 
     #[test]

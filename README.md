@@ -311,7 +311,8 @@ The R facade's low-level `coxsurv.fit` and `survfitcoxph.fit` entry points use
 an `O(n log n)` Rust risk-set sweep for weighted, stratified, tied-event, and
 counting-process baselines, while retaining R-compatible curve and uncertainty
 shapes for ordinary predictions and individual time-dependent trajectories.
-`survdiff` uses the same right-censored and delayed-entry response forms.
+The R-style `survdiff` tests right-censored responses. For delayed entry, pass
+the interval starts and stops to `kernels.survdiff`.
 `coxph` uses Efron's tie handling by default, matching R, and also accepts
 `ties="breslow"` or the compatibility alias `method="breslow"`.
 Penalty terms (`ridge`, `pspline`, `frailty`) are fitted by a port of R's

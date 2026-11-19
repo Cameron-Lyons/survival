@@ -846,7 +846,9 @@ def _data_row_labels(data: Any, n: int) -> tuple[str, ...] | None:
     return None
 
 
-def _data_row_count(data: Any, formula: str | None = None) -> int:
+def _data_row_count(
+    data: Any, formula: str | None = None, terms: _FormulaTerms | None = None
+) -> int:
     """Rows from the response/formula variables, or the data's explicit rows."""
 
     if isinstance(data, _FormulaRows):
@@ -855,7 +857,7 @@ def _data_row_count(data: Any, formula: str | None = None) -> int:
     names = (
         spec.columns
         if spec is not None and spec.columns
-        else _formula_columns(formula, data)
+        else _formula_columns(formula, data, terms)
         if formula is not None
         else _data_column_names(data)
     )
@@ -873,17 +875,19 @@ def _data_row_count(data: Any, formula: str | None = None) -> int:
         raise ValueError("data must have at least one column") from exc
 
 
-def _formula_input_row_count(data: Any, formula: str, row_aligned: Mapping[str, Any]) -> int:
+def _formula_input_row_count(
+    data: Any, formula: str, row_aligned: Mapping[str, Any], terms: _FormulaTerms | None = None
+) -> int:
     """Evaluated variables/extras supply rows before a variable-free frame's count."""
 
     spec = _response_spec(formula)
-    if (spec is not None and spec.columns) or _formula_columns(formula, data):
-        return _data_row_count(data, formula)
+    if (spec is not None and spec.columns) or _formula_columns(formula, data, terms):
+        return _data_row_count(data, formula, terms)
     for name, values in row_aligned.items():
         if values is not None:
             source = _column_source(data, values) if isinstance(values, str) else values
             return _column_length(source, name, _coerce_array_like)
-    return _data_row_count(data, formula)
+    return _data_row_count(data, formula, terms)
 
 
 def _covariate_factors(term: _CovariateSpec) -> tuple[_CovariateTerm, ...]:
@@ -1248,18 +1252,23 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
     return [term.column]
 
 
-def _formula_rhs_terms(formula: str, data: Any) -> _FormulaTerms:
+def _formula_rhs_terms(formula: str, data: Any, *, special_cluster: bool = True) -> _FormulaTerms:
     """The terms of *formula*'s right-hand side, a ``.`` standing for the other columns
     of *data*."""
 
     spec = _response_spec(formula)
     _lhs, _sep, rhs = formula.partition("~")
-    return _split_terms(rhs, _dot_terms(data, [] if spec is None else list(spec.columns)))
+    return _split_terms(
+        rhs,
+        _dot_terms(data, [] if spec is None else list(spec.columns)),
+        special_cluster=special_cluster,
+    )
 
 
-def _formula_columns(formula: str, data: Any) -> list[str]:
+def _formula_columns(formula: str, data: Any, terms: _FormulaTerms | None = None) -> list[str]:
     spec = _response_spec(formula)
-    terms = _formula_rhs_terms(formula, data)
+    if terms is None:
+        terms = _formula_rhs_terms(formula, data)
     columns = (
         ([] if spec is None else list(spec.columns))
         + _covariate_columns(terms.variables)
@@ -1385,6 +1394,7 @@ def _formula_data_rows(
     *,
     row_names: bool = True,
     response: bool = True,
+    terms: _FormulaTerms | None = None,
 ) -> _FormulaRows:
     """``data[rows, ]`` restricted to the variables *formula* uses.
 
@@ -1396,7 +1406,7 @@ def _formula_data_rows(
 
     return _data_rows(
         data,
-        _formula_columns(formula, data),
+        _formula_columns(formula, data, terms),
         rows,
         n,
         row_names=row_names,
@@ -1408,12 +1418,15 @@ def _subset_formula_inputs(
     formula: str,
     data: Any,
     subset: Any,
+    terms: _FormulaTerms | None = None,
+    /,
     **row_aligned: Any,
 ) -> tuple[_FormulaRows, dict[str, Any]]:
     data, row_aligned = _prepare_formula_inputs(data, subset=subset, **row_aligned)
     subset = row_aligned.pop("subset")
-    terms = _formula_rhs_terms(formula, data)
-    n = _formula_input_row_count(data, formula, row_aligned)
+    if terms is None:
+        terms = _formula_rhs_terms(formula, data)
+    n = _formula_input_row_count(data, formula, row_aligned, terms)
     data = _with_response_cache(data, _response_spec(formula), n)
     data = _with_strata_cache(data, _strata_specs(terms), n)
     data = _with_evaluated_variables(data, _frame_variables(terms), n)
@@ -1422,7 +1435,7 @@ def _subset_formula_inputs(
         name: _subset_optional_sequence(values, indices, name)
         for name, values in row_aligned.items()
     }
-    return _formula_data_rows(formula, data, indices, n), filtered
+    return _formula_data_rows(formula, data, indices, n, terms=terms), filtered
 
 
 def _with_response_cache(data: Any, spec: _SurvResponseSpec | None, n: int) -> Any:
@@ -1533,6 +1546,8 @@ def _apply_formula_na_action(
     formula: str,
     data: Any,
     na_action: str | None,
+    terms: _FormulaTerms | None = None,
+    /,
     **row_aligned: Any,
 ) -> tuple[Any, dict[str, Any], list[int]]:
     """``na.action`` on the formula's variables and the row-aligned arguments together:
@@ -1544,8 +1559,9 @@ def _apply_formula_na_action(
 
     data, row_aligned = _prepare_formula_inputs(data, **row_aligned)
     action = _normalize_na_action(na_action)
-    terms = _formula_rhs_terms(formula, data)
-    n = _formula_input_row_count(data, formula, row_aligned)
+    if terms is None:
+        terms = _formula_rhs_terms(formula, data)
+    n = _formula_input_row_count(data, formula, row_aligned, terms)
     response_spec = _response_spec(formula)
     data = _with_response_cache(data, response_spec, n)
     data = _with_strata_cache(data, _strata_specs(terms), n)
@@ -1561,7 +1577,7 @@ def _apply_formula_na_action(
     columns = (
         list(dict.fromkeys(_covariate_columns(variables) + terms.clusters))
         if normalized
-        else _formula_columns(formula, data)
+        else _formula_columns(formula, data, terms)
     )
     required: set[str] = set()
     if response_spec is not None and not normalized:
@@ -1584,7 +1600,7 @@ def _apply_formula_na_action(
     filtered = {
         name: _subset_optional_sequence(values, keep, name) for name, values in row_aligned.items()
     }
-    return _formula_data_rows(formula, data, keep, n), filtered, sorted(missing)
+    return _formula_data_rows(formula, data, keep, n, terms=terms), filtered, sorted(missing)
 
 
 def _formula_missing_rows(
@@ -2016,6 +2032,7 @@ def _materialize_formula_terms(terms: _CachedFormulaTerms) -> _FormulaTerms:
 def _split_terms_cached(
     rhs: str,
     dot_terms: tuple[str, ...] | None = None,
+    special_cluster: bool = True,
 ) -> _CachedFormulaTerms:
     expansion = _FormulaExpansion(dot_terms)
     parsed_terms = [
@@ -2024,25 +2041,27 @@ def _split_terms_cached(
         if not any(factor.special == "offset" for factor in _covariate_factors(item))
     ]
     variables = expansion.variables
+    cluster_terms = (
+        [term for term in variables if term.special == "cluster"] if special_cluster else []
+    )
+    if len(cluster_terms) > 1:
+        raise ValueError("a formula cannot have multiple cluster terms")
     covariates = [
         item
         for item in parsed_terms
-        if isinstance(item, _InteractionTerm) or (not item.strata and item.special != "cluster")
+        if isinstance(item, _InteractionTerm) or (not item.strata and item not in cluster_terms)
     ]
     model_terms: list[_FormulaModelTerm] = [
         _ModelStrataTerm(item.strata)
         if isinstance(item, _CovariateTerm) and item.strata
         else _ModelClusterTerm(item)
-        if isinstance(item, _CovariateTerm) and item.special == "cluster"
+        if isinstance(item, _CovariateTerm) and item in cluster_terms
         else _ModelCovariateTerm(item)
         for item in parsed_terms
     ]
 
     offsets = [replace(term, special=None) for term in variables if term.special == "offset"]
     _append_unique(model_terms, [_ModelOffsetTerm(term) for term in offsets])
-    cluster_terms = [term for term in variables if term.special == "cluster"]
-    if len(cluster_terms) > 1:
-        raise ValueError("a formula cannot have multiple cluster terms")
     clusters = _covariate_columns(cluster_terms)
     if cluster_terms:
         cluster_term = cluster_terms[0]
@@ -2078,7 +2097,9 @@ def _split_terms_cached(
     )
 
 
-def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
+def _split_terms(
+    rhs: str, dot_terms: list[str] | None = None, *, special_cluster: bool = True
+) -> _FormulaTerms:
     if len(_formula_tokens(rhs)) > 1 and any(
         rhs.startswith(op, idx) for idx, _char in _top_level(rhs) for op in ("==", "!=", "<", ">")
     ):
@@ -2087,7 +2108,7 @@ def _split_terms(rhs: str, dot_terms: list[str] | None = None) -> _FormulaTerms:
             "e.g. ~ I(age > 60) + sex"
         )
     dot_key = None if dot_terms is None else tuple(dot_terms)
-    return _materialize_formula_terms(_split_terms_cached(rhs, dot_key))
+    return _materialize_formula_terms(_split_terms_cached(rhs, dot_key, special_cluster))
 
 
 def _formula_cluster_values(data: Any, terms: _FormulaTerms, n: int) -> Sequence[Any] | None:

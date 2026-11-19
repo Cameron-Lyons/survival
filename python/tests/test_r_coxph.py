@@ -469,6 +469,26 @@ def test_predict_newdata_matches_r(fit, strata_fit):
         r.predict(strata_fit, {"age": [50], "rx": [3]})
 
 
+def test_expected_interval_errors_across_repeated_stratum_queries(cgd):
+    fit = r.coxph("Surv(tstart, tstop, status) ~ age + height + strata(treat)", cgd)
+    newdata = {
+        "tstart": [-1, 100, 200, 150, 15],
+        "tstop": [0, 120, 400, 180, 90],
+        "status": [1, 0, 1, 0, 1],
+        "age": [5, 12, 6, 8, 7],
+        "height": [120, 145, 130, 135, 141],
+        "treat": ["placebo", "rIFN-g", "rIFN-g", "placebo", "placebo"],
+    }
+    # Stock survival 3.8-11 predict.coxph(type = "expected", se.fit = TRUE).
+    counts = [0, 0.0539792363018638, 0.79650331602801, 0.112397792214248, 0.218517425737434]
+    errors = [0, 0.0316241546443336, 0.366386609905779, 0.0669542251619452, 0.0971041756364371]
+    for rows in [[1, 2], [4, 0, 3], [2, 0, 3, 1]]:
+        data = {name: [column[i] for i in rows] for name, column in newdata.items()}
+        result = r.predict(fit, data, type="expected", se_fit=True)
+        assert result.fit == approx([counts[i] for i in rows])
+        assert result.se_fit == approx([errors[i] for i in rows])
+
+
 def test_residual_types_match_r(fit):
     assert r.residuals(fit)[:3] == approx([0.818224210164987, 0.444577488815711, 0.69498818752843])
     assert r.residuals(fit, type="deviance")[:3] == approx(

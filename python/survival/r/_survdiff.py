@@ -18,13 +18,15 @@ from ._formula import (
     _apply_formula_na_action,
     _column_source,
     _covariate_term_name,
+    _formula_response_spec,
+    _formula_rhs_terms,
     _na_action_record,
     _offset_vector,
-    _parse_formula,
     _prepare_formula_inputs,
     _strata_keep,
     _strata_specs,
     _subset_formula_inputs,
+    _surv_from_spec,
     _term_values,
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
@@ -54,19 +56,18 @@ def _formula_inputs(
     Surv,
     dict[str, Any],
     StrataFactor | None,
-    list[str] | None,
     list[float] | None,
     NaAction | None,
 ]:
     """The model frame: the response, the group columns, the strata factor and the offset."""
 
+    # survdiff's only grouping special is strata(). cluster(x) is an ordinary group.
+    terms = _formula_rhs_terms(formula, data, special_cluster=False)
     if subset is not None:
-        data, _aligned = _subset_formula_inputs(formula, data, subset)
-    data, _aligned, removed = _apply_formula_na_action(formula, data, na_action)
-    y, terms = _parse_formula(formula, data)
+        data, _aligned = _subset_formula_inputs(formula, data, subset, terms)
+    data, _aligned, removed = _apply_formula_na_action(formula, data, na_action, terms)
+    y = _surv_from_spec(data, _formula_response_spec(formula))
     n = len(y)
-    if terms.clusters:
-        raise ValueError("cluster() terms are not valid for this function")
     columns: dict[str, Any] = {}
     for model_term in terms.model_terms:
         if isinstance(model_term, _ModelCovariateTerm):
@@ -77,14 +78,11 @@ def _formula_inputs(
             values = _column_source(data, term.column) if plain else _term_values(data, term, n)
             columns[_covariate_term_name(term)] = values
     strata_terms = _strata_specs(terms)
-    strata = _strata_keep(data, strata_terms) if strata_terms else None
-    strata_levels = (
-        list(_strata_keep(data, strata_terms, drop_unused=False).levels) if strata_terms else None
-    )
+    strata = _strata_keep(data, strata_terms, drop_unused=False) if strata_terms else None
     offset = _offset_vector(data, terms.offsets, n) if terms.offsets else None
     if offset is not None and (columns or strata is not None):
         raise ValueError("Cannot have both an offset and groups")
-    return y, columns, strata, strata_levels, offset, _na_action_record(na_action, removed)
+    return y, columns, strata, offset, _na_action_record(na_action, removed)
 
 
 def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvdiffResult:
@@ -105,14 +103,6 @@ def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvdiffResult:
     )
 
 
-def _strata_table(strata: StrataFactor, counts: Any, levels: list[str] | None) -> dict[str, int]:
-    """R's ``table(strata.keep)``: every level of the strata evaluated before row
-    removal, with zero for one that the removal emptied."""
-
-    observed = dict(zip(strata.levels, [int(value) for value in counts], strict=True))
-    return {level: observed.get(level, 0) for level in (levels or list(observed))}
-
-
 def _k_sample(
     y: Surv,
     group_codes: list[int],
@@ -120,7 +110,6 @@ def _k_sample(
     strata: StrataFactor | None,
     rho: float,
     timefix: bool,
-    strata_levels: list[str] | None = None,
 ) -> SurvdiffResult:
     strata_codes = (
         None
@@ -128,7 +117,7 @@ def _k_sample(
         else _complete_codes(strata, "missing values in the grouping variables")
     )
     fit = _core.survdiff(
-        list(y.time),
+        y.time,
         y._event_codes(),
         group_codes,
         strata=strata_codes,
@@ -146,11 +135,7 @@ def _k_sample(
         pvalue=fit.pvalue,
         df=int(fit.df),
         groups=group_levels,
-        strata=(
-            None
-            if strata_counts is None or strata is None
-            else _strata_table(strata, strata_counts, strata_levels)
-        ),
+        strata=None if strata is None else dict(zip(strata.levels, strata.counts, strict=True)),
     )
 
 
@@ -182,9 +167,7 @@ def survdiff(
         raise ValueError("invalid value for timefix option")
     rho = _finite_float(rho, "rho")
     if isinstance(response, str):
-        y, columns, strata, strata_levels, offset, omitted = _formula_inputs(
-            response, data, subset, na_action
-        )
+        y, columns, strata, offset, omitted = _formula_inputs(response, data, subset, na_action)
         if group is not None:
             raise ValueError("group is only used with a Surv response")
         _response_check(y)
@@ -209,8 +192,8 @@ def survdiff(
         if aligned["group"] is None:
             raise ValueError("No groups to test")
         codes, levels = _curve_factor({"group": aligned["group"]}, len(y), shortlabel=True)
-        strata = strata_levels = None
+        strata = None
     else:
         raise TypeError("The 'formula' argument is not a formula")
-    result = _k_sample(y, codes, levels, strata, rho, bool(timefix), strata_levels)
+    result = _k_sample(y, codes, levels, strata, rho, bool(timefix))
     return replace(result, na_action=omitted)

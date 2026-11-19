@@ -27,7 +27,9 @@ impl WeightRange {
         // Several entries can leave the curve together. Within each right-censored
         // cluster the forward sweep removes one row at a time and resets empty clusters.
         let removed = if counting { n } else { 1.0 };
-        self.largest > f64::MAX / n
+        // Leave headroom for rounding in both the bound and the running sum.
+        // In particular, three copies of the rounded MAX / 3 sum to infinity.
+        (self.rows > 1 && self.largest > (f64::MAX / 2.0) / n)
             || (self.smallest < self.largest
                 && self.smallest < self.largest * (removed * f64::EPSILON.sqrt()))
     }
@@ -36,7 +38,7 @@ impl WeightRange {
 /// Subtracting a large case weight can erase the remaining risk set.
 /// Use exact updates when even a single small weight could lose half its digits
 /// against the total, or when summing the finite weights could overflow.
-pub(super) fn needs_exact_updates(rows: &[usize], weights: &[f64], counting: bool) -> bool {
+pub(crate) fn needs_exact_updates(rows: &[usize], weights: &[f64], counting: bool) -> bool {
     let mut range = WeightRange::EMPTY;
     for &row in rows {
         range.include(weights[row]);
@@ -46,7 +48,7 @@ pub(super) fn needs_exact_updates(rows: &[usize], weights: &[f64], counting: boo
 
 /// Keep ordinary cluster updates when only the weights of different clusters
 /// are far apart. Those weights are never subtracted from each other.
-pub(super) fn cluster_weights(
+pub(crate) fn cluster_weights(
     rows: &[usize],
     weights: &[f64],
     cluster: &[usize],
@@ -71,12 +73,12 @@ pub(super) fn cluster_weights(
 /// integer totals remain exact across insertions and deletions at any scale:
 /// a 53-bit significand times at most usize::MAX rows fits in an i128.
 #[derive(Default)]
-pub(super) struct RiskWeight {
+pub(crate) struct RiskWeight {
     bins: BTreeMap<u16, i128>,
 }
 
 impl RiskWeight {
-    pub(super) fn add(&mut self, weight: f64) {
+    pub(crate) fn add(&mut self, weight: f64) {
         if weight == 0.0 {
             return;
         }
@@ -97,7 +99,25 @@ impl RiskWeight {
         }
     }
 
-    pub(super) fn total(&self) -> f64 {
+    /// The sum of finite weights can exceed f64::MAX. Scaling each exponent
+    /// bin by 2^-1023 keeps the normalized sum in range in that case.
+    pub(crate) fn log2_total(&self) -> f64 {
+        let total = self.total();
+        if total.is_finite() {
+            return total.log2();
+        }
+        let scaled = self
+            .bins
+            .iter()
+            .map(|(&exponent, &significand)| {
+                (significand as f64 / (1_u64 << 52) as f64)
+                    * 2.0_f64.powi(i32::from(exponent) - 2046)
+            })
+            .sum::<f64>();
+        scaled.log2() + 1023.0
+    }
+
+    pub(crate) fn total(&self) -> f64 {
         self.bins
             .iter()
             .fold(0.0, |sum, (&exponent, &significand)| {
