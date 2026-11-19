@@ -6,6 +6,7 @@ Reference values were computed with R 4.5.3 and survival 3.8-12, calling
 
 import math
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -54,6 +55,33 @@ CASE_2124 = {
 
 def _counting_fit(case, **kwargs):
     return core.coxph_fit(case["time"], case["status"], case["x"], entry=case["entry"], **kwargs)
+
+
+def test_exact_ties_with_nested_and_delayed_risk_sets_match_r():
+    # R survival 3.8-11: coxph(Surv(start, stop, event) ~ x + z + strata(s),
+    # data, ties="exact", init=c(.1,-.2)).
+    j, s = np.divmod(np.arange(81), 2)
+    stop = (j // 4 + 1).astype(float)
+    start = np.where((s == 0) | (j % 7 == 0), -1, j % 5 * 0.2 + np.maximum(0, stop - 3))
+    start = np.minimum(start, stop - 0.1)
+    event = ((j % 4 != 0) & (j % 13 != 1)).astype(int)
+    x, z = (j % 9 - 4) / 3, ((j * 7 + s) % 11) / 4 - 1
+    # This censored interval follows every death in its otherwise nested stratum.
+    start[-1], stop[-1], x[-1], z[-1] = 10.1, 10.2, 2.0, -3.0
+    data = {"start": start, "stop": stop, "event": event, "x": x, "z": z, "s": s}
+    fit = survival.r.coxph(
+        "Surv(start, stop, event) ~ x + z + strata(s)", data, ties="exact", init=[0.1, -0.2]
+    )
+    np.testing.assert_allclose(
+        fit.coefficients, [0.182370442798909, -0.0791966614229612], rtol=1e-11
+    )
+    np.testing.assert_allclose(fit.loglik, [-107.925686407365, -107.643905038612], rtol=1e-12)
+    np.testing.assert_allclose(
+        fit.var,
+        [[0.0314977266253302, 0.00314048007689207], [0.00314048007689207, 0.0367087101197348]],
+        rtol=1e-11,
+    )
+    assert fit.score == pytest.approx(0.564949567393137, rel=1e-11)
 
 
 def test_counting_fit_keeps_small_risk_sets_exact():

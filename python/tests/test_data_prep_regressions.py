@@ -368,6 +368,34 @@ def test_ids_convert_from_python_and_numpy_scalars():
         survival.kernels.cluster([1, None])
 
 
+@pytest.mark.parametrize("subject", [2**63 + 1, np.uint64(2**63 + 1), -(2**63) - 1, 2**1024])
+def test_native_id_kernels_reject_lossy_integer_conversions(subject):
+    kernels = survival.kernels
+    with pytest.raises(OverflowError, match="integer id cannot be represented exactly"):
+        kernels.cluster([subject, subject])
+    with pytest.raises(OverflowError, match="integer id cannot be represented exactly"):
+        kernels.lvcf([2**63, subject], [False, True])
+    with pytest.raises(OverflowError, match="integer id cannot be represented exactly"):
+        kernels.neardate([2**63], [1.0], [subject], [1.0])
+    with pytest.raises(OverflowError, match="integer id cannot be represented exactly"):
+        kernels.tmerge_step([2**63], [0.0], [2.0], [subject], [1.0], "tdc")
+
+
+def test_native_numeric_ids_match_exactly_across_integer_and_float_types():
+    large = 2**63
+    other = large + 2048  # The next representable double.
+    ids = [np.uint64(large), float(large), large - 1, other, np.float64(other), 2**200]
+    assert survival.kernels.cluster(ids).codes == [0, 0, 1, 2, 2, 3]
+    assert survival.kernels.neardate(ids, [1] * 6, [other, large], [1, 1]) == [
+        1,
+        1,
+        None,
+        0,
+        0,
+        None,
+    ]
+
+
 def _rtt_right():
     return {
         "time": [1, 2, 2, 3, 3, 3, 4, 5, 5, 6, 7, 8, 2, 4, 4, 9],

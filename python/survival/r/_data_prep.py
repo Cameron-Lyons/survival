@@ -15,7 +15,9 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from importlib import import_module
 from itertools import chain, compress
+from operator import index
 from typing import Any, TypeVar, cast
 
 import numpy as np
@@ -27,6 +29,8 @@ from ._coerce import (
     _categories,
     _category_codes,
     _DEFAULT_NA_ACTION,
+    _EXACT_INTEGER,
+    _factor,
     _factor_levels,
     _finite_float,
     _float_vector,
@@ -38,7 +42,6 @@ from ._coerce import (
     _materialize_labels,
     _missing_flags,
     _normalize_bool_option,
-    _normalize_positive_scale,
     _numeric_ndarray,
     _PLAIN_REALS_BOOL_OR_NONE,
     _PLAIN_SCALARS,
@@ -123,11 +126,11 @@ def tcut(x: Any, breaks: Any, labels: Any | None = None, scale: Any = 1) -> Tcut
         _tcut_numbers(x, "x"),
         _tcut_numbers(_scalar_or_vector(breaks, "breaks"), "breaks"),
         label_values,
-        _normalize_positive_scale(scale),
+        _finite_float(scale, "scale"),
     )
 
 
-def _neardate_calendar_key(value: Any) -> int:
+def _calendar_time_key(value: Any) -> int:
     """An exact calendar instant, retaining NumPy subsecond units and Python time zones."""
 
     if hasattr(value, "to_datetime64"):
@@ -155,17 +158,35 @@ def _neardate_integer_ids(values: Any) -> np.ndarray | None:
         values = np.asarray(values)
     if values.ndim != 1 or values.dtype.kind not in "iu" or np.ma.isMaskedArray(values):
         return None
-    if values.dtype.kind == "u" and values.size and values.max() > np.iinfo(np.int64).max:
+    if values.dtype.kind == "u" and values.size and int(values.max()) > np.iinfo(np.int64).max:
         return None
     return values.astype(np.int64, copy=False)
 
 
-def _neardate_labels(values: Any, name: str) -> list[Any]:
-    # Extension arrays may export NA as float NaN through to_numpy(); their
-    # list conversion retains the declared missing scalar and numeric NaNs.
-    if hasattr(getattr(values, "dtype", None), "na_value") and hasattr(values, "tolist"):
-        values = values.tolist()
-    return _materialize_labels(values, name)
+def _column_scalars(values: Any) -> Any:
+    # A pandas extension array's own list conversion preserves its scalar
+    # types. Its NumPy export may round nullable integers or expose timestamps as ticks.
+    if hasattr(values, "to_numpy") and hasattr(values, "tolist"):
+        return values.tolist()
+    return values
+
+
+def _wide_id_codes(*columns: list[Any]) -> list[list[int]]:
+    """Code IDs together when an integer exceeds the native signed 64-bit range."""
+    codes: dict[Any, int] = {}
+    result = []
+    for column in columns:
+        encoded = []
+        for value in column:
+            # Native Python numbers compare and hash integers and floats exactly.
+            if not isinstance(value, str):
+                try:
+                    value = index(value)
+                except TypeError:
+                    value = float(value)
+            encoded.append(codes.setdefault(value, len(codes)))
+        result.append(encoded)
+    return result
 
 
 def _promote_numeric_ids(values: list[Any]) -> list[Any]:
@@ -183,52 +204,104 @@ def _promote_numeric_ids(values: list[Any]) -> list[Any]:
     return values
 
 
-def _neardate_date_vectors(
-    y1: Any, y2: Any
-) -> tuple[list[float] | np.ndarray, list[float] | np.ndarray]:
-    """R ranks the union of sortable dates; numeric dates can use their values directly."""
+def _sortable_time_vectors(*columns: tuple[str, Any]) -> list[list[float] | np.ndarray]:
+    """Represent the joint visit order as doubles, ranking values that need an exact key."""
+    arrays: list[list[float] | np.ndarray] = []
+    for _, values in columns:
+        array = _numeric_ndarray(values)
+        if array is None:
+            break
+        dtype = getattr(values, "dtype", None)
+        if array.dtype.kind == "f" and (
+            getattr(dtype, "kind", None) in {"i", "u"}
+            or getattr(dtype, "is_integer", lambda: False)()
+        ):
+            # Nullable integer columns may export doubles with NaN at nulls.
+            break
+        if (
+            array.dtype.kind in "iu"
+            and array.dtype.itemsize >= 8
+            and array.size
+            and (int(array.min()) < -_EXACT_INTEGER or int(array.max()) > _EXACT_INTEGER)
+        ):
+            break
+        arrays.append(array.astype(float, copy=False))
+    else:
+        return arrays
 
-    if _categories(y1) is not None or _categories(y2) is not None:
-        raise ValueError("y1 and y2 must be sortable")
-    array1, array2 = _numeric_ndarray(y1), _numeric_ndarray(y2)
-    if array1 is not None and array2 is not None:
-        return array1.astype(float, copy=False), array2.astype(float, copy=False)
-
-    vectors = [
-        [None if np.ma.is_masked(value) else value for value in values]
-        if isinstance(values, np.ndarray) and values.ndim == 1 and values.dtype.kind == "M"
-        else _materialize_1d(values, name)
-        for values, name in ((y1, "y1"), (y2, "y2"))
-    ]
-    types = {type(value) for value in chain.from_iterable(vectors)}
+    vectors = []
+    for name, values in columns:
+        # Iterating a datetime64 array retains its resolution. A column's
+        # to_list() can truncate nanoseconds to Python datetime microseconds.
+        if not isinstance(values, np.ndarray) and hasattr(values, "to_numpy"):
+            array = values.to_numpy()
+            if isinstance(array, np.ndarray) and array.dtype.kind == "M":
+                values = array
+            elif getattr(getattr(values, "dtype", None), "kind", None) in {"i", "u"}:
+                values = _column_scalars(values)
+        if isinstance(values, np.ndarray) and values.ndim == 1 and values.dtype.kind == "M":
+            vectors.append([None if np.ma.is_masked(value) else value for value in values])
+        else:
+            vectors.append(_materialize_1d(values, name))
+    types = set(map(type, chain.from_iterable(vectors)))
+    if int in types and types <= _PLAIN_REALS_BOOL_OR_NONE:
+        try:
+            numeric = [np.asarray(vector, dtype=np.float64) for vector in vectors]
+        except OverflowError:
+            pass  # A Python integer can exceed the entire double range.
+        else:
+            # A neighboring integer might have rounded onto 2**53 itself.
+            # Inside these bounds the conversion preserves every visit order.
+            if all(
+                not (np.any(array >= _EXACT_INTEGER) or np.any(array <= -_EXACT_INTEGER))
+                for array in numeric
+            ):
+                return list(numeric)
     character = any(issubclass(kind, str) for kind in types)
     calendar = any(issubclass(kind, (date, np.datetime64)) for kind in types)
-    if not character and not calendar:
-        if types <= {int, float, bool, type(None)}:
-            if type(None) in types:
-                return (
-                    [math.nan if value is None else float(value) for value in vectors[0]],
-                    [math.nan if value is None else float(value) for value in vectors[1]],
-                )
-            return list(map(float, vectors[0])), list(map(float, vectors[1]))
-        try:
-            return _floats_or_nan(vectors[0]), _floats_or_nan(vectors[1])
-        except (TypeError, ValueError):
-            return _numeric_or_nan(vectors[0], "y1"), _numeric_or_nan(vectors[1], "y2")
-    dates = [value for value in chain.from_iterable(vectors) if not _is_missing_value(value)]
     key: Callable[[Any], Any]
     if character:
         key = _as_character
-    elif all(isinstance(value, date | np.datetime64) for value in dates):
-        key = _neardate_calendar_key
+    elif calendar:
+        if any(
+            not isinstance(value, date | np.datetime64) and not _is_missing_value(value)
+            for value in chain.from_iterable(vectors)
+        ):
+            names = " and ".join(name for name, _ in columns)
+            raise ValueError(f"{names} must be sortable")
+        key = _calendar_time_key
+    elif any(issubclass(kind, (int, np.integer)) for kind in types) and any(
+        isinstance(value, int | np.integer) and abs(int(value)) > _EXACT_INTEGER
+        for value in chain.from_iterable(vectors)
+    ):
+        # Python integers compare exactly with floats, even beyond the mantissa.
+        def key(value: Any) -> Any:
+            return value.item() if isinstance(value, np.generic) else value
+
     else:
-        raise ValueError("y1 and y2 must be sortable")
-    levels = {value: position for position, value in enumerate(sorted({key(v) for v in dates}))}
-    result = [
-        [math.nan if _is_missing_value(value) else float(levels[key(value)]) for value in vector]
-        for vector in vectors
+        try:
+            return [_floats_or_nan(vector) for vector in vectors]
+        except (TypeError, ValueError):
+            return [
+                _numeric_or_nan(vector, name)
+                for (name, _), vector in zip(columns, vectors, strict=True)
+            ]
+
+    keys = [
+        [None if _is_missing_value(value) else key(value) for value in vector] for vector in vectors
     ]
-    return result[0], result[1]
+    levels = sorted({value for value in chain.from_iterable(keys) if value is not None})
+    ranks = {value: float(i) for i, value in enumerate(levels)}
+    return [[ranks.get(value, math.nan) for value in vector] for vector in keys]
+
+
+def _neardate_date_vectors(
+    y1: Any, y2: Any
+) -> tuple[list[float] | np.ndarray, list[float] | np.ndarray]:
+    if _categories(y1) is not None or _categories(y2) is not None:
+        raise ValueError("y1 and y2 must be sortable")
+    query, reference = _sortable_time_vectors(("y1", y1), ("y2", y2))
+    return query, reference
 
 
 def _check_nomatch(nomatch: Any, rows: int) -> None:
@@ -255,14 +328,8 @@ def _neardate_integers(
     if len(id2) != len(y2_values):
         raise ValueError("id2 and y2 have different lengths")
     _check_nomatch(nomatch, len(id2))
-    y2_array = np.asarray(y2_values, dtype=np.float64)
-    keep2 = ~np.isnan(y2_array)
-    if keep2.all():
-        matched = _core.neardate(id1, y1_values, id2, y2_array, best)
-        return matched if nomatch is None else [nomatch if m is None else m for m in matched]
-    rows2 = np.flatnonzero(keep2).tolist()
-    matched = _core.neardate(id1, y1_values, id2[keep2], y2_array[keep2], best)
-    return [nomatch if m is None else rows2[m] for m in matched]
+    matched = _core.neardate(id1, y1_values, id2, y2_values, best)
+    return matched if nomatch is None else [nomatch if m is None else m for m in matched]
 
 
 def _neardate_ordered_matches(
@@ -340,8 +407,8 @@ def neardate(
     integer1, integer2 = _neardate_integer_ids(id1), _neardate_integer_ids(id2)
     if integer1 is not None and integer2 is not None:
         return _neardate_integers(integer1, integer2, y1, y2, best_value, nomatch)
-    id1_values = _neardate_labels(id1, "id1")
-    id2_values = _neardate_labels(id2, "id2")
+    id1_values = _materialize_labels(_column_scalars(id1), "id1")
+    id2_values = _materialize_labels(_column_scalars(id2), "id2")
     y1_values, y2_values = _neardate_date_vectors(y1, y2)
     if len(id1_values) != len(y1_values):
         raise ValueError("id1 and y1 have different lengths")
@@ -435,17 +502,77 @@ def neardate(
     y2_array = np.asarray(y2_values, dtype=np.float64)
     keep2 = ~np.isnan(y2_array)
     complete = bool(keep2.all())
-    matched = _core.neardate(
-        id1_labels,
-        y1_values,
-        id2_labels if complete else list(compress(id2_labels, keep2.tolist())),
-        y2_array if complete else y2_array[keep2],
-        best_value,
-    )
+    reference_ids = id2_labels if complete else list(compress(id2_labels, keep2.tolist()))
+    reference_dates = y2_array if complete else y2_array[keep2]
+    try:
+        matched = _core.neardate(id1_labels, y1_values, reference_ids, reference_dates, best_value)
+    except OverflowError:
+        query_codes, reference_codes = _wide_id_codes(id1_labels, reference_ids)
+        matched = _core.neardate(
+            query_codes, y1_values, reference_codes, reference_dates, best_value
+        )
     rows2 = None if complete else np.flatnonzero(keep2).tolist()
     if rows2 is None:
         return [nomatch if match is None else match for match in matched]
     return [nomatch if match is None else rows2[match] for match in matched]
+
+
+def _lvcf_initial_value(x: Any, values: list[Any], missing: list[bool]) -> bool | int | None:
+    observed = [v for v, absent in zip(values, missing, strict=True) if not absent]
+    if observed:
+        if all(_is_bool_like(v) for v in observed):
+            return False
+        if all(
+            isinstance(v, numbers.Number | np.bool_)
+            and not isinstance(v, complex | np.complexfloating | np.timedelta64)
+            and v in (0, 1)
+            for v in observed
+        ):
+            return 0
+    else:
+        # With no observed value, retain the column's declared type. An
+        # untyped sequence of None represents R's default logical NA vector.
+        dtype = getattr(x, "dtype", None)
+        if dtype is None:
+            if any(isinstance(v, date | np.datetime64 | np.timedelta64) for v in values):
+                return None
+            return 0 if any(isinstance(v, float | np.floating) for v in values) else False
+        kind = getattr(dtype, "kind", None)
+        if kind is None and hasattr(dtype, "to_python"):
+            kind = np.dtype(dtype.to_python()).kind
+        if kind == "b":
+            return False
+        if kind in {"i", "u", "f"}:
+            return 0
+    return None
+
+
+def _lvcf_measurements(x: Any) -> list[Any]:
+    dtype = getattr(x, "dtype", None)
+    if getattr(dtype, "time_unit", None) == "ns":
+        # Polars' Python datetime and timedelta scalars truncate nanoseconds.
+        instants = x.to_numpy()
+        zone = getattr(dtype, "time_zone", None)
+        if zone is None:
+            return list(instants)
+        missing = np.isnat(instants)
+        if np.any((instants.view(np.int64) % 1000 != 0) & ~missing):
+            try:
+                pandas = import_module("pandas")
+            except ImportError:
+                precise = instants
+            else:
+                try:
+                    precise = pandas.DatetimeIndex(instants, tz="UTC").tz_convert(zone).tolist()
+                except pandas.errors.OutOfBoundsDatetime:
+                    # The zone offset may push the local clock past pandas' nanosecond limits.
+                    precise = instants
+            return [
+                None if absent else value for absent, value in zip(missing, precise, strict=True)
+            ]
+    if isinstance(x, np.ndarray) and x.ndim == 1 and x.dtype.kind in "Mm":
+        return list(x)
+    return _materialize_1d(_column_scalars(x), "x")
 
 
 def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[Any]:
@@ -454,36 +581,43 @@ def lvcf(id: Any, x: Any, time: Any | None = None, first: bool = True) -> list[A
     With ``first`` (R's default) a missing first observation of a logical or 0/1
     variable becomes ``False``/``0`` before the values are carried forward.
     Factor-valued columns keep their levels and unknown initial values, returning
-    an unordered ``Factor`` as R does. Supplied times are
-    ordered within each subject with missing times last; results retain input order.
+    an unordered ``Factor`` as R does. Numeric, calendar, character and factor
+    visit times order each subject's observations. Missing times come last and
+    ties retain input order. Results are returned in the original row order.
     """
 
-    id_values = _materialize_labels(id, "id")
-    values = list(_materialize_1d(x, "x"))
+    id_values = _materialize_labels(_column_scalars(id), "id")
+    values = _lvcf_measurements(x)
     if len(values) != len(id_values):
         raise ValueError("x must have the same length as id")
-    if any(_is_missing_value(value) for value in id_values):
+    if any(_missing_flags(id_values)):
         raise ValueError("id must not contain missing values")
-    times = None if time is None else _numeric_or_nan(time, "time")
+    times: list[float] | np.ndarray | None = None
+    if time is not None:
+        if _categories(time) is None:
+            (times,) = _sortable_time_vectors(("time", time))
+        else:
+            codes, _ = _factor(time, "time")
+            times = [math.nan if code is None else float(code) for code in codes]
     if times is not None and len(times) != len(values):
         raise ValueError("time must have the same length as id")
-    missing = [_is_missing_value(value) for value in values]
-    source = _core.lvcf(id_values, missing, times)
-    if first and _categories(x) is None:
+    missing = _missing_flags(values)
+    try:
+        source = _core.lvcf(id_values, missing, times)
+    except OverflowError:
+        (subject_codes,) = _wide_id_codes(id_values)
+        source = _core.lvcf(subject_codes, missing, times)
+    levels = _categories(x)
+    if first and levels is None:
         initial_missing = [
             row for row, origin in enumerate(source) if row == origin and missing[row]
         ]
         if initial_missing:
-            observed = [value for value, absent in zip(values, missing, strict=True) if not absent]
-            logical = all(_is_bool_like(value) for value in observed)
-            binary = not logical and all(
-                not isinstance(value, str) and float(value) in (0.0, 1.0) for value in observed
-            )
-            if logical or binary:
+            replacement = _lvcf_initial_value(x, values, missing)
+            if replacement is not None:
                 for row in initial_missing:
-                    values[row] = False if logical else 0
+                    values[row] = replacement
     result = [values[row] for row in source]
-    levels = _categories(x)
     return result if levels is None else Factor(result, levels)
 
 

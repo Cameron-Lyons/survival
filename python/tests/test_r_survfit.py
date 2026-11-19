@@ -269,6 +269,143 @@ def test_survfit_weights_report_unweighted_counts_and_robust_se():
     )
 
 
+@pytest.mark.parametrize(
+    ("ctype", "final_chaz_se"), [(1, 0.313907501209533), (2, 0.472359382395163)]
+)
+def test_survfit_robust_variance_after_a_large_weight_leaves(ctype, final_chaz_se):
+    # R survival 3.8-11: the large censored observation is gone before the first event.
+    fit = r.survfit(
+        r.Surv([1, 2, 3, 3, 4], [0, 1, 1, 1, 0]),
+        weights=[1e165, 1, 2, 0.5, 1],
+        ctype=ctype,
+    )
+    _close(fit.surv, [1, 7 / 9, 2 / 9, 2 / 9])
+    _close(fit.std_err, [0, 0.206582722601006, 0.206582722601006, 0.206582722601006])
+    _close(fit.std_chaz, [0, 0.206582722601006, final_chaz_se, final_chaz_se])
+
+
+@pytest.mark.parametrize("influence", [False, True])
+@pytest.mark.parametrize(("ctype", "final_hazard"), [(1, 1.4), (2, 1.9)])
+def test_weighted_censoring_curve_removes_tied_deaths_first(influence, ctype, final_hazard):
+    # Equivalent stock R fit: survfit(Surv(2*time - status, 1-status) ~ 1,
+    #                               weights=w, robust=TRUE, ctype=ctype).
+    fit = r.survfit(
+        r.Surv([0.0, -0.0, 1, 1], [1, 0, 0, 0]),
+        weights=[1e165, 1, 1, 0.5],
+        reverse=True,
+        influence=influence,
+        ctype=ctype,
+    )
+    _close(fit.time, [0, 1])
+    _close(fit.surv, [0.6, 0])
+    _close(fit.cumhaz, [0.4, final_hazard])
+    _close(fit.std_err, [0.299332590941915, 0])
+    _close(fit.std_chaz, [0.299332590941915] * 2)
+
+
+def test_censoring_curve_accounts_for_delayed_entry_before_a_tied_death():
+    # Stock R: survfit(Surv(2*start, 2*time-status, 1-status) ~ 1, weights=w, cluster=g).
+    fit = r.survfit(
+        r.Surv([0, 2, 0, 0, 0], [4, 3, 3, 1, 4], [0, 1, 0, 0, 0]),
+        weights=[1, 2, 1, 1, 1],
+        cluster=[1, 1, 2, 3, 4],
+        reverse=True,
+    )
+    _close(fit.time, [1, 3, 4])
+    _close(fit.surv, [0.75, 0.5, 0])
+    _close(fit.std_err, [0.21650635094611, 0.25, 0])
+    _close(fit.std_chaz, [0.21650635094611, 0.347777334043025, 0.347777334043025])
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_splitting_an_interval_between_output_times_preserves_cluster_influence(reverse):
+    start = [0, 0, 0, 0, 1.5]
+    stop = [1, 5, 3, 5, 5]
+    status = [int(s != reverse) for s in [0, 0, 1, 0, 0]]
+    weights = [1, 1, 1, 1, 5]
+    ids = [10, 11, 12, 13, 14]
+    groups = [3, 1, 2, 4, 1]
+
+    def fit():
+        return r.survfit(
+            r.Surv(start, stop, status),
+            weights=weights,
+            id=ids,
+            cluster=groups,
+            reverse=reverse,
+            influence=True,
+        )
+
+    original = fit()
+    start.append(2)
+    stop[-1:] = [2, 5]
+    status[-1:] = [0, status[-1]]
+    weights.append(weights[-1])
+    ids.append(ids[-1])
+    groups.append(groups[-1])
+    split = fit()
+    _close(split.time, original.time)
+    _close(split.std_err, original.std_err)
+    _close(split.std_chaz, original.std_chaz)
+    j = split.time.index(3)
+    _close(split.influence_surv[0].values[:, j], [0, 6 / 64, -7 / 64, 1 / 64])
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("robust", [False, True])
+def test_delayed_large_weight_keeps_the_early_risk_set(reverse, robust):
+    status = [0, 1, 0]
+    if reverse:
+        status = [1 - s for s in status]
+    fit = r.survfit(
+        r.Surv([2, 0, 0], [5, 1, 3], status),
+        weights=[1e17, 1, 1],
+        id=[1, 2, 3],
+        reverse=reverse,
+        robust=robust,
+        influence=robust,
+    )
+    # The weight-1e17 subject is outside the risk set at the only event.
+    _close(fit.n_risk, [2, 1e17, 1e17])
+    _close(fit.surv, [0.5] * 3)
+    _close(fit.cumhaz, [0.5] * 3)
+    _close(fit.std_err, [math.sqrt(0.125 if robust else 0.5)] * 3)
+    _close(fit.std_chaz, [math.sqrt(0.125 if robust else 0.25)] * 3)
+    if robust:
+        _close(fit.influence_surv[0].values[:, 0], [0, -0.25, 0.25])
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_weighted_tied_events_exhaust_the_counting_risk_set(reverse):
+    fit = r.survfit(
+        r.Surv([0] * 3, [1] * 3, [int(not reverse)] * 3),
+        weights=[9, 9, 1e17],
+        reverse=reverse,
+        robust=False,
+    )
+    assert fit.n_risk == (fit.n_censor if reverse else fit.n_event)
+    assert fit.surv == [0]
+    assert fit.cumhaz == [1]
+
+
+@pytest.mark.parametrize("counting", [False, True])
+@pytest.mark.parametrize("influence", [False, True])
+def test_cluster_recovers_small_weights_after_two_large_censorings(counting, influence):
+    time = [1, 2, 3, 4]
+    status = [0, 0, 1, 0]
+    fit = r.survfit(
+        r.Surv([0] * 4, time, status) if counting else r.Surv(time, status),
+        weights=[1e200, 1e100, 1, 1],
+        cluster=[1, 1, 1, 2],
+        influence=influence,
+    )
+    _close(fit.n_risk, [1e200, 1e100, 2, 1])
+    _close(fit.surv, [1, 1, 0.5, 0.5])
+    _close(fit.std_err, [0, 0, math.sqrt(0.125), math.sqrt(0.125)])
+    if influence:
+        _close(fit.influence_surv[0].values[:, 2], [-0.25, 0.25])
+
+
 def test_survfit_start_time_conditions_the_curves():
     fit = r.survfit("Surv(time, status) ~ group", _toy_data(), start_time=2)
 

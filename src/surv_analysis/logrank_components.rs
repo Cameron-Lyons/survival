@@ -1,17 +1,16 @@
-use super::survfitkm::strata_index;
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use super::survfitkm::{rows_by_curve, strata_index};
 use crate::core::strata_order::validate_intervals;
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::pchisq;
 use crate::internal::matrix::LuDecomposition;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
+use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_empty,
 };
 use ndarray::Array2;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct SurvdiffData {
@@ -160,7 +159,20 @@ fn survdiff_stratum(
     };
     let kaplan = (rho != 0.0).then(|| left_continuous_km(rows, &entries_desc, start, time, status));
 
+    let groups: Vec<usize> = if n == time.len() {
+        (0..ngroup).collect()
+    } else {
+        let mut present = vec![false; ngroup];
+        for &row in rows {
+            present[group[row]] = true;
+        }
+        (0..ngroup).filter(|&g| present[g]).collect()
+    };
     let mut risk = vec![0.0; ngroup];
+    // Bound the intermediate products in R's covariance update by weight² * n³.
+    let n_float = n as f64;
+    let ordinary_weights =
+        (f64::MIN_POSITIVE.sqrt() * n_float)..=(f64::MAX / n_float.powi(3)).sqrt();
     let mut left = 0;
     let mut i = n;
     while i > 0 {
@@ -174,9 +186,11 @@ fn survdiff_stratum(
         while j > 0 && time[rows[j - 1]] == current {
             let row = rows[j - 1];
             let k = group[row];
-            deaths += f64::from(status[row]);
             risk[k] += 1.0;
-            obs[k][stratum] += f64::from(status[row]) * wt;
+            if status[row] == 1 {
+                deaths += 1.0;
+                obs[k][stratum] += wt;
+            }
             j -= 1;
         }
         i = j;
@@ -190,21 +204,45 @@ fn survdiff_stratum(
             continue;
         }
         let nrisk = (n - i - left) as f64;
-        let wt2 = wt * wt;
-        for (j, &nj) in risk.iter().enumerate() {
+        let ordinary = ordinary_weights.contains(&wt);
+        for &j in &groups {
+            let nj = risk[j];
             if nj == 0.0 {
                 continue;
             }
-            exp[j][stratum] += wt * deaths * nj / nrisk;
+            let expected = if ordinary {
+                wt * deaths * nj / nrisk
+            } else {
+                wt * (deaths * nj / nrisk)
+            };
+            exp[j][stratum] += expected;
             if deaths == nrisk {
                 continue;
             }
-            let tmp = wt2 * deaths * nj * (nrisk - deaths) / (nrisk * (nrisk - 1.0));
             let mut row = var.row_mut(j);
             let row = row.as_slice_mut().expect("row-major covariance matrix");
-            row[j] += tmp;
-            for (value, &nk) in row.iter_mut().zip(&risk) {
-                *value -= tmp * nk / nrisk;
+            if ordinary {
+                // R's separate diagonal addition and subtraction affect singularity checks.
+                let tmp = wt * wt * deaths * nj * (nrisk - deaths) / (nrisk * (nrisk - 1.0));
+                row[j] += tmp;
+                if groups.len() == ngroup {
+                    for (value, &nk) in row.iter_mut().zip(&risk) {
+                        *value -= tmp * nk / nrisk;
+                    }
+                } else {
+                    for &k in &groups {
+                        row[k] -= tmp * risk[k] / nrisk;
+                    }
+                }
+            } else if nj < nrisk {
+                // Applying each risk proportion first avoids an overflowing squared weight.
+                let corrected = wt * ((nrisk - deaths) / (nrisk - 1.0));
+                row[j] += expected * (corrected * ((nrisk - nj) / nrisk));
+                for &k in &groups {
+                    if k != j && risk[k] > 0.0 {
+                        row[k] -= expected * (corrected * (risk[k] / nrisk));
+                    }
+                }
             }
         }
     }
@@ -257,28 +295,10 @@ pub fn survdiff(data: &SurvdiffData, rho: f64, timefix: bool) -> SurvivalResult<
     }
     let (strata_levels, stratum) = strata_index(data.strata.as_deref(), n);
     let nstrat = strata_levels.len();
-    let mut rows_by_stratum: Vec<Vec<usize>> = vec![Vec::new(); nstrat];
-    for (i, &s) in stratum.iter().enumerate() {
-        rows_by_stratum[s].push(i);
-    }
-    let rows_by_stratum: Vec<Vec<usize>> = rows_by_stratum
+    // Each tied time is consumed as a block, so status need not be a sort key.
+    let rows_by_stratum: Vec<Vec<usize>> = rows_by_curve(&stratum, nstrat)
         .into_iter()
-        .map(|rows| {
-            let mut keys: Vec<(f64, i32, usize)> = rows
-                .into_iter()
-                .map(|i| (time[i], -data.status[i], i))
-                .collect();
-            let order = |a: &(f64, i32, usize), b: &(f64, i32, usize)| {
-                a.0.total_cmp(&b.0)
-                    .then_with(|| (a.1, a.2).cmp(&(b.1, b.2)))
-            };
-            if keys.len() > PARALLEL_THRESHOLD_LARGE {
-                keys.par_sort_unstable_by(order);
-            } else {
-                keys.sort_unstable_by(order);
-            }
-            keys.into_iter().map(|(_, _, i)| i).collect()
-        })
+        .map(|rows| ordered_subset(&rows, &time, true))
         .collect();
 
     let mut obs = vec![vec![0.0; nstrat]; ngroup];
@@ -619,6 +639,38 @@ mod tests {
                 assert_eq!(mixed.pvalue, event.pvalue);
             }
         }
+    }
+
+    #[test]
+    fn censored_entry_after_survival_reaches_zero_has_no_weighted_score() {
+        let data = SurvdiffData::try_new(
+            Some(vec![0.0, 0.0, 3.0]),
+            vec![1.0, 2.0, 4.0],
+            vec![1, 1, 0],
+            vec![0, 1, 1],
+            None,
+        )
+        .unwrap();
+        let fit = survdiff(&data, -1.0, false).unwrap();
+        assert_eq!(fit.obs_totals(), vec![1.0, 2.0]);
+        assert_eq!(fit.exp_totals(), vec![0.5, 2.5]);
+        assert_eq!(fit.var, vec![vec![0.25, -0.25], vec![-0.25, 0.25]]);
+        assert_eq!(fit.chisq, 1.0);
+    }
+
+    #[test]
+    fn covariance_stays_finite_when_the_squared_weight_overflows() {
+        let data = right(vec![1.0, 1.0, 2.0, 3.0], vec![1, 1, 1, 0], vec![0, 1, 0, 1]);
+        let fit = survdiff(&data, -512.0, false).unwrap();
+        // At the second event S(t-) = 1/2. Both groups have risk fraction 1/2.
+        let half_weight = 2.0_f64.powi(511);
+        let variance = half_weight * half_weight;
+        assert_eq!(fit.exp_totals(), vec![half_weight, half_weight]);
+        assert_eq!(
+            fit.var,
+            vec![vec![variance, -variance], vec![-variance, variance]]
+        );
+        assert_eq!(fit.chisq, 1.0);
     }
 
     #[test]

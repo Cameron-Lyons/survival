@@ -57,57 +57,73 @@ pub(super) fn independent_variance(
     std_chaz: &mut [f64],
 ) {
     let order = &rows.sort2;
-    let scale = order
-        .iter()
-        .map(|&row| data.wt[row])
-        .fold(0.0_f64, f64::max);
-    if scale == 0.0 {
-        std_surv.fill(0.0);
-        std_chaz.fill(0.0);
-        return;
-    }
-    let mut risk_squares = vec![0.0; order.len() + 1];
-    for k in (0..order.len()).rev() {
-        let weight = data.wt[order[k]] / scale;
-        risk_squares[k] = risk_squares[k + 1] + weight * weight;
+    // Equal risk totals can both be infinite after summing finite case weights.
+    let risk_ratio = |smaller: f64, larger: f64| {
+        if smaller == larger {
+            1.0
+        } else {
+            smaller / larger
+        }
+    };
+    // At each event, sum the squared shares of the risk weight of rows that stay
+    // past that time. A single scale for the curve can erase every remaining
+    // weight once a much heavier observation leaves.
+    let mut risk_squares = vec![0.0; times.len()];
+    let mut later = order.len();
+    let mut later_risk = 0.0;
+    let mut squares = 0.0;
+    for (i, &time) in times.iter().enumerate().rev() {
+        let (d0, d1, nrisk) = event_terms(i);
+        if d0 > 0.0 && d1 > 0.0 {
+            squares *= risk_ratio(later_risk, nrisk).powi(2);
+            while later > 0 && data.time2[order[later - 1]] > time {
+                later -= 1;
+                squares += (data.wt[order[later]] / nrisk).powi(2);
+            }
+            risk_squares[i] = squares;
+            later_risk = nrisk;
+        }
     }
     let mut person = 0;
+    // a_surv and a_chaz are the influence per unit of risk weight, multiplied by
+    // the last event's risk weight. Each subject contributes its share times a.
+    let mut previous_risk = f64::INFINITY;
     let (mut a_surv, mut a_chaz) = (0.0_f64, 0.0_f64);
     let (mut departed_surv, mut departed_chaz) = (0.0, 0.0);
     let (mut var_surv, mut var_chaz) = (0.0_f64, 0.0_f64);
     let mut km = 1.0;
     for (i, &time) in times.iter().enumerate() {
         while person < order.len() && left_before(data, options.reverse, order[person], time) {
-            let weight = data.wt[order[person]] / scale;
+            let weight = data.wt[order[person]] / previous_risk;
             departed_surv += (weight * a_surv).powi(2);
             departed_chaz += (weight * a_chaz).powi(2);
             person += 1;
         }
         let (d0, d1, nrisk) = event_terms(i);
         if d0 > 0.0 && d1 > 0.0 {
-            let d1 = d1 / scale;
-            let nrisk = nrisk / scale;
             let hazard = d1 / nrisk;
             let factor = 1.0 - hazard;
+            let ratio = risk_ratio(nrisk, previous_risk);
             let (event_derivative, risk_derivative) =
-                hazard_influence_terms(d0, d1, nrisk, options.ctype);
-            a_surv = a_surv * factor + km * hazard / nrisk;
-            a_chaz -= risk_derivative;
+                hazard_influence_terms(d0, hazard, 1.0, options.ctype);
+            a_surv = a_surv * ratio * factor + km * hazard;
+            a_chaz = a_chaz * ratio - risk_derivative;
+            previous_risk = nrisk;
             departed_surv *= factor * factor;
 
             while person < order.len() && data.time2[order[person]] <= time {
                 let row = order[person];
-                let weight = data.wt[row] / scale;
+                let weight = data.wt[row] / nrisk;
                 let event = has_event(data, options.reverse, row);
-                let surv = a_surv - if event { km / nrisk } else { 0.0 };
+                let surv = a_surv - if event { km } else { 0.0 };
                 let chaz = a_chaz + if event { event_derivative } else { 0.0 };
                 departed_surv += (weight * surv).powi(2);
                 departed_chaz += (weight * chaz).powi(2);
                 person += 1;
             }
             km *= factor;
-            var_surv = departed_surv + risk_squares[person] * a_surv * a_surv;
-            var_chaz = departed_chaz + risk_squares[person] * a_chaz * a_chaz;
+            var_surv = departed_surv + risk_squares[i] * a_surv * a_surv;
+            var_chaz = departed_chaz + risk_squares[i] * a_chaz * a_chaz;
         }
         std_surv[i] = match options.stype {
             SurvType::KaplanMeier => var_surv.sqrt(),
@@ -141,7 +157,7 @@ pub(super) fn use_cluster_sums(
 /// How much grouping rows into clusters inflates their sum of squared weights:
 /// `sum_g W_g^2 / sum_i w_i^2` for the clusters' total weights `W_g`.  It is 1 when every
 /// row is its own cluster and, for equal weights, the mean size of the cluster a random
-/// row belongs to.  `rows` gives each row's cluster code, below `ncodes`, and weight.
+/// row belongs to. `rows` gives each row's cluster code, below `ncodes`, and weight.
 pub(super) fn cluster_concentration(
     rows: impl Iterator<Item = (usize, f64)> + Clone,
     ncodes: usize,
@@ -156,9 +172,9 @@ pub(super) fn cluster_concentration(
     let mut totals = vec![0.0; ncodes];
     let mut row_squares = 0.0;
     for (g, weight) in rows {
-        let weight = weight / scale;
-        totals[g] += weight;
-        row_squares += weight * weight;
+        let relative = weight / scale;
+        totals[g] += relative;
+        row_squares += relative * relative;
     }
     totals.iter().map(|total| total * total).sum::<f64>() / row_squares
 }
@@ -168,8 +184,7 @@ pub(super) fn cluster_concentration(
 /// all have the event then leaves behind the residue of terms about `1 / |f|` times larger,
 /// which the running sums would hold only to `eps / |f|` of its size.  The weight at risk
 /// falls by a factor of at least `1 / |f|` at such a time, so there are few of them: usually
-/// only the last time of a curve, at which `f` is zero or, for a weighted censoring curve,
-/// the rounding residue of `n.risk - n.event`.
+/// only the last time of a curve, when every remaining subject has the event.
 const DENSE_STEP_FACTOR: f64 = 1e-3;
 
 /// The clustered robust variance of right-censored data without influence matrices, in

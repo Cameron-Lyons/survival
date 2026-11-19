@@ -1,12 +1,13 @@
-use super::id_value::{IdValue, SubjectId};
+use super::id_value::{IdValue, SubjectId, first_appearance_codes};
 use crate::error::SurvivalResult;
+use crate::internal::numpy_utils::FloatVec;
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
 
 fn compare_time(left: f64, right: f64) -> Ordering {
     match (left.is_nan(), right.is_nan()) {
-        (false, false) => left.total_cmp(&right),
+        (false, false) => left.partial_cmp(&right).unwrap(),
         (false, true) => Ordering::Less,
         (true, false) => Ordering::Greater,
         (true, true) => Ordering::Equal,
@@ -23,25 +24,28 @@ pub fn lvcf<I: SubjectId>(
     if let Some(time) = time {
         validate_length(n, time.len(), "time")?;
     }
-    let keys: Vec<I::Key> = id.iter().map(SubjectId::key).collect();
+    let (subjects, levels) = first_appearance_codes(id);
+    let mut current = vec![usize::MAX; levels.len()];
+    let mut source_row = |row: usize| {
+        let last = &mut current[subjects[row]];
+        if !missing[row] || *last == usize::MAX {
+            *last = row;
+        }
+        *last
+    };
+    let Some(time) = time else {
+        // Input order is visit order within each subject, even for interleaved IDs.
+        return Ok((0..n).map(source_row).collect());
+    };
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by(|&left, &right| {
-        keys[left]
-            .cmp(&keys[right])
-            .then_with(|| time.map_or(Ordering::Equal, |t| compare_time(t[left], t[right])))
+        subjects[left]
+            .cmp(&subjects[right])
+            .then_with(|| compare_time(time[left], time[right]))
     });
-
-    let mut source: Vec<usize> = (0..n).collect();
-    let mut current = 0;
-    let mut previous: Option<usize> = None;
-    for &row in &order {
-        let new_subject = previous.is_none_or(|p| keys[p] != keys[row]);
-        if new_subject || !missing[row] {
-            current = row;
-        } else {
-            source[row] = current;
-        }
-        previous = Some(row);
+    let mut source = vec![0; n];
+    for row in order {
+        source[row] = source_row(row);
     }
     Ok(source)
 }
@@ -50,16 +54,17 @@ pub fn lvcf<I: SubjectId>(
 #[pyfunction(name = "lvcf")]
 #[pyo3(signature = (id, missing, time=None))]
 pub(crate) fn lvcf_py(
+    py: Python<'_>,
     id: Vec<IdValue>,
     missing: Vec<bool>,
-    time: Option<Vec<f64>>,
+    time: Option<FloatVec>,
 ) -> PyResult<Vec<usize>> {
     if id.iter().any(IdValue::is_missing) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "id must not contain missing values",
         ));
     }
-    Ok(lvcf(&id, &missing, time.as_deref())?)
+    Ok(py.detach(|| lvcf(&id, &missing, time.as_deref()))?)
 }
 
 #[cfg(test)]
@@ -89,6 +94,16 @@ mod tests {
         assert_eq!(result, vec![0, 2, 2]);
         let result = lvcf(&[0i64, 0], &[false, true], Some(&[2.0, 1.0])).unwrap();
         assert_eq!(result, vec![0, 1]);
+    }
+
+    #[test]
+    fn ties_preserve_input_order_within_interleaved_subjects() {
+        let id = ["a", "b", "b", "a", "a", "b"];
+        let missing = [true, false, true, false, true, false];
+        let expected = vec![0, 1, 1, 3, 3, 5];
+        assert_eq!(lvcf(&id, &missing, None).unwrap(), expected);
+        let time = [0.0, 0.0, -0.0, -0.0, 0.0, 0.0];
+        assert_eq!(lvcf(&id, &missing, Some(&time)).unwrap(), expected);
     }
 
     #[test]

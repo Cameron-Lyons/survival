@@ -19,22 +19,18 @@ pub struct TcutResult {
 
 crate::internal::pickle::picklable!(TcutResult);
 
-fn seq_length(from: f64, to: f64, n: usize) -> Vec<f64> {
-    match n {
-        0 => Vec::new(),
-        1 => vec![from],
-        2 => vec![from, to],
-        _ => {
-            let n1 = (n - 1) as f64;
-            let mut out = Vec::with_capacity(n);
-            out.push(from);
-            for k in 1..n - 1 {
-                out.push(from + k as f64 * ((to - from) / n1));
-            }
-            out.push(to);
-            out
-        }
-    }
+fn evenly_spaced_breaks(from: f64, to: f64, intervals: usize) -> SurvivalResult<Vec<f64>> {
+    // seq.default scales both endpoints before subtracting when their span overflows.
+    let divisor = if (to - from).is_finite() { 1.0 } else { 4.0 };
+    let origin = from / divisor;
+    let step = (to / divisor - origin) / intervals as f64;
+    let mut out = Vec::new();
+    out.try_reserve_exact(intervals.saturating_add(1))
+        .map_err(|_| SurvivalError::invalid_input("interval count is too large to allocate"))?;
+    out.push(from);
+    out.extend((1..intervals).map(|k| (origin + k as f64 * step) * divisor));
+    out.push(to);
+    Ok(out)
 }
 
 pub fn tcut(
@@ -46,34 +42,28 @@ pub fn tcut(
     if !scale.is_finite() {
         return Err(SurvivalError::invalid_input("scale must be finite"));
     }
-    let (cutpoints, labels) = if let [count] = breaks {
-        if count.is_nan() || *count < 1.0 {
+    let (mut cutpoints, labels) = if let [count] = breaks {
+        if !count.is_finite() || *count < 1.0 {
             return Err(SurvivalError::invalid_input(
                 "Must specify at least one interval",
             ));
         }
+        if labels.is_some_and(|labels| labels.len() as f64 != *count) {
+            return Err(SurvivalError::invalid_input(
+                "Number of labels must equal number of intervals",
+            ));
+        }
         let n_intervals = count.ceil() as usize;
-        let labels = match labels {
-            None => (1..=n_intervals).map(|i| format!("Range {i}")).collect(),
-            Some(labels) if labels.len() == n_intervals => labels.to_vec(),
-            Some(_) => {
-                return Err(SurvivalError::invalid_input(
-                    "Number of labels must equal number of intervals",
-                ));
-            }
-        };
-        let finite: Vec<f64> = x.iter().copied().filter(|v| !v.is_nan()).collect();
-        let (mut low, mut high) = if finite.is_empty() {
-            (1.0, 1.0)
-        } else {
-            (
-                finite.iter().copied().fold(f64::INFINITY, f64::min),
-                finite.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-            )
-        };
+        let (mut low, mut high) = x
+            .iter()
+            .copied()
+            .filter(|v| !v.is_nan())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), v| {
+                (low.min(v), high.max(v))
+            });
         if !low.is_finite() || !high.is_finite() {
             return Err(SurvivalError::invalid_input(
-                "x must be finite when breaks is an interval count",
+                "x must have a finite range when breaks is an interval count",
             ));
         }
         let mut width = high - low;
@@ -83,12 +73,24 @@ pub fn tcut(
         }
         low -= 0.01 * width;
         high += 0.01 * width;
-        (seq_length(low, high, n_intervals + 1), labels)
+        if !low.is_finite() || !high.is_finite() {
+            return Err(SurvivalError::invalid_input(
+                "padded interval endpoints must be finite",
+            ));
+        }
+        let mut interval_labels = Vec::new();
+        interval_labels
+            .try_reserve_exact(n_intervals)
+            .map_err(|_| SurvivalError::invalid_input("interval count is too large to allocate"))?;
+        let cutpoints = evenly_spaced_breaks(low, high, n_intervals)?;
+        if let Some(labels) = labels {
+            interval_labels.extend_from_slice(labels);
+        } else {
+            interval_labels.extend((1..=n_intervals).map(|i| format!("Range {i}")));
+        }
+        (cutpoints, interval_labels)
     } else {
-        if breaks.len() < 2
-            || breaks.iter().any(|b| b.is_nan())
-            || breaks.windows(2).any(|w| w[1] < w[0])
-        {
+        if breaks.len() < 2 || !breaks.windows(2).all(|w| w[1] - w[0] >= 0.0) {
             return Err(SurvivalError::invalid_input(
                 "breaks must be given in ascending order and contain no NA's",
             ));
@@ -112,9 +114,14 @@ pub fn tcut(
         };
         (breaks.to_vec(), labels)
     };
+    if scale != 1.0 {
+        for cut in &mut cutpoints {
+            *cut *= scale;
+        }
+    }
     Ok(TcutResult {
         values: x.iter().map(|v| v * scale).collect(),
-        cutpoints: cutpoints.iter().map(|c| c * scale).collect(),
+        cutpoints,
         labels,
     })
 }
@@ -330,8 +337,10 @@ mod tests {
         assert_eq!(result.labels, strings(&["Range 1", "Range 2", "Range 3"]));
         let constant = tcut(&[5.0, 5.0, f64::NAN], &[2.0], None, 1.0).unwrap();
         assert_eq!(constant.cutpoints, vec![4.99, 5.5, 6.01]);
-        let empty = tcut(&[f64::NAN], &[1.0], None, 1.0).unwrap();
-        assert_eq!(empty.cutpoints, vec![0.99, 2.01]);
+        for empty in [&[][..], &[f64::NAN][..]] {
+            assert!(tcut(empty, &[1.0], None, 1.0).is_err());
+            assert!(tcut(empty, &[0.0, 1.0], None, 1.0).is_ok());
+        }
         assert!(tcut(&[1.0], &[0.5], None, 1.0).is_err());
         assert!(tcut(&[1.0], &[2.0], Some(&strings(&["only"])), 1.0).is_err());
     }
@@ -343,6 +352,30 @@ mod tests {
         assert!(tcut(&[0.5], &[], None, 1.0).is_err());
         assert!(tcut(&[0.5], &[0.0, 1.0], None, f64::NAN).is_err());
         assert!(tcut(&[0.5], &[0.0, 1.0, 1.0], None, 1.0).is_ok());
+    }
+
+    #[test]
+    fn interval_counts_and_extreme_breaks_follow_r() {
+        for count in [f64::INFINITY, f64::MAX] {
+            assert!(tcut(&[0.0], &[count], None, 1.0).is_err());
+        }
+        assert_eq!(
+            tcut(&[1.0, 2.0], &[2.5], None, 1.0).unwrap().labels.len(),
+            3
+        );
+        let above_one = tcut(&[1.0, 2.0], &[1.0 + f64::EPSILON], None, 1.0).unwrap();
+        assert_eq!(above_one.cutpoints.len(), above_one.labels.len() + 1);
+        assert!(tcut(&[1.0, 2.0], &[2.5], Some(&strings(&["a", "b", "c"])), 1.0).is_err());
+        for endpoint in [f64::NEG_INFINITY, f64::INFINITY] {
+            assert!(tcut(&[0.0], &[endpoint, endpoint], None, 1.0).is_err());
+        }
+        let cuts = tcut(&[-8.9e307, 8.9e307], &[3.0], None, 1.0)
+            .unwrap()
+            .cutpoints;
+        for (cut, expected) in cuts.iter().zip([-9.078, -3.026, 3.026, 9.078]) {
+            assert!((cut / 1e307 - expected).abs() < 1e-14);
+        }
+        assert!(tcut(&[-1e308, 1e308], &[3.0], None, 1.0).is_err());
     }
 
     #[test]
