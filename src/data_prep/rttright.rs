@@ -372,12 +372,18 @@ pub fn rttright<I: SubjectId>(input: RttrightInput<'_, I>) -> SurvivalResult<Rtt
         }
         let gwt: Vec<f64> = query_times.iter().map(|&t| curve.before(t)).collect();
         for &i in rows {
-            let g_row = curve.before(stop[i]);
-            for (col, (&t, &g_col)) in query_times.iter().zip(&gwt).enumerate() {
-                if has_weight[i] {
-                    weights[i][col] = adjust(casewt[i], g_row.max(g_col));
-                } else if stop[i] >= t && start.as_ref().is_none_or(|s| s[i] < t) {
-                    weights[i][col] = adjust(casewt[i], g_col);
+            let row = &mut weights[i];
+            let w = casewt[i];
+            if has_weight[i] {
+                let g_row = curve.before(stop[i]);
+                for (value, &g_col) in row.iter_mut().zip(&gwt) {
+                    *value = adjust(w, g_row.max(g_col));
+                }
+            } else {
+                for ((value, &t), &g_col) in row.iter_mut().zip(query_times).zip(&gwt) {
+                    if stop[i] >= t && start.as_ref().is_none_or(|s| s[i] < t) {
+                        *value = adjust(w, g_col);
+                    }
                 }
             }
         }

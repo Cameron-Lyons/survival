@@ -403,15 +403,7 @@ impl CoxPHFit {
         se_fit: bool,
     ) -> SurvivalResult<CoxPrediction> {
         self.check_prediction_dimensions()?;
-        let training_count = |i: usize| f64::from(self.status[i]) - self.residuals[i];
-        if newdata.is_none() && !se_fit {
-            return Ok(CoxPrediction {
-                fit: (0..self.n).map(training_count).collect(),
-                se_fit: None,
-            });
-        }
-
-        let (x, time, entry) = match newdata {
+        let (x, time, entry, mut fit) = match newdata {
             Some(newdata) => {
                 self.check_newdata(newdata, true)?;
                 if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
@@ -429,9 +421,30 @@ impl CoxPHFit {
                         "New data has a different survival type than the model",
                     ));
                 }
-                (newdata.x.view(), time, newdata.entry.as_deref())
+                (
+                    newdata.x.view(),
+                    time,
+                    newdata.entry.as_deref(),
+                    Vec::with_capacity(time.len()),
+                )
             }
-            None => (self.x.view(), self.time.as_slice(), self.entry.as_deref()),
+            None => {
+                let fit = self
+                    .status
+                    .iter()
+                    .zip(&self.residuals)
+                    .map(|(&status, &residual)| f64::from(status) - residual)
+                    .collect();
+                if !se_fit {
+                    return Ok(CoxPrediction { fit, se_fit: None });
+                }
+                (
+                    self.x.view(),
+                    self.time.as_slice(),
+                    self.entry.as_deref(),
+                    fit,
+                )
+            }
         };
         let curves = self.baseline_curves()?;
         let log_risk = match newdata {
@@ -444,7 +457,6 @@ impl CoxPHFit {
             None => self.training_prediction_risks(&curves.origins),
         };
         let logs = log_risk.needs_logs(curves.stable).then(|| curves.logs());
-        let mut fit = Vec::with_capacity(time.len());
         let mut se = se_fit.then(|| Vec::with_capacity(time.len()));
         let mut scratch = if se_fit {
             vec![0.0; self.nvar()]
@@ -463,11 +475,9 @@ impl CoxPHFit {
             let end = find_interval(&curve.time, time[i], false);
             if let Some(logs) = logs {
                 let lp = log_risk.scale(i);
-                fit.push(if newdata.is_some() {
-                    logs[stratum].range_hazard(first, end, lp)
-                } else {
-                    training_count(i)
-                });
+                if newdata.is_some() {
+                    fit.push(logs[stratum].range_hazard(first, end, lp));
+                }
                 if let Some(se) = &mut se {
                     for ((value, &x), &mean) in scratch.iter_mut().zip(row).zip(&self.means) {
                         *value = x - mean;
@@ -476,13 +486,11 @@ impl CoxPHFit {
                 }
             } else {
                 let risk = log_risk.scale(i).exp_at(0.0);
-                fit.push(if newdata.is_some() {
+                if newdata.is_some() {
                     let hazard_at =
                         |index: usize| index.checked_sub(1).map_or(0.0, |j| curve.cumhaz[j]);
-                    (hazard_at(end) - hazard_at(first)) * risk
-                } else {
-                    training_count(i)
-                });
+                    fit.push((hazard_at(end) - hazard_at(first)) * risk);
+                }
                 if let Some(se) = &mut se {
                     let integrated = curves.integrated(stratum);
                     let mut variance_at = |index| {
