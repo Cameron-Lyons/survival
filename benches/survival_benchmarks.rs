@@ -981,6 +981,21 @@ mod cox_regression {
         bencher.bench_local(|| fit.predict_survival_at(&times, None).unwrap());
     }
 
+    #[divan::bench(args = [1000, 10000, 50000])]
+    fn coxph_expected_small_batch_with_errors(bencher: divan::Bencher, n: usize) {
+        let fit = fitted_coxph_model(n, 4);
+        let newdata = survival::regression::CoxNewData::try_new(
+            generate_covariates(8, 4),
+            None,
+            None,
+            Some((1..=8).map(|i| f64::from(i * 2)).collect()),
+            None,
+        )
+        .unwrap();
+        fit.predict_expected(Some(&newdata), true).unwrap();
+        bencher.bench_local(|| fit.predict_expected(Some(&newdata), true).unwrap());
+    }
+
     #[divan::bench(args = [100, 1000, 5000])]
     fn coxph_efron(bencher: divan::Bencher, n: usize) {
         let (time, status, covariates) = generate_tied_regression_data(n, 4);

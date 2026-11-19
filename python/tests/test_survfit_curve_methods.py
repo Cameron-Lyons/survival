@@ -189,6 +189,49 @@ def test_turnbull_start_time_keeps_intervals_ending_after_it():
     assert _turnbull(start_time=3).n == [6]
 
 
+@pytest.mark.parametrize(
+    ("timefix", "n", "grid", "survival_at_first"),
+    [
+        (True, 3, [4, 4.5, 6], 1 / 3),
+        (False, 4, [2 + 1e-12, 4, 4.5, 6], 0.62500632463064165),
+    ],
+)
+def test_turnbull_rounds_near_ties_before_the_cutoff(timefix, n, grid, survival_at_first):
+    data = {"time": [2, 2 + 1e-12, 4, 5, 6], "s": [1, 1, 1, 0, 1]}
+    fit = r.survfit('Surv(time, s, type="left") ~ 1', data, start_time=2 + 5e-13, timefix=timefix)
+    assert fit.n == [n]
+    assert fit.time == grid
+    assert fit.surv[0] == pytest.approx(survival_at_first)
+
+
+def test_turnbull_validates_collapsing_intervals_before_removing_early_rows():
+    data = {"l": [1, 2, 3], "r": [1 + 1e-12, 3, 3]}
+    with pytest.raises(ValueError, match="an interval has effective length 0"):
+        _turnbull(data, start_time=2)
+    fit = _turnbull(data, start_time=2, timefix=False)
+    assert fit.n == [2]
+    assert fit.time == [3.0]
+
+
+def test_turnbull_accepts_unbounded_cutoffs():
+    fit = _turnbull()
+    left_unbounded = _turnbull(start_time=-math.inf)
+    assert left_unbounded.n == fit.n
+    assert left_unbounded.time == fit.time
+    assert left_unbounded.surv == fit.surv
+    with pytest.raises(ValueError, match="greater than all time points"):
+        _turnbull(start_time=math.inf)
+
+
+def test_turnbull_cutoff_uses_only_observed_endpoints_for_timefix():
+    near_one = math.nextafter(1.0, math.inf)
+    data = {"l": [near_one, 2], "r": [None, 3]}
+    fit = _turnbull(data)
+    left_unbounded = _turnbull(data, start_time=-math.inf)
+    assert left_unbounded.time == fit.time == [near_one, 2.5]
+    assert left_unbounded.surv == fit.surv
+
+
 def test_turnbull_start_time_drops_empty_stratum_and_keeps_case_weights_aligned():
     data = {
         "l": [1, 1, 1, 4, 2, 5],

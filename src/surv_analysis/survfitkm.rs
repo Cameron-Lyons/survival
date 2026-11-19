@@ -6,6 +6,7 @@ use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
+use crate::internal::risk_weight;
 use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_empty,
@@ -18,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
-mod risk_weight;
 mod robust;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

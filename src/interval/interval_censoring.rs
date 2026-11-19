@@ -1,3 +1,4 @@
+use super::turnbull_em::TurnbullWeights;
 use crate::data_prep::aeq_surv;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::sorting::sorted_indices_by;
@@ -324,7 +325,9 @@ fn turnbull_jump_points(
             }
         }
     }
-    brackets.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // R orders tied finite endpoints by bracket type, including -0 and +0.
+    let by_time = |a: &f64, b: &f64| a.partial_cmp(b).expect("validated finite endpoints");
+    brackets.sort_by(|a, b| by_time(&a.0, &b.0).then_with(|| a.1.cmp(&b.1)));
     let mut jtimes: Vec<f64> = brackets
         .iter()
         .filter(|(_, kind)| *kind == 0)
@@ -343,7 +346,7 @@ fn turnbull_jump_points(
             jtimes.push(time1[i]);
         }
     }
-    jtimes.sort_by(f64::total_cmp);
+    jtimes.sort_by(by_time);
     jtimes.dedup();
     (jtimes, mintime)
 }
@@ -475,12 +478,7 @@ fn turnbull_curve(
     let mut eps = 1.0;
     let mut jump_history: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; njump]);
     let mut accelerated = Vec::new();
-    let loglik = |jumps: &[f64]| -> f64 {
-        supports
-            .iter()
-            .map(|support| jumps[support.clone()].iter().sum::<f64>().ln())
-            .sum()
-    };
+    let mut imputation = TurnbullWeights::new(&supports, &lwt, njump);
     while eps > TURNBULL_EPS {
         iter += 1;
         if iter > TURNBULL_MAX_ITER {
@@ -505,7 +503,7 @@ fn turnbull_curve(
                     current[j]
                 });
             }
-            if loglik(&accelerated) < loglik(current) {
+            if imputation.loglik(&accelerated) < imputation.loglik(current) {
                 current
             } else {
                 &accelerated
@@ -514,20 +512,7 @@ fn turnbull_curve(
             current
         };
 
-        let wt2 = &mut fit_weights[real.len()..];
-        wt2.fill(0.0);
-        for (support, &weight) in supports.iter().zip(&lwt) {
-            let denominator: f64 = jumps[support.clone()].iter().sum();
-            let multiplier = weight / denominator;
-            if !multiplier.is_finite() {
-                return Err(SurvivalError::invalid_input(
-                    "interval-censored observation has no finite probability mass",
-                ));
-            }
-            for j in support.clone() {
-                wt2[j] += multiplier * jumps[j];
-            }
-        }
+        imputation.redistribute(jumps, &mut fit_weights[real.len()..])?;
         validate_finite(&fit_weights, "weights")?;
         validate_non_negative(&fit_weights, "weights")?;
         product_limit_at_jumps(
@@ -634,18 +619,19 @@ pub fn turnbull(input: &TurnbullInput<'_>) -> SurvivalResult<TurnbullResult> {
     let n = input.time1.len();
     let conf_type = ConfType::parse(input.conf_type)?;
     let (time1, time2) = if input.timefix {
-        let mut all: Vec<f64> = input.time1.to_vec();
-        let interval_rows: Vec<usize> = (0..n)
-            .filter(|&i| status[i] == IntervalStatus::Interval)
-            .collect();
-        all.extend(interval_rows.iter().map(|&i| input.time2[i]));
-        let mut fixed = aeq_surv(&all, None, None)?.time;
-        let mut time2 = input.time2.to_vec();
-        for (k, &i) in interval_rows.iter().enumerate() {
-            time2[i] = fixed[n + k];
+        // Keep the interval pairs aligned so aeqSurv detects newly collapsed
+        // intervals. Other observations have no upper endpoint.
+        let mut upper = input.time2.to_vec();
+        for (t, code) in upper.iter_mut().zip(&status) {
+            if *code != IntervalStatus::Interval {
+                *t = f64::NAN;
+            }
         }
-        fixed.truncate(n);
-        (Cow::Owned(fixed), Cow::Owned(time2))
+        let fixed = aeq_surv(input.time1, Some(&upper), None)?;
+        (
+            Cow::Owned(fixed.time),
+            Cow::Owned(fixed.time2.expect("second time column supplied")),
+        )
     } else {
         (Cow::Borrowed(input.time1), Cow::Borrowed(input.time2))
     };
@@ -860,6 +846,32 @@ mod tests {
     }
 
     #[test]
+    fn signed_zero_endpoints_follow_the_same_bracket_order_as_r() {
+        for lower_zero in [-0.0, 0.0] {
+            for upper_zero in [-0.0, 0.0] {
+                // (-2, 0] and (0, 2] have disjoint support, regardless of sign.
+                let (jumps, first) = turnbull_jump_points(
+                    &[-2.0, lower_zero],
+                    &[upper_zero, 2.0],
+                    &mut [IntervalStatus::Interval; 2],
+                );
+                assert_eq!(jumps, [-1.0, 1.0]);
+                assert_eq!(first, -1.0);
+            }
+        }
+        // Like sort(unique(jtimes)) in R, keep the first exact zero.
+        for first in [-0.0_f64, 0.0] {
+            let (jumps, _) = turnbull_jump_points(
+                &[first, -first],
+                &[f64::NAN; 2],
+                &mut [IntervalStatus::Exact; 2],
+            );
+            assert_eq!(jumps.len(), 1);
+            assert_eq!(jumps[0].to_bits(), first.to_bits());
+        }
+    }
+
+    #[test]
     fn finite_extreme_intervals_have_finite_midpoints() {
         for (lower, upper) in [(1.0e308_f64, 1.5e308_f64), (-1.5e308, -1.0e308)] {
             let fit = turnbull(&TurnbullInput {
@@ -1055,6 +1067,45 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("no finite probability mass"));
+    }
+
+    #[test]
+    fn timefix_rejects_collapsed_intervals_and_preserves_exact_observations() {
+        let time = [1.0, 2.0];
+        // The second endpoint is unused on exact rows.
+        let adjacent = [1.0_f64.next_up(), f64::NAN];
+        for weight in [0.0, 1.0] {
+            let weights = [weight, 1.0];
+            let input = TurnbullInput {
+                time1: &time,
+                time2: &adjacent,
+                status: &[3, 1],
+                weights: Some(&weights),
+                group: None,
+                conf_level: 0.95,
+                conf_type: "none",
+                timefix: true,
+                se_fit: false,
+                robust: None,
+            };
+            let error = turnbull(&input).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("an interval has effective length 0")
+            );
+            let equal = turnbull(&TurnbullInput {
+                time2: &[1.0, f64::NAN],
+                ..input
+            })
+            .unwrap();
+            let exact = turnbull(&TurnbullInput {
+                status: &[1, 1],
+                ..input
+            })
+            .unwrap();
+            assert_eq!(equal.curves, exact.curves);
+        }
     }
 
     #[test]

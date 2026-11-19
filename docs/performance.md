@@ -58,8 +58,10 @@ the Rust benchmarks. Save a previous release with `--extension`, then use
 and Borgan score contributions alongside the complete-call timings.
 
 `benches/python/bench_turnbull.py` measures disjoint and overlapping intervals,
-including fractional weights and mixed censoring. Use `--extension` to select a
-saved native build and `--compare` to check all curve fields and iteration counts.
+including full-span intervals, varied inspection widths, fractional weights and
+mixed censoring. Use `--extension` to select a saved native build and
+`--compare` to check exact agreement of the survival estimates, uncertainty,
+counts and iterations on the same platform.
 
 `scripts/benchmark_interaction.py` measures formula interactions with sparse
 observed combinations, checking their labels and level order before reporting
@@ -96,9 +98,13 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 
 - Turnbull fits store contiguous jump ranges for censored observations, using
   O(n + j) membership storage for n observations and j jump points. Initial
-  overlap counts use endpoint updates. Each EM iteration visits the jumps
-  covered by each interval, so wide overlapping intervals can require O(n j)
-  work. The Kaplan–Meier update sorts the augmented observation rows once.
+  overlap counts use endpoint updates. For dense grids, intervals with the
+  same first jump reuse partial sums of jump probabilities. Large fits split
+  the jump grid across workers, each accumulating the observations in input
+  order. Each EM iteration still takes O(n j) work in the worst case. Preserving
+  the order of the floating-point sums keeps the acceleration and stopping
+  decisions reproducible across worker counts. The Kaplan–Meier update sorts
+  the augmented observation rows once.
   Each iteration then takes O(n + j) time for the product-limit calculation,
   accumulating tied weights in the same order as the full kernel. The final
   fit supplies risk counts, standard errors and confidence limits. Grouped
@@ -150,10 +156,13 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - `survfit.coxph(newdata)` curve columns become Kaplan–Meier engines in one native
   call that reads the time-by-curve matrices directly, with no per-element Python
   conversion.
-- Requested-time summaries choose a forward sweep for dense ordered queries and
-  binary search for sparse or unordered ones, comparing the query count with the
-  grid size divided by its search depth; count accumulation streams prefix sums in
-  R's addition order. Compact tables read restricted-mean rectangles directly from
+- Requested-time summaries read the fitted columns directly and supply the
+  time-zero row during lookup. A sparse query with per-time counts allocates
+  space proportional to the returned points. The lookup uses a forward sweep
+  for dense ordered queries and binary search for sparse or unordered ones.
+  It compares the query count with the grid size divided by its search depth.
+  Count accumulation streams prefix sums in R's addition order. Compact tables
+  read restricted-mean rectangles directly from
   the curve with scratch storage proportional to the number of curves, and median
   searches stop at the required crossing. `print_survfit` uses these compact
   kernels directly and never builds the per-observation arrays of
@@ -262,6 +271,12 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   instead of a time-by-covariate matrix; time-dependent subjects find their
   baseline rows by binary search (O(I log T + U) for I intervals and U selected
   rows) and are grouped in one pass.
+- Expected-event predictions with standard errors integrate baseline variances
+  and covariate means on first use of each requested stratum. Subsequent calls
+  reuse those integrals, and each observation uses one lookup per endpoint for
+  both its prediction and its standard error. The ordinary-risk calculation
+  retains one variance and one value per covariate at each baseline time in
+  the requested strata.
 - Expected-event, survival-at-time and cohort predictions compute risks with one
   reusable centered row (O(p) temporary storage). Grouped predictions are summed
   inside the native call, so term output storage is O(G × T) for G groups and T
@@ -332,9 +347,16 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   strided and Fortran-ordered arrays retain the same row and column order.
 - Redistribution-to-the-right weights group observed strata, with storage
   proportional to the rows and observed groups instead of the largest label.
+  Strata without censoring skip the time sorts. Widely separated weights and
+  totals at risk of overflow use exact risk-set updates and log ratios.
+  Counting-process histories can also drive censoring survival below the
+  normal floating-point range. Those curves repeat the sweep on the log scale.
   The native redistribution and Cox detail computations release the GIL.
 - Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order.
   The ordinary log-rank test (`rho=0`) skips the weight calculation.
+  Sample sizes include every row. Event-free strata skip sorting. In strata
+  with more censorings than events, sorting and risk-set calculations start
+  with rows whose follow-up reaches the first event.
   The covariance update visits only groups present in the stratum.
   The `logrank::two_groups_per_stratum` benchmark measures this case.
 - Rate-table matching folds table labels once and indexes exact matches; a small

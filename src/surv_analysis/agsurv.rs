@@ -4,12 +4,12 @@ use crate::core::strata_order::validate_intervals;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::matrix::matrix_rows;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec};
-use crate::internal::step::{find_interval, sort_unique, step_at};
+use crate::internal::step::{sort_unique, step_at};
 use crate::internal::validation::{
     ValidationError, validate_binary_f64, validate_binary_i32, validate_finite, validate_length,
     validate_non_negative, validate_positive, validate_sorted,
 };
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -858,10 +858,7 @@ fn validate_variance_values(varmat: Option<&Array2<f64>>) -> SurvivalResult<()> 
     Ok(())
 }
 
-pub fn cumhaz_at(curve: &AgsurvCurve, t: f64) -> f64 {
-    step_at(&curve.time, &curve.cumhaz, t, 0.0)
-}
-
+#[derive(Debug, Clone)]
 pub struct IntegratedCurve {
     pub cum_varhaz: Vec<f64>,
     pub cum_xbar: Array2<f64>,
@@ -885,13 +882,6 @@ pub fn integrate_curve(curve: &AgsurvCurve) -> IntegratedCurve {
     IntegratedCurve {
         cum_varhaz,
         cum_xbar,
-    }
-}
-
-pub fn cum_xbar_at(curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64) -> Array1<f64> {
-    match find_interval(&curve.time, t, false) {
-        0 => Array1::zeros(integrated.cum_xbar.ncols()),
-        index => integrated.cum_xbar.row(index - 1).to_owned(),
     }
 }
 

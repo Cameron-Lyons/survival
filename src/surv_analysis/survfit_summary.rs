@@ -36,7 +36,7 @@ pub(crate) fn survfit0_with(fit: &SurvfitKMResult, keep_influence: bool) -> Surv
         for (range, &insert) in ranges.iter().zip(&inserts) {
             if insert {
                 out.push(if first {
-                    values.get(range.start).copied().unwrap_or(zero)
+                    values[range.clone()].first().copied().unwrap_or(zero)
                 } else {
                     zero
                 });
@@ -508,111 +508,110 @@ pub fn summary_survfit_times_with_counts(
         ));
     }
     let ordered = increasing || times.windows(2).all(|pair| pair[1] >= pair[0]);
-    let fit0 = survfit0_with(fit, false);
-    let ranges = fit0.curve_ranges();
+    let ranges = fit.curve_ranges();
     let mut out = SurvfitKMResult {
-        n: fit0.n.clone(),
+        n: fit.n.clone(),
         time: Vec::new(),
         n_risk: Vec::new(),
         n_event: Vec::new(),
         n_censor: Vec::new(),
-        n_enter: fit0.n_enter.as_ref().map(|_| Vec::new()),
+        n_enter: fit.n_enter.as_ref().map(|_| Vec::new()),
         counts: None,
         surv: Vec::new(),
-        std_err: fit0.std_err.as_ref().map(|_| Vec::new()),
+        std_err: fit.std_err.as_ref().map(|_| Vec::new()),
         cumhaz: Vec::new(),
-        std_chaz: fit0.std_chaz.as_ref().map(|_| Vec::new()),
-        lower: fit0.lower.as_ref().map(|_| Vec::new()),
-        upper: fit0.upper.as_ref().map(|_| Vec::new()),
-        strata: fit0.strata.as_ref().map(|_| Vec::new()),
-        strata_codes: fit0.strata_codes.clone(),
-        n_id: fit0.n_id.clone(),
+        std_chaz: fit.std_chaz.as_ref().map(|_| Vec::new()),
+        lower: fit.lower.as_ref().map(|_| Vec::new()),
+        upper: fit.upper.as_ref().map(|_| Vec::new()),
+        strata: fit.strata.as_ref().map(|_| Vec::new()),
+        strata_codes: fit.strata_codes.clone(),
+        n_id: fit.n_id.clone(),
         logse: false,
-        conf_int: fit0.conf_int,
-        conf_type: fit0.conf_type.clone(),
-        conf_lower: fit0.conf_lower.clone(),
-        type_: fit0.type_.clone(),
-        t0: fit0.t0,
+        conf_int: fit.conf_int,
+        conf_type: fit.conf_type.clone(),
+        conf_lower: fit.conf_lower.clone(),
+        type_: fit.type_.clone(),
+        t0: fit.t0,
         influence_surv: None,
         influence_chaz: None,
     };
-    for range in &ranges {
-        let curve_time = &fit0.time[range.clone()];
-        if let [first, second, ..] = curve_time
-            && second < first
+    for range in ranges {
+        // Look up observed rows directly. A prepended survfit0 row has survival
+        // and limits of one, zero counts and hazards, and the first risk count.
+        let observed = &fit.time[range.clone()];
+        let has_origin = observed.first() == Some(&fit.t0);
+        if observed.first().is_some_and(|&first| first < fit.t0)
+            || (has_origin && observed.get(1).is_some_and(|&second| second < fit.t0))
         {
             return Err(SurvivalError::invalid_input(
                 "'vec' must be sorted non-decreasingly and not contain NAs",
             ));
         }
-        let times: Vec<f64> = if extend {
-            times.to_vec()
+        let start = out.time.len();
+        if extend {
+            out.time.extend_from_slice(times);
         } else {
-            let maxtime = curve_time.iter().copied().fold(f64::NAN, f64::max);
-            times.iter().copied().filter(|&t| t <= maxtime).collect()
-        };
-        if curve_time.is_empty() {
-            return Err(SurvivalError::invalid_input(
-                "no points selected for one or more curves, data error (?) or consider using the extend argument",
-            ));
+            let last = observed.last().copied().unwrap_or(fit.t0);
+            out.time
+                .extend(times.iter().copied().filter(|&t| t <= last));
         }
-        let (index1, index2) = summary_time_indices(curve_time, &times, ordered);
-        let ssub = |values: &[f64]| -> Vec<f64> {
-            index1
-                .iter()
-                .map(|&i| values[range.start + i.max(1) - 1])
-                .collect()
+        let queries = &out.time[start..];
+        let (closed, open) = summary_time_indices(observed, queries, ordered);
+        let select = |out: &mut Vec<f64>, values: &[f64], initial: f64| {
+            let values = &values[range.clone()];
+            // R's ssub clamps an index before the first row to that row. It can
+            // already contain events when the first observed time equals t0.
+            let first = if has_origin { values[0] } else { initial };
+            out.extend(
+                closed
+                    .iter()
+                    .map(|&i| if i == 0 { first } else { values[i - 1] }),
+            );
         };
-        let delta = |values: &[f64]| -> Vec<f64> {
-            let mut cumulative = 0.0;
-            let mut previous = 0.0;
-            let mut cursor = 0;
-            index1
-                .iter()
-                .map(|&i| {
-                    while cursor < i {
-                        cumulative += values[range.start + cursor];
-                        cursor += 1;
-                    }
-                    let out = cumulative - previous;
-                    previous = cumulative;
-                    out
-                })
-                .collect()
-        };
-        let counts =
-            |values: &[f64]| -> Vec<f64> { if dosum { delta(values) } else { ssub(values) } };
-        out.time.extend_from_slice(&times);
-        for (target, source) in [(&mut out.surv, &fit0.surv), (&mut out.cumhaz, &fit0.cumhaz)] {
-            target.extend(ssub(source));
-        }
-        for (target, source) in [
-            (&mut out.std_err, &fit0.std_err),
-            (&mut out.std_chaz, &fit0.std_chaz),
-            (&mut out.lower, &fit0.lower),
-            (&mut out.upper, &fit0.upper),
+        select(&mut out.surv, &fit.surv, 1.0);
+        select(&mut out.cumhaz, &fit.cumhaz, 0.0);
+        for (target, source, initial) in [
+            (&mut out.std_err, &fit.std_err, 0.0),
+            (&mut out.std_chaz, &fit.std_chaz, 0.0),
+            (&mut out.lower, &fit.lower, 1.0),
+            (&mut out.upper, &fit.upper, 1.0),
         ] {
             if let (Some(target), Some(source)) = (target, source) {
-                target.extend(ssub(source));
+                select(target, source, initial);
             }
         }
-        out.n_risk.extend(index2.iter().map(|&i| {
-            if i <= range.len() {
-                fit0.n_risk[range.start + i - 1]
+        let risk = &fit.n_risk[range.clone()];
+        out.n_risk.extend(
+            open.iter()
+                .map(|&i| risk.get(i - 1).copied().unwrap_or(0.0)),
+        );
+        let counts = |target: &mut Vec<f64>, values: &[f64]| {
+            if dosum {
+                let values = &values[range.clone()];
+                let mut previous = 0;
+                let mut total = 0.0;
+                target.extend(closed.iter().map(|&i| {
+                    let before = total;
+                    for &value in &values[previous..i] {
+                        total += value;
+                    }
+                    previous = i;
+                    total - before
+                }));
             } else {
-                0.0
+                select(target, values, 0.0);
             }
-        }));
-        out.n_event.extend(counts(&fit0.n_event));
-        out.n_censor.extend(counts(&fit0.n_censor));
-        if let (Some(target), Some(source)) = (&mut out.n_enter, &fit0.n_enter) {
-            target.extend(counts(source));
+        };
+        counts(&mut out.n_event, &fit.n_event);
+        counts(&mut out.n_censor, &fit.n_censor);
+        if let (Some(target), Some(source)) = (&mut out.n_enter, &fit.n_enter) {
+            counts(target, source);
         }
         if let Some(strata) = &mut out.strata {
-            strata.push(times.len());
+            strata.push(queries.len());
         }
     }
-    if fit0.logse
+    if fit.logse
         && let Some(std_err) = &mut out.std_err
     {
         for (se, surv) in std_err.iter_mut().zip(&out.surv) {
@@ -1110,6 +1109,55 @@ mod tests {
                 summary_survfit_times_with_counts(&fit, &times, false, Some(false))
                     .unwrap()
                     .n_event,
+            );
+        }
+    }
+
+    #[test]
+    fn summaries_keep_empty_strata_and_distinguish_observed_and_inserted_origins() {
+        use crate::surv_analysis::survfitkm::StackedCurves;
+
+        let fit = SurvfitKMResult::from_stacked(StackedCurves::new(
+            vec![0.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
+            vec![4.0, 3.0, 2.0, 1.0, 4.0, 3.0, 2.0, 1.0],
+            vec![1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+            vec![0.75, 0.75, 0.375, 0.375, 0.75, 0.5, 0.5, 0.5],
+            Some(vec![0, 4, 0, 4]),
+            vec![0, 4, 0, 4],
+        ))
+        .unwrap();
+        let with_origin = survfit0(&fit);
+        assert_eq!(
+            with_origin.n_risk,
+            [0., 4., 3., 2., 1., 0., 4., 4., 3., 2., 1.]
+        );
+
+        let times = [-1., 0., 0.5, 2., 5.];
+        for dosum in [true, false] {
+            let summary =
+                |fit| summary_survfit_times_with_counts(fit, &times, true, Some(dosum)).unwrap();
+            let out = summary(&fit);
+            assert_eq!(out, summary(&with_origin));
+            assert_eq!(out.strata, Some(vec![5; 4]));
+            for i in [0, 10] {
+                assert_eq!(&out.n_risk[i..i + 5], &[0.; 5]);
+                assert_eq!(&out.n_event[i..i + 5], &[0.; 5]);
+                assert_eq!(&out.surv[i..i + 5], &[1.; 5]);
+            }
+            // Stock summary.survfit with the two populated strata.
+            assert_eq!(&out.n_risk[5..10], &[4., 4., 3., 3., 0.]);
+            assert_eq!(&out.n_risk[15..20], &[4., 4., 4., 3., 0.]);
+            assert_eq!(&out.surv[5..10], &[0.75, 0.75, 0.75, 0.75, 0.375]);
+            assert_eq!(&out.surv[15..20], &[1., 1., 1., 0.5, 0.5]);
+            let events = if dosum {
+                [0., 1., 0., 0., 1.]
+            } else {
+                [1., 1., 1., 0., 0.]
+            };
+            assert_eq!(&out.n_event[5..10], &events);
+            assert_eq!(
+                &out.n_event[15..20],
+                &[0., 0., 0., if dosum { 2. } else { 1. }, 0.]
             );
         }
     }

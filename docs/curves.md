@@ -381,3 +381,7 @@ data, with the forward KM risk count at `t` equal to the number of starts below
 `t` less the intervals ending before `t`; the formula interface refuses
 counting-process responses, as R's `survdiff` does. Near-tie normalization runs
 first and rejects intervals whose length becomes zero.
+
+In a `survdiff` formula, `cluster(site)` groups observations by site.
+`cluster(site) + cluster(arm)` compares the observed site and arm combinations.
+Use `strata(site)` to compare the other groups within each site.

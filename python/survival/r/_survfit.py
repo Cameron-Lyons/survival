@@ -929,14 +929,24 @@ def _aj_result(
     )
 
 
-def _interval_coding(y: Surv) -> tuple[Sequence[float], Sequence[float], list[int]]:
+def _interval_coding(
+    y: Surv, *, timefix: bool
+) -> tuple[Sequence[float], Sequence[float], list[int]]:
     """R's ``Surv(type = "interval")`` columns: time1, time2 (interval rows) and status."""
 
     status = y._event_codes()
-    if y.type == "left":
-        return y.time, y.time, [2 if value == 0 else 1 for value in status]
-    time2 = [math.nan if value is None else float(value) for value in y.time2 or ()]
-    return y.time, time2, status
+    time1: Sequence[float] = y.time
+    time2: Sequence[float] | None = y.time2
+    if timefix:
+        # Only interval rows have two endpoints. Exclude the stored placeholder
+        # on other rows from the near-tie calculation, as in the native fitter.
+        if time2 is not None:
+            time2 = [hi if code == 3 else math.nan for hi, code in zip(time2, status, strict=True)]
+        fixed = _core.aeq_surv(time1, time2)
+        time1, time2 = fixed.time, fixed.time2
+    if time2 is None:
+        return time1, time1, [2 if value == 0 else 1 for value in status]
+    return time1, time2, status
 
 
 def _survfitTurnbull(
@@ -968,8 +978,9 @@ def _survfitTurnbull(
         raise ValueError("cluster is not supported for interval-censored data")
     if frame.y.start is not None:
         raise ValueError("survfitTurnbull not appropriate for counting process data")
-    start = _start_time_value(start_time)
-    time1, time2, status = _interval_coding(frame.y)
+    start = _start_time_value(start_time, allow_infinite=True)
+    # survfit.formula rounds the full response before survfitTurnbull applies start.time.
+    time1, time2, status = _interval_coding(frame.y, timefix=timefix and start is not None)
     strata_codes = frame.strata_codes
     levels = frame.x_levels
     weights = frame.weights
@@ -991,7 +1002,7 @@ def _survfitTurnbull(
             if strata_codes is not None:
                 strata_codes = [strata_codes[row] for row in rows]
                 levels = [frame.x_levels[code] for code in sorted(set(strata_codes))]
-    result = _core.turnbull(
+    engine = _core.turnbull(
         time1,
         time2,
         status,
@@ -999,14 +1010,12 @@ def _survfitTurnbull(
         group=strata_codes,
         conf_level=conf_int,
         conf_type=conf_type,
-        timefix=timefix,
+        timefix=timefix and start is None,
         se_fit=se_fit,
         robust=robust,
-    )
+    ).fit
     call = SurvfitCall(frame.terms, 1, 1, timefix, start, id=id_name)
-    return _km_result(
-        result.fit, levels, call, frame.model, se_fit, None, na_action=frame.na_action
-    )
+    return _km_result(engine, levels, call, frame.model, se_fit, None, na_action=frame.na_action)
 
 
 def _engine_of(x: Any) -> Any:

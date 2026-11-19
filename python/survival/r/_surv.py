@@ -453,29 +453,25 @@ def _interval2_columns(
     time2 = _time_column(right, "time2", "Time2 must be numeric")
     if len(time2) != len(time):
         raise ValueError("time and time2 are different lengths")
-    backwards = [
-        not (math.isnan(a) or math.isnan(b)) and a > b for a, b in zip(time, time2, strict=True)
-    ]
-    time = [value if math.isfinite(value) else math.nan for value in time]
-    time2 = [value if math.isfinite(value) else math.nan for value in time2]
+    backwards = False
     status: list[int | None] = []
-    for left, right_value, bad in zip(time, time2, backwards, strict=True):
-        if bad or (math.isnan(left) and math.isnan(right_value)):
-            status.append(None)
-        elif math.isnan(left):
-            status.append(2)
-        elif math.isnan(right_value):
-            status.append(0)
-        elif left == right_value:
-            status.append(1)
+    for row, (left, upper) in enumerate(zip(time, time2, strict=True)):
+        finite_upper = math.isfinite(upper)
+        if not finite_upper:
+            time2[row] = math.nan
+        if not math.isfinite(left):
+            time[row] = time2[row]
+            code = 2 if finite_upper else None
+        elif not finite_upper:
+            code = 0
         else:
-            status.append(3)
-    if any(backwards):
+            code = 1 if left == upper else 3
+        if left > upper:
+            backwards = True
+            code = None
+        status.append(code)
+    if backwards:
         _warn_outside_package("Invalid interval: start > stop, NA created")
-    time = [
-        right_value if code == 2 else left
-        for left, right_value, code in zip(time, time2, status, strict=True)
-    ]
     return time, time2, status
 
 

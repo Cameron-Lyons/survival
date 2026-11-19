@@ -7,6 +7,7 @@ pub(crate) mod matrix;
 pub(crate) mod numpy_utils;
 pub(crate) mod pickle;
 pub(crate) mod qr;
+pub(crate) mod risk_weight;
 pub(crate) mod rng;
 pub(crate) mod simd;
 pub(crate) mod sorting;

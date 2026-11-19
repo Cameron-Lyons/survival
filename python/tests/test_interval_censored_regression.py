@@ -129,3 +129,36 @@ def test_invalid_observations_are_rejected(code, left, right, message):
             0,
             interval.IntervalDistribution.Weibull,
         )
+
+
+def test_turnbull_aitken_convergence_matches_stock_r():
+    # Lightly weighted exact events locate the jumps. Most interval observations
+    # span the middle of the grid, covering 9,883 jump visits in total.
+    rows = np.arange(150)
+    times = rows + 1
+    lower = (5 * rows % 97) % 75
+    upper = 150 - (29 * rows % 97) % 75
+    upper[::4] = lower[::4] + 1
+    (curve,) = interval.turnbull(
+        np.r_[times, lower],
+        np.r_[times, upper],
+        [1] * 150 + [3] * 150,
+        weights=[0.01] * 150 + [1.0] * 150,
+        timefix=False,
+        se_fit=False,
+    ).curves
+
+    # Stock survival 3.8-11 called survfitKM once per iteration.
+    assert curve.iterations == 167
+    np.testing.assert_array_equal(curve.time, times)
+    positions = [31, 78, 96]
+    np.testing.assert_allclose(
+        np.asarray(curve.surv)[positions],
+        [0.8180503976609773, 0.023561787069174576, 0.008150261305521099],
+        rtol=1e-8,
+    )
+    np.testing.assert_allclose(
+        np.asarray(curve.n_event)[positions],
+        [0.018260458876189933, 0.3568234023356351, 0.04682734930357703],
+        rtol=1e-8,
+    )

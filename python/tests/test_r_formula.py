@@ -206,6 +206,16 @@ def test_model_frame_applies_subset_then_na_action():
         r_formula.model_frame("Surv(time, status) ~ 1", data, weights=[1.0, 2.0])
 
 
+def test_model_frame_extra_column_named_terms_survives_row_selection():
+    frame = survival.r.model_frame(
+        "Surv(t, s) ~ 1",
+        {"t": [1, 2, 3], "s": [0, 1, 1]},
+        subset=[2, 1, 0],
+        extra={"terms": [5, None, 6]},
+    )
+    assert frame == {"time": [3.0, 1.0], "status": [1, 0], "terms": [6, 5]}
+
+
 def test_arithmetic_responses_and_call_terms_evaluate_against_data():
     data = {"stop": [365.25, 730.5], "event": [1, 0], "age": [40, 60]}
     mf = r_formula.model_frame("Surv(stop / 365.25, event) ~ cut(age + 48, c(0, 100, 200))", data)

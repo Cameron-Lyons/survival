@@ -8,7 +8,9 @@ use super::scaling::{PredictorOrigin, add_predictor_parts, predictor_origin_scal
 use crate::error::SurvivalResult;
 use crate::regression::log_risk_sweep::{LogMomentTree, LogMoments, LogRiskSweep, LogRiskTime};
 use crate::regression::log_scale::LogScale;
-use crate::surv_analysis::agsurv::{AgsurvCurve, CoxSurvCurve, CoxSurvType, IndividualInterval};
+use crate::surv_analysis::agsurv::{
+    AgsurvCurve, CoxSurvCurve, CoxSurvType, IndividualInterval, IntegratedCurve, integrate_curve,
+};
 use ndarray::{Array2, ArrayView2};
 use std::ops::Deref;
 use std::sync::OnceLock;
@@ -21,6 +23,7 @@ pub(super) struct CachedCurves {
     pub reference_offset: f64,
     pub kp_logs: Option<Vec<Vec<f64>>>,
     logs: OnceLock<Vec<LogCurve>>,
+    integrated: OnceLock<Vec<OnceLock<IntegratedCurve>>>,
 }
 
 impl Deref for CachedCurves {
@@ -39,6 +42,7 @@ impl CachedCurves {
             origins,
             kp_logs: None,
             logs: OnceLock::new(),
+            integrated: OnceLock::new(),
         }
     }
 
@@ -71,6 +75,13 @@ impl CachedCurves {
                 })
                 .collect()
         })
+    }
+
+    pub fn integrated(&self, stratum: usize) -> &IntegratedCurve {
+        let strata = self
+            .integrated
+            .get_or_init(|| (0..self.len()).map(|_| OnceLock::new()).collect());
+        strata[stratum].get_or_init(|| integrate_curve(&self[stratum]))
     }
 }
 
@@ -512,6 +523,7 @@ impl CoxPHFit {
             reference_offset: offset_mean,
             kp_logs: None,
             logs: OnceLock::from(logs),
+            integrated: OnceLock::new(),
         })
     }
 }

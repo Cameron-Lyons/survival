@@ -67,6 +67,42 @@ def test_survdiff_single_observed_stratum_returns_group_vectors():
     assert result.exp == pytest.approx([1.4, 2.6])
 
 
+def test_survdiff_cluster_term_groups_like_r():
+    data = {
+        "time": range(1, 9),
+        "status": [1, 1, 0, 1, 0, 0, 1, 1],
+        "a": r._coerce._r_factor(["y", "x", None, "y", "x", "y", "x", "y"], ["y", "x"]),
+        "b": [2, 1, 1, 1, 2, 1, 2, 3],
+    }
+    result = r.survdiff("Surv(time, status) ~ cluster(a) + b", data, rho=0.5)
+    assert result.groups == [
+        "cluster(a)=y, b=1",
+        "cluster(a)=y, b=2",
+        "cluster(a)=y, b=3",
+        "cluster(a)=x, b=1",
+        "cluster(a)=x, b=2",
+    ]
+    assert result.n == [2, 1, 1, 1, 2]
+    assert result.chisq == pytest.approx(9.33333333333333)
+    assert result.pvalue == pytest.approx(0.0532868544584728)
+
+    formula = "Surv(time, status) ~ cluster(a) + cluster(b > 1)"
+    result = r.survdiff(formula, data, subset=[0, 1, 2, 3, 4, 5, 6, 7, 6], rho=0.5)
+    assert result.groups == [
+        "cluster(a)=y, cluster(b > 1)=FALSE",
+        "cluster(a)=y, cluster(b > 1)=TRUE ",
+        "cluster(a)=x, cluster(b > 1)=FALSE",
+        "cluster(a)=x, cluster(b > 1)=TRUE ",
+    ]
+    assert result.n == [2, 2, 1, 3]
+    assert result.na_action.rows == (3,)
+    assert result.chisq == pytest.approx(2.3248240275471344)
+    assert result.pvalue == pytest.approx(0.50778197052053675)
+    for regression in (r.coxph, r.survreg):
+        with pytest.raises(ValueError, match="multiple cluster terms"):
+            regression(formula, data)
+
+
 def test_survdiff_one_sample_test_uses_the_offset():
     data = _toy_data()
     data["expect"] = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]

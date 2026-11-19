@@ -4,13 +4,11 @@ use super::scaling::{
 use super::{CoxNewData, CoxPHFit, CoxPrediction, CoxTermsPrediction, PredictReference};
 use crate::core::strata_order::stratum_groups;
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::step::step_at;
+use crate::internal::step::find_interval;
 use crate::internal::validation::validate_length;
 use crate::regression::cox_optimizer::predictor_bound_needs_anchor;
 use crate::regression::log_scale::LogScale;
-use crate::surv_analysis::agsurv::{
-    AgsurvCurve, IntegratedCurve, cum_xbar_at, cumhaz_at, integrate_curve,
-};
+use crate::surv_analysis::agsurv::{AgsurvCurve, IntegratedCurve};
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 impl CoxPHFit {
@@ -405,184 +403,128 @@ impl CoxPHFit {
         se_fit: bool,
     ) -> SurvivalResult<CoxPrediction> {
         self.check_prediction_dimensions()?;
-        let counting = self.entry.is_some();
-        let Some(newdata) = newdata else {
-            let fit: Vec<f64> = self
-                .status
-                .iter()
-                .zip(&self.residuals)
-                .map(|(&s, r)| f64::from(s) - r)
-                .collect();
-            if !se_fit {
-                return Ok(CoxPrediction { fit, se_fit: None });
-            }
-            let curves = self.baseline_curves()?;
-            let log_risk = self.training_prediction_risks(&curves.origins);
-            let risk = log_risk.risks();
-            let se = if log_risk.needs_logs(curves.stable) {
-                self.expected_se_log(
-                    self.x.view(),
-                    &log_risk.as_scales(),
-                    &self.sorted.stratum_index,
-                    self.entry.as_deref(),
-                    &self.time,
-                )?
-            } else {
-                self.expected_se(
-                    self.x.view(),
-                    Some(&self.means),
-                    &risk,
-                    &self.sorted.stratum_index,
-                    self.entry.as_deref(),
-                    &self.time,
-                )?
-            };
-            return Ok(CoxPrediction {
-                fit,
-                se_fit: Some(se),
-            });
-        };
-        self.check_newdata(newdata, true)?;
-        if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
-            return Err(SurvivalError::invalid_input(
-                "newdata must carry the strata for expected predictions",
-            ));
-        }
-        let Some(new_time) = newdata.time.as_deref() else {
-            return Err(SurvivalError::invalid_input(
-                "newdata must contain the follow-up time for type = 'expected'",
-            ));
-        };
-        if counting && newdata.entry.is_none() {
-            return Err(SurvivalError::invalid_input(
-                "New data has a different survival type than the model",
-            ));
-        }
-        let curves = self.baseline_curves()?;
-        let log_risk = self.prediction_log_risks_at(
-            newdata.x.view(),
-            newdata.offset.as_deref(),
-            &curves.origins,
-            newdata.strata.as_deref(),
-        );
-        let risk2 = log_risk.risks();
-        let stable = log_risk.needs_logs(curves.stable);
-        let stratum_index: Vec<usize> = match &newdata.strata {
-            Some(strata) => strata
-                .iter()
-                .map(|&code| self.sorted.position_of(code).expect("checked"))
-                .collect(),
-            None => vec![0; newdata.nrows()],
-        };
-        let fit: Vec<f64> = (0..newdata.nrows())
-            .map(|i| {
-                let curve = &curves[stratum_index[i]];
-                if stable {
-                    let first = newdata
-                        .entry
-                        .as_ref()
-                        .map_or(0, |entry| curve.time.partition_point(|&t| t <= entry[i]));
-                    let end = curve.time.partition_point(|&t| t <= new_time[i]);
-                    return curves.logs()[stratum_index[i]].range_hazard(
-                        first,
-                        end,
-                        log_risk.scale(i),
-                    );
+        let (x, time, entry, mut fit) = match newdata {
+            Some(newdata) => {
+                self.check_newdata(newdata, true)?;
+                if newdata.strata.is_none() && self.sorted.nstrata() > 1 {
+                    return Err(SurvivalError::invalid_input(
+                        "newdata must carry the strata for expected predictions",
+                    ));
                 }
-                let stop = cumhaz_at(curve, new_time[i]);
-                let start = newdata
-                    .entry
-                    .as_ref()
-                    .map_or(0.0, |entry| cumhaz_at(curve, entry[i]));
-                (stop - start) * risk2[i]
-            })
-            .collect();
-        let se = if se_fit && stable {
-            Some(self.expected_se_log(
-                newdata.x.view(),
-                &log_risk.as_scales(),
-                &stratum_index,
-                newdata.entry.as_deref(),
-                new_time,
-            )?)
-        } else if se_fit {
-            Some(self.expected_se(
-                newdata.x.view(),
-                Some(&self.means),
-                &risk2,
-                &stratum_index,
-                newdata.entry.as_deref(),
-                new_time,
-            )?)
-        } else {
-            None
+                let time = newdata.time.as_deref().ok_or_else(|| {
+                    SurvivalError::invalid_input(
+                        "newdata must contain the follow-up time for type = 'expected'",
+                    )
+                })?;
+                if self.entry.is_some() && newdata.entry.is_none() {
+                    return Err(SurvivalError::invalid_input(
+                        "New data has a different survival type than the model",
+                    ));
+                }
+                (
+                    newdata.x.view(),
+                    time,
+                    newdata.entry.as_deref(),
+                    Vec::with_capacity(time.len()),
+                )
+            }
+            None => {
+                let fit = self
+                    .status
+                    .iter()
+                    .zip(&self.residuals)
+                    .map(|(&status, &residual)| f64::from(status) - residual)
+                    .collect();
+                if !se_fit {
+                    return Ok(CoxPrediction { fit, se_fit: None });
+                }
+                (
+                    self.x.view(),
+                    self.time.as_slice(),
+                    self.entry.as_deref(),
+                    fit,
+                )
+            }
         };
+        let curves = self.baseline_curves()?;
+        let log_risk = match newdata {
+            Some(newdata) => self.prediction_log_risks_at(
+                x,
+                newdata.offset.as_deref(),
+                &curves.origins,
+                newdata.strata.as_deref(),
+            ),
+            None => self.training_prediction_risks(&curves.origins),
+        };
+        let logs = log_risk.needs_logs(curves.stable).then(|| curves.logs());
+        let mut se = se_fit.then(|| Vec::with_capacity(time.len()));
+        let mut scratch = if se_fit {
+            vec![0.0; self.nvar()]
+        } else {
+            Vec::new()
+        };
+        for (i, row) in x.outer_iter().enumerate() {
+            let stratum = match newdata {
+                None => self.sorted.stratum_index[i],
+                Some(newdata) => newdata.strata.as_ref().map_or(0, |strata| {
+                    self.sorted.position_of(strata[i]).expect("strata checked")
+                }),
+            };
+            let curve = &curves[stratum];
+            let first = entry.map_or(0, |entry| find_interval(&curve.time, entry[i], false));
+            let end = find_interval(&curve.time, time[i], false);
+            if let Some(logs) = logs {
+                let lp = log_risk.scale(i);
+                if newdata.is_some() {
+                    fit.push(logs[stratum].range_hazard(first, end, lp));
+                }
+                if let Some(se) = &mut se {
+                    for ((value, &x), &mean) in scratch.iter_mut().zip(row).zip(&self.means) {
+                        *value = x - mean;
+                    }
+                    se.push(logs[stratum].expected_se(first, end, lp, &scratch, &self.var));
+                }
+            } else {
+                let risk = log_risk.scale(i).exp_at(0.0);
+                if newdata.is_some() {
+                    let hazard_at =
+                        |index: usize| index.checked_sub(1).map_or(0.0, |j| curve.cumhaz[j]);
+                    fit.push((hazard_at(end) - hazard_at(first)) * risk);
+                }
+                if let Some(se) = &mut se {
+                    let integrated = curves.integrated(stratum);
+                    let mut variance_at = |index| {
+                        self.expected_variance_at(curve, integrated, index, row, &mut scratch)
+                    };
+                    se.push((variance_at(end) - variance_at(first)).sqrt() * risk);
+                }
+            }
+        }
         Ok(CoxPrediction { fit, se_fit: se })
     }
 
-    fn expected_se_log(
+    fn expected_variance_at(
         &self,
-        x: ArrayView2<'_, f64>,
-        log_risk: &[LogScale],
-        strata: &[usize],
-        entry: Option<&[f64]>,
-        time: &[f64],
-    ) -> SurvivalResult<Vec<f64>> {
-        let curves = self.baseline_curves()?;
-        Ok((0..time.len())
-            .map(|i| {
-                let curve = &curves[strata[i]];
-                let first = entry.map_or(0, |entry| curve.time.partition_point(|&t| t <= entry[i]));
-                let end = curve.time.partition_point(|&t| t <= time[i]);
-                let centered: Vec<f64> = x
-                    .row(i)
-                    .iter()
-                    .zip(&self.means)
-                    .map(|(x, m)| x - m)
-                    .collect();
-                curves.logs()[strata[i]].expected_se(first, end, log_risk[i], &centered, &self.var)
-            })
-            .collect())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn expected_se(
-        &self,
-        x: ArrayView2<'_, f64>,
-        means: Option<&[f64]>,
-        risk: &[f64],
-        stratum_index: &[usize],
-        entry: Option<&[f64]>,
-        time: &[f64],
-    ) -> SurvivalResult<Vec<f64>> {
-        let curves = self.baseline_curves()?;
-        let integrated: Vec<IntegratedCurve> = curves.iter().map(integrate_curve).collect();
-        let variance_at =
-            |curve: &AgsurvCurve, integrated: &IntegratedCurve, t: f64, row: usize| {
-                let chaz = cumhaz_at(curve, t);
-                let varh = step_at(&curve.time, &integrated.cum_varhaz, t, 0.0);
-                let xbar = cum_xbar_at(curve, integrated, t);
-                let dt: Vec<f64> = (0..self.nvar())
-                    .map(|k| chaz * (x[(row, k)] - means.map_or(0.0, |m| m[k])) - xbar[k])
-                    .collect();
-                let mut quad = 0.0;
-                for (i, &left) in dt.iter().enumerate() {
-                    for (j, &right) in dt.iter().enumerate() {
-                        quad += left * self.var[(i, j)] * right;
-                    }
-                }
-                varh + quad
-            };
-        Ok((0..time.len())
-            .map(|i| {
-                let s = stratum_index[i];
-                let v2 = variance_at(&curves[s], &integrated[s], time[i], i);
-                let v1 = entry.map_or(0.0, |entry| {
-                    variance_at(&curves[s], &integrated[s], entry[i], i)
-                });
-                (v2 - v1).sqrt() * risk[i]
-            })
-            .collect())
+        curve: &AgsurvCurve,
+        integrated: &IntegratedCurve,
+        index: usize,
+        row: ArrayView1<'_, f64>,
+        derivative: &mut [f64],
+    ) -> f64 {
+        let Some(g) = index.checked_sub(1) else {
+            return 0.0;
+        };
+        let chaz = curve.cumhaz[g];
+        for (k, value) in derivative.iter_mut().enumerate() {
+            *value = chaz * (row[k] - self.means[k]) - integrated.cum_xbar[(g, k)];
+        }
+        let mut quad = 0.0;
+        for (i, &left) in derivative.iter().enumerate() {
+            for (j, &right) in derivative.iter().enumerate() {
+                quad += left * self.var[(i, j)] * right;
+            }
+        }
+        integrated.cum_varhaz[g] + quad
     }
 
     pub fn predict_survival(

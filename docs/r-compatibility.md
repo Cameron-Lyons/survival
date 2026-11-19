@@ -570,23 +570,38 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   full weighted risk set dies, R's risk-set subtraction can leave a negative
   rounding residue before a fractional power and return NaN; the port bounds the
   survival increment to [0, 1], giving survival zero.
-- Turnbull (interval-censored) curves: `cluster` raises "cluster is not
-  supported for interval-censored data" (R hands the full cluster vector to the
-  `survfitKM` fits of the pseudo-observations, which reads out of bounds). For
-  exact, left- and right-censored rows `start.time` compares their time; R's
-  rule compares the placeholder 1 in `y[, 2]` and drops them for any
-  `start.time > 1`.
+- For Turnbull (interval-censored) curves, `cluster` raises "cluster is not
+  supported for interval-censored data". R passes the full cluster vector to
+  `survfitKM` for the pseudo-observations, which can read out of bounds.
+- With `timefix = TRUE`, Turnbull fits resolve near ties across the full response
+  before applying `start.time`. Equal endpoints denote an exact event, and
+  positive and negative zero tie. Like R, the fit raises "an interval has
+  effective length 0" if rounding merges an interval's distinct endpoints,
+  even for a zero-weight row.
+- Only actual endpoints enter the rounding grid. The cutoff compares the upper
+  endpoint of an interval or the observed time of an exact, left-censored or
+  right-censored row. In R's interval response, these single-endpoint rows
+  carry a placeholder 1 in their second column. R uses that column for the
+  cutoff, dropping them for any `start.time > 1`. R also includes the
+  placeholder during rounding, so a right censor just above 1 can trigger
+  the effective-length error.
+- During EM, an interval whose possible event times have zero total probability
+  raises "interval-censored observation has no finite probability mass", even
+  when its case weight is zero. For the disjoint intervals `(1, 2]` and
+  `(3, 4]` with weights 0 and 1, stock survival 3.8-11 stops with
+  "missing value where TRUE/FALSE needed".
 - Turnbull uses a midpoint that stays finite for large finite endpoints. For
   the interval `(1e308, 1.5e308]`, the estimate falls to zero at `1.25e308`.
   In stock survival 3.8-11 and 3.8-12 the endpoint sum overflows and the fit
   raises an error.
 
-Turnbull curves follow R's EM (`survfitTurnbull.R`: Aitken acceleration every
-fifth step, stopping at max |change| < 5e-5). That rule is sensitive to
-floating-point order, so on larger data the curves agree with R only to that
-tolerance amplified: up to about 0.02 in survival at n = 500 and 0.006 at
-n = 2000, with different iteration counts. The fixtures use small data where
-this does not show.
+Turnbull curves follow R's EM algorithm, with Aitken acceleration every fifth
+step and a stopping threshold of 5e-5 for the largest change in survival.
+The 300-observation regression case matches stock survival 3.8-11 and 3.8-12 in 167
+iterations. The order of floating-point additions can change acceleration
+decisions. On other comparison datasets, differences from R reached about
+0.02 in survival at n = 500 and 0.006 at n = 2000, with different iteration
+counts. Parallel fits preserve the sequential addition order.
 
 ### Population calculations
 
@@ -648,6 +663,11 @@ this does not show.
   tests `Y[, 2] > 0` (the stop time, `rttright.R:186`), so a subject's censored
   last row keeps a weight: with `times = c(3, 8.5)` R's weights sum to 1.467 at
   8.5, the port's to 1.
+- With one censoring at time 1 and one event at time 2, the event receives all
+  the normalized redistribution weight. For case weights `c(1e17, 1)`, stock
+  survival 3.8-11 gives the event infinite weight. For `c(1e308, 1e308)`, it
+  gives both rows zero weight. The port recovers `[0, 1]` to within `1e-12`
+  in both cases.
 - `finegray` raises "censoring probability is zero before a selected event"
   where R's weights become Inf/NaN (delayed entry can drive G to 0 before a
   later event).
