@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 const NA_REAL: f64 = f64::from_bits(0x7ff8_0000_0000_07a2);
 
 // Uncentered R model matrices can carry signaling NA alongside quiet NaN.
-// Matrix multiplication preserves NA in that case, independent of column order.
+// Their product can yield either missing kind in R. Prefer NA here.
 fn design_missing(values: impl IntoIterator<Item = f64>) -> Option<f64> {
     let mut nan = None;
     for value in values {

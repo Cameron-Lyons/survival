@@ -54,14 +54,31 @@ test_that("aliased predictions preserve independent numeric NaNs", {
   formula <- Surv(time, status) ~ x + dup + z
   expected <- survival::survreg(formula, d)
   actual <- survivalr::survreg(formula, d)
-  nd <- data.frame(x = c(1, 2, 3, NaN, NA, 2, NaN),
-    dup = c(1, 1, NaN, 1, 1, NA, NaN), z = c(0, NaN, 0, 2, NaN, NaN, NaN))
+  nd <- data.frame(x = c(1, 2, 3, NaN, NA, 2, NaN, NA),
+    dup = c(1, 1, NaN, 1, 1, NA, NaN, 1), z = c(0, NaN, 0, 2, NaN, NaN, NaN, 0))
+  design <- as.matrix(nd)
+  has_nan <- rowSums(is.nan(design)) > 0
+  has_na <- rowSums(is.na(design) & !is.nan(design)) > 0
+  expect_identical(names(coef(expected))[is.na(coef(expected))], "dup")
   for (type in c("terms", "lp", "response", "quantile", "uquantile")) {
     stock <- predict(expected, nd, type = type, p = .4, se.fit = TRUE)
     bridged <- predict(actual, nd, type = type, p = .4, se.fit = TRUE)
     for (part in names(stock)) {
-      expect_identical(is.nan(bridged[[part]]), is.nan(stock[[part]]))
-      expect_equal(bridged[[part]], stock[[part]], tolerance = 3e-7)
+      # R's ?NA allows either missing kind when arithmetic combines NA and NaN.
+      mixed <- if (type == "terms") {
+        cbind(x = FALSE, dup = is.nan(nd$dup), z = FALSE)
+      } else if (part == "se.fit" && type %in% c("lp", "uquantile")) {
+        # These errors use the design and covariance independently of the alias.
+        has_nan & has_na
+      } else {
+        # The fitted location includes the aliased coefficient's NA.
+        has_nan
+      }
+      label <- paste(type, part)
+      expect_equal(bridged[[part]], stock[[part]], tolerance = 3e-7, info = label)
+      expect_identical(is.na(bridged[[part]]), is.na(stock[[part]]), info = label)
+      expect_identical(is.nan(bridged[[part]])[!mixed], is.nan(stock[[part]])[!mixed],
+        info = label)
     }
   }
 })

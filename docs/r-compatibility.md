@@ -1130,8 +1130,10 @@ this does not show.
   trajectories by the training stratum labels.
 - AFT distribution queries forward Python `RuntimeWarning` and `UserWarning` as
   R warnings; other callback warning categories go to Python's warning hook.
-- Mixed `NA`/`NaN` arithmetic in AFT distribution queries can return either
-  missing kind across platforms. R's `help("NA", package = "base")` states
+- Mixed `NA`/`NaN` arithmetic in AFT distribution queries and predictions can
+  return either missing kind across platforms. In particular, R's matrix
+  multiplication backend can change the result when a numeric `NaN` predictor
+  enters a product with an aliased coefficient. R's `help("NA", package = "base")` states
   "either might result (which may depend on the R platform)";
   `help("is.finite", package = "base")` also identifies compiler reordering
   as a cause. Differential checks retain exact missing kinds for unambiguous
