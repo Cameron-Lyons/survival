@@ -1559,8 +1559,8 @@ class ResidualsSurvfitResult:
 class SurvdiffResult:
     """R's ``survdiff`` object.
 
-    ``obs`` and ``exp`` are per group, or ``groups x strata`` matrices when the formula has a
-    ``strata()`` term; ``var`` is the ``groups x groups`` variance of ``obs - exp``.  The
+    ``obs`` and ``exp`` are per group, or ``groups x strata`` matrices when multiple strata
+    have observations. ``var`` is the ``groups x groups`` variance of ``obs - exp``. The
     one-sample test (an ``offset()`` of expected survival) has a single group.
     """
 

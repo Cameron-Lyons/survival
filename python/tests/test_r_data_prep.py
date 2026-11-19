@@ -245,6 +245,38 @@ def test_tmerge_arguments_match_r_values_and_tcount():
     assert counts["inf"]["boundary"] == 4
 
 
+@pytest.mark.parametrize("times", [[0.0, -0.0], [-0.0, 0.0]])
+def test_tmerge_signed_zero_updates_keep_the_last_value(times):
+    base = {"id": [1], "lo": [-1.0], "hi": [2.0]}
+    updates = {"id": [1, 1], "time": times, "value": [3, 7]}
+    frame = r.tmerge(base, base, id="id", tstart="lo", tstop="hi")
+    result = r.tmerge(
+        frame,
+        updates,
+        id="id",
+        event_value=r.event("time", "value"),
+        covariate=r.tdc("time", "value", init=0),
+        cumulative=r.cumevent("time", "value"),
+    )
+    assert result["tstart"] == [-1.0, 0.0]
+    assert result["tstop"] == [0.0, 2.0]
+    assert result["event_value"] == [7, 0]
+    assert result["covariate"] == [0, 7]
+    assert result["cumulative"] == [10, 0]
+    assert result.tcount["event_value"]["within"] == 2
+    assert result.tcount["event_value"]["tied"] == 1
+
+
+def test_tmerge_matches_large_integer_and_float_subject_ids_exactly():
+    subject = 2**53
+    base = {"id": [subject, subject + 1], "hi": [4, 4]}
+    frame = r.tmerge(base, base, id="id", tstop="hi")
+    result = r.tmerge(frame, {"id": [float(subject)], "t": [1]}, id="id", x=r.tdc("t"))
+    assert result["id"] == [subject, subject, subject + 1]
+    assert result["x"] == [0, 1, 0]
+    assert result.tcount["x"]["missid"] == 0
+
+
 def test_tmerge_options_delay_na_rm_and_names():
     base, long = _base(), _long()
     d1 = r.tmerge(base, base, id="id", death=r.event("futime", "death"))

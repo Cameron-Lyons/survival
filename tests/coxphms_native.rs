@@ -65,6 +65,46 @@ fn close(actual: &[f64], expected: &[f64]) {
 }
 
 #[test]
+fn fractional_weight_multistate_fit_defaults_to_subject_clustered_variance() {
+    let mut data = observations();
+    data.weights = Some(vec![1., 1.5, 1., 1., 1., 0.5, 1., 1., 1., 2., 1., 1.]);
+    let design = design();
+    let options = CoxphOptions {
+        robust: None,
+        ..fit_options()
+    };
+    let fit = coxphms_fit(&data, &design, options.clone()).unwrap().fit;
+    // Stock R survival 3.8-11, coxph(..., id=id, weights=w, ties="efron").
+    close(
+        fit.var.as_slice().unwrap(),
+        &[
+            1.12178320814769,
+            -0.011203651747709764,
+            -0.011203651747709764,
+            1.0161952344400278,
+        ],
+    );
+    data.cluster = Some(vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+    let clustered = coxphms_fit(&data, &design, options).unwrap().fit;
+    close(
+        clustered.var.as_slice().unwrap(),
+        &[
+            0.5340720104567472,
+            -0.017683456357785322,
+            -0.017683456357785322,
+            1.186784082001233,
+        ],
+    );
+    let model_based = coxphms_fit(&data, &design, fit_options()).unwrap().fit;
+    assert_eq!(fit.naive_var.as_ref(), Some(&model_based.var));
+    assert!(model_based.naive_var.is_none());
+    for with_cluster in [&model_based, &clustered] {
+        let concordance_se = with_cluster.concordance.var.as_ref().unwrap()[0][0].sqrt();
+        close(&[concordance_se], &[0.06605337367050325]);
+    }
+}
+
+#[test]
 fn downstream_fit_and_curves_match_stock_r() {
     // R survival 3.8-11: event <- factor(endpoint, levels=c(0,2,3),
     // labels=c("censor","a","b")); coxph(Surv(time, event) ~ x,

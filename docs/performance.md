@@ -300,8 +300,10 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - Redistribution-to-the-right weights group observed strata, with storage
   proportional to the rows and observed groups instead of the largest label.
   The native redistribution and Cox detail computations release the GIL.
-- Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order
-  without a separate curve fit; `rho=0` allocates no weights.
+- Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order.
+  The ordinary log-rank test (`rho=0`) skips the weight calculation.
+  The covariance update skips rows for groups with nobody at risk. The
+  `logrank::two_groups_per_stratum` benchmark measures this case.
 - Rate-table matching folds table labels once and indexes exact matches; a small
   cache serves the observed labels of common sex and race dimensions and is
   promoted to a hash map after four distinct observed labels. Prefix matching
@@ -337,7 +339,10 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   columns and M expanded rows.
 - Term grouping (`attrassign`) is one O(P + T) pass over P columns and T terms.
 - Response repetition, `lvcf`, `neardate` and `tmerge` avoid per-row Python index
-  lists and repeated sorts; `tmerge` does not convert unreferenced update columns.
+  lists and repeated sorts. `tmerge` converts only referenced update columns,
+  matches update IDs once per call, and uses
+  the interval split points to place events. The `tmerge_bench::split_covariate_updates`
+  benchmark measures interval expansion with four updates per subject.
 - `neardate` retains and sorts reference dates only for queried subjects when
   query rows are at most one sixteenth of reference rows. Larger query sets keep
   the single-pass reference index, avoiding extra hashing and string copies.

@@ -525,6 +525,20 @@ mod aareg_bench {
 mod logrank {
     use super::*;
 
+    #[divan::bench(args = [16, 128])]
+    fn two_groups_per_stratum(bencher: divan::Bencher, nstrata: usize) {
+        let n = 180 * nstrata;
+        let (time, _, status) = generate_survival_data(n);
+        let strata: Vec<i32> = (0..n).map(|i| (i / 180) as i32).collect();
+        // Neighboring strata share one group, so every group contrast is estimable.
+        let group = (0..n)
+            .map(|i| ((i / 180 + i % 2) % nstrata) as i32)
+            .collect();
+        let data =
+            surv_analysis::SurvdiffData::try_new(None, time, status, group, Some(strata)).unwrap();
+        bencher.bench_local(|| surv_analysis::survdiff(&data, 0.0, false).unwrap());
+    }
+
     #[divan::bench(args = [100, 1000, 10000])]
     fn logrank(bencher: divan::Bencher, n: usize) {
         let (time, _, status_i32) = generate_survival_data(n);
@@ -1612,7 +1626,41 @@ mod timeline_range_bench {
 
 mod tmerge_bench {
     use super::*;
-    use survival::data_prep::{tmerge_cumulative, tmerge_lookup};
+    use survival::data_prep::{
+        TmergeBase, TmergeKind, TmergeOptions, TmergeUpdate, tmerge_cumulative, tmerge_lookup,
+        tmerge_step,
+    };
+
+    #[divan::bench(args = [1_000, 20_000])]
+    fn split_covariate_updates(bencher: divan::Bencher, subjects: usize) {
+        let id: Vec<usize> = (0..subjects).collect();
+        let start = vec![0.; subjects];
+        let stop = vec![5.; subjects];
+        let base = TmergeBase {
+            id: &id,
+            start: &start,
+            stop: &stop,
+        };
+        let update_id: Vec<usize> = (0..subjects * 4).map(|row| row / 4).collect();
+        let time = [1., 2., 3., 4.].repeat(subjects);
+        let update = TmergeUpdate {
+            id: &update_id,
+            time: &time,
+            value: None,
+            missing: None,
+        };
+        bencher.bench_local(|| {
+            tmerge_step(
+                &base,
+                &update,
+                TmergeKind::Tdc,
+                &TmergeOptions::default(),
+                None,
+                f64::NAN,
+            )
+            .unwrap()
+        });
+    }
 
     #[divan::bench(args = [1_000, 10_000, 100_000])]
     fn last_value_sweep(bencher: divan::Bencher, n: usize) {

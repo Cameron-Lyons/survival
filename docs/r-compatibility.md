@@ -622,6 +622,11 @@ this does not show.
   wrong length raises "argument <name> is not the same length as id"; R indexes
   the short vector by subject and stops with "missing time value, when that
   variable defines the span".
+- If two numeric subject IDs in an established `tmerge` frame have the same
+  character label, a character update selects the first matching subject for
+  both events and covariates. Stock survival 3.8-11 can place the event on the
+  second subject and omit the covariate at that visit. Numeric update IDs
+  distinguish the two subjects.
 - `Surv2` timeline data: a given `istate` must equal the derived current state
   at each interval's start row; R's check compares vectors of different
   lengths.

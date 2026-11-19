@@ -1508,6 +1508,7 @@ test_that("R formula wrappers delegate to the Python survival package", {
     survival::coxph.fit,
     c(weighted_efron_args, list(control = survival::coxph.control(iter.max = 0)))
   )
+  expect_equal(bridged_weighted_efron$var, reference_weighted_efron$var, tolerance = 1e-12)
   expect_equal(
     bridged_weighted_efron$residuals,
     reference_weighted_efron$residuals,

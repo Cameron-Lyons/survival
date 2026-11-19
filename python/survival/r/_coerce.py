@@ -931,7 +931,7 @@ def _as_character(value: Any) -> str:
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float | np.floating):
-        return _r_format_number(float(value), 15)
+        return "0" if value == 0.0 else _r_format_number(float(value), 15)
     if _is_missing_value(value):
         return "NA"
     return str(value)

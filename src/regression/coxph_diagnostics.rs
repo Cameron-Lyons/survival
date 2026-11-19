@@ -1055,10 +1055,12 @@ mod tests {
         else {
             panic!("matrix residuals")
         };
+        let model_variance = model.naive_var.as_ref().unwrap();
         for i in 0..8 {
             for j in 0..2 {
                 assert!(
-                    (dfbetas[(i, j)] - dfbeta[(i, j)] / model.var[(j, j)].sqrt()).abs() < 1e-12
+                    (dfbetas[(i, j)] - dfbeta[(i, j)] / model_variance[(j, j)].sqrt()).abs()
+                        < 1e-12
                 );
             }
         }

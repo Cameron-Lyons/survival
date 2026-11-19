@@ -201,6 +201,22 @@ def test_coxph_estimator_survival_curves_match_r_survfit():
         estimator.predict_survival_function(np.array([[0.1, 0.2]], dtype=np.float64))
 
 
+def test_coxph_estimator_medians_match_r_on_half_survival_plateaus():
+    x, y = _toy_data()
+    estimator = CoxPHEstimator().fit(x, y)
+    # Stock R median(survfit(fit, newdata)): at t=2 these first three
+    # profiles have S=0.5, 0.5+tol/2, and 0.5-tol/2. The next death is at 4.
+    profiles = np.array(
+        [0.016819860782513629, 0.016819869342933280, 0.016819852222093923, 0.972802626428284078]
+    )[:, None]
+    np.testing.assert_equal(estimator.predict_median_survival_time(profiles), [3, 3, 3, np.nan])
+
+    # With the last observation censored, the final plateau spans times 6 to 8.
+    y[-1, 1] = 0
+    estimator.fit(x, y)
+    np.testing.assert_equal(estimator.predict_median_survival_time([[0.6025563659195774]]), [7])
+
+
 @pytest.mark.skipif(
     not HAS_TREE_BINDINGS,
     reason="tree survival estimators require the Rust extension to be built with the ml feature",

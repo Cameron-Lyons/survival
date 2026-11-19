@@ -136,11 +136,11 @@ def _k_sample(
         timefix=timefix,
     )
     strata_counts = fit.strata
-    stratified = strata_counts is not None
+    multiple_strata = strata_counts is not None and len(strata_counts) > 1
     return SurvdiffResult(
         n=[int(value) for value in fit.n],
-        obs=fit.obs if stratified else [row[0] for row in fit.obs],
-        exp=fit.exp if stratified else [row[0] for row in fit.exp],
+        obs=fit.obs if multiple_strata else [row[0] for row in fit.obs],
+        exp=fit.exp if multiple_strata else [row[0] for row in fit.exp],
         var=fit.var,
         chisq=fit.chisq,
         pvalue=fit.pvalue,

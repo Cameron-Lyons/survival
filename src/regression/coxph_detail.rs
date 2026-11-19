@@ -464,9 +464,10 @@ mod tests {
                 [info[1][1] / det, -info[0][1] / det],
                 [-info[1][0] / det, info[0][0] / det],
             ];
+            let model_variance = fit.naive_var.as_ref().unwrap();
             for (i, row) in inverse.iter().enumerate() {
                 for (k, value) in row.iter().enumerate() {
-                    assert!((value - fit.var[(i, k)]).abs() < 1e-8);
+                    assert!((value - model_variance[(i, k)]).abs() < 1e-8);
                 }
             }
             let basehaz = fit.basehaz(true).unwrap();
