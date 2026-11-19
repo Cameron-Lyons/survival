@@ -189,7 +189,7 @@ def test_pseudo_collapses_by_subject_and_returns_r_data_frame():
     frame = r.pseudo(fit, times=[2, 5], data_frame=True)
     assert list(frame) == ["id", "time", "resid", "pseudo"]
     assert frame["id"] == [1, 2, 3, 4] * 2
-    assert len(frame["pseudo"]) == 8
+    assert frame["pseudo"] == [row[j] for j in range(2) for row in values]
     assert len(r.pseudo(fit, times=[2], collapse=False)) == 8
     with pytest.raises(ValueError, match="the times argument is required"):
         r.pseudo(fit)
@@ -213,6 +213,20 @@ def test_pseudo_multistate_has_subject_state_time_layout():
     assert len(single[0]) == 3
     assert not isinstance(single[0][0], list)
     assert all(not math.isnan(v) for row in single for v in row)
+
+    frame = r.pseudo(fit, times=[2, 4], data_frame=True)
+    assert frame["state"] == (["(s0)"] * 6 + ["a"] * 6 + ["b"] * 6) * 2
+    assert frame["pseudo"] == [row[k][j] for j in range(2) for k in range(3) for row in values]
+
+
+def test_multistate_cumhaz_tables_without_observed_transitions():
+    event = survival.Factor(["censor"] * 4, ["censor", "death"])
+    fit = r.survfit(r.Surv([1, 2, 3, 4], event), group=["a", "b", "a", "b"])
+    options = {"times": [1, 2], "type": "cumhaz", "data_frame": True}
+
+    expected = {"(id)": [], "transition": [], "time": [], "resid": [], "curve": []}
+    assert r.residuals_survfit(fit, **options) == expected
+    assert r.pseudo(fit, **options) == {**expected, "pseudo": []}
 
 
 def _mgus2_competing_risks(n=60):

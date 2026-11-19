@@ -1,5 +1,5 @@
-use super::survfit_confint::{ConfType, survfit_confint};
-use super::survfitkm::{HazardType, SurvfitKMData, SurvfitKMOptions, survfitkm};
+use super::survfit_confint::{ConfType, survfit_confint, validate_conf_int};
+use super::survfitkm::{HazardType, SurvfitKMData, SurvfitKMOptions, fit_with_counts};
 use crate::error::SurvivalResult;
 use crate::internal::validation::validate_length;
 
@@ -34,6 +34,10 @@ pub fn nelson_aalen(
 ) -> SurvivalResult<NelsonAalenResult> {
     validate_length(time.len(), status.len(), "status")?;
     if time.is_empty() {
+        if let Some(weights) = weights {
+            validate_length(0, weights.len(), "weights")?;
+        }
+        validate_conf_int(confidence_level)?;
         return Ok(NelsonAalenResult {
             time: Vec::new(),
             cumulative_hazard: Vec::new(),
@@ -60,20 +64,13 @@ pub fn nelson_aalen(
         robust: Some(false),
         ..Default::default()
     };
-    let fit = survfitkm(&data, &options)?;
+    let fit = fit_with_counts(&data, &options, true)?;
     let std_chaz = fit.std_chaz.as_deref().expect("se.fit is on");
-    let unweighted = |weighted: &[f64], counts: Option<&Vec<f64>>| -> Vec<usize> {
-        counts
-            .map_or(weighted, Vec::as_slice)
-            .iter()
-            .map(|&value| value as usize)
-            .collect()
+    let (n_risk, n_event) = match &fit.counts {
+        Some(counts) => (&counts.n_risk, &counts.n_event),
+        None => (&fit.n_risk, &fit.n_event),
     };
-    let n_risk_all = unweighted(&fit.n_risk, fit.counts.as_ref().map(|c| &c.n_risk));
-    let n_event_all = unweighted(&fit.n_event, fit.counts.as_ref().map(|c| &c.n_event));
-    let rows: Vec<usize> = (0..fit.time.len())
-        .filter(|&i| n_event_all[i] > 0)
-        .collect();
+    let rows: Vec<usize> = (0..fit.time.len()).filter(|&i| n_event[i] > 0.0).collect();
     let cumulative_hazard: Vec<f64> = rows.iter().map(|&i| fit.cumhaz[i]).collect();
     let std_err: Vec<f64> = rows.iter().map(|&i| std_chaz[i]).collect();
     let bands = survfit_confint(
@@ -91,8 +88,8 @@ pub fn nelson_aalen(
         variance: std_err.iter().map(|se| se * se).collect(),
         ci_lower: bands.lower,
         ci_upper: bands.upper,
-        n_risk: rows.iter().map(|&i| n_risk_all[i]).collect(),
-        n_events: rows.iter().map(|&i| n_event_all[i]).collect(),
+        n_risk: rows.iter().map(|&i| n_risk[i] as usize).collect(),
+        n_events: rows.iter().map(|&i| n_event[i] as usize).collect(),
     })
 }
 
@@ -180,7 +177,19 @@ mod tests {
     }
 
     #[test]
+    fn near_unit_weights_keep_exact_counts_at_event_times() {
+        let weights = [1.0 - 1e-10; 3];
+        let fit = nelson_aalen(&[1.0, 2.0, 3.0], &[1, 0, 1], Some(&weights), 0.95).unwrap();
+        assert_eq!(fit.time, [1.0, 3.0]);
+        assert_eq!(fit.n_risk, [3, 1]);
+        assert_eq!(fit.n_events, [1, 1]);
+        assert_vec_close(&fit.cumulative_hazard, &[1.0 / 3.0, 4.0 / 3.0]);
+    }
+
+    #[test]
     fn rejects_malformed_inputs() {
+        assert!(nelson_aalen(&[], &[], None, 1.0).is_err());
+        assert!(nelson_aalen(&[], &[], Some(&[1.0]), 0.95).is_err());
         assert!(nelson_aalen(&[1.0, 2.0], &[1, 2], None, 0.95).is_err());
         assert!(nelson_aalen(&[1.0, 2.0], &[1, 0], Some(&[1.0, f64::INFINITY]), 0.95).is_err());
         assert!(nelson_aalen(&[1.0, 2.0], &[1, 0], None, 1.0).is_err());

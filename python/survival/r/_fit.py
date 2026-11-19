@@ -36,6 +36,7 @@ from ._expression import _expression_source
 from ._formula import (
     _apply_formula_na_action,
     _column,
+    _column_length,
     _column_or_values,
     _column_source,
     _covariate_term_name,
@@ -956,11 +957,12 @@ def _newdata_frame(
     ``missing``: ``na.fail`` refuses it, and a prediction pads it back as NaN for
     ``na.pass`` and ``na.exclude``.
     With ``allow_missing_predictors``, ``na.pass`` carries covariate and offset
-    NaNs into the prediction kernel. ``allow_missing_strata`` is used only when
-    strata do not affect the requested prediction; missing codes then use a
-    valid placeholder. Expected-count predictions ignore a missing event code.
+    NaNs into the prediction kernel. With ``allow_missing_strata``, retained
+    rows with missing codes use a valid placeholder in the kernel.
+    Expected-count predictions ignore a missing event code.
     ``allow_unknown_strata`` gives a stratum the fit did not see the placeholder code
-    too and lists its rows in ``unknown_strata``, as R's ``match()`` gives them NA.
+    too. ``unknown_strata`` lists retained rows whose stratum is missing or does
+    not match a training level.
     """
 
     newdata, _ = _prepare_formula_inputs(newdata)
@@ -985,7 +987,11 @@ def _newdata_frame(
             ]
         )
     )
-    n = len(_column(newdata, columns[0])) if columns else _formula_design_row_count(newdata, design)
+    n = (
+        _column_length(_column_source(newdata, columns[0]), columns[0])
+        if columns
+        else _formula_design_row_count(newdata, design)
+    )
     strata_specs = dict.fromkeys(
         [spec for spec in strata_terms if strata_columns]
         + [
@@ -1071,11 +1077,7 @@ def _newdata_frame(
             else _complete_codes(factor, "missing values in the strata")
         )
         mapped = [None if code is None else remap[code] for code in codes]
-        unknown_strata = tuple(
-            row
-            for row, (code, value) in enumerate(zip(codes, mapped, strict=True))
-            if code is not None and value is None
-        )
+        unknown_strata = tuple(row for row, value in enumerate(mapped) if value is None)
         strata_codes = [0 if value is None else value for value in mapped]
     y = (
         response
@@ -1106,8 +1108,8 @@ def _prediction_row_labels(
 
 def _prediction_row_result(
     values: Any,
-    fit_names: list[str] | None,
-    se_names: list[str] | None,
+    fit_names: Sequence[str | None] | None,
+    se_names: Sequence[str | None] | None,
     *,
     null_dimnames: bool = False,
 ) -> dict[str, Any]:

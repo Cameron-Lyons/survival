@@ -1090,8 +1090,9 @@ def rttright(
 ) -> list[float] | list[list[float]]:
     """R's ``rttright``: redistribute-to-the-right weights.
 
-    Returns one weight per observation, or one row per observation with a column
-    per requested ``times`` value (R's matrix) when several times are given.
+    With omitted or scalar ``times``, returns one weight per observation. Other
+    requests return a matrix with one column per time, including zero columns.
+    A single observation with an empty time request returns an empty vector.
     """
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
@@ -1152,9 +1153,12 @@ def rttright(
         timefix,
         renorm,
     )
-    if query is not None and len(query) > 1:
-        return [list(row) for row in result.weights]
-    return [row[0] for row in result.weights]
+    weights_by_row = result.weights
+    if query is None or len(query) == 1:
+        return [row[0] for row in weights_by_row]
+    if not query and len(weights_by_row) == 1:
+        return []  # R's drop() turns a one-row, zero-column matrix into a vector.
+    return weights_by_row
 
 
 _TMERGE_COUNT_NAMES = (

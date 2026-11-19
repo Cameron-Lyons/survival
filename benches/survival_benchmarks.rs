@@ -1493,6 +1493,80 @@ mod case_cohort_bench {
 
 mod survreg_bench {
     use super::*;
+    use survival::regression::{SurvregFit, SurvregPredictType};
+    use survival::residuals::SurvregResidType;
+
+    fn fitted_weibull() -> SurvregFit {
+        let n = 4096;
+        let (time, _, status) = generate_survival_data(n);
+        let design = Array2::from_shape_fn((n, 16), |(i, j)| (0.013 * (i * j) as f64).cos());
+        let strata = (0..n).map(|i| (i / 5) % 4).collect();
+        let data = SurvregData::try_new(
+            time,
+            status,
+            design,
+            None,
+            Some(generate_case_weights(n)),
+            None,
+            Some(strata),
+            None,
+        )
+        .unwrap();
+        let dist = SurvregDistribution::from_name("weibull", None).unwrap();
+        let fit = survreg_fit(&data, &dist, None, 0.0, &SurvregControl::default(), false).unwrap();
+        assert!(fit.converged);
+        fit
+    }
+
+    #[divan::bench(args = [1, 11, 51])]
+    fn quantile_standard_errors(bencher: divan::Bencher, count: usize) {
+        let fit = fitted_weibull();
+        let p: Vec<_> = (1..=count).map(|i| i as f64 / (count + 1) as f64).collect();
+        bencher.bench_local(|| {
+            fit.predict(
+                None,
+                SurvregPredictType::Quantile,
+                true,
+                black_box(&p),
+                None,
+                None,
+            )
+            .unwrap()
+        });
+    }
+
+    #[divan::bench(args = [false, true])]
+    fn selected_terms(bencher: divan::Bencher, se_fit: bool) {
+        let fit = fitted_weibull();
+        // Each term spans three design columns, with column zero as the intercept.
+        let assign: Vec<_> = (0..fit.nvar()).map(|column| column.div_ceil(3)).collect();
+        bencher.bench_local(|| {
+            fit.predict(
+                None,
+                SurvregPredictType::Terms,
+                se_fit,
+                &[],
+                Some(&assign),
+                Some(&[1, 3, 1]),
+            )
+            .unwrap()
+        });
+    }
+
+    #[divan::bench]
+    fn collapsed_dfbeta(bencher: divan::Bencher) {
+        let fit = fitted_weibull();
+        let groups: Vec<_> = (0..fit.n).map(|i| i % 64).collect();
+        bencher.bench_local(|| {
+            fit.residuals(
+                SurvregResidType::Dfbeta,
+                true,
+                Some(black_box(&groups)),
+                true,
+            )
+            .unwrap()
+        });
+    }
 
     fn bench_fit(bencher: divan::Bencher, data: &SurvregData, distribution: &str) {
         let distribution = SurvregDistribution::from_name(distribution, None)
@@ -1966,25 +2040,38 @@ mod turnbull_bench {
     use super::*;
     use survival::interval::{TurnbullInput, turnbull};
 
-    #[divan::bench(args = [100, 1000, 5000])]
-    fn disjoint_intervals(bencher: divan::Bencher, n: usize) {
-        let time1: Vec<f64> = (0..n).map(|i| (2 * i) as f64).collect();
+    fn fit_disjoint(bencher: divan::Bencher, time1: &[f64], group: Option<&[i32]>, se_fit: bool) {
+        let n = time1.len();
         let time2: Vec<f64> = time1.iter().map(|&t| t + 1.0).collect();
         let status = vec![3; n];
         let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 * 0.25).collect();
         let input = TurnbullInput {
-            time1: &time1,
+            time1,
             time2: &time2,
             status: &status,
             weights: Some(&weights),
-            group: None,
+            group,
             conf_level: 0.95,
             conf_type: "log",
             timefix: false,
-            se_fit: true,
+            se_fit,
             robust: None,
         };
         bencher.bench(|| black_box(turnbull(black_box(&input)).unwrap()));
+    }
+
+    #[divan::bench(args = [100, 1000, 5000])]
+    fn disjoint_intervals(bencher: divan::Bencher, n: usize) {
+        let time: Vec<f64> = (0..n).map(|i| (2 * i) as f64).collect();
+        fit_disjoint(bencher, &time, None, true);
+    }
+
+    #[divan::bench(args = [20, 200, 2000])]
+    fn interleaved_strata(bencher: divan::Bencher, strata: usize) {
+        let n = 50 * strata;
+        let time: Vec<f64> = (0..n).map(|i| (2 * (i / strata)) as f64).collect();
+        let group: Vec<i32> = (0..n).map(|i| (i % strata) as i32).collect();
+        fit_disjoint(bencher, &time, Some(&group), false);
     }
 }
 

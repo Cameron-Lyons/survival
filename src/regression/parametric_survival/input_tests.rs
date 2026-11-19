@@ -17,6 +17,106 @@ fn data() -> SurvregData {
     .unwrap()
 }
 
+fn fitted() -> SurvregFit {
+    survreg_fit(
+        &data(),
+        &SurvregDistribution::from_name("gaussian", None).unwrap(),
+        None,
+        0.0,
+        &SurvregControl::default(),
+        false,
+    )
+    .unwrap()
+}
+
+#[test]
+fn fitted_aft_methods_validate_public_dimensions() {
+    let fit = fitted();
+    let check = |mutate: fn(&mut SurvregFit)| {
+        let mut bad = fit.clone();
+        mutate(&mut bad);
+        assert!(
+            bad.predict(None, SurvregPredictType::Quantile, true, &[0.5], None, None)
+                .is_err()
+        );
+        assert!(
+            bad.residuals(SurvregResidType::Dfbeta, true, None, true)
+                .is_err()
+        );
+    };
+    check(|f| f.means.clear());
+    check(|f| f.coefficients.clear());
+    check(|f| f.scale.clear());
+    check(|f| f.linear_predictors.clear());
+    check(|f| f.strata.truncate(1));
+    check(|f| f.covariates = Array2::zeros((1, 2)));
+    check(|f| f.variance_matrix[1].clear());
+    let mut ragged = fit.variance_matrix.clone();
+    ragged[1].pop();
+    let bad_naive = SurvregFit {
+        naive_variance_matrix: Some(ragged),
+        ..fit
+    };
+    assert!(
+        bad_naive
+            .residuals(SurvregResidType::Dfbeta, true, None, true)
+            .is_err()
+    );
+}
+
+#[test]
+fn fitted_aft_checks_the_strata_and_response_it_evaluates() {
+    let fit = fitted();
+    let mut bad_stratum = fit.clone();
+    bad_stratum.strata[0] = usize::MAX;
+    let quantile = |fit: &SurvregFit, newdata: Option<&SurvregNewdata<'_>>| {
+        fit.predict(
+            newdata,
+            SurvregPredictType::Quantile,
+            true,
+            &[0.5],
+            None,
+            None,
+        )
+    };
+    assert!(quantile(&bad_stratum, None).is_err());
+    let x = ndarray::array![[1.0, 2.0]];
+    let newdata = SurvregNewdata {
+        covariates: x.view(),
+        offset: None,
+        strata: None,
+    };
+    assert_eq!(
+        quantile(&bad_stratum, Some(&newdata)).unwrap(),
+        quantile(&fit, Some(&newdata)).unwrap()
+    );
+
+    for bad in [
+        bad_stratum,
+        SurvregFit {
+            status: vec![3; fit.n],
+            ..fit.clone()
+        },
+        SurvregFit {
+            time: vec![],
+            ..fit.clone()
+        },
+        SurvregFit {
+            time2: Some(vec![]),
+            ..fit.clone()
+        },
+        SurvregFit {
+            weights: Some(vec![1.0]),
+            ..fit
+        },
+    ] {
+        assert!(
+            bad.residuals(SurvregResidType::Matrix, true, None, true)
+                .is_err()
+        );
+    }
+}
+
 #[test]
 fn public_aft_offset_is_checked_before_initial_fit() {
     let mut data = data();

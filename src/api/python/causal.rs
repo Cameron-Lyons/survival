@@ -60,7 +60,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MNARSurvivalConfig>()?;
     m.add_class::<MNARSurvivalResult>()?;
 
-    m.add_function(wrap_pyfunction!(interval_censored_regression, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::interval::interval_censoring::interval_censored_regression_py,
+        m
+    )?)?;
     m.add_class::<IntervalCensoredResult>()?;
     m.add_class::<IntervalDistribution>()?;
 

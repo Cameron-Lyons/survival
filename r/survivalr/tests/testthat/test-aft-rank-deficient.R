@@ -42,3 +42,26 @@ test_that("nonbinary constant aliases retain stock identified AFT fits", {
     expect_true(all(is.na(suppressWarnings(predict(actual, d[1:3, ], type = "lp")))))
   }
 })
+
+test_that("aliased predictions preserve independent numeric NaNs", {
+  d <- data.frame(
+    time = c(2, 4, 3, 5, 6, 1, 4, 2, 8, 3),
+    status = c(1, 1, 0, 1, 0, 1, 1, 0, 1, 1),
+    x = c(.4, .2, .6, .1, .5, .3, .8, 1.2, -.2, .7),
+    z = c(1, -.3, .4, .1, 1.4, 1.2, -.8, .3, 1.4, -.3)
+  )
+  d$dup <- d$x
+  formula <- Surv(time, status) ~ x + dup + z
+  expected <- survival::survreg(formula, d)
+  actual <- survivalr::survreg(formula, d)
+  nd <- data.frame(x = c(1, 2, 3, NaN, NA, 2, NaN),
+    dup = c(1, 1, NaN, 1, 1, NA, NaN), z = c(0, NaN, 0, 2, NaN, NaN, NaN))
+  for (type in c("terms", "lp", "response", "quantile", "uquantile")) {
+    stock <- predict(expected, nd, type = type, p = .4, se.fit = TRUE)
+    bridged <- predict(actual, nd, type = type, p = .4, se.fit = TRUE)
+    for (part in names(stock)) {
+      expect_identical(is.nan(bridged[[part]]), is.nan(stock[[part]]))
+      expect_equal(bridged[[part]], stock[[part]], tolerance = 3e-7)
+    }
+  }
+})

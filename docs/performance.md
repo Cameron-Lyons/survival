@@ -80,6 +80,10 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   `make.unique`, and `tt()` terms expand into an array design. Numeric columns stay NumPy arrays until they are
   copied into the design. The R bridge adds reticulate conversion, which is done in
   bulk for numeric columns and native results.
+- Formula interactions fit each distinct component once. An interaction can
+  reuse a main effect's design columns when both use the same coding.
+  Interaction terms that need full factor indicators build those columns
+  separately from treatment contrasts.
 - Because that preparation is a roughly fixed cost per call, stock R is faster for
   cheap R-facing operations, such as returning a stored model matrix or small
   formula predictions. The native kernels are faster for heavier work, such as
@@ -92,10 +96,15 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 
 - Turnbull fits store contiguous jump ranges for censored observations, using
   O(n + j) membership storage for n observations and j jump points. Initial
-  overlap counts use endpoint updates. Each EM membership update visits only
-  covered jumps, summing in their original order; wide overlapping intervals
-  can still require O(n j) work per iteration. The Kaplan–Meier steps and
-  Aitken acceleration retain their existing arithmetic and stopping rule.
+  overlap counts use endpoint updates. Each EM iteration visits the jumps
+  covered by each interval, so wide overlapping intervals can require O(n j)
+  work. The Kaplan–Meier update sorts the augmented observation rows once.
+  Each iteration then takes O(n + j) time for the product-limit calculation,
+  accumulating tied weights in the same order as the full kernel. The final
+  fit supplies risk counts, standard errors and confidence limits. Grouped
+  fits gather the rows for each stratum once. The
+  `turnbull_bench::interleaved_strata` benchmark holds rows per stratum fixed
+  as the number of strata grows.
 - Kaplan–Meier fits sort once (O(n log n)). For right-censored data with one
   observation per cluster and no influence matrix, including the usual weighted
   curve where fractional weights select robust variance, standard errors come
@@ -130,7 +139,8 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   through one table cleared after each curve, then fit the curves in parallel when
   there are several curves and more than 1,000 rows. Integer ids and clusters whose
   values span fewer than 2n values are numbered through a table indexed by value,
-  others through a hash map.
+  others through a hash map. Kaplan–Meier fits reuse input columns when all
+  rows are retained. A single curve uses the fitted cluster codes directly.
 - `survfit.coxph(newdata)` curve columns become Kaplan–Meier engines in one native
   call that reads the time-by-curve matrices directly, with no per-element Python
   conversion.
@@ -144,7 +154,11 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   `summary_survfit`.
 - Grouped residuals and pseudo-values bucket input rows by curve in one pass
   (O(n + g) for g curves). Grouped multi-state data frames copy contiguous time
-  blocks per state.
+  blocks per state. Python flattens pseudo-values in time, state and subject
+  order with one conversion of the native result.
+- `survcheck` uses the subject ordering prepared for interval checks to count
+  visits to each state. It builds the event table from visit-count histograms,
+  avoiding a subject-by-state matrix.
 - Multistate summaries allocate selected output rows directly and represent
   inserted initial rows in the selection indices. Sparse requested-time summaries
   and multistate Cox row selection avoid copying the fitted time grid, counts,
@@ -169,6 +183,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 
 ### Cox models
 
+- The `agsurv` baseline kernel reuses its risk-set covariate sums for the
+  returned `xbar` matrix. Efron variance also keeps tied-death covariate sums
+  on the failure-time grid.
 - Extreme right-censored Breslow/Efron evaluations use normalized risk moments
   in a reverse-time sweep, retaining O(n p²) work and O(p²) moment scratch space
   alongside the O(n) predictors.
@@ -276,6 +293,16 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   the GIL once per batch.
 - Built-in distribution queries compose recycling indices and allocate the result
   once; callback queries reuse owned arithmetic buffers.
+- With an estimated scale, quantile standard errors reuse each row's covariance
+  products across the requested probabilities. For m fitted parameters and q
+  quantiles, each row takes O(m² + qm) work. One quantile uses a single direct
+  quadratic form.
+- Per-term predictions center the selected design columns as they read each
+  row. Repeated selections reuse the same contribution and standard error.
+  The standard-error calculation shares a work vector across rows and terms.
+- Collapsed residuals add each weighted observation directly to its group's
+  total. Influence residuals and the robust covariance share the same score
+  calculation, reusing two work vectors and reading covariance rows contiguously.
 
 ### Other routines
 

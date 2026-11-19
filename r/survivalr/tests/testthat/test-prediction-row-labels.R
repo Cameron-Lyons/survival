@@ -109,6 +109,22 @@ test_that("quantile labels retain scale names, scalar errors and fixed-scale rep
   }
 })
 
+test_that("quantiles keep missing stratum labels and full rows", {
+  d <- data.frame(t = c(1, 2, 4, 5, 3, 8, 6, 4), s = c(1, 0, 1, 1, 1, 0, 1, 0),
+                  g = c(1, 2, 2, 1, 1, 2, 1, 2), x = c(0, 1, 0, 1, 1, 0, 0, 1))
+  formula <- Surv(t, s) ~ x + strata(g)
+  fit <- survreg(formula, d)
+  stock <- survival::survreg(formula, d)
+  for (groups in list(c(1, NA_real_), c(1, 3), c(NA_real_, 3))) {
+    nd <- data.frame(x = c(1, 0), g = groups)
+    for (type in c("quantile", "uquantile")) {
+      expected <- predict(stock, nd, type = type, p = c(.2, .8), se.fit = TRUE)
+      actual <- predict(fit, nd, type = type, p = c(.2, .8), se.fit = TRUE)
+      .prediction_rows_compare(actual, expected, paste(type, toString(groups)))
+    }
+  }
+})
+
 test_that("selected and entirely omitted term matrices retain row names and widths", {
   d <- survival::ovarian; row.names(d) <- paste0("subject:",seq_len(nrow(d)))
   nd <- d[1:4,]; nd$age[c(2L,4L)] <- NA

@@ -188,6 +188,16 @@ def _r_logical(values: Any) -> Any:
     return _ExpressionVector(values, "logical")
 
 
+def _r_design_matrix(values: Any, row_names: Any, column_names: Any) -> Any:
+    from .r._survreg import _RDesignMatrix
+
+    return _RDesignMatrix(
+        values,
+        tuple(row_names) if row_names is not None else None,
+        tuple(column_names) if column_names is not None else None,
+    )
+
+
 def _r_data_frame(columns: dict[str, Any], n: int, row_names: Any = None) -> Any:
     """Carry R row names separately from formula variables and retain empty frame sizes."""
     from .r._formula import _FormulaRows

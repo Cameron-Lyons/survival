@@ -18,6 +18,11 @@ stratum the fit did not see: the linear predictor, response and terms are
 returned, and quantiles of an estimated-scale fit are NA for those rows, as in
 R; Cox predictions refuse an unknown stratum, as R does.
 
+With `na.pass`, a missing or unseen scale stratum keeps its row in an AFT
+quantile matrix. If the model estimates the scale, that row has missing
+quantiles and standard errors, even when training used only one stratum.
+A fixed-scale model uses its fitted scale for the row.
+
 - AFT `"quantile"` returns response-scale quantiles at `p` (R's default
   `[0.1, 0.9]`) and `"uquantile"` the same quantiles on the linear scale.
   Probabilities 0 and 1 return the distribution's limits. Quantiles use each
@@ -30,11 +35,14 @@ R; Cox predictions refuse an unknown stratum, as R does.
   prediction types ignore `p`. An explicit empty probability request returns a
   zero-column result, including with `se_fit=True`. Nullable list, NumPy, pandas
   and Polars query values also work in `dsurvreg`, `psurvreg` and `qsurvreg`.
+  The built-in Gaussian and Student-t quantiles preserve R's `NA` and numeric
+  `NaN` when either is supplied as a probability.
 - The typed `SurvregFit.predict(...)` takes `offset=` and `strata=` for its new
   rows. `AFTEstimator.predict()` returns the fitted response-scale location;
   `predict_median()` and `predict_quantile()` return distribution quantiles.
-- As in R, an aliased AFT coefficient makes ordinary new-data predictions
-  missing; term predictions keep the contributions of other terms.
+- An aliased AFT coefficient makes ordinary new-data predictions missing.
+  Term predictions keep the contributions of other terms, including the
+  distinction between R's missing value `NA` and a numeric `NaN`.
 
 Native expected-count predictions require a stratum for every new row when the
 model has several baselines. Ordinary `survfit(newdata)` may omit strata because
@@ -42,6 +50,8 @@ it returns a curve block for every baseline, and individual covariate paths keep
 R's default of the first stratum. Public Rust fitted-Cox predictions check stored
 row, covariate and covariance dimensions before using cached baselines, and
 missing stored strata or an unknown training stratum code are input errors.
+Rust AFT predictions and residuals also check fitted array dimensions. Stored
+quantiles and residuals check that each training stratum indexes a fitted scale.
 
 ## Missing values
 
@@ -131,6 +141,12 @@ needed. Names that R leaves absent stay absent:
 Models saved before row labels were retained cannot recover custom source names;
 their numerical behavior is unchanged.
 
+For AFT fits built from a response and an indexed design matrix, Python keeps
+the index on stored predictions. When new data have an index, the model matrix
+and predictions keep the labels of the rows retained by the missing-data action.
+The R bridge carries matrix row and column names through the same fit and
+retains missing entries in integer and logical matrices.
+
 ## Grouped predictions and residuals
 
 `r.predict(..., collapse=groups)` sums ordinary Cox predictions within groups,
@@ -151,6 +167,9 @@ residuals = r.residuals(fit, type="score", collapse=groups)
   including numeric-looking text. Missing labels form a final group with a
   warning; numeric `NaN` and `None`/R `NA` are distinct groups, while factor
   missing values share one group.
+- Native AFT residuals and clustered covariance accept the full range of
+  unsigned machine-sized group IDs. Groups are ordered by ID and require
+  storage proportional to the number of observations and observed groups.
 - Values sum within each group in input order; standard errors are
   `sqrt(sum(se^2))`, as in R's collapse method, with each per-row error computed
   before squaring so negative variances still propagate NaN.

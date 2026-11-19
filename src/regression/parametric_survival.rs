@@ -127,6 +127,44 @@ pub struct SurvregData {
     pub cluster: Option<Vec<usize>>,
 }
 
+fn validate_aft_response(
+    time: &[f64],
+    time2: Option<&[f64]>,
+    status: &[i32],
+) -> SurvivalResult<()> {
+    validate_non_empty(time, "time")?;
+    validate_finite(time, "time")?;
+    let n = time.len();
+    validate_length(n, status.len(), "status")?;
+    if let Some(upper) = time2 {
+        validate_length(n, upper.len(), "time2")?;
+    }
+    for (index, &code) in status.iter().enumerate() {
+        if code == 3 {
+            let upper = time2.ok_or_else(|| {
+                SurvivalError::invalid_input(
+                    "time2 is required for interval-censored (status 3) rows",
+                )
+            })?[index];
+            if !upper.is_finite() {
+                return Err(SurvivalError::invalid_input(format!(
+                    "time2 contains non-finite value {upper} at interval-censored index {index}"
+                )));
+            }
+            if upper < time[index] {
+                return Err(SurvivalError::invalid_input(format!(
+                    "Invalid interval: start > stop at index {index}"
+                )));
+            }
+        } else if !(0..=2).contains(&code) {
+            return Err(SurvivalError::invalid_input(format!(
+                "status must contain the codes 0 (right censored), 1 (exact), 2 (left censored) or 3 (interval censored); got {code} at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl SurvregData {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
@@ -154,10 +192,8 @@ impl SurvregData {
     }
 
     pub(crate) fn validate(&self) -> SurvivalResult<()> {
-        validate_non_empty(&self.time, "time")?;
-        validate_finite(&self.time, "time")?;
+        validate_aft_response(&self.time, self.time2.as_deref(), &self.status)?;
         let n = self.n();
-        validate_length(n, self.status.len(), "status")?;
         validate_length(n, self.covariates.nrows(), "covariates")?;
         if self.nvar() == 0 {
             return Err(SurvivalError::invalid_input(
@@ -172,37 +208,6 @@ impl SurvregData {
             return Err(SurvivalError::invalid_input(format!(
                 "covariates contains non-finite value {value} at row {row}, column {column}"
             )));
-        }
-        for (index, &code) in self.status.iter().enumerate() {
-            if !(0..=3).contains(&code) {
-                return Err(SurvivalError::invalid_input(format!(
-                    "status must contain the codes 0 (right censored), 1 (exact), 2 (left censored) or 3 (interval censored); got {code} at index {index}"
-                )));
-            }
-        }
-        match &self.time2 {
-            Some(time2) => {
-                validate_length(n, time2.len(), "time2")?;
-                for i in (0..n).filter(|&i| self.status[i] == 3) {
-                    if !time2[i].is_finite() {
-                        return Err(SurvivalError::invalid_input(format!(
-                            "time2 contains non-finite value {} at interval-censored index {i}",
-                            time2[i]
-                        )));
-                    }
-                    if time2[i] < self.time[i] {
-                        return Err(SurvivalError::invalid_input(format!(
-                            "Invalid interval: start > stop at index {i}"
-                        )));
-                    }
-                }
-            }
-            None if self.status.contains(&3) => {
-                return Err(SurvivalError::invalid_input(
-                    "time2 is required for interval-censored (status 3) rows",
-                ));
-            }
-            None => {}
         }
         if let Some(weights) = &self.weights {
             validate_length(n, weights.len(), "weights")?;
@@ -399,7 +404,60 @@ impl SurvregFit {
     }
 
     pub fn has_intercept(&self) -> bool {
-        self.covariates.column(0).iter().all(|&v| v == 1.0)
+        self.nvar() > 0 && self.covariates.column(0).iter().all(|&v| v == 1.0)
+    }
+
+    // Rust callers can edit fitted fields after construction. Check the shape
+    // before slicing, including the extra coefficients for estimated scales.
+    pub(crate) fn check_dimensions(&self) -> SurvivalResult<()> {
+        validate_length(self.n, self.covariates.nrows(), "fit design rows")?;
+        validate_length(
+            self.n,
+            self.linear_predictors.len(),
+            "fit linear predictors",
+        )?;
+        validate_length(self.n, self.strata.len(), "fit strata")?;
+        validate_length(self.nvar(), self.means.len(), "fit means")?;
+        validate_non_empty(&self.scale, "fit scale")?;
+        let k = self.coefficients.len();
+        let nscale = k.checked_sub(self.nvar());
+        if nscale != Some(self.nstrata()) && !(nscale == Some(0) && self.nstrata() == 1) {
+            return Err(SurvivalError::invalid_input(
+                "fit coefficients must match the design columns and estimated scales",
+            ));
+        }
+        validate_length(k, self.variance_matrix.len(), "fit variance rows")?;
+        Ok(())
+    }
+
+    pub(crate) fn check_covariance(&self, matrix: &[Vec<f64>]) -> SurvivalResult<()> {
+        let k = self.coefficients.len();
+        if matrix.len() != k || matrix.iter().any(|row| row.len() != k) {
+            return Err(SurvivalError::invalid_input(format!(
+                "fit covariance must have shape ({k}, {k})"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_stored_strata(&self) -> SurvivalResult<()> {
+        if let Some(code) = self.strata.iter().find(|&&s| s >= self.nstrata()) {
+            return Err(SurvivalError::invalid_input(format!(
+                "fit stratum {code} is outside the fitted scales"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_residual_inputs(&self) -> SurvivalResult<()> {
+        self.check_dimensions()?;
+        self.check_stored_strata()?;
+        validate_length(self.n, self.time.len(), "fit time")?;
+        validate_aft_response(&self.time, self.time2.as_deref(), &self.status)?;
+        if let Some(weights) = &self.weights {
+            validate_length(self.n, weights.len(), "fit weights")?;
+        }
+        Ok(())
     }
 
     pub fn predict(

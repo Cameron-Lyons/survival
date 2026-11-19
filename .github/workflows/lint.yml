@@ -101,7 +101,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install Python lint dependencies
-        run: uv sync --extra dev --extra test --no-install-project
+        run: uv sync --extra dev --no-install-project
 
       - name: Check formatting
         run: uv run --no-sync ruff format python/ test/ --check

@@ -1025,6 +1025,11 @@ test_that("R formula wrappers delegate to the Python survival package", {
     id = c("c", "a", "b")
   )
   expect_equal(rttright(Surv(time, status) ~ 1, data = rtt_data), c(0.5, 0, 0.5))
+  expect_equal(rttright(Surv(time, status) ~ 1, rtt_data, times = NULL), c(0.5, 0, 0.5))
+  expect_identical(dim(rttright(Surv(time, status) ~ 1, rtt_data, times = numeric())),
+                   c(3L, 0L))
+  expect_identical(rttright(Surv(time, status) ~ 1, rtt_data[1L, ], times = numeric()),
+                   numeric())
   expect_equal(
     rttright(Surv(time, status) ~ 1, data = rtt_data, renorm = FALSE),
     c(1.5, 0, 1.5)

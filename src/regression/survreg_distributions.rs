@@ -54,6 +54,7 @@ impl SurvregTransform {
     pub fn derivative(self, y: f64) -> SurvivalResult<f64> {
         Ok(match self {
             Self::Identity => 1.0,
+            Self::Log if y.is_nan() => y,
             Self::Log => 1.0 / y,
             Self::Custom => {
                 return Err(invalid(
@@ -66,6 +67,7 @@ impl SurvregTransform {
     pub fn inverse(self, x: f64) -> SurvivalResult<f64> {
         Ok(match self {
             Self::Identity => x,
+            Self::Log if x.is_nan() => x,
             Self::Log => x.exp(),
             Self::Custom => {
                 return Err(invalid(
@@ -515,6 +517,10 @@ impl SurvregDistribution {
     }
 
     pub(crate) fn builtin_quantile(&self, p: f64) -> f64 {
+        // R's quantile functions retain the distinct payloads of NA and NaN.
+        if p.is_nan() {
+            return p;
+        }
         match self.family {
             SurvregFamily::Custom => unreachable!("custom quantiles use batches"),
             SurvregFamily::ExtremeValue => (-(1.0 - p).ln()).ln(),
@@ -834,6 +840,21 @@ mod tests {
         let dist = SurvregDistribution::from_name("extreme", None).unwrap();
         let far = with_builtin_kernel!(&dist, kernel => kernel.censored(1e6));
         assert!(far.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn quantiles_preserve_missing_probability_kinds() {
+        let na = f64::from_bits(0x7ff8_0000_0000_07a2);
+        let p = [na, f64::NAN, -0.2, 1.2];
+        for name in ["extreme", "logistic", "gaussian", "t"] {
+            let dist = SurvregDistribution::from_name(name, None).unwrap();
+            let quantiles = dist.quantiles(&p).unwrap();
+            assert_eq!(quantiles[0].to_bits(), na.to_bits(), "{name}");
+            for value in &quantiles[1..] {
+                assert!(value.is_nan() && value.to_bits() != na.to_bits(), "{name}");
+            }
+            assert_eq!(dist.quantile(na).unwrap().to_bits(), na.to_bits());
+        }
     }
 
     #[test]

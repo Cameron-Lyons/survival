@@ -24,10 +24,12 @@ no robust-variance workspace is allocated. A fitted Cox model with optional
 `newdata` gives model-based curves, and a multi-state Cox model gives R's
 `survfit.coxphms` state-probability curves.
 
-`surv_analysis.survfitkm` is the native right-censored and counting-process
-kernel (`ctype=1` gives the Nelson–Aalen hazard); it accepts NumPy arrays, pandas or
-Polars columns and sequences, require binary status (integral floats are
-converted with a check) and release the GIL.
+`surv_analysis.survfitkm` accepts NumPy arrays, pandas or Polars columns and
+sequences for right-censored and counting-process curves. It checks status values
+for binary codes, accepts integral floats and releases the GIL during fitting.
+`ctype=1` gives the Nelson–Aalen cumulative hazard. The Rust
+`surv_analysis::nelson_aalen` function reports this hazard at event times with
+unweighted observation counts, including when case weights are close to one.
 
 ### Times
 
@@ -343,6 +345,9 @@ KM and Aalen–Johansen fits keep their missing-data action as `fit.na_action`
 | Observation pseudo-value vector, matrix or array | Retained rows | Original row count, omitted rows NaN |
 | Collapsed subject output | Retained subjects | Retained subjects |
 | Long table (`data_frame=True`) | Retained rows | Retained rows |
+
+For a multi-state fit with no observed transitions, cumulative-hazard residual
+and pseudo-value tables have zero rows and keep their column names.
 
 Without an explicit id, labels keep the positions before omission: omitting
 observations 2 and 6 gives ids `[1, 3, 4, 5, 7, 8]`. Excluded rows are labeled by

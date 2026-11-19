@@ -117,17 +117,25 @@ pub(crate) struct DenseGroups {
 
 impl DenseGroups {
     pub(crate) fn new(labels: &[i32]) -> Self {
+        Self::rank(labels, |a, b| a.abs_diff(b) as usize)
+    }
+
+    pub(crate) fn from_usize(labels: &[usize]) -> Self {
+        Self::rank(labels, usize::abs_diff)
+    }
+
+    fn rank<T: Ord + Copy>(labels: &[T], distance: impl Fn(T, T) -> usize) -> Self {
         let (Some(&min), Some(&max)) = (labels.iter().min(), labels.iter().max()) else {
             return Self {
                 ids: Vec::new(),
                 count: 0,
             };
         };
-        let slot = |label: i32| (i64::from(label) - i64::from(min)) as usize;
-        let span = slot(max) + 1;
-        if span <= 4 * labels.len() {
+        let slot = |label| distance(label, min);
+        let last = slot(max);
+        if last < labels.len().saturating_mul(4) {
             // Compact labels (cluster codes, ids): rank through a table.
-            let mut rank = vec![0usize; span];
+            let mut rank = vec![0usize; last + 1];
             for &label in labels {
                 rank[slot(label)] = 1;
             }

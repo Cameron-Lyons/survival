@@ -250,7 +250,7 @@ impl SurvregDistribution {
                         let scale_value = scale[if scale.len() == 1 { 0 } else { i }];
                         let mean_value = mean[if mean.len() == 1 { 0 } else { i }];
                         self.query_inverse_one(add(
-                            multiply(self.query_quantile_one(p), scale_value, p_len, scale.len()),
+                            multiply(self.builtin_quantile(p), scale_value, p_len, scale.len()),
                             mean_value,
                             p_len,
                             mean.len(),
@@ -266,7 +266,7 @@ impl SurvregDistribution {
                     let j = i % multiplied;
                     self.query_inverse_one(add(
                         multiply(
-                            self.query_quantile_one(p[j % p.len()]),
+                            self.builtin_quantile(p[j % p.len()]),
                             scale[j % scale.len()],
                             p.len(),
                             scale.len(),
@@ -288,7 +288,7 @@ impl SurvregDistribution {
             self.t_math_values(p, TMath::Quantile, warn)?
         } else {
             self.quantile_warnings(p, warn)?;
-            p.iter().map(|&p| self.query_quantile_one(p)).collect()
+            p.iter().map(|&p| self.builtin_quantile(p)).collect()
         };
         let located = if matching_lengths(quantiles.len(), mean.len(), scale.len()) {
             let quantile_len = quantiles.len();
@@ -486,14 +486,6 @@ impl SurvregDistribution {
         Ok(())
     }
 
-    fn query_quantile_one(&self, p: f64) -> f64 {
-        if p.is_nan() {
-            p
-        } else {
-            self.builtin_quantile(p)
-        }
-    }
-
     #[inline]
     fn finite_scalar_probability_one(
         &self,
@@ -560,7 +552,7 @@ impl SurvregDistribution {
         scale: f64,
     ) -> SurvivalResult<f64> {
         self.query_inverse_one(arithmetic(
-            multiply(self.query_quantile_one(p), scale, 1, 1),
+            multiply(self.builtin_quantile(p), scale, 1, 1),
             mean,
             Arithmetic::Add,
             1,

@@ -326,6 +326,11 @@ Curves (`survfit.coxphms`, `coxsurv1-4.c`):
 
 ### Parametric regression (`survreg`)
 
+- For a model with estimated scale, `rsigma=False` uses the location block
+  of the covariance matrix for dfbeta, standardized dfbeta and likelihood
+  displacement residuals. Stock R 3.8-12 drops the scale columns from the
+  score and multiplies by the full covariance matrix, raising
+  “non-conformable arguments”.
 - **Loglogistic with a zero lower bound**: `survreg.R:130` lists
   `"Log logisit"`, so R skips the zero-lower-bound conversion for the
   loglogistic family and errors "Invalid survival times for this distribution"
@@ -547,6 +552,10 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   exact, left- and right-censored rows `start.time` compares their time; R's
   rule compares the placeholder 1 in `y[, 2]` and drops them for any
   `start.time > 1`.
+- Turnbull uses a midpoint that stays finite for large finite endpoints. For
+  the interval `(1e308, 1.5e308]`, the estimate falls to zero at `1.25e308`.
+  In stock survival 3.8-11 and 3.8-12 the endpoint sum overflows and the fit
+  raises an error.
 
 Turnbull curves follow R's EM (`survfitTurnbull.R`: Aitken acceleration every
 fifth step, stopping at max |change| < 5e-5). That rule is sensitive to

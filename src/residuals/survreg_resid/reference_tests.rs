@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::core::strata_order::rowsum;
-use crate::internal::matrix::matrix_from_rows;
+use crate::internal::matrix::{matrix_from_rows, matrix_rows};
 use crate::internal::rng::Rng;
 use crate::regression::parametric_survival::{
     FittingResponse, SurvregControl, SurvregData, derfun, robust_variance, survreg_fit,
@@ -376,23 +376,38 @@ fn robust_variance_and_dfbeta_match_the_reference_bit_for_bit() {
 }
 
 #[test]
-fn collapse_codes_beyond_32_bits_are_rejected_by_every_path() {
+fn wide_cluster_labels_keep_the_same_group_residuals_and_robust_variance() {
     let case = FitCase {
         distribution: "weibull",
-        weights: false,
+        weights: true,
         nstrata: 1,
         spread: 1,
         clusters: 10,
     };
-    let (fit, mut cluster) = sample_fit(&case, 3);
-    cluster[7] = i32::MAX as usize + 1;
-    let message = "collapse codes must fit in 32 bits";
-    let residuals = fit
-        .residuals(SurvregResidType::Dfbeta, true, Some(&cluster), true)
-        .unwrap_err();
-    assert!(residuals.to_string().contains(message), "{residuals}");
-    let robust = robust_variance(&fit, Some(&cluster)).unwrap_err();
-    assert!(robust.to_string().contains(message), "{robust}");
+    let (fit, cluster) = sample_fit(&case, 3);
+    let compact: Vec<_> = cluster.iter().map(|g| g - 3).collect();
+    let expected = reference_dfbeta(&fit, true, Some(&compact), true);
+    let variance = reference_robust_variance(&fit, Some(&compact));
+    for labels in [
+        compact
+            .iter()
+            .map(|g| usize::MAX - 9 + g)
+            .collect::<Vec<_>>(),
+        compact
+            .iter()
+            .map(|g| if *g == 9 { usize::MAX } else { *g })
+            .collect(),
+    ] {
+        let got = fit
+            .residuals(SurvregResidType::Dfbeta, true, Some(&labels), true)
+            .unwrap();
+        assert_same_rows(&got.values, &expected, "wide cluster codes");
+        assert_same_rows(
+            &robust_variance(&fit, Some(&labels)).unwrap(),
+            &variance,
+            "wide cluster covariance",
+        );
+    }
     let short = robust_variance(&fit, Some(&cluster[1..])).unwrap_err();
     assert!(short.to_string().contains("collapse"), "{short}");
 }
