@@ -15,7 +15,7 @@ use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatVec, IntVec};
 use crate::internal::sorting::ordered_subset;
 use crate::internal::validation::{
-    validate_finite, validate_length, validate_non_empty, validate_non_negative,
+    validate_finite, validate_length, validate_no_nan, validate_non_empty, validate_non_negative,
 };
 use ndarray::{Array2, Array3, Axis, ShapeBuilder, s};
 use pyo3::prelude::*;
@@ -73,7 +73,7 @@ impl SurvfitAJData {
 
     pub fn validate(&self) -> SurvivalResult<()> {
         validate_non_empty(&self.time, "time")?;
-        validate_finite(&self.time, "time")?;
+        validate_no_nan(&self.time, "time")?;
         validate_length(self.time.len(), self.state.len(), "state")?;
         if self.states.is_empty() {
             return Err(SurvivalError::invalid_input(
@@ -93,7 +93,7 @@ impl SurvfitAJData {
         }
         if let Some(start) = &self.start {
             validate_length(self.time.len(), start.len(), "start")?;
-            validate_finite(start, "start")?;
+            validate_no_nan(start, "start")?;
             validate_intervals(start, &self.time)?;
         }
         if let Some(weights) = &self.weights {

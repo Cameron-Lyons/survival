@@ -52,7 +52,7 @@ fn aalen_johansen_rejects_modified_inputs_before_fitting() {
     .unwrap();
     let mutations: &[fn(&mut SurvfitAJData)] = &[
         |d| d.time.clear(),
-        |d| d.time[0] = f64::INFINITY,
+        |d| d.time[0] = f64::NAN,
         |d| d.state.clear(),
         |d| d.state[0] = -1,
         |d| d.state[0] = 3,
@@ -84,6 +84,10 @@ fn aalen_johansen_rejects_modified_inputs_before_fitting() {
         }
     }
     assert!(survfitaj(&original, &SurvfitAJOptions::default()).is_ok());
+    let mut infinite = original;
+    infinite.time[2] = f64::INFINITY;
+    let fit = survfitaj(&infinite, &SurvfitAJOptions::default()).unwrap();
+    assert_eq!(fit.time, vec![1.0, 2.0, f64::INFINITY]);
 }
 
 #[test]

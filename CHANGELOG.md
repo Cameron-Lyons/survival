@@ -42,6 +42,8 @@ Numerical corrections are described under Fixed below.
 
 ### Performance
 
+- Small stratified Kaplan–Meier fits prepare curves sequentially, avoiding
+  thread-dispatch overhead while larger fits retain parallel preparation.
 - Concordance is 3-5x faster at 10^4 to 10^6 rows with bitwise-identical
   results. This covers `concordance`, `concordancefit` and the concordance that
   every `coxph` fit reports; with the Cox fit changes below, `coxph` itself is
@@ -131,6 +133,15 @@ Numerical corrections are described under Fixed below.
 
 ### Fixed
 
+- Native Python bindings, prepared matrix fitters and direct Cox curves preserve
+  NumPy masks as missing values across designs, responses, risks, weights and
+  covariance inputs. Ordinary arrays retain their direct conversion path.
+- Stratum-centered Cox predictions compute finite weighted means when intermediate
+  sums overflow, preserving predictions and standard errors for large covariates.
+- Aalen–Johansen restricted-mean standard errors integrate retained probability
+  influences, including truncation between fitted times and extension beyond the
+  final observation. Fits and summaries support infinite time endpoints with R's
+  time-in-state and uncertainty conventions.
 - The Python package-layout example uses the current `survival.kernels` import.
 - Optional ML builds use `chacha20` 0.10.2, fixing the RNG's use of an SSE4.1
   instruction in its SSE2 backend ([upstream fix](https://github.com/RustCrypto/stream-ciphers/pull/580)).

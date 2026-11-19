@@ -24,6 +24,7 @@ include = [
   "/test/r/kernel_references/*.json",
   "/python/tests/fixtures/aeq_large_time_reference.json",
   "/python/tests/fixtures/aj_entry_reference.json",
+  "/python/tests/fixtures/aj_mean_infinite_reference.json",
   "/python/tests/fixtures/egger_r_reference.json",
   "/python/tests/fixtures/km_infinite_reference.json",
   "/python/tests/fixtures/population_summary_reference.json",

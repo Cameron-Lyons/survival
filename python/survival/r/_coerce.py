@@ -26,15 +26,39 @@ _NA_REAL = struct.unpack("=d", struct.pack("=Q", 0x7FF80000000007A2))[0]
 _MASKED_FLOAT_WARNING = "Warning: converting a masked element to nan."
 
 
+def _asarray_with_na(values: Any) -> np.ndarray:
+    """An ndarray that keeps masked entries missing at native boundaries.
+
+    ``np.asarray`` discards a masked array's mask and exposes its backing values.
+    Ordinary arrays keep its no-copy path; masked entries become R's NA payload
+    without changing the original data or mask. Nonnumeric arrays retain an
+    object dtype so the caller can still validate or convert them.
+    """
+    if isinstance(values, np.ma.MaskedArray):
+        if np.ma.is_masked(values):
+            dtype = np.float64 if values.dtype.kind in "biuf" else object
+            return np.ma.filled(values.astype(dtype, copy=False), _NA_REAL)
+    elif isinstance(values, list | tuple) and any(
+        isinstance(value, np.ma.MaskedArray) for value in values
+    ):
+        # A sequence of masked rows also loses its masks under np.asarray.
+        values = [_asarray_with_na(value) for value in values]
+    return np.asarray(values)
+
+
 def _numeric_design_matrix(
     x: Any, n: int, *, vector: bool = False, empty: bool = False, invalid: str = "Invalid X matrix"
 ) -> np.ndarray:
     """Prepared numeric columns without per-row lists at the native boundary."""
     if isinstance(x, Mapping):
-        values = np.column_stack(list(x.values())) if x else np.empty((n, 0))
+        values = (
+            np.column_stack([_asarray_with_na(column) for column in x.values()])
+            if x
+            else np.empty((n, 0))
+        )
     else:
         values = x.to_numpy() if hasattr(x, "to_numpy") else x
-    matrix = np.asarray(values)
+    matrix = _asarray_with_na(values)
     if matrix.ndim == 1 and matrix.size == 0 and empty:
         matrix = np.empty((n, 0))
     elif matrix.ndim == 1 and vector:

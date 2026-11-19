@@ -1,5 +1,6 @@
 use super::scaling::{
     PredictionRisks, PredictorOrigin, add_predictor_parts, relative_covariate_scale,
+    stable_weighted_mean,
 };
 use super::{CoxNewData, CoxPHFit, CoxPrediction, CoxTermsPrediction, PredictReference};
 use crate::core::strata_order::stratum_groups;
@@ -169,9 +170,25 @@ impl CoxPHFit {
                 *sum += self.weights[row] * self.x[(row, col)];
             }
         }
-        for (sum, total) in sums.iter_mut().zip(&totals) {
-            for value in sum.iter_mut() {
-                *value /= total;
+        for (stratum, (sum, &total)) in sums.iter_mut().zip(&totals).enumerate() {
+            if total.is_finite() && sum.iter().all(|value| value.is_finite()) {
+                for value in sum.iter_mut() {
+                    *value /= total;
+                }
+                continue;
+            }
+            // A finite centre can have an overflowing weighted sum. Keep the
+            // usual row-order arithmetic above, rescaling only affected columns.
+            let (start, end) = self.sorted.bounds[stratum];
+            let rows = &self.sorted.order[start..end];
+            let weights: Vec<f64> = rows.iter().map(|&row| self.weights[row]).collect();
+            for (column, value) in sum.iter_mut().enumerate() {
+                if total.is_finite() && value.is_finite() {
+                    *value /= total;
+                } else {
+                    let values: Vec<f64> = rows.iter().map(|&row| self.x[(row, column)]).collect();
+                    *value = stable_weighted_mean(&values, &weights);
+                }
             }
         }
         sums

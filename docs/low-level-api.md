@@ -25,6 +25,13 @@ conversion path. The typed boundary types are described in
 [Repository layout](repo-layout.md#boundary-input-types). Kernels receive owned
 buffers, so the bindings release the GIL while fitting.
 
+Native vector and matrix conversions preserve NumPy masks as missing values.
+Floating-point inputs use NaN; integer and boolean inputs reject missing values.
+The R-style matrix fitters and direct Cox curve interface also preserve masks
+in rows and columns supplied through mappings. Required fitting inputs must be
+complete; prepared-input interfaces reject missing values without omitting rows.
+Use the formula interface to apply a missing-row policy before fitting.
+
 ## Bare Cox fitting
 
 `r.coxph_fit`, `r.agreg_fit` and `r.agexact_fit` return a `CoxphFitResult` with

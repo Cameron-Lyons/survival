@@ -10,6 +10,7 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _asarray_with_na,
     _finite_float,
     _float_vector,
     _integer_scalar,
@@ -117,7 +118,7 @@ def _response(y: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         status = np.asarray(y.event, dtype=float)
         time2 = None if y.time2 is None else np.asarray(y.time2, dtype=float)
     else:
-        matrix = np.asarray(y)
+        matrix = _asarray_with_na(y)
         if matrix.ndim != 2 or matrix.shape[1] not in {2, 3}:
             raise ValueError("Invalid survival response")
         if matrix.dtype.kind not in "biuf":
