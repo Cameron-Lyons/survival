@@ -106,6 +106,29 @@ def test_numpy_timestamp_matching_retains_exact_resolution(unit):
     assert r.neardate([1, 1], [1, 1], query, reference, best="prior") == [0, 1]
 
 
+@pytest.mark.parametrize("storage", [list, np.int64, np.uint64])
+def test_adjacent_large_integer_dates_remain_distinguishable(storage):
+    query = [2**53 + 1, 2**53 + 3]
+    reference = [2**53, 2**53 + 2]
+    if storage is not list:
+        query, reference = (np.asarray(column, dtype=storage) for column in (query, reference))
+    assert r.neardate([1, 1], [1, 1], query, reference, nomatch=-1) == [1, -1]
+    assert r.neardate([1, 1], [1, 1], query, reference, best="prior") == [0, 1]
+
+
+@pytest.mark.parametrize("array", [False, True])
+def test_wide_subject_ids_use_the_same_codes_in_both_vectors(array):
+    base = 2**63
+    query = [base, base + 1, base + 2]
+    reference = [base + 1, base]
+    if array:
+        query, reference = (
+            np.asarray(query, dtype=np.uint64),
+            np.asarray(reference, dtype=np.uint64),
+        )
+    assert r.neardate(query, reference, [1, 1, 1], [2, 2]) == [1, 0, None]
+
+
 def test_mixed_numpy_date_units_do_not_overflow_distant_calendar_dates():
     query = [np.datetime64("1500-01-01", "D"), np.datetime64("2020-01-01", "ns")]
     reference = [np.datetime64("1600-01-01", "D"), np.datetime64("2020-01-02", "ns")]
@@ -126,6 +149,13 @@ def test_python_calendar_and_aware_datetimes_match_absolute_instants():
     reference = [np.datetime64("2020-01-01", "D"), datetime(2020, 1, 1, tzinfo=UTC)]
     assert r.neardate([1, 1], [1, 1], query, reference) == [0, 0]
     assert r.neardate([1, 1], [1, 1], query, reference, best="prior") == [1, 1]
+
+
+def test_direct_pandas_nullable_integer_dates_keep_exact_matches():
+    pd = pytest.importorskip("pandas")
+    base = 2**53
+    reference = pd.array([base + 1, base, pd.NA], dtype="Int64")
+    assert r.neardate([1], [1, 1, 1], [base], reference) == [1]
 
 
 def test_masked_numpy_datetimes_do_not_lose_type_or_missingness():

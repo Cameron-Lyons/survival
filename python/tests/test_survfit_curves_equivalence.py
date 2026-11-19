@@ -90,10 +90,9 @@ def test_clustered_robust_variance_matches_the_dense_cluster_loop(options):
 def test_clustered_robust_variance_matches_the_dense_loop_where_the_censoring_curve_runs_out(
     seed,
 ):
-    """A weighted censoring curve whose last time mixes deaths and censorings ends on a
-    survival factor that is the rounding residue of ``n.risk - n.event`` rather than zero.
-    That time takes the dense loop's step, so the standard errors and limits there agree
-    with the dense loop to rounding of their own size, not only of the curve's."""
+    """A weighted censoring curve whose last time mixes deaths and censorings exhausts
+    its risk set after the tied deaths leave. At that time the standard errors and
+    limits agree with the dense loop to rounding of their own size."""
 
     data = _clustered_km_data(last_status=None, seed=seed)
     options = {"cluster": "cl", "weights": "w", "reverse": True}

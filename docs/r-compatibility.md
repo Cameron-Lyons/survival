@@ -522,6 +522,30 @@ Penalized survreg (`survpenal.fit`, `survreg7.c`):
   response rows or give a dimension error. The port leaves nonfinite endpoints and
   their statuses in their own rows. Infinite-origin summary tables keep R's
   undefined arithmetic.
+- Reverse Kaplan–Meier curves remove deaths before censorings at the same
+  time. Accumulating the remaining weight directly preserves small censoring
+  weights when a much heavier subject dies. For an exhausted weighted risk set,
+  rounding on opposite sides of zero can give tiny finite confidence limits in
+  one implementation and undefined limits in the other.
+- Delayed-entry and clustered fits preserve small weights when a much larger
+  weight leaves a risk set. With weights `[1e17, 1, 1]` and only the two
+  unit-weight subjects at risk for the first event, survival 3.8-12 reports zero
+  weight at risk and negative infinite survival. The port returns a risk weight
+  of two and survival of 0.5.
+- Extreme finite case weights are rescaled together within a curve when a
+  common scale preserves its smallest weights. With five weights of `8e307`,
+  survival and robust standard errors match the unit-weight fit. Survival
+  3.8-12 returns undefined probabilities when the risk total overflows.
+  Reported risk and event weights stay in the original units, so a total
+  outside the binary64 range is reported as infinity. If no common scale can
+  keep both the largest risk calculations and the smallest squared weight
+  in range, the curve retains the original units and may encounter overflow.
+- Splitting an event-free counting-process interval at an interior time
+  preserves the cluster's Kaplan–Meier influence and standard error.
+  In survival 3.8-12, where the split time is absent from the output grid,
+  the intermediate departure can clear the weight of another active subject
+  in that cluster. For the regression case, splitting changes R's standard
+  error from 0.14490 to 0.19137. Both representations give 0.14490 here.
 - `survfitKM`: default weights and absent `id`/`cluster` are resolved before
   `start_time` filtering (R's lazy default weights can be evaluated after
   filtering, producing the wrong length, and R can access missing `id` or
@@ -605,6 +629,9 @@ this does not show.
 
 ### Data preparation
 
+- `tcut` rounds a fractional interval count up and returns one more cutpoint
+  than labels. At the first representable value above 1, R rounds
+  `breaks + 1` to 2 and returns two cutpoints for two interval labels.
 - `tmerge` takes numeric times; R also accepts `Date` times and returns `Date`
   `tstart`/`tstop`. Convert dates to day counts first. `event(censor = )` sets
   the value of censored rows, which R's `tmerge` ignores (a character event

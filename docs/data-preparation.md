@@ -85,12 +85,16 @@ r.neardate([1], [1, 1], ["10"], ["10", "10"], best="prior")
   `y1 and y2 must be sortable` error.
 - Identifiers use R's common matching type. Numbers match their character labels,
   logical values match `"TRUE"` and `"FALSE"`, and factor identifiers use their
-  labels. Numeric identifier arrays keep the native array path. Distinct numeric
-  query identifiers that share R's rounded character label retain R's separate
-  query groups.
+  labels. Signed integer arrays use the native array path. `r.neardate` and
+  `r.lvcf` preserve the identity of Python integers and NumPy unsigned
+  integers beyond the signed 64-bit range. Their low-level
+  kernels raise `OverflowError` for integer IDs that neither a signed 64-bit
+  integer nor a double can represent exactly. Distinct numeric query identifiers
+  that share R's rounded character label retain R's separate query groups.
 - Calendar values are ranked together with exact integer time keys, keeping NumPy
-  units down to attoseconds and pandas subsecond precision. Python dates and naive
-  datetimes are taken as UTC; aware datetimes use their absolute instant. `NaT`
+  units down to attoseconds and pandas subsecond precision. Integer visit times
+  also keep their order above the exact integer range of a double. Python dates
+  and naive datetimes use UTC. Aware datetimes use their absolute instant. `NaT`
   and masked entries are missing. Convert calendar and numeric date vectors to one
   representation before mixing them.
 - The R facade ranks character and classed date vectors with R's common type and
@@ -101,7 +105,10 @@ r.neardate([1], [1, 1], ["10"], ["10", "10"], best="prior")
 
 `r.lvcf` carries non-missing values forward within each subject and returns a list
 in input row order. With `time`, rows are ordered within each subject with missing
-times last, and equal times keep input order, as in R.
+times last, and equal times keep input order, as in R. Calendar times use their
+chronological order, character times use lexical order, and factors use the
+declared level order. Without `time`, a single pass carries values within each
+subject, including when subjects' visits are interleaved.
 
 ```python
 r.lvcf([1, 1, 1], [None, None, 1], time=[None, 1, 2])
@@ -119,6 +126,21 @@ logical levels. Inputs are not modified.
 Factor inputs return an unordered `Factor` with all declared levels in their
 original order, including unused levels, as in R. This preserves the censoring
 level and event states when the result is passed to `Surv`.
+
+Timezone-aware Polars measurements return Python datetimes when every instant
+falls on a whole microsecond. For finer precision, `r.lvcf` returns pandas
+timestamps in the column's time zone when pandas can represent them. If pandas
+is unavailable or a local timestamp exceeds its range, the result holds the
+exact UTC instants as NumPy `datetime64[ns]` values.
+
+## Time-dependent cutpoints
+
+`r.tcut(x, breaks, scale=1)` accepts either an interval count or an ordered
+vector of cutpoints. An interval count needs at least one observed value and
+finite endpoints for the padded range. Explicit cutpoints also work with an
+empty or entirely missing `x`. The scale multiplies the values and cutpoints
+after the interval labels have been formed. Zero and negative scales follow
+the same rule.
 
 ## Removing repeated states
 

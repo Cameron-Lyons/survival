@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+mod risk_weight;
 mod robust;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -863,11 +864,15 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
     let dtime = kernel_unique_times(data, rows, options.entry);
     let ntime = dtime.len();
     let counting = data.time1.is_some();
+    let subtracts_weights = counting || data.cluster.is_some_and(|(_, nid)| nid < nused);
+    let exact_weights =
+        subtracts_weights && risk_weight::needs_exact_updates(sort2, data.wt, counting);
 
     let mut n_risk = vec![0.0; ntime];
     let mut n_event = vec![0.0; ntime];
     let mut n_censor = vec![0.0; ntime];
     let mut wt_risk = vec![0.0; ntime];
+    let mut reverse_risk = options.reverse.then(|| vec![0.0; ntime]);
     let mut wt_event = vec![0.0; ntime];
     let mut wt_censor = vec![0.0; ntime];
     let mut n_enter = (options.entry && counting).then(|| vec![0.0; ntime]);
@@ -877,8 +882,13 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         let mut person2 = nused;
         let mut n1 = 0.0;
         let mut wt1 = 0.0;
+        let mut active_weight = (counting && exact_weights).then(risk_weight::RiskWeight::default);
         for k in (0..ntime).rev() {
             let (mut n2, mut n3, mut wt2, mut wt3) = (0.0, 0.0, 0.0, 0.0);
+            // Deaths leave before tied censorings. Accumulate the weight at that
+            // point directly: subtracting tied deaths from wt1 can erase it.
+            let mut censor_risk = wt1;
+            let end2 = person2;
             while person2 > 0 {
                 let i2 = sort2[person2 - 1];
                 if data.time2[i2] < dtime[k] {
@@ -886,12 +896,18 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 }
                 n1 += 1.0;
                 wt1 += data.wt[i2];
+                if let Some(sum) = &mut active_weight {
+                    sum.add(data.wt[i2]);
+                }
                 if data.status[i2] == 1 {
                     n2 += 1.0;
                     wt2 += data.wt[i2];
-                } else if data.position[i2] & 2 != 0 {
-                    n3 += 1.0;
-                    wt3 += data.wt[i2];
+                } else {
+                    censor_risk += data.wt[i2];
+                    if data.position[i2] & 2 != 0 {
+                        n3 += 1.0;
+                        wt3 += data.wt[i2];
+                    }
                 }
                 person2 -= 1;
             }
@@ -904,6 +920,10 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     }
                     n1 -= 1.0;
                     wt1 -= data.wt[i1];
+                    censor_risk -= data.wt[i1];
+                    if let Some(sum) = &mut active_weight {
+                        sum.add(-data.wt[i1]);
+                    }
                     if options.entry && data.position[i1] & 1 != 0 && time1[i1] == dtime[k] {
                         n4 += 1.0;
                         wt4 += data.wt[i1];
@@ -915,18 +935,52 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     wt_enter[k] = wt4;
                 }
             }
+            if let Some(sum) = &mut active_weight {
+                wt1 = sum.total();
+                // Use the same rounding for both sides of the hazard fraction,
+                // including a tied block that exhausts the risk set.
+                let mut events = risk_weight::RiskWeight::default();
+                let mut censors = risk_weight::RiskWeight::default();
+                for &row in &sort2[person2..end2] {
+                    if data.status[row] == 1 {
+                        events.add(data.wt[row]);
+                    } else if data.position[row] & 2 != 0 {
+                        censors.add(data.wt[row]);
+                    }
+                }
+                wt2 = events.total();
+                wt3 = censors.total();
+                if options.reverse {
+                    // sort2 puts tied deaths first. The bins can remove even a
+                    // dominant death and restore it exactly for the next time.
+                    let deaths = &sort2[person2..end2];
+                    let tied = deaths
+                        .iter()
+                        .take_while(|&&row| data.time2[row] == dtime[k] && data.status[row] == 1);
+                    for &row in tied.clone() {
+                        sum.add(-data.wt[row]);
+                    }
+                    censor_risk = sum.total();
+                    for &row in tied {
+                        sum.add(data.wt[row]);
+                    }
+                }
+            }
             n_risk[k] = n1;
             n_event[k] = n2;
             n_censor[k] = n3;
             wt_risk[k] = wt1;
+            if let Some(risk) = &mut reverse_risk {
+                risk[k] = censor_risk;
+            }
             wt_event[k] = wt2;
             wt_censor[k] = wt3;
         }
     }
 
     let event_terms = |i: usize| -> (f64, f64, f64) {
-        if options.reverse {
-            (n_censor[i], wt_censor[i], wt_risk[i] - wt_event[i])
+        if let Some(risk) = &reverse_risk {
+            (n_censor[i], wt_censor[i], risk[i])
         } else {
             (n_event[i], wt_event[i], wt_risk[i])
         }
@@ -993,6 +1047,7 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             &mut std_chaz,
         );
     } else if summable
+        && !exact_weights
         && data.cluster.is_some_and(|(cluster, nid)| {
             robust::use_cluster_sums(nid, ntime, nused, || {
                 let rows = rows.sort2.iter().map(|&row| (cluster[row], data.wt[row]));
@@ -1018,16 +1073,12 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         let mut imat2 = want_chaz_matrix.then(|| Vec::with_capacity(nid * ntime));
         let mut gcount = vec![0i64; nid];
         let mut gwt = vec![0.0; nid];
+        let mut cluster_weights = exact_weights
+            .then(|| risk_weight::cluster_weights(sort2, data.wt, cluster, nid, counting));
         let mut inf1 = vec![0.0; nid];
         let mut inf2 = vec![0.0; nid];
         let mut person1 = 0;
         let mut person2 = 0;
-        if !counting {
-            for &i2 in sort2 {
-                gcount[cluster[i2]] += 1;
-                gwt[cluster[i2]] += data.wt[i2];
-            }
-        }
         let is_event = |i2: usize| -> bool {
             if options.reverse {
                 data.status[i2] == 0 && data.position[i2] & 2 != 0
@@ -1035,39 +1086,49 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 data.status[i2] == 1
             }
         };
-        let remove = |i2: usize, gcount: &mut [i64], gwt: &mut [f64]| {
+        let mut change_risk = |i2: usize, enter: bool, gcount: &mut [i64], gwt: &mut [f64]| {
             let g = cluster[i2];
-            gcount[g] -= 1;
-            if gcount[g] == 0 {
+            let change = if enter { data.wt[i2] } else { -data.wt[i2] };
+            gcount[g] += if enter { 1 } else { -1 };
+            if let Some(sum) = cluster_weights.as_mut().and_then(|sums| sums[g].as_mut()) {
+                sum.add(change);
+                gwt[g] = sum.total();
+            } else if !enter && gcount[g] == 0 {
                 gwt[g] = 0.0;
             } else {
-                gwt[g] -= data.wt[i2];
+                gwt[g] += change;
             }
         };
+        if !counting {
+            for &row in sort2 {
+                change_risk(row, true, &mut gcount, &mut gwt);
+            }
+        }
         let mut km = 1.0;
         let mut v1 = 0.0;
         let mut v2 = 0.0;
         for i in 0..ntime {
-            while person2 < nused {
-                let i2 = sort2[person2];
-                let gone = data.time2[i2] < dtime[i]
-                    || (options.reverse && data.time2[i2] == dtime[i] && data.status[i2] == 1);
-                if !gone {
-                    break;
-                }
-                remove(i2, &mut gcount, &mut gwt);
-                person2 += 1;
-            }
+            // An entire interval may fall between two output times. Register
+            // entries first so its departure removes an active cluster member.
             if let (Some(time1), Some(sort1)) = (data.time1, &rows.sort1) {
                 while person1 < nused {
                     let i1 = sort1[person1];
                     if time1[i1] >= dtime[i] {
                         break;
                     }
-                    gcount[cluster[i1]] += 1;
-                    gwt[cluster[i1]] += data.wt[i1];
+                    change_risk(i1, true, &mut gcount, &mut gwt);
                     person1 += 1;
                 }
+            }
+            while person2 < nused {
+                let row = sort2[person2];
+                let gone = data.time2[row] < dtime[i]
+                    || (options.reverse && data.time2[row] == dtime[i] && data.status[row] == 1);
+                if !gone {
+                    break;
+                }
+                change_risk(row, false, &mut gcount, &mut gwt);
+                person2 += 1;
             }
             let (d0, d1, nrisk) = event_terms(i);
             if d0 > 0.0 && d1 > 0.0 {
@@ -1102,7 +1163,7 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                         }
                         inf2[g] += data.wt[i2] * dn_term;
                     }
-                    remove(i2, &mut gcount, &mut gwt);
+                    change_risk(i2, false, &mut gcount, &mut gwt);
                     person2 += 1;
                 }
                 km *= 1.0 - haz;
@@ -1244,7 +1305,8 @@ fn curve_inputs(
             let mut sort2 = keep.clone();
             sort2.sort_by(|&a, &b| {
                 time[a]
-                    .total_cmp(&time[b])
+                    .partial_cmp(&time[b])
+                    .expect("validated times contain no NaNs")
                     .then_with(|| status[b].cmp(&status[a]))
             });
             sort2
@@ -1293,6 +1355,34 @@ fn has_nonunit_weights(weights: &[f64]) -> bool {
         .map(|weight| ((weight - 1.0).abs() / scale) / n)
         .sum();
     difference.is_nan() || difference > tolerance
+}
+
+/// A common power of two preserves the relative weights exactly. Keep the
+/// original units for broadly spread weights if scaling would underflow their
+/// squared risk totals after larger subjects leave.
+fn curve_weight_scale(rows: &[usize], weights: &[f64]) -> f64 {
+    let n = rows.len() as f64;
+    let largest = rows.iter().map(|&row| weights[row]).fold(0.0, f64::max);
+    // A tied hazard variance can multiply a squared risk total by n.
+    let largest_safe = (f64::MAX / n).sqrt() / n;
+    let smallest_safe = f64::MIN_POSITIVE.sqrt();
+    if largest == 0.0 || (smallest_safe..=largest_safe).contains(&largest) {
+        return 1.0;
+    }
+    let smallest = rows
+        .iter()
+        .map(|&row| weights[row])
+        .filter(|&weight| weight > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    // Pick the largest power of two that keeps the smallest squared risk normal.
+    // Dividing subnormal inputs by MIN_POSITIVE yields at least 2^-52.
+    let limit = largest.max(f64::MIN_POSITIVE).min(smallest / smallest_safe);
+    let scale = f64::from_bits(limit.to_bits() & (0x7ff_u64 << 52));
+    if scale > 0.0 && largest / scale <= largest_safe {
+        scale
+    } else {
+        1.0
+    }
 }
 
 pub fn survfitkm(
@@ -1350,7 +1440,7 @@ pub(super) fn fit_with_counts(
     let time = retained_rows(time, rows);
     let start = start.map(|s| retained_rows(s, rows));
     let status = retained_rows(&data.status, rows);
-    let weights = data
+    let mut weights = data
         .weights
         .as_deref()
         .map_or_else(|| Cow::Owned(vec![1.0; n]), |w| retained_rows(w, rows));
@@ -1425,10 +1515,28 @@ pub(super) fn fit_with_counts(
     let mut renumbering = cluster
         .filter(|_| n_curves > 1)
         .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
+    let addcounts = data.weights.is_some()
+        && if require_counts {
+            weights.iter().any(|&weight| weight != 1.0)
+        } else {
+            has_nonunit_weights(&weights)
+        };
+    let mut weight_scales = Vec::new();
     let mut curves = Vec::with_capacity(n_curves);
     for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
         if keep.is_empty() {
             continue;
+        }
+        if data.weights.is_some() {
+            let scale = curve_weight_scale(&keep, &weights);
+            if scale != 1.0 {
+                weight_scales.resize(n_curves, 1.0);
+                weight_scales[curve] = scale;
+                let weights = weights.to_mut();
+                for &row in &keep {
+                    weights[row] /= scale;
+                }
+            }
         }
         if let (Some(n_id), Some((codes, labels))) = (&mut n_id, &ids) {
             n_id[curve] = if n_curves == 1 {
@@ -1509,12 +1617,6 @@ pub(super) fn fit_with_counts(
         influence_surv: None,
         influence_chaz: None,
     };
-    let addcounts = data.weights.is_some()
-        && if require_counts {
-            weights.iter().any(|&weight| weight != 1.0)
-        } else {
-            has_nonunit_weights(&weights)
-        };
     let mut counts = addcounts.then(|| SurvfitCounts {
         n_risk: Vec::with_capacity(total),
         n_event: Vec::with_capacity(total),
@@ -1525,7 +1627,53 @@ pub(super) fn fit_with_counts(
     let mut strata_codes = Vec::with_capacity(fits.len());
     let mut influence_surv = influence.survival().then(Vec::new);
     let mut influence_chaz = influence.cumhaz().then(Vec::new);
+    let mut std_low = (options.se_fit
+        && options.conf_type != ConfType::None
+        && options.conf_lower != ConfLower::Usual)
+        .then(|| Vec::with_capacity(total));
     for (curve, mut fit, curve_clusters) in fits {
+        let scale = weight_scales.get(curve).copied().unwrap_or(1.0);
+        if scale != 1.0 && !robust {
+            // Model variances are inversely proportional to case weight.
+            let root_scale = scale.sqrt();
+            for se in fit.std_surv.iter_mut().chain(&mut fit.std_chaz) {
+                *se /= root_scale;
+            }
+        }
+        if let Some(lower) = &mut std_low {
+            match options.conf_lower {
+                ConfLower::Peto => {
+                    let root_scale = scale.sqrt();
+                    lower.extend(
+                        fit.surv
+                            .iter()
+                            .zip(&fit.wt_risk)
+                            .map(|(s, n)| ((1.0 - s) / n).sqrt() / root_scale),
+                    );
+                }
+                ConfLower::Modified => {
+                    let mut lag = f64::NAN;
+                    for i in 0..fit.time.len() {
+                        if i == 0 || fit.wt_event[i] > 0.0 {
+                            lag = fit.wt_risk[i];
+                        }
+                        lower.push(fit.std_surv[i] * (lag / fit.wt_risk[i]).sqrt());
+                    }
+                }
+                ConfLower::Usual => unreachable!(),
+            }
+        }
+        if scale != 1.0 {
+            for count in fit
+                .wt_risk
+                .iter_mut()
+                .chain(&mut fit.wt_event)
+                .chain(&mut fit.wt_censor)
+                .chain(fit.wt_enter.iter_mut().flatten())
+            {
+                *count *= scale;
+            }
+        }
         strata_rows.push(fit.time.len());
         strata_codes.push(strata_levels[curve]);
         result.time.extend_from_slice(&fit.time);
@@ -1588,37 +1736,6 @@ pub(super) fn fit_with_counts(
 
     if options.se_fit && options.conf_type != ConfType::None {
         let std_err = result.std_err.as_deref().expect("se.fit keeps std.err");
-        let std_low: Option<Vec<f64>> = match options.conf_lower {
-            ConfLower::Usual => None,
-            ConfLower::Peto => Some(
-                result
-                    .surv
-                    .iter()
-                    .zip(&result.n_risk)
-                    .map(|(s, n)| ((1.0 - s) / n).sqrt())
-                    .collect(),
-            ),
-            ConfLower::Modified => {
-                let mut n_lag = vec![0.0; result.time.len()];
-                for range in result.curve_ranges() {
-                    let mut lag = f64::NAN;
-                    for i in range.clone() {
-                        if i == range.start || result.n_event[i] > 0.0 {
-                            lag = result.n_risk[i];
-                        }
-                        n_lag[i] = lag;
-                    }
-                }
-                Some(
-                    std_err
-                        .iter()
-                        .zip(&n_lag)
-                        .zip(&result.n_risk)
-                        .map(|((se, lag), n)| se * (lag / n).sqrt())
-                        .collect(),
-                )
-            }
-        };
         let bands = survfit_confint(
             &result.surv,
             std_err,
@@ -2561,6 +2678,110 @@ mod tests {
         }
     }
 
+    #[test]
+    fn overflowing_case_weight_totals_preserve_curves_and_variance_units() {
+        let scale: f64 = 8e307;
+        let time = [1., 2., 2., 3., 4.].repeat(2);
+        let event = [1, 1, 1, 0, 0].repeat(2);
+        let mut unit = SurvfitKMData::right_censored(time, event).unwrap();
+        unit.strata = Some(vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1]);
+        let mut weighted = unit.clone();
+        weighted.weights = Some([vec![scale; 5], vec![1.; 5]].concat());
+        for robust in [false, true] {
+            for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+                let options = SurvfitKMOptions {
+                    robust: Some(robust),
+                    ctype,
+                    conf_lower: ConfLower::Modified,
+                    ..Default::default()
+                };
+                let reference = survfitkm(&unit, &options).unwrap();
+                let actual = survfitkm(&weighted, &options).unwrap();
+                assert_vec_approx(&actual.surv, &reference.surv, 1e-14);
+                assert_vec_approx(&actual.cumhaz, &reference.cumhaz, 1e-14);
+                for (i, &risk) in reference.n_risk.iter().enumerate() {
+                    let weight = if i < 4 { scale } else { 1.0 };
+                    assert_eq!(actual.n_risk[i], risk * weight);
+                    assert_eq!(actual.n_event[i], reference.n_event[i] * weight);
+                    assert_eq!(actual.n_censor[i], reference.n_censor[i] * weight);
+                    let se_scale = if robust { 1.0 } else { weight.sqrt() };
+                    for (observed, expected) in [
+                        (&actual.std_err, &reference.std_err),
+                        (&actual.std_chaz, &reference.std_chaz),
+                    ] {
+                        assert!(
+                            (observed.as_ref().unwrap()[i] * se_scale
+                                - expected.as_ref().unwrap()[i])
+                                .abs()
+                                < 1e-14
+                        );
+                    }
+                    assert!(actual.lower.as_ref().unwrap()[i].is_finite());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_large_departing_weight_does_not_rescale_away_small_later_weights() {
+        let mut data = SurvfitKMData::right_censored(vec![1., 2., 3.], vec![0, 1, 0]).unwrap();
+        data.weights = Some(vec![8e307, 1e-200, 1e-200]);
+        let fit = survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+        assert_eq!(fit.n_risk, [8e307, 2e-200, 1e-200]);
+        assert_eq!(fit.surv, [1., 0.5, 0.5]);
+    }
+
+    #[test]
+    fn rescaling_respects_both_extremes_of_the_risk_sets() {
+        let mut data =
+            SurvfitKMData::right_censored(vec![1., 1., 2., 3., 4.], vec![1, 0, 0, 1, 0]).unwrap();
+        data.weights = Some(vec![8e307, 8e307, 8e307, 1e100, 1e100]);
+        let fit = survfitkm(&data, &SurvfitKMOptions::default()).unwrap();
+        assert_eq!(fit.n_risk, [f64::INFINITY, 8e307, 2e100, 1e100]);
+        assert_vec_approx(&fit.surv, &[2. / 3., 2. / 3., 1. / 3., 1. / 3.], 1e-14);
+    }
+
+    #[test]
+    fn tiny_case_weights_preserve_model_and_direct_robust_variance() {
+        let unit =
+            SurvfitKMData::right_censored(vec![1., 2., 2., 3., 4.], vec![1, 1, 1, 0, 0]).unwrap();
+        let mut weighted = unit.clone();
+        for robust in [false, true] {
+            let options = SurvfitKMOptions {
+                robust: Some(robust),
+                ctype: HazardType::FlemingHarrington,
+                influence: if robust {
+                    InfluenceRequest::Both
+                } else {
+                    InfluenceRequest::None
+                },
+                ..Default::default()
+            };
+            let reference = survfitkm(&unit, &options).unwrap();
+            for weight in [1e-200_f64, f64::from_bits(1)] {
+                weighted.weights = Some(vec![weight; 5]);
+                let actual = survfitkm(&weighted, &options).unwrap();
+                assert_vec_approx(&actual.surv, &reference.surv, 1e-14);
+                assert_vec_approx(&actual.cumhaz, &reference.cumhaz, 1e-14);
+                for (i, &risk) in reference.n_risk.iter().enumerate() {
+                    assert_eq!(actual.n_risk[i], risk * weight);
+                    let se_scale = if robust { 1.0 } else { weight.sqrt() };
+                    for (observed, expected) in [
+                        (&actual.std_err, &reference.std_err),
+                        (&actual.std_chaz, &reference.std_chaz),
+                    ] {
+                        assert!(
+                            (observed.as_ref().unwrap()[i] * se_scale
+                                - expected.as_ref().unwrap()[i])
+                                .abs()
+                                < 1e-14
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Clustered data the running-sum variance takes: a giant cluster, a few medium ones
     /// and hundreds of singletons, ties, zero weights, and a final tied block in which
     /// everyone at risk has the event (censoring, for `reverse`), so the curve ends at zero.
@@ -2638,6 +2859,13 @@ mod tests {
                     .max()
                     .unwrap_or(0);
                 let weight = |i: usize| data.weights.as_ref().map_or(1.0, |w| w[i]);
+                if data
+                    .weights
+                    .as_ref()
+                    .is_some_and(|w| risk_weight::needs_exact_updates(&rows, w, false))
+                {
+                    return false;
+                }
                 robust::use_cluster_sums(nid, range.len(), fit.n[curve], || {
                     let rows = rows.iter().map(|&i| (clusters[i] as usize, weight(i)));
                     robust::cluster_concentration(rows, ncodes)
@@ -2793,8 +3021,7 @@ mod tests {
     /// Two curves, with non-dyadic weights, that nearly run out.  In the first, everyone at
     /// risk at time 30 has the event but five rows of tiny weight, which have theirs later;
     /// in the second, the last time mixes deaths and censorings, so that the censoring
-    /// curve's (`reverse`) survival factor there is the rounding residue of
-    /// `n.risk - n.event` rather than zero.
+    /// curve (`reverse`) exhausts its risk set after the tied deaths leave.
     fn nearly_running_out(seed: u64, reverse: bool) -> SurvfitKMData {
         let mut state = seed;
         let mut uniform = move || {
@@ -2934,6 +3161,35 @@ mod tests {
             robust::cluster_concentration((0..3).map(|g| (g, 0.0)), 3),
             1.0
         );
+    }
+
+    #[test]
+    fn cluster_variance_after_a_large_censoring_weight_matches_explicit_influences() {
+        let n = 200;
+        let mut data = SurvfitKMData::right_censored(
+            (0..n).map(f64::from).collect(),
+            (0..n).map(|i| i32::from(i % 3 != 0)).collect(),
+        )
+        .unwrap();
+        let mut weights = vec![1.0; n as usize];
+        weights[0] = 1e165;
+        data.weights = Some(weights);
+        data.cluster = Some((0..n).map(|i| i64::from(i / 2)).collect());
+        for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+            let mut options = SurvfitKMOptions {
+                ctype,
+                ..Default::default()
+            };
+            let result = survfitkm(&data, &options).unwrap();
+            options.influence = InfluenceRequest::Both;
+            let reference = survfitkm(&data, &options).unwrap();
+            assert_vec_approx(&result.std_err.unwrap(), &reference.std_err.unwrap(), 1e-12);
+            assert_vec_approx(
+                &result.std_chaz.unwrap(),
+                &reference.std_chaz.unwrap(),
+                1e-12,
+            );
+        }
     }
 
     #[test]

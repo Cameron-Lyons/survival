@@ -208,6 +208,14 @@ def test_tcut_scales_values_and_cutpoints_like_r():
         r.tcut([1, 2], [0, 5], labels=["a", "b"])
 
 
+@pytest.mark.parametrize("scale", [0, -2])
+def test_tcut_allows_zero_and_negative_scale(scale):
+    cut = r.tcut([1, 3], [0, 2, 4], scale=scale)
+    assert list(cut.values) == [scale, 3 * scale]
+    assert list(cut.cutpoints) == [0, 2 * scale, 4 * scale]
+    assert list(cut.labels) == ["0+ thru 2", "2+ thru 4"]
+
+
 def test_tmerge_arguments_match_r_values_and_tcount():
     base, long = _base(), _long()
     d1 = r.tmerge(base, base, id="id", death=r.event("futime", "death"))

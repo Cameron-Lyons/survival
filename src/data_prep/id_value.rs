@@ -84,6 +84,7 @@ impl<'py> pyo3::FromPyObject<'_, 'py> for IdValue {
     type Error = pyo3::PyErr;
 
     fn extract(obj: pyo3::Borrowed<'_, 'py, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        use pyo3::exceptions::{PyOverflowError, PyTypeError};
         use pyo3::prelude::*;
         use pyo3::types::{PyFloat, PyString};
 
@@ -93,13 +94,28 @@ impl<'py> pyo3::FromPyObject<'_, 'py> for IdValue {
         if let Ok(number) = obj.cast::<PyFloat>() {
             return Ok(Self::Float(number.value()));
         }
-        if let Ok(value) = obj.extract::<i64>() {
-            return Ok(Self::Int(value));
+        match obj.extract::<i64>() {
+            Ok(value) => return Ok(Self::Int(value)),
+            Err(err) if err.is_instance_of::<PyOverflowError>(obj.py()) => {
+                // Compare a Python int, since NumPy's mixed integer/float
+                // equality can round both operands to the same double.
+                let integer = obj.py().import("operator")?.call_method1("index", (obj,))?;
+                if let Ok(value) = integer.extract::<f64>()
+                    && integer.eq(value)?
+                {
+                    return Ok(Self::Float(value));
+                }
+                return Err(PyOverflowError::new_err(
+                    "integer id cannot be represented exactly as a signed 64-bit integer or float",
+                ));
+            }
+            Err(err) if !err.is_instance_of::<PyTypeError>(obj.py()) => return Err(err),
+            Err(_) => {}
         }
         if let Ok(value) = obj.extract::<f64>() {
             return Ok(Self::Float(value));
         }
-        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+        Err(PyTypeError::new_err(format!(
             "an id must be an int, float or str, not {}",
             obj.get_type().name()?
         )))

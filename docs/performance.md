@@ -110,7 +110,12 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   curve where fractional weights select robust variance, standard errors come
   from an O(n) sweep: observations at risk share a coefficient, departed
   observations' influences evolve by product-limit factors, and suffix sums of
-  squared risk weights avoid cancellation.
+  squared weight shares use the total weight at risk at each event.
+- Subtracting a large case weight can erase smaller subjects still at risk.
+  For widely separated weights, delayed-entry curves and clustered influence
+  calculations keep integer sums for each occupied binary exponent. Removing
+  a weight updates its exponent's sum exactly. Reporting a risk total visits
+  only the occupied exponents.
 - Right-censored Kaplan–Meier fits with repeated clusters and no influence request
   keep each cluster's influence as its weight at risk times a shared coefficient
   plus a departed part, held in running sums of squares and products that change
@@ -123,8 +128,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   expanded sums cancel by about the mean size of the cluster a random row belongs
   to (`sum W_g^2 / sum w_i^2`), so fits where that exceeds 1,000, such as one
   cluster holding most of the rows, keep the general influence calculation, as do
-  fits with at most 64 clusters or few event times, counting-process data and
-  explicit influence matrices.
+  fits with at most 64 clusters or few event times, counting-process data,
+  explicit influence matrices, and weights whose range would lose precision
+  in the running sums.
 - Independent right-censored competing-risk curves use a moment sweep with small
   triangular QR factors updated by Givens rotations: O((n + t)(s + h)) time and
   O(n + s + h) extra storage for t reporting times, s states and h hazard columns.
@@ -237,10 +243,10 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   complementary subset when most rows die together, with anchored means. Weights
   are scaled by the largest risk score and each state keeps a power-of-two
   exponent, so the recursion runs in linear arithmetic; a risk set whose log-risk
-  spread exceeds 256 mixes log weights instead. Right-censored fits keep one
-  running recursion per stratum, as R's `coxexact.c` does, and read each tie of at
-  most `n / 2` deaths from it: about `n L` cells per evaluation for L levels,
-  instead of `n d` per tie. Counting-process exact fits walk each stratum once by
+  spread exceeds 256 mixes log weights instead. Right-censored fits and
+  counting-process strata with nested risk sets can share one running recursion
+  across ties. When the ties justify keeping L levels, the recursion updates
+  about `n L` cells per evaluation. Counting-process exact fits walk each stratum once by
   decreasing stop and entry time, using a running accumulator for growing risk sets
   and a tree of 16-row blocks otherwise: O(n log n) preparation and
   O(n log n (p² + 1)) per untied evaluation in general.
@@ -329,8 +335,8 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   The native redistribution and Cox detail computations release the GIL.
 - Weighted log-rank tests compute `S(t-)^rho` weights in the test's own time order.
   The ordinary log-rank test (`rho=0`) skips the weight calculation.
-  The covariance update skips rows for groups with nobody at risk. The
-  `logrank::two_groups_per_stratum` benchmark measures this case.
+  The covariance update visits only groups present in the stratum.
+  The `logrank::two_groups_per_stratum` benchmark measures this case.
 - Rate-table matching folds table labels once and indexes exact matches; a small
   cache serves the observed labels of common sex and race dimensions and is
   promoted to a hash map after four distinct observed labels. Prefix matching

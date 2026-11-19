@@ -13005,7 +13005,7 @@ def lrt_test(loglik_full: float, loglik_reduced: float, df: int) -> TestResult: 
 def lvcf(
     id: Sequence[int | float | str],
     missing: Sequence[bool],
-    time: Sequence[float] | None = None,
+    time: ArrayLike | None = None,
 ) -> list[int]: ...
 def marginal_recurrent_model(
     subject_id: Sequence[int],
