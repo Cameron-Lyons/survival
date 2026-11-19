@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from .. import _survival as _core
 from ._coerce import (
     _as_character,
+    _asarray_with_na,
     _encode_labels,
     _factor,
     _integer_scalar,
@@ -142,7 +143,7 @@ def _response(value: Any, name: str, *, prediction: bool = False) -> NDArray[np.
         if value.start is not None:
             columns.insert(0, value.start)
         value = np.column_stack(columns)
-    matrix = np.asarray(value)
+    matrix = _asarray_with_na(value)
     if matrix.ndim != 2 or matrix.shape[1] not in (2, 3):
         raise ValueError(f"{name} must have 2 or 3 columns")
     if matrix.dtype.kind not in "biuf":
@@ -153,7 +154,7 @@ def _response(value: Any, name: str, *, prediction: bool = False) -> NDArray[np.
 def _vector(value: Any, n: int, name: str) -> NDArray[np.float64]:
     if value is None:
         raise ValueError(f"{name} is required")
-    values = np.asarray(value)
+    values = _asarray_with_na(value)
     if values.ndim != 1 or len(values) != n:
         raise ValueError(f"{name} must have {n} entries")
     if values.dtype.kind not in "biuf":
@@ -222,9 +223,13 @@ def coxsurv_fit(
     design = _numeric_design_matrix(x, n, empty=True)
     p = design.shape[1]
     if isinstance(x2, dict):
-        new_x = np.column_stack(list(x2.values())) if x2 else np.empty((1, 0))
+        new_x = (
+            np.column_stack([_asarray_with_na(column) for column in x2.values()])
+            if x2
+            else np.empty((1, 0))
+        )
     else:
-        new_x = np.asarray(x2.to_numpy() if hasattr(x2, "to_numpy") else x2)
+        new_x = _asarray_with_na(x2.to_numpy() if hasattr(x2, "to_numpy") else x2)
         if new_x.ndim == 1:
             new_x = new_x.reshape(1, -1)
     if new_x.ndim != 2 or new_x.shape[0] == 0 or new_x.shape[1] != p:
@@ -238,7 +243,7 @@ def coxsurv_fit(
     if se_fit:
         if varmat is None:
             raise ValueError("varmat is required when se.fit is true")
-        variance = np.asarray(varmat, dtype=float)
+        variance = _asarray_with_na(varmat).astype(np.float64, copy=False)
         if variance.shape != (p, p):
             raise ValueError(f"varmat must have shape ({p}, {p})")
     ids = None

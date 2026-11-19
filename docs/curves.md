@@ -41,6 +41,11 @@ infinities: negative infinity keeps all rows, positive infinity keeps only
 infinite stop times or reports that all rows were removed. Other routines, such
 as Cox fitting, keep their finite-time contracts.
 
+Aalen–Johansen fits also accept infinite endpoints, with `start < stop` for
+counting intervals. Their `start.time` and requested summary times must remain
+finite, as in R. Restricted-mean truncation can be infinite; time-in-state areas
+and their uncertainty retain R's infinite or undefined values when appropriate.
+
 `timefix=True` (the default) merges near-tied times with R's `aeqSurv` tolerance;
 actual near ties collapse to the earliest time. Nonfinite endpoints stay in their
 own rows with their statuses. When summing large finite times would overflow, the
@@ -85,6 +90,13 @@ Multi-state `summary_survfit` returns probabilities, state-specific counts,
 confidence limits and a table of restricted mean time in each state, with the
 common, individual, numeric and omitted restricted-mean options. A requested time
 before the first curve time reports `p0`.
+
+For Aalen–Johansen fits with `influence=True`, restricted-mean standard errors
+come from integrating each cluster's retained probability influence before
+combining clusters. This includes truncation between fitted times and extension
+beyond the final observation. Without retained influences, summaries interpolate
+the stored area standard errors, matching R; the two methods can differ away
+from fitted times.
 
 Rust callers use
 `surv_analysis::summary_survfit_times_with_counts(fit, times, extend, dosum)`,

@@ -1,7 +1,7 @@
 use super::survfit_summary::{RmeanOption, survfit0_aj, survfit0_aj_rows};
-use super::survfitaj::SurvfitAJResult;
+use super::survfitaj::{SurvfitAJInfluence, SurvfitAJResult};
 use crate::error::{SurvivalError, SurvivalResult};
-use crate::internal::validation::validate_finite;
+use crate::internal::validation::{validate_finite, validate_no_nan};
 
 pub type AJMeanTable = (Vec<Vec<f64>>, Vec<f64>, Vec<String>);
 
@@ -11,7 +11,14 @@ pub fn survmean_aj(
     rmean: RmeanOption,
 ) -> SurvivalResult<AJMeanTable> {
     let fit0 = survfit0_aj(fit);
-    survmean_table(&fit0, 1, |i, _, state| fit0.pstate[i][state], scale, rmean)
+    survmean_table(
+        &fit0,
+        1,
+        |i, _, state| fit0.pstate[i][state],
+        fit.influence_pstate.as_deref(),
+        scale,
+        rmean,
+    )
 }
 
 pub(crate) fn survmean_coxms(
@@ -31,6 +38,7 @@ pub(crate) fn survmean_coxms(
             Ok(row) => pstate(row, j, state),
             Err(_) => p0[(-1 - rows[i]) as usize][state],
         },
+        None,
         scale,
         rmean,
     )
@@ -40,6 +48,7 @@ fn survmean_table(
     fit0: &SurvfitAJResult,
     ndata: usize,
     pstate: impl Fn(usize, usize, usize) -> f64,
+    influence: Option<&[SurvfitAJInfluence]>,
     scale: f64,
     rmean: RmeanOption,
 ) -> SurvivalResult<AJMeanTable> {
@@ -49,7 +58,7 @@ fn survmean_table(
         ));
     }
     if let RmeanOption::At(time) = rmean {
-        validate_finite(&[time], "rmean")?;
+        validate_no_nan(&[time], "rmean")?;
     }
     let fit = fit0;
     let ranges = fit.curve_ranges();
@@ -75,10 +84,36 @@ fn survmean_table(
     let mean = !matches!(rmean, RmeanOption::None);
     if mean {
         columns.push("rmean".into());
-        if fit.std_auc.is_some() {
+        if influence.is_some() || fit.std_auc.is_some() {
             columns.push("se(rmean)".into());
         }
     }
+    let influence_se = if mean {
+        influence
+            .map(|curves| {
+                if curves.len() != ranges.len() {
+                    return Err(SurvivalError::invalid_input(
+                        "influence must have one array per curve",
+                    ));
+                }
+                curves
+                    .iter()
+                    .zip(&ranges)
+                    .zip(&ends)
+                    .map(|((curve, range), &end)| {
+                        integrated_influence_se(
+                            curve,
+                            &fit.time[range.clone()],
+                            end,
+                            fit.states.len(),
+                        )
+                    })
+                    .collect::<SurvivalResult<Vec<_>>>()
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let mut rows = Vec::with_capacity(ranges.len() * ndata * fit.states.len());
     for state in 0..fit.states.len() {
         for data in 0..ndata {
@@ -91,19 +126,15 @@ fn survmean_table(
                     let end = ends[curve];
                     let area = area_to(&fit.time, range.clone(), end, |i| pstate(i, data, state));
                     row.push(area / scale);
-                    if let Some(auc) = &fit.std_auc {
-                        let times = &fit.time[range.clone()];
-                        let hi = times.partition_point(|&time| time < end);
-                        let se = if hi == 0 {
-                            auc[range.start][state]
-                        } else if hi == times.len() {
-                            auc[range.end - 1][state]
-                        } else {
-                            let left = range.start + hi - 1;
-                            let fraction =
-                                (end - fit.time[left]) / (fit.time[left + 1] - fit.time[left]);
-                            auc[left][state] + fraction * (auc[left + 1][state] - auc[left][state])
-                        };
+                    if let Some(se) = &influence_se {
+                        row.push(se[curve][state] / scale);
+                    } else if let Some(auc) = &fit.std_auc {
+                        let se = interpolate_auc(
+                            &fit.time[range.clone()],
+                            &auc[range.clone()],
+                            state,
+                            end,
+                        )?;
                         row.push(se / scale);
                     }
                 }
@@ -125,6 +156,101 @@ fn survmean_table(
     Ok((rows, ends, columns))
 }
 
+/// R's `approx(..., rule=2)` drops missing ordinates and returns an exact
+/// knot's value, including when that knot is at infinity.
+fn interpolate_auc(times: &[f64], auc: &[Vec<f64>], state: usize, end: f64) -> SurvivalResult<f64> {
+    let mut points = times
+        .iter()
+        .zip(auc)
+        .enumerate()
+        .filter(|(_, (_, values))| !values[state].is_nan());
+    let (Some((first, _)), Some(_)) = (points.next(), points.next()) else {
+        return Err(SurvivalError::invalid_input(
+            "need at least two non-NA values to interpolate",
+        ));
+    };
+    if end <= times[first] {
+        return Ok(auc[first][state]);
+    }
+    let last = auc
+        .iter()
+        .rposition(|values| !values[state].is_nan())
+        .unwrap();
+    if end >= times[last] {
+        return Ok(auc[last][state]);
+    }
+    let hi = times.partition_point(|&time| time < end);
+    let right = hi
+        + auc[hi..]
+            .iter()
+            .position(|values| !values[state].is_nan())
+            .unwrap();
+    if end == times[right] {
+        return Ok(auc[right][state]);
+    }
+    let left = auc[..right]
+        .iter()
+        .rposition(|values| !values[state].is_nan())
+        .unwrap();
+    let fraction = (end - times[left]) / (times[right] - times[left]);
+    Ok(auc[left][state] + fraction * (auc[right][state] - auc[left][state]))
+}
+
+/// R's `survmean2` integrates each cluster's probability influence before
+/// taking its norm. Interpolating the norms loses their covariance over time.
+fn integrated_influence_se(
+    influence: &SurvfitAJInfluence,
+    times: &[f64],
+    end: f64,
+    states: usize,
+) -> SurvivalResult<Vec<f64>> {
+    let (clusters, observed_times, observed_states) = influence.values.dim();
+    let initial = times.len().checked_sub(observed_times);
+    if observed_states != states
+        || !matches!(initial, Some(0 | 1))
+        || influence
+            .i0
+            .as_ref()
+            .is_some_and(|i0| i0.dim() != (clusters, states))
+    {
+        return Err(SurvivalError::invalid_input(
+            "influence dimensions do not match the curve's times and states",
+        ));
+    }
+    let initial = initial.expect("checked");
+    let mut area = vec![vec![0.0; clusters]; states];
+    for (time, width) in integration_widths(times, end).enumerate() {
+        for (state, area) in area.iter_mut().enumerate() {
+            for (cluster, total) in area.iter_mut().enumerate() {
+                // survfit0 keeps the large influence arrays shared. Its added
+                // origin row is represented by i0, or by a zero derivative.
+                let value = if time < initial {
+                    influence.i0.as_ref().map_or(0.0, |i0| i0[[cluster, state]])
+                } else {
+                    influence.values[[cluster, time - initial, state]]
+                };
+                *total += width * value;
+            }
+        }
+    }
+    Ok(area
+        .iter()
+        .map(|values| values.iter().map(|value| value * value).sum::<f64>().sqrt())
+        .collect())
+}
+
+/// Lengths of the intervals before `end`, with zero padding after it. In
+/// particular a terminal row at infinity has width zero, not Inf - Inf.
+fn integration_widths(times: &[f64], end: f64) -> impl Iterator<Item = f64> + '_ {
+    times.iter().enumerate().map(move |(i, &time)| {
+        if time >= end {
+            0.0
+        } else {
+            times.get(i + 1).copied().unwrap_or(end).min(end) - time
+        }
+    })
+}
+
 pub(crate) fn time_in_state(
     fit0: &SurvfitAJResult,
     range: std::ops::Range<usize>,
@@ -140,16 +266,9 @@ fn area_to(
     end: f64,
     value: impl Fn(usize) -> f64,
 ) -> f64 {
-    range
-        .clone()
-        .map(|i| {
-            let next = if i + 1 < range.end {
-                time[i + 1].min(end)
-            } else {
-                end
-            };
-            (next - time[i]).max(0.0) * value(i)
-        })
+    integration_widths(&time[range.clone()], end)
+        .zip(range)
+        .map(|(width, i)| width * value(i))
         .sum()
 }
 

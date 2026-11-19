@@ -203,8 +203,8 @@ mod python {
 
     use ndarray::{Array2, Array3};
     use numpy::{
-        Element, IntoPyArray, PyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods,
-        PyUntypedArray, PyUntypedArrayMethods, ToPyArray, get_array_module,
+        Element, IntoPyArray, PyArray, PyArray1, PyArray2, PyArray3, PyArrayDescrMethods,
+        PyArrayMethods, PyUntypedArray, PyUntypedArrayMethods, ToPyArray, get_array_module,
     };
     use pyo3::Borrowed;
     use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -228,6 +228,36 @@ mod python {
 
     fn is_plain_sequence(obj: &Bound<'_, PyAny>) -> bool {
         obj.is_instance_of::<PyList>() || obj.is_instance_of::<PyTuple>()
+    }
+
+    /// NumPy's array casts expose masked backing values. Preserve missing entries
+    /// before those casts, while exact ndarrays and non-array inputs keep their
+    /// existing extraction paths. Integer and boolean readers reject the NaNs.
+    fn masked_array_values<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        if obj.is_exact_instance_of::<PyUntypedArray>() {
+            return Ok(None);
+        }
+        let Ok(array) = obj.cast::<PyUntypedArray>() else {
+            return Ok(None);
+        };
+        let py = obj.py();
+        let masked = py.import("numpy.ma")?;
+        if !obj.is_instance(&masked.getattr("MaskedArray")?)?
+            || !masked.getattr("is_masked")?.call1((obj,))?.is_truthy()?
+        {
+            return Ok(None);
+        }
+        let dtype = if matches!(array.dtype().kind(), b'b' | b'i' | b'u' | b'f') {
+            numpy::dtype::<f64>(py)
+        } else {
+            // Fill before converting nonnumeric backing storage: masked strings
+            // and objects need not themselves be convertible to a number.
+            numpy::dtype::<Py<PyAny>>(py)
+        };
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("copy", false)?;
+        let converted = obj.call_method("astype", (dtype,), Some(&kwargs))?;
+        Ok(Some(converted.call_method1("filled", (f64::NAN,))?))
     }
 
     fn asarray<'py, T: Element>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -678,7 +708,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            float_values(&obj, "a float array").map(FloatVec)
+            let masked = masked_array_values(&obj)?;
+            float_values(masked.as_ref().unwrap_or(&obj), "a float array").map(FloatVec)
         }
     }
 
@@ -686,7 +717,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            int_values(&obj).map(IntVec)
+            let masked = masked_array_values(&obj)?;
+            int_values(masked.as_ref().unwrap_or(&obj)).map(IntVec)
         }
     }
 
@@ -694,7 +726,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            bool_values(&obj).map(BoolVec)
+            let masked = masked_array_values(&obj)?;
+            bool_values(masked.as_ref().unwrap_or(&obj)).map(BoolVec)
         }
     }
 
@@ -702,7 +735,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            matrix_values(&obj)
+            let masked = masked_array_values(&obj)?;
+            matrix_values(masked.as_ref().unwrap_or(&obj))
         }
     }
 
@@ -710,7 +744,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            array3_values(&obj)
+            let masked = masked_array_values(&obj)?;
+            array3_values(masked.as_ref().unwrap_or(&obj))
         }
     }
 
@@ -718,7 +753,8 @@ mod python {
         type Error = PyErr;
 
         fn extract(obj: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-            row_values(&obj)
+            let masked = masked_array_values(&obj)?;
+            row_values(masked.as_ref().unwrap_or(&obj))
         }
     }
 
@@ -999,6 +1035,97 @@ mod python_tests {
             assert!(err.to_string().contains("cannot convert 'list'"), "{err}");
             let err = floats(py, "None").unwrap_err();
             assert!(err.to_string().contains("NoneType"), "{err}");
+        });
+    }
+
+    #[test]
+    fn masked_arrays_preserve_missing_values_in_all_input_containers() {
+        Python::initialize();
+        Python::attach(|py| {
+            for dtype in [
+                "float64", "float32", "int32", "int64", "bool", ">f8", "object",
+            ] {
+                let vector = eval(
+                    py,
+                    &format!("np.ma.array([1, 0, 1], mask=[0, 1, 0], dtype='{dtype}')[::-1]"),
+                );
+                let values = vector.extract::<FloatVec>().unwrap();
+                assert_eq!(values[0], 1.0);
+                assert!(values[1].is_nan());
+                assert_eq!(values[2], 1.0);
+                for error in [
+                    vector.extract::<IntVec>().unwrap_err(),
+                    vector.extract::<BoolVec>().unwrap_err(),
+                ] {
+                    assert!(error.to_string().contains("not an int32"), "{error}");
+                }
+
+                let matrix = eval(
+                    py,
+                    &format!(
+                        "np.ma.array([[1, 0], [0, 1]], mask=[[0, 1], [0, 0]], dtype='{dtype}').T"
+                    ),
+                );
+                let values = matrix.extract::<FloatMatrix>().unwrap();
+                let rows = matrix.extract::<FloatRows>().unwrap();
+                assert_eq!(values.dim(), (2, 2));
+                assert_eq!(values[[0, 0]], 1.0);
+                assert_eq!(rows[0], [1.0, 0.0]);
+                assert!(values[[1, 0]].is_nan());
+                assert!(rows[1][0].is_nan());
+                assert_eq!(rows[1][1], 1.0);
+
+                let cube = matrix.call_method1("reshape", ((2, 1, 2),)).unwrap();
+                let values = cube.extract::<FloatArray3>().unwrap();
+                assert_eq!(values.dim(), (2, 1, 2));
+                assert!(values[[1, 0, 0]].is_nan());
+                assert_eq!(values[[1, 0, 1]], 1.0);
+            }
+            // Missing backing objects need not be convertible to a number.
+            for dtype in ["object", "U7"] {
+                let values = floats(
+                    py,
+                    &format!("np.ma.array(['1', 'ignored'], mask=[0, 1], dtype='{dtype}')"),
+                )
+                .unwrap();
+                assert_eq!(values[0], 1.0);
+                assert!(values[1].is_nan());
+            }
+        });
+    }
+
+    #[test]
+    fn complete_masked_arrays_and_other_subclasses_retain_values_and_shapes() {
+        Python::initialize();
+        Python::attach(|py| {
+            for expr in [
+                "np.ma.array([1, 0, 1], mask=False)",
+                "np.ma.array([1, 0, 1], mask=np.ma.nomask)",
+                "np.array([1, 0, 1]).view(type('ArraySubclass', (np.ndarray,), {}))",
+            ] {
+                let input = eval(py, expr);
+                assert_eq!(*input.extract::<FloatVec>().unwrap(), [1., 0., 1.]);
+                assert_eq!(*input.extract::<IntVec>().unwrap(), [1, 0, 1]);
+                assert_eq!(*input.extract::<BoolVec>().unwrap(), [true, false, true]);
+                let matrix = input.call_method1("reshape", ((3, 1),)).unwrap();
+                assert_eq!(
+                    matrix.extract::<FloatMatrix>().unwrap().as_flat(),
+                    [1., 0., 1.]
+                );
+                assert_eq!(*matrix.extract::<FloatRows>().unwrap(), [[1.], [0.], [1.]]);
+                let cube = input.call_method1("reshape", ((1, 3, 1),)).unwrap();
+                assert_eq!(
+                    cube.extract::<FloatArray3>().unwrap().as_flat(),
+                    [1., 0., 1.]
+                );
+            }
+            assert_eq!(
+                eval(py, "np.ma.array(np.empty((2, 0, 3)), mask=True)")
+                    .extract::<FloatArray3>()
+                    .unwrap()
+                    .dim(),
+                (2, 0, 3)
+            );
         });
     }
 

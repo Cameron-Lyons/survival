@@ -148,6 +148,14 @@ pub(super) fn estimates(
     if !d.right || d.sefit != 1 || d.ngrp != d.sort2.len() || d.i0.iter().any(|&v| v != 0.0) {
         return None;
     }
+    // Infinite durations have R's per-cluster NaN/Inf area arithmetic. Use the
+    // general update directly instead of discovering that at the end of a fit.
+    if !d.t0.is_finite()
+        || d.utime.first().is_some_and(|time| !time.is_finite())
+        || d.utime.last().is_some_and(|time| !time.is_finite())
+    {
+        return None;
+    }
     let origin = d.cstate[*d.sort2.first()?];
     if d.sort2.iter().any(|&row| d.cstate[row] != origin) {
         return None;

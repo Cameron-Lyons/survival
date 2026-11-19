@@ -128,15 +128,24 @@ mod kaplan_meier {
         bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
     }
 
-    #[divan::bench(args = [1000, 10000, 100000])]
-    fn survfitkm_strata(bencher: divan::Bencher, n: usize) {
+    fn stratified(bencher: divan::Bencher, n: usize, groups: usize) {
         let (time, _, status) = generate_survival_data(n);
-        let strata = generate_strata(n, 50);
+        let strata = generate_strata(n, groups);
         let data = SurvfitKMData::try_new(None, time, status, None, Some(strata), None, None)
             .expect("benchmark survival data should be valid");
         let options = SurvfitKMOptions::default();
 
         bencher.bench_local(|| surv_analysis::survfitkm(&data, &options));
+    }
+
+    #[divan::bench(args = [10, 100, 1000, 10000, 100000])]
+    fn survfitkm_strata(bencher: divan::Bencher, n: usize) {
+        stratified(bencher, n, 50);
+    }
+
+    #[divan::bench(args = [10, 100, 1000, 10000, 100000])]
+    fn survfitkm_two_strata(bencher: divan::Bencher, n: usize) {
+        stratified(bencher, n, 2);
     }
 }
 

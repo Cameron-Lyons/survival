@@ -1318,7 +1318,9 @@ fn curve_inputs(
             rows: CurveRows { sort1, sort2 },
         }
     };
-    if single {
+    // Small stratified fits cannot repay dispatching their row sorts to workers.
+    // Match the threshold used when fitting the prepared curves below.
+    if single || x.len() <= PARALLEL_THRESHOLD_LARGE {
         buckets.into_iter().map(prepare).collect()
     } else {
         buckets.into_par_iter().map(prepare).collect()
@@ -2048,6 +2050,91 @@ mod tests {
         let single = fit(own, SurvfitKMOptions::default());
         assert_eq!(&result.time[0..4], single.time.as_slice());
         assert_eq!(&result.surv[0..4], single.surv.as_slice());
+    }
+
+    #[test]
+    fn stratified_fits_match_separate_curves_across_parallel_threshold() {
+        let bits = |values: &[f64]| {
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        for n in [12, PARALLEL_THRESHOLD_LARGE, PARALLEL_THRESHOLD_LARGE + 1] {
+            let time: Vec<f64> = (0..n)
+                .map(|i| 1.0 + ((i * 37) % (n / 6).max(2)) as f64)
+                .collect();
+            let status: Vec<i32> = (0..n).map(|i| i32::from(i % 4 != 0)).collect();
+            let weights: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+            let strata: Vec<i32> = (0..n).map(|i| [7, -2, 11][i % 3]).collect();
+            for counting in [false, true] {
+                let start = counting.then(|| time.iter().map(|time| time - 1.0).collect());
+                let data = SurvfitKMData::try_new(
+                    start,
+                    time.clone(),
+                    status.clone(),
+                    Some(weights.clone()),
+                    Some(strata.clone()),
+                    None,
+                    None,
+                )
+                .unwrap();
+                for reverse in [false, true] {
+                    for ctype in [HazardType::NelsonAalen, HazardType::FlemingHarrington] {
+                        let options = SurvfitKMOptions {
+                            reverse,
+                            ctype,
+                            timefix: false,
+                            ..Default::default()
+                        };
+                        let grouped = survfitkm(&data, &options).unwrap();
+                        for (curve, code) in [-2, 7, 11].into_iter().enumerate() {
+                            let rows: Vec<usize> = (0..n).filter(|&i| strata[i] == code).collect();
+                            let pick = |values: &[f64]| select_items(values, &rows);
+                            let alone = SurvfitKMData::try_new(
+                                data.start.as_deref().map(pick),
+                                pick(&time),
+                                select_items(&status, &rows),
+                                Some(pick(&weights)),
+                                None,
+                                None,
+                                None,
+                            )
+                            .unwrap();
+                            let expected = survfitkm(&alone, &options).unwrap();
+                            let actual = grouped.select_curves(&[curve]).unwrap();
+                            assert_eq!(actual.n, expected.n);
+                            for (actual, expected) in [
+                                (&actual.time, &expected.time),
+                                (&actual.n_risk, &expected.n_risk),
+                                (&actual.n_event, &expected.n_event),
+                                (&actual.n_censor, &expected.n_censor),
+                                (&actual.surv, &expected.surv),
+                                (&actual.cumhaz, &expected.cumhaz),
+                                (
+                                    actual.std_err.as_ref().unwrap(),
+                                    expected.std_err.as_ref().unwrap(),
+                                ),
+                                (
+                                    actual.std_chaz.as_ref().unwrap(),
+                                    expected.std_chaz.as_ref().unwrap(),
+                                ),
+                                (
+                                    actual.lower.as_ref().unwrap(),
+                                    expected.lower.as_ref().unwrap(),
+                                ),
+                                (
+                                    actual.upper.as_ref().unwrap(),
+                                    expected.upper.as_ref().unwrap(),
+                                ),
+                            ] {
+                                assert_eq!(bits(actual), bits(expected));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

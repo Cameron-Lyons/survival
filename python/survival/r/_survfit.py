@@ -1714,7 +1714,12 @@ def _rmean_option(
         return _match_string_arg(
             rmean, "rmean", ("none", "common", "individual"), "Invalid value for rmean option"
         )
-    value = _finite_float(rmean, "rmean")
+    if isinstance(fit, SurvfitMultiStateResult):
+        value = _float_vector([rmean], "rmean")[0]
+        if math.isnan(value):
+            raise ValueError("Invalid value for rmean option")
+    else:
+        value = _finite_float(rmean, "rmean")
     start_time = None if isinstance(fit, SurvfitResult) else fit.start_time
     first = min(fit.time)
     if include_origin:

@@ -145,6 +145,9 @@ alongside the corrected oracle.
   near 1e16 and beyond. Exact ties normalize each subset size by its largest
   possible product before accumulating probabilities. Fitting, diagnostics,
   new-data predictions and current-version serialization share these scales.
+- **Stratum-centered Cox predictions**: finite covariate means remain finite
+  when their weighted sums overflow. A scaled fallback computes only the affected
+  centers, keeping ordinary prediction arithmetic unchanged.
 - **coxph.detail**: extreme risk sets use normalized means and covariances;
   R computes `exp(lp)` and overflows. Absolute baseline hazards and weighted
   risk totals may still overflow or underflow when that is their true scale.

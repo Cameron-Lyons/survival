@@ -76,6 +76,8 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   the kernel runs, so fits on several Python threads run in parallel. Lists of
   float rows fill one allocation. Results that consumers read as arrays are
   returned as NumPy arrays; several result types offer `to_arrays()` snapshots.
+  Masked ndarray subclasses preserve missing entries; ordinary ndarrays keep
+  their direct extraction path.
 - Formula calls add model-frame preparation in Python: expression evaluation,
   factor coding and omission. Row labels of integer- and string-indexed frames
   are read in bulk, increasing row selections keep their labels without
@@ -117,6 +119,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   from an O(n) sweep: observations at risk share a coefficient, departed
   observations' influences evolve by product-limit factors, and suffix sums of
   squared weight shares use the total weight at risk at each event.
+  Preparing and fitting multiple curves stays sequential for at most 1,000
+  observations, avoiding thread-dispatch overhead on small stratified fits.
+  Larger fits retain parallel curve preparation and fitting.
 - Subtracting a large case weight can erase smaller subjects still at risk.
   For widely separated weights, delayed-entry curves and clustered influence
   calculations keep integer sums for each occupied binary exponent. Removing
