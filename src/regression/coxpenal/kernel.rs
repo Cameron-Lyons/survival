@@ -1,4 +1,5 @@
 use crate::error::SurvivalResult;
+use crate::regression::cox_gram::GRAM_MIN_VARIABLES;
 use crate::regression::efron_steps::{EfronStepSums, scaled_first};
 use crate::regression::log_scale::LogScale;
 use crate::regression::penalized::cholesky3::{chinv3, cholesky3, chsolve3, finish_factors};
@@ -6,6 +7,7 @@ use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use ndarray::Array2;
 use std::sync::OnceLock;
 
+mod gram;
 #[cfg(test)]
 mod reference_tests;
 mod stable;
@@ -102,6 +104,9 @@ pub(super) struct Kernel {
     /// The current tie set's death steps, whose dense information
     /// [`Self::finish_information`] adds when there is no sparse frailty.
     steps: EfronStepSums,
+    /// The Gram evaluation's storage, for right-censored fits without a
+    /// sparse frailty and with at least [`GRAM_MIN_VARIABLES`] covariates.
+    gram: Option<Box<gram::PenalizedGram>>,
 }
 
 /// Efron's second moments (`a2`, `cmat2`) enter death step `k` of a tie set
@@ -306,6 +311,8 @@ impl Kernel {
             tied_mark: vec![false; nf],
             tie_sums: TieSums::new(nvar),
             steps: EfronStepSums::default(),
+            gram: (nf == 0 && data.start.is_none() && nvar >= GRAM_MIN_VARIABLES)
+                .then(|| Box::new(gram::PenalizedGram::new(n, nvar))),
         }
     }
 
@@ -827,7 +834,11 @@ impl Kernel {
         self.stable_score = None;
         Ok(if self.start.is_some() {
             self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
+        } else if let Some(loglik) = self.evaluate_right_gram(beta, fbeta, u, jmat) {
+            loglik
         } else {
+            u.fill(0.0);
+            jmat.fill(0.0);
             self.evaluate_right(beta, fbeta, u, jmat, fdiag)
         })
     }

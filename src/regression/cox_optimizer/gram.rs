@@ -1,20 +1,5 @@
 //! The right-censored Breslow and Efron evaluation with its information built
-//! from two weighted Gram matrices.
-//!
-//! R's `coxfit6` adds each subject's `r x x'` to running risk-set sums and
-//! reads them at every death time, `O((n + t) p^2)` scalar work for `n`
-//! subjects, `t` death times and `p` covariates. The information needs those
-//! sums only through `sum_t sum_j wtave (C_t - f_j C2_t) / d_tj`, which is
-//! `sum_i omega_i x_i x_i'`: every death time adds `alpha = sum_j wtave / d_j`
-//! to the weight of each subject still at risk, and `gamma = sum_j wtave s_j / d_j`
-//! (`s_j = 1 - f_j`) instead to each of its deaths. The mean part is
-//! `sum_tj wtave m_tj m_tj'` for the step means `m_tj` that the score already
-//! computes. Both are matrix products, which run far faster than the running
-//! sums once there are more than a few covariates, and the weights are sums of
-//! positive terms. A tie set of several Efron steps contributes two mean rows,
-//! the Cholesky factor of its steps' sums ([`EfronStepSums::mean_factor`]),
-//! instead of one per step. Rows go through the products in blocks of [`BLOCK`], so the
-//! scratch storage does not grow with the data.
+//! from two weighted Gram matrices ([`crate::regression::cox_gram`]).
 //!
 //! The log-likelihood and score are those of R's sweep, bit for bit. A sweep
 //! that meets an extreme risk or a non-finite weight or information entry
@@ -22,15 +7,8 @@
 //! missing values behave as before.
 
 use super::*;
-use crate::regression::efron_steps::{EfronStepSums, scaled_first};
-use ndarray::linalg::general_mat_mul;
-use ndarray::s;
-
-/// The fewest covariates for which the Gram evaluation replaces R's sweep.
-pub(super) const GRAM_MIN_VARIABLES: usize = 8;
-
-/// Rows per matrix product.
-const BLOCK: usize = 4096;
+use crate::regression::cox_gram::CoxGram;
+pub(super) use crate::regression::cox_gram::GRAM_MIN_VARIABLES;
 
 /// Scratch storage of [`CoxData::coxfit6_gram`].
 #[derive(Debug)]
@@ -41,57 +19,18 @@ pub(crate) struct GramWorkspace {
     weight: Vec<f64>,
     /// Each time group's `(start, end, stratum, alpha, gamma)`, in sweep order.
     groups: Vec<(usize, usize, usize, f64, f64)>,
-    /// Up to [`BLOCK`] step means, row by row, and their weights.
-    means: Array2<f64>,
-    mean_weights: Vec<f64>,
-    scratch: Array2<f64>,
-    gram: Array2<f64>,
+    gram: CoxGram,
 }
 
 impl GramWorkspace {
     pub(super) fn new(n: usize, nvar: usize) -> Self {
-        let block = BLOCK.min(n.max(1));
         Self {
             risk_set: RiskSetSums::zeros(nvar, false),
             tied: RiskSetSums::zeros(nvar, false),
             weight: vec![0.0; n],
             groups: Vec::new(),
-            means: Array2::zeros((block, nvar)),
-            mean_weights: Vec::with_capacity(block),
-            scratch: Array2::zeros((block, nvar)),
-            gram: Array2::zeros((nvar, nvar)),
+            gram: CoxGram::new(n, nvar),
         }
-    }
-
-    /// Records the weight of the mean row just written, subtracting the
-    /// buffer once it is full.
-    fn push_mean(&mut self, weight: f64) {
-        self.mean_weights.push(weight);
-        if self.mean_weights.len() == self.means.nrows() {
-            self.flush_means();
-        }
-    }
-
-    /// Subtracts the buffered step means' `sum wtave m m'` from the Gram matrix.
-    fn flush_means(&mut self) {
-        let rows = self.mean_weights.len();
-        if rows == 0 {
-            return;
-        }
-        let means = self.means.slice(s![..rows, ..]);
-        let mut weighted = self.scratch.slice_mut(s![..rows, ..]);
-        for ((mut target, source), &weight) in weighted
-            .rows_mut()
-            .into_iter()
-            .zip(means.rows())
-            .zip(&self.mean_weights)
-        {
-            for (value, &mean) in target.iter_mut().zip(source) {
-                *value = weight * mean;
-            }
-        }
-        general_mat_mul(-1.0, &means.t(), &weighted, 1.0, &mut self.gram);
-        self.mean_weights.clear();
     }
 }
 
@@ -111,8 +50,7 @@ impl CoxData {
         let row = self.rows();
         self.fill_linear_predictors(beta, eta);
         workspace.groups.clear();
-        workspace.mean_weights.clear();
-        workspace.gram.fill(0.0);
+        workspace.gram.clear();
         workspace.risk_set.clear();
         let mut loglik = 0.0;
         let mut stratum = 0;
@@ -168,7 +106,7 @@ impl CoxData {
                     let denom = sum(risk_set.denom, tied.denom);
                     set_loglik -= wtave * denom.ln();
                     if steps == 1 {
-                        let mut mean_row = workspace.means.row_mut(workspace.mean_weights.len());
+                        let mut mean_row = workspace.gram.mean_row();
                         for (i, (score, mean)) in u.iter_mut().zip(mean_row.iter_mut()).enumerate()
                         {
                             *mean = sum(risk_set.a[i], tied.a[i]) / denom;
@@ -185,28 +123,21 @@ impl CoxData {
                 }
                 loglik += set_loglik;
                 if steps == 1 {
-                    workspace.push_mean(wtave);
+                    workspace.gram.push_mean(wtave);
                 } else {
-                    // The steps' means span the survivors' and deaths' sums, so
-                    // two rows carry their outer products.
-                    let ((first, cross), (_, second)) = step_sums.mean_factor()?;
-                    let scale = 1.0 / workspace.risk_set.denom;
-                    for factor in [(first, cross), (0.0, second)] {
-                        let slot = workspace.mean_weights.len();
-                        let (risk_set, tied) = (&workspace.risk_set, &workspace.tied);
-                        let mut mean_row = workspace.means.row_mut(slot);
-                        for (i, mean) in mean_row.iter_mut().enumerate() {
-                            let (survivors, deaths) = scaled_first(risk_set.a[i], tied.a[i], scale);
-                            *mean = factor.0 * survivors + factor.1 * deaths;
-                        }
-                        workspace.push_mean(wtave);
-                    }
+                    let (risk_set, tied) = (&workspace.risk_set, &workspace.tied);
+                    workspace.gram.push_tie_set(
+                        &step_sums,
+                        &risk_set.a,
+                        &tied.a,
+                        risk_set.denom,
+                        wtave,
+                    )?;
                 }
             }
             workspace.groups.push((start, end, stratum, alpha, gamma));
             end = start;
         }
-        workspace.flush_means();
 
         // Each subject's weight: the alphas of the death times it is at risk
         // at, with its own death time's gamma in place of that time's alpha.
@@ -232,28 +163,10 @@ impl CoxData {
                 workspace.weight[person] = omega;
             }
         }
-        let n = self.time.len();
-        let mut first = 0;
-        while first < n {
-            let last = (first + workspace.scratch.nrows()).min(n);
-            let rows = self.covar.slice(s![first..last, ..]);
-            let mut weighted = workspace.scratch.slice_mut(s![..last - first, ..]);
-            for ((mut target, source), &omega) in weighted
-                .rows_mut()
-                .into_iter()
-                .zip(rows.rows())
-                .zip(&workspace.weight[first..last])
-            {
-                for (value, &x) in target.iter_mut().zip(source) {
-                    *value = omega * x;
-                }
-            }
-            general_mat_mul(1.0, &rows.t(), &weighted, 1.0, &mut workspace.gram);
-            first = last;
-        }
+        let gram = workspace.gram.finish(self.covar.view(), &workspace.weight);
         for k in 0..nvar {
             for i in k..nvar {
-                imat[(k, i)] = workspace.gram[(k, i)];
+                imat[(k, i)] = gram[(k, i)];
             }
         }
         let finite = loglik.is_finite()

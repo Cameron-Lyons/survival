@@ -2,6 +2,7 @@ pub(crate) mod aareg_fit;
 pub(crate) mod blogit;
 pub(crate) mod cause_specific;
 pub(crate) mod cch;
+pub(crate) mod cox_gram;
 pub(crate) mod cox_optimizer;
 pub(crate) mod cox_zph;
 pub(crate) mod cox_zph_smooth;

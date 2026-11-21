@@ -67,9 +67,11 @@ Numerical corrections are described under Fixed below.
   hazard-weighted risk and the outer products of the death-time means, instead of
   R's running second-moment sums, which cost `p^2` per subject and per death time.
   At 10^5 rows `coxph.fit` is 1.1-2.2x faster for 10 to 50 covariates with
-  continuous times and 1.5-3.8x with tied ones. Log-likelihoods and scores are
-  unchanged bit for bit; the information agrees to about 1e-15 of its second
-  moments, and fits whose sums overflow keep R's sweep.
+  continuous times and 1.5-3.8x with tied ones. Penalized fits without a sparse
+  frailty do the same, so a pspline term (about 11 basis columns) makes `coxph`
+  1.7-2x faster at 10^5 rows. Log-likelihoods and scores are unchanged bit for
+  bit; the information agrees to about 1e-15 of its second moments, and fits
+  whose sums overflow keep R's sweep.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals reuse the fit's row order and dense
   cluster ids instead of re-sorting and regrouping rows. `cox.zph` buckets

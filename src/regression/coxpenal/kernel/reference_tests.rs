@@ -5,7 +5,9 @@
 //! and Newton steps through them to [`FIT_TOLERANCE`]: the frailty entries of
 //! Efron fits, whose tie corrections are summed per set (see
 //! `tied_frailty.rs`), and the dense information of fits without a sparse
-//! frailty, whose death steps are collapsed (see `efron_steps.rs`).
+//! frailty, whose death steps are collapsed (see `efron_steps.rs`) or, for
+//! right-censored fits with many covariates, built from Gram matrices (see
+//! `gram.rs`).
 
 use super::*;
 use crate::internal::rng::Rng;
@@ -815,7 +817,8 @@ fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
     } else {
         assert_bits
     };
-    let dense_check = if nf == 0 && case.has_tied_deaths() {
+    let gram = nf == 0 && case.start.is_none() && nvar >= GRAM_MIN_VARIABLES;
+    let dense_check = if nf == 0 && (gram || case.has_tied_deaths()) {
         assert_close
     } else {
         assert_bits
@@ -901,7 +904,7 @@ fn shapes() -> Vec<Shape> {
             (Some(6), 3),
             (Some(1), 2),
         ] {
-            for (nvar, nfrail) in [(3, 0), (1, 0), (2, 7), (0, 4), (4, 60)] {
+            for (nvar, nfrail) in [(3, 0), (1, 0), (2, 7), (0, 4), (4, 60), (9, 0)] {
                 shapes.push(Shape {
                     n: 160,
                     nvar,
@@ -1153,6 +1156,47 @@ fn newton_steps_with_reassociated_tie_corrections_match_the_reference() {
             close("fbeta", &new.fbeta, &old.fbeta);
             close("loglik", &[new.loglik], &[old.loglik]);
             close("fdiag", &new.fdiag, &old.fdiag);
+            close(
+                "inverse",
+                new.hinv.as_slice().unwrap(),
+                old.hinv.as_slice().unwrap(),
+            );
+        }
+    }
+}
+
+#[test]
+fn newton_steps_through_gram_information_match_the_reference() {
+    let mut rng = Rng::with_seed(0x6a3e_c0de);
+    let nvar = GRAM_MIN_VARIABLES + 1;
+    for efron in [false, true] {
+        for distinct_times in [None, Some(6), Some(1)] {
+            let case = Case::random(
+                &mut rng,
+                Shape {
+                    n: 500,
+                    nvar,
+                    distinct_times,
+                    nstrata: 2,
+                    nfrail: 0,
+                    counting: false,
+                },
+            );
+            let mut kernel = Kernel::new(case.data(efron));
+            assert!(kernel.gram.is_some());
+            let mut reference = Reference::new(&case.data(efron));
+            let new = newton_steps(nvar, 0, 2.0, 6, |beta, fbeta, u, jmat, fdiag| {
+                kernel.evaluate(beta, fbeta, u, jmat, fdiag).unwrap()
+            });
+            let old = newton_steps(nvar, 0, 2.0, 6, |beta, fbeta, u, jmat, fdiag| {
+                reference.evaluate(beta, fbeta, u, jmat, fdiag)
+            });
+            let label = format!("gram efron {efron} times {distinct_times:?}");
+            let close = |name: &str, actual: &[f64], expected: &[f64]| {
+                assert_within(&format!("{label} {name}"), actual, expected, FIT_TOLERANCE);
+            };
+            close("beta", &new.beta, &old.beta);
+            close("loglik", &[new.loglik], &[old.loglik]);
             close(
                 "inverse",
                 new.hinv.as_slice().unwrap(),

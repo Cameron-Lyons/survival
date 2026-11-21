@@ -263,8 +263,11 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   matrix of the death-time means, two rows per Efron tie set from the Cholesky
   factor of its step sums. Rows pass through the products in blocks of 4,096, so
   the scratch storage is O(p^2 + 4096 p). Both products run through
-  `matrixmultiply`; with 50 covariates and continuous times at 10^5 rows a fit
-  takes 150 ms instead of 325 ms.
+  `matrixmultiply` (`cox_gram.rs`); with 50 covariates and continuous times at
+  10^5 rows a fit takes 150 ms instead of 325 ms. The penalized right-censored
+  sweep without a sparse frailty (`coxpenal/kernel/gram.rs`) shares the
+  construction: `coxph(~ pspline(x1) + x2)` at 10^5 rows takes 251 ms instead of
+  423 ms. Counting-process and sparse-frailty sweeps keep the running sums.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in
