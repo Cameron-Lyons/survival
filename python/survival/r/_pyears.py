@@ -453,6 +453,22 @@ def _timestamp_days(values: list[Any]) -> list[float] | None:
     return days.tolist()
 
 
+def _string_column_missing(column: Sequence[Any]) -> bool | None:
+    """For a column of strings and missing values with at least one string, whether
+    it has a missing value; ``None`` for any other column. Each distinct value type
+    is checked once."""
+
+    types = set(map(type, column))
+    others = {kind for kind in types if not issubclass(kind, str)}
+    if others == types:
+        return None
+    if not others:
+        return False
+    if all(_is_missing_value(value) for value in column if type(value) in others):
+        return True
+    return None
+
+
 def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetableResult:
     """Shared date/factor coercion for public matching and population model frames."""
     names = ratetable.dimid
@@ -487,12 +503,10 @@ def _match_rate_columns(data: Any, ratetable: RateTable) -> _core.MatchRatetable
             columns.append(
                 [math.nan if index is None else float(matched[index]) for index in codes]
             )
-        elif all(isinstance(value, str) or _is_missing_value(value) for value in column) and any(
-            isinstance(value, str) for value in column
-        ):
-            if any(_is_missing_value(value) for value in column):
+        elif (missing := _string_column_missing(column)) is not None:
+            if missing:
                 raise ValueError(f"The variable {name} contains missing values")
-            columns.append([str(value) for value in column])
+            columns.append(list(map(str, column)))
         elif code > 2:
             days = _timestamp_days(column)
             columns.append([_ratetable_day(value) for value in column] if days is None else days)
@@ -1623,9 +1637,10 @@ def _survexp_groups(mf: ModelFrame, data: Any) -> tuple[list[int] | None, list[s
     groups = _model_strata(mf, _population_variable_overrides(mf, data))
     if groups is None:
         return None, None
-    if any(code is None for code in groups.codes):
+    codes = groups.codes
+    if None in codes:
         raise ValueError("missing values in the grouping variables")
-    return [int(code) for code in groups.codes if code is not None], list(groups.levels)
+    return list(map(int, codes)), list(groups.levels)
 
 
 def _survexp_method(method: str | None, cohort: Any, conditional: Any, has_response: bool) -> str:

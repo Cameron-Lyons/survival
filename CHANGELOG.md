@@ -44,6 +44,9 @@ Numerical corrections are described under Fixed below.
 
 - Small stratified Kaplan–Meier fits prepare curves sequentially, avoiding
   thread-dispatch overhead while larger fits retain parallel preparation.
+- Rate-table matching checks string columns, and the model frame checks label
+  columns, once per distinct value type; `survexp` and `pyears` with a date rate
+  variable are 5-10% faster at 100,000 rows.
 - Concordance is 3-5x faster at 10^4 to 10^6 rows with bitwise-identical
   results. This covers `concordance`, `concordancefit` and the concordance that
   every `coxph` fit reports; with the Cox fit changes below, `coxph` itself is
@@ -133,6 +136,8 @@ Numerical corrections are described under Fixed below.
 
 ### Fixed
 
+- A direct `cargo build --features extension-module` links on macOS: `build.rs`
+  emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
   NumPy masks as missing values across designs, responses, risks, weights and
   covariance inputs. Ordinary arrays retain their direct conversion path.

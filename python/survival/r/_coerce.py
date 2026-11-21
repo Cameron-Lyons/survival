@@ -173,9 +173,8 @@ _EXACT_INTEGER = 2**53
 
 def _materialize_labels(values: Any, name: str) -> list[Any]:
     result = _coerce_array_like(values, name)
-    if not set(map(type, result)) <= _PLAIN_SCALARS and any(
-        isinstance(value, list) for value in result
-    ):
+    types = set(map(type, result))
+    if not types <= _PLAIN_SCALARS and any(issubclass(kind, list) for kind in types):
         raise ValueError(f"{name} must be one-dimensional")
     return result
 
