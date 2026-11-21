@@ -19,7 +19,7 @@ from datetime import date as _Date
 from datetime import datetime as _DateTime
 from datetime import timedelta as _TimeDelta
 from itertools import chain, pairwise
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -1640,7 +1640,7 @@ def _survexp_groups(mf: ModelFrame, data: Any) -> tuple[list[int] | None, list[s
     codes = groups.codes
     if None in codes:
         raise ValueError("missing values in the grouping variables")
-    return list(map(int, codes)), list(groups.levels)
+    return list(map(int, cast("list[int]", codes))), list(groups.levels)
 
 
 def _survexp_method(method: str | None, cohort: Any, conditional: Any, has_response: bool) -> str:
