@@ -69,10 +69,13 @@ class _ExpressionVector(list[Any]):
         )
 
 
-def _all_logical(values: Sequence[Any]) -> bool:
-    """Whether *values* hold a logical and nothing but logicals and missing values."""
+def _all_logical(values: Sequence[Any], types: set[type] | None = None) -> bool:
+    """Whether *values* hold a logical and nothing but logicals and missing values.
 
-    types = set(map(type, values))
+    *types*, when given, is ``set(map(type, values))``."""
+
+    if types is None:
+        types = set(map(type, values))
     logical = {
         kind
         for kind in types
@@ -100,6 +103,8 @@ def _expression_source(source: Any, name: str) -> _ExpressionVector:
             or str(dtype) == "boolean"
         )
     )
+    # Inference checks each distinct value type once instead of every value.
+    types: set[type] | None = None
     if levels is not None:
         kind = "factor"
     elif kind not in {"logical", "numeric", "character"}:
@@ -107,10 +112,10 @@ def _expression_source(source: Any, name: str) -> _ExpressionVector:
             kind = "logical"
         elif getattr(dtype, "kind", None) in {"i", "u", "f"}:
             kind = "numeric"
-        elif _all_logical(values):
+        elif _all_logical(values, types := set(map(type, values))):
             kind = "logical"
         elif getattr(dtype, "kind", None) in {"U", "S"} or any(
-            isinstance(value, str) for value in values
+            issubclass(value_type, str) for value_type in types
         ):
             kind = "character"
         else:
@@ -128,7 +133,15 @@ def _expression_source(source: Any, name: str) -> _ExpressionVector:
             storage = "integer"
     elif kind == "numeric" and getattr(dtype, "kind", None) != "f":
         integer = getattr(dtype, "kind", None) in {"i", "u"}
-        for value in values:
+        if types is None:
+            types = set(map(type, values))
+        if types == {int}:
+            # Exact ints are never missing or bool-like: only the range decides.
+            integer = min(values) > -(2**31) and max(values) < 2**31
+            values_to_check: Iterable[Any] = ()
+        else:
+            values_to_check = values
+        for value in values_to_check:
             if _is_missing_value(value):
                 continue
             if (

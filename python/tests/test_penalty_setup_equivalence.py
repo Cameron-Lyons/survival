@@ -40,6 +40,18 @@ def reference_levels(values):
     return tuple(sorted(present, key=_strata_level_sort_key))
 
 
+def reference_combine_basis(rows, groups):
+    index = {group: i for i, group in enumerate(sorted(set(groups)))}
+    target = [index[group] for group in groups]
+    combined = []
+    for row in rows:
+        sums = [0.0] * len(index)
+        for value, i in zip(row, target, strict=True):
+            sums[i] += value
+        combined.append(sums)
+    return combined
+
+
 def reference_columns(spec, values):
     x = values[spec.columns[0]]
     if spec.kind == "pspline":
@@ -47,7 +59,7 @@ def reference_columns(spec, values):
             [float(value) for value in x], spec.nterm, spec.degree, spec.boundary
         ).basis
         if spec.combine is not None:
-            basis = penalties._combine_basis(basis, spec.combine)
+            basis = reference_combine_basis(basis, spec.combine)
         first = 0 if spec.intercept else 1
         if not basis:
             return []

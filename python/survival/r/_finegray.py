@@ -11,6 +11,8 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _finite_float,
@@ -123,7 +125,10 @@ def finegray(
         weights=user_weights,
         timefix=fix_time,
     )
-    source = [row - 1 for row in split.row]
+    # The expansion is quadratic in the input size; build its columns in bulk.
+    expanded = split.to_arrays()
+    source_rows = expanded["row"] - 1
+    source = source_rows.tolist()
     variables = [
         (name, values) for name, values in _model_variables(mf) if not name.startswith("strata(")
     ]
@@ -132,12 +137,14 @@ def finegray(
     columns: dict[str, list[Any]] = {
         name: _select_rows(values, source) for name, values in variables
     }
-    columns[output_names[0]] = split.start
-    columns[output_names[1]] = split.end
-    columns[output_names[2]] = [int(status[idx] == enum) for idx in source]
-    columns[output_names[3]] = split.wt
+    columns[output_names[0]] = expanded["start"].tolist()
+    columns[output_names[1]] = expanded["end"].tolist()
+    columns[output_names[2]] = (
+        (np.asarray(status, dtype=np.int64)[source_rows] == enum).astype(np.int64).tolist()
+    )
+    columns[output_names[3]] = expanded["wt"].tolist()
     if count_name is not None:
-        columns[count_name] = split.add
+        columns[count_name] = expanded["add"].tolist()
     return FinegrayFrame(columns, event=response.states[enum - 1])
 
 

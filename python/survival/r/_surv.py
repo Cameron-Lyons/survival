@@ -301,14 +301,11 @@ class Surv(_SurvivalOperations):
             if len(time) != nn:
                 raise ValueError("Start and stop are different lengths")
             event, levels = _event_input(args[2], nn, "Start and event are different lengths")
-            backwards = [
-                not (math.isnan(a) or math.isnan(b)) and a >= b
-                for a, b in zip(start, time, strict=True)
-            ]
-            if any(backwards):
-                start = [
-                    math.nan if bad else value for value, bad in zip(start, backwards, strict=True)
-                ]
+            # A comparison with NaN is false, so missing endpoints are never backwards.
+            start_values = np.asarray(start, dtype=np.float64)
+            backwards = start_values >= np.asarray(time, dtype=np.float64)
+            if backwards.any():
+                start = np.where(backwards, np.nan, start_values).tolist()
                 _warn_outside_package("Stop time must be > start time, NA created")
             if mstate or levels is not None:
                 status, states, clabel = _mstate_status(event, levels=levels)

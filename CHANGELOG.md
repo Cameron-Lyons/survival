@@ -39,9 +39,19 @@ Numerical corrections are described under Fixed below.
   results `SurvDiffResult`, `SurvExpResult`, `PyearsResult` and `RateTable`
   (including `survexp_us()`) pickle and copy.
 - `coef`, `vcov`, `concat_surv` and `model_summary` have precise return types.
+- `PsplineBasis.to_arrays()` returns the basis matrix and knots as NumPy arrays.
 
 ### Performance
 
+- Formula calls on list columns, as the bundled datasets and the `survSplit`,
+  `finegray` and `tmerge` results hold them, classify each column from its
+  distinct value types: `coxph` on 100,000 list rows is 1.6x faster and `survreg`
+  1.4x, approaching DataFrame input. Results are unchanged.
+- `finegray` builds its weighted rows in bulk (1.4x faster at 10,000 subjects),
+  and a counting-process `Surv` checks backward intervals with NumPy, so the
+  follow-up `coxph` on 2 million `finegray` rows is 1.3x faster. The `tt()`
+  risk-set expansion is built the same way; `pspline()` is 2.7x faster at 100,000
+  rows, and `pspline()` formula terms read the native basis as an array.
 - Small stratified Kaplan–Meier fits prepare curves sequentially, avoiding
   thread-dispatch overhead while larger fits retain parallel preparation.
 - Concordance is 3-5x faster at 10^4 to 10^6 rows with bitwise-identical

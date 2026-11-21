@@ -624,7 +624,7 @@ def _time_transform_design(
                 else None,
             ), rows
         return _MatrixDesignTerm(term, names), rows
-    return _NumericDesignTerm(term), [float(v) for v in values]
+    return _NumericDesignTerm(term), list(map(float, values))
 
 
 def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _CoxData:
@@ -638,31 +638,33 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
             _core.CountingProcessData(list(y.start), list(y.time), y._event_codes()),
             frame.strata,
         )
-    tindex = [int(idx) for idx in counts.index]
-    nrisk = [int(value) for value in counts.nrisk]
-    new_time = [time for time, size in zip(counts.time, nrisk, strict=True) for _ in range(size)]
+    # The expansion has one row per subject at risk at each event time, so build its
+    # columns in bulk. The native getters already return lists of Python numbers.
+    tindex = counts.index
+    nrisk = np.asarray(counts.nrisk, dtype=np.intp)
     # coxcount's times are finite and its statuses 0/1, which Surv() would keep as they are.
     new_y = Surv._from_normalized(
-        time=new_time,
-        event=[int(value) for value in counts.status],
+        time=np.repeat(np.asarray(counts.time, dtype=np.float64), nrisk).tolist(),
+        event=counts.status,
         start=None,
         time2=None,
         surv_type="right",
     )
-    riskset = [group for group, size in enumerate(nrisk) for _ in range(size)]
+    riskset_codes = np.repeat(np.arange(len(nrisk)), nrisk)
+    riskset = riskset_codes.tolist()
     # Neither the expanded rows' names nor their response is read here; model_matrix
     # rebuilds the names from the fit's frame when it is asked for them.
     data = _formula_data_rows(
         frame.formula, frame.data, tindex, frame.n, row_names=False, response=False
     )
-    weights = None if frame.weights is None else [frame.weights[idx] for idx in tindex]
+    weights = None if frame.weights is None else list(map(frame.weights.__getitem__, tindex))
     transformed: dict[_CovariateTerm, Any] = {}
     replacements: dict[_CovariateTerm, _SingleDesignTerm] = {}
     categorical: dict[_CovariateTerm, list[Any]] = {}
     for term, function in zip(tt_terms, _tt_functions(tt, len(tt_terms)), strict=True):
         source = _column_source(data, term.column)
         values = source if _categories(source) is not None else _column(data, term.column)
-        args = (values, list(new_y.time), [group + 1 for group in riskset], weights)
+        args = (values, list(new_y.time), (riskset_codes + 1).tolist(), weights)
         result = (
             function(*args, status=new_y._event_codes())
             if getattr(function, "_survival_tt_r_callback", False)
@@ -706,9 +708,9 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
         ),
         strata=riskset,
         weights=weights,
-        offset=None if frame.offset is None else [frame.offset[idx] for idx in tindex],
-        cluster=None if frame.cluster is None else [frame.cluster[idx] for idx in tindex],
-        id=None if frame.id is None else [frame.id[idx] for idx in tindex],
+        offset=None if frame.offset is None else list(map(frame.offset.__getitem__, tindex)),
+        cluster=None if frame.cluster is None else list(map(frame.cluster.__getitem__, tindex)),
+        id=None if frame.id is None else list(map(frame.id.__getitem__, tindex)),
         design=design,
     )
 
