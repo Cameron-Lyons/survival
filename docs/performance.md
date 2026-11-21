@@ -255,6 +255,16 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   non-finite sums keep the per-death loop. With heavy ties (about 40 deaths per
   event time, 10^5 rows) an Efron `coxph` with ten covariates is about 1.2x faster,
   and penalized spline fits 1.3-1.4x.
+- Right-censored fits with at least eight covariates skip the running
+  second-moment sums altogether (`cox_optimizer/gram.rs`). Each death time adds
+  `sum_j wtave / d_j` to the weight of every subject still at risk (its own deaths
+  take `sum_j wtave s_j / d_j` instead), so the second-moment part of the
+  information is one weighted Gram matrix `X' diag(w) X`. The mean part is a Gram
+  matrix of the death-time means, two rows per Efron tie set from the Cholesky
+  factor of its step sums. Rows pass through the products in blocks of 4,096, so
+  the scratch storage is O(p^2 + 4096 p). Both products run through
+  `matrixmultiply`; with 50 covariates and continuous times at 10^5 rows a fit
+  takes 150 ms instead of 325 ms.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in

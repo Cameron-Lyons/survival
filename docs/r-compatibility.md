@@ -820,7 +820,9 @@ counts. Parallel fits preserve the sequential addition order.
   step at a time; log-likelihoods and scores keep R's per-step sums. The
   information therefore agrees with `coxfit6`, `agfit4` and `coxfit5` to
   rounding (about 1e-15 of the second moments), and `coxph.detail` gives a risk
-  set of one subject exactly zero information.
+  set of one subject exactly zero information. Right-censored fits with eight or
+  more covariates sum that information as two Gram matrices rather than at each
+  death time, with the same agreement.
 - `kernels.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
   `agexact.fit` wrappers) follows `coxph()` rather than the bare fitters: it
   centers the offset, so `agreg.fit`'s info rescale count differs for a large

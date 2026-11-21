@@ -62,6 +62,14 @@ Numerical corrections are described under Fixed below.
   about 1e-13 and variances to about 1e-14 (2e-11 for ill-conditioned pspline
   information). With about 40 deaths per event time, a ten-covariate Efron `coxph`
   is 1.2x faster and pspline fits 1.3-1.4x.
+- Right-censored Breslow and Efron fits with eight or more covariates build their
+  information from two weighted Gram matrices, `X' diag(w) X` for each subject's
+  hazard-weighted risk and the outer products of the death-time means, instead of
+  R's running second-moment sums, which cost `p^2` per subject and per death time.
+  At 10^5 rows `coxph.fit` is 1.1-2.2x faster for 10 to 50 covariates with
+  continuous times and 1.5-3.8x with tied ones. Log-likelihoods and scores are
+  unchanged bit for bit; the information agrees to about 1e-15 of its second
+  moments, and fits whose sums overflow keep R's sweep.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals reuse the fit's row order and dense
   cluster ids instead of re-sorting and regrouping rows. `cox.zph` buckets

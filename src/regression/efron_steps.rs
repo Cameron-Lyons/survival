@@ -59,6 +59,23 @@ impl EfronStepSums {
         .all(|value| value.is_finite() && *value > 0.0)
     }
 
+    /// The two rows whose outer products, weighted by the steps' common
+    /// weight, sum to the steps' `sum_j m_j m_j'` for the means
+    /// `m_j = (R + s_j A2) r_j / D`: with `R / D` and `A2 / D` the
+    /// [`scaled_first`] moments, `sum_j r_j^2 [1, s_j][1, s_j]'` is a positive
+    /// semi-definite 2 x 2 matrix, and its Cholesky factor combines them.
+    /// `None` when the factor is not finite.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn mean_factor(&self) -> Option<((f64, f64), (f64, f64))> {
+        let first = self.ratio_square.sqrt();
+        let cross = self.share_square / first;
+        let second = (self.share_squared_square - cross * cross).max(0.0).sqrt();
+        [first, cross, second]
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(((first, cross), (0.0, second)))
+    }
+
     /// The summed information entry of the steps for variables `i` and `k`,
     /// given each one's [`scaled_first`] moments and the raw second moments
     /// `second` (risk set) and `tied_second` (deaths), with `scale = 1 / D`.
@@ -125,6 +142,32 @@ mod tests {
         let actual = steps.entry(moments, moments, c, c2, 1.0 / d);
         assert!(
             (actual - expected).abs() < 1e-14 * expected.abs(),
+            "{actual} vs {expected}"
+        );
+    }
+
+    /// The factor's two rows reproduce the steps' summed mean outer products.
+    #[test]
+    fn mean_factor_reproduces_the_step_means() {
+        let (d, e) = (10.0, 6.0);
+        let (a, a2) = (3.0, 2.5);
+        let ndead = 4;
+        let mut steps = EfronStepSums::default();
+        let mut expected = 0.0;
+        for j in 0..ndead {
+            let fraction = j as f64 / ndead as f64;
+            let denom = d - fraction * e;
+            let mean = (a - fraction * a2) / denom;
+            expected += mean * mean;
+            steps.add(1.0 - fraction, denom, d);
+        }
+        let ((l11, l21), (_, l22)) = steps.mean_factor().unwrap();
+        let (survivors, deaths) = scaled_first(a, a2, 1.0 / d);
+        let first = l11 * survivors + l21 * deaths;
+        let second = l22 * deaths;
+        let actual = first * first + second * second;
+        assert!(
+            (actual - expected).abs() < 1e-14 * expected,
             "{actual} vs {expected}"
         );
     }

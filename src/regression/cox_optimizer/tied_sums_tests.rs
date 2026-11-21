@@ -2,10 +2,11 @@
 //! risk-weighted sums only where an Efron step reads them, to the sweeps that
 //! accumulated them for every death and added R's information one Efron step
 //! at a time. Log-likelihoods, scores and Breslow information match bit for
-//! bit. Efron tie sets collapse their information steps, so each entry must
-//! match within `1e-12 * sqrt(s_ii s_kk)` for the diagonal second-moment
-//! magnitudes `s` the reference sums, which bound every term either sweep
-//! adds to it.
+//! bit. Efron tie sets collapse their information steps, and right-censored
+//! fits with many covariates build it from Gram matrices (`gram.rs`), so each
+//! of their entries must match within `1e-12 * sqrt(s_ii s_kk)` for the
+//! diagonal second-moment magnitudes `s` the reference sums, which bound every
+//! term either sweep adds to it.
 
 use super::*;
 use crate::internal::rng::Rng;
@@ -214,13 +215,15 @@ fn bits(values: &[f64]) -> Vec<u64> {
         .collect()
 }
 
-/// Efron information within `1e-12 * sqrt(s_ii s_kk)` of R's per-step sums,
-/// and Breslow information bit for bit; non-finite entries must agree exactly.
+/// Efron information, and the information of Gram evaluations, within
+/// `1e-12 * sqrt(s_ii s_kk)` of R's per-step sums; other Breslow information
+/// bit for bit. Non-finite entries must agree exactly.
 fn assert_information(fit: &CoxFit, reference: &Reference, label: &str) {
     let nvar = reference.u.len();
     let actual = fit.imat.as_slice().unwrap();
     let expected = reference.imat.as_slice().unwrap();
-    if !fit.data.efron {
+    let gram = matches!(&fit.fitter, Fitter::Coxfit6 { workspace } if workspace.gram.is_some());
+    if !fit.data.efron && !gram {
         assert_eq!(bits(actual), bits(expected), "{label}: information");
         return;
     }
@@ -439,6 +442,80 @@ fn large_nearly_complete_tie_sets_keep_their_information() {
             let mut fit = builder.build().unwrap();
             let label = format!("n {n} survivors {survivors} dominant {dominant} {offset}");
             for scale in [0.0, 0.3, 2.0] {
+                let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
+                assert_same_evaluation(&mut fit, &beta, &label);
+            }
+        }
+    }
+}
+
+/// Right-censored fits with enough covariates take the Gram evaluation; its
+/// information must match R's sweep, with the same fallbacks for zero weights
+/// and extreme risks.
+#[test]
+fn gram_evaluations_match_sweeps_that_sum_every_death() {
+    let mut rng = Rng::with_seed(0x0067_7a3e_11a5);
+    for case_index in 0..120 {
+        let nvar = super::gram::GRAM_MIN_VARIABLES + case_index % 5;
+        let case = random_case(&mut rng, nvar, case_index % 5 == 4);
+        for method in [TieMethod::Breslow, TieMethod::Efron] {
+            for offset_shift in [0.0, -300.0] {
+                let mut fit = build(&case, method, false, offset_shift);
+                assert!(
+                    matches!(&fit.fitter, Fitter::Coxfit6 { workspace } if workspace.gram.is_some())
+                );
+                let label = format!("gram case {case_index} {method:?} {offset_shift}");
+                for scale in [0.0, 0.5, 2.0, 40.0] {
+                    let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
+                    assert_same_evaluation(&mut fit, &beta, &label);
+                }
+                if fit.fit().is_ok() {
+                    let beta = fit.beta.clone();
+                    assert_same_evaluation(&mut fit, &beta, &label);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gram_evaluations_of_large_nearly_complete_tie_sets_match() {
+    let mut rng = Rng::with_seed(0x6a3e_7e5d);
+    let nvar = super::gram::GRAM_MIN_VARIABLES + 1;
+    for (n, survivors, offset, distinct) in [
+        (3_000, 0, 0.0, 1),
+        (3_000, 5, 50.0, 1),
+        (5_000, 40, 0.0, 30),
+        (9_000, 0, 0.0, 9_000),
+    ] {
+        let time: Vec<f64> = (0..n)
+            .map(|i| {
+                if i < n - survivors {
+                    (i % distinct) as f64
+                } else {
+                    1e6
+                }
+            })
+            .collect();
+        let status = (0..n)
+            .map(|i| i32::from(i < n - survivors))
+            .collect::<Vec<_>>();
+        let weights: Vec<f64> = (0..n).map(|_| 10f64.powf(rng.f64() * 8.0 - 4.0)).collect();
+        let covar = Array2::from_shape_fn((n, nvar), |(_, j)| {
+            offset + (rng.f64() - 0.5) * (1.0 + j as f64)
+        });
+        for method in [TieMethod::Breslow, TieMethod::Efron] {
+            let mut fit = CoxFitBuilder::new(
+                Array1::from_vec(time.clone()),
+                Array1::from_vec(status.clone()),
+                covar.clone(),
+            )
+            .weights(Array1::from_vec(weights.clone()))
+            .method(method)
+            .build()
+            .unwrap();
+            let label = format!("gram n {n} survivors {survivors} {offset} {distinct} {method:?}");
+            for scale in [0.0, 0.3, 1.0] {
                 let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
                 assert_same_evaluation(&mut fit, &beta, &label);
             }

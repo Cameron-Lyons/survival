@@ -13,6 +13,7 @@ use super::exact_ties::{
     sweep_levels,
 };
 
+mod gram;
 mod workspace;
 use workspace::EvaluationWorkspace;
 mod log_risk;
@@ -754,8 +755,16 @@ impl CoxData {
             eta,
             risk_set,
             tied,
+            gram,
             ..
         } = workspace;
+        if let Some(gram) = gram {
+            if let Some(loglik) = self.coxfit6_gram(beta, eta, gram, u, imat) {
+                return loglik;
+            }
+            u.fill(0.0);
+            imat.fill(0.0);
+        }
         self.fill_linear_predictors(beta, eta);
         risk_set.clear();
         let mut loglik = 0.0;
