@@ -67,7 +67,12 @@ from ._formula import (
 )
 from ._models import model_formula
 from ._names import _make_names_unique, _make_unique
-from ._penalties import _combine_basis, _pspline_boundary, _pspline_cbase, _pspline_combine
+from ._penalties import (
+    _combine_basis_array,
+    _pspline_boundary,
+    _pspline_cbase,
+    _pspline_combine,
+)
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._types import (
     _MISSING,
@@ -400,19 +405,19 @@ def pspline(
     intercept_value = _normalize_bool_option(intercept, "intercept")
     basis = _core.pspline_basis(x_values, nterm_value, _integer_scalar(degree, "degree"), boundary)
 
-    matrix = [list(row) for row in basis.basis]
+    matrix = basis.to_arrays()["basis"]
     combine_codes = None
     if combine is not None:
-        groups = _pspline_combine(combine, len(matrix[0]), intercept_value)
-        matrix = _combine_basis(matrix, groups)
+        groups = _pspline_combine(combine, matrix.shape[1], intercept_value)
+        matrix = _combine_basis_array(matrix, groups)
         combine_codes = list(groups if intercept_value else groups[1:])
-    nvar = len(matrix[0])
+    nvar = matrix.shape[1]
     dmat = _second_difference_penalty(nvar)
     if not intercept_value:
-        matrix = [row[1:] for row in matrix]
+        matrix = matrix[:, 1:]
         dmat = [row[1:] for row in dmat[1:]]
     return PsplineResult(
-        basis=matrix,
+        basis=matrix.tolist(),
         knots=list(basis.knots),
         nterm=basis.nterm,
         degree=basis.degree,
