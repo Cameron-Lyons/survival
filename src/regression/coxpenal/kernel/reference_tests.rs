@@ -6,8 +6,7 @@
 //! Efron fits, whose tie corrections are summed per set (see
 //! `tied_frailty.rs`), and the dense information of fits without a sparse
 //! frailty, whose death steps are collapsed (see `efron_steps.rs`) or, for
-//! right-censored fits with many covariates, built from Gram matrices (see
-//! `gram.rs`).
+//! fits with many covariates, built from Gram matrices (see `gram.rs`).
 
 use super::*;
 use crate::internal::rng::Rng;
@@ -817,7 +816,7 @@ fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
     } else {
         assert_bits
     };
-    let gram = nf == 0 && case.start.is_none() && nvar >= GRAM_MIN_VARIABLES;
+    let gram = nf == 0 && nvar >= GRAM_MIN_VARIABLES;
     let dense_check = if nf == 0 && (gram || case.has_tied_deaths()) {
         assert_close
     } else {
@@ -1169,7 +1168,7 @@ fn newton_steps_with_reassociated_tie_corrections_match_the_reference() {
 fn newton_steps_through_gram_information_match_the_reference() {
     let mut rng = Rng::with_seed(0x6a3e_c0de);
     let nvar = GRAM_MIN_VARIABLES + 1;
-    for efron in [false, true] {
+    for (efron, counting) in [(false, false), (true, false), (false, true), (true, true)] {
         for distinct_times in [None, Some(6), Some(1)] {
             let case = Case::random(
                 &mut rng,
@@ -1179,7 +1178,7 @@ fn newton_steps_through_gram_information_match_the_reference() {
                     distinct_times,
                     nstrata: 2,
                     nfrail: 0,
-                    counting: false,
+                    counting,
                 },
             );
             let mut kernel = Kernel::new(case.data(efron));
@@ -1191,7 +1190,7 @@ fn newton_steps_through_gram_information_match_the_reference() {
             let old = newton_steps(nvar, 0, 2.0, 6, |beta, fbeta, u, jmat, fdiag| {
                 reference.evaluate(beta, fbeta, u, jmat, fdiag)
             });
-            let label = format!("gram efron {efron} times {distinct_times:?}");
+            let label = format!("gram efron {efron} counting {counting} times {distinct_times:?}");
             let close = |name: &str, actual: &[f64], expected: &[f64]| {
                 assert_within(&format!("{label} {name}"), actual, expected, FIT_TOLERANCE);
             };

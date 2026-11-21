@@ -272,8 +272,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   difference of double-double prefix sums found by binary search, so late short
   intervals keep their precision; R's running sums lose the rounding of every row
   that leaves them, so against explicit risk sets the Gram information is as
-  accurate as theirs. Penalized counting-process and sparse-frailty sweeps keep
-  the running sums.
+  accurate as theirs. The penalized counting-process sweep without a sparse
+  frailty does the same (a pspline fit on 1.6 x 10^5 rows takes 349 ms instead
+  of 466 ms); sparse-frailty sweeps keep the running sums.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in

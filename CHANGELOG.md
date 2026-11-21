@@ -69,9 +69,10 @@ Numerical corrections are described under Fixed below.
   At 10^5 rows `coxph.fit` is 1.1-2.2x faster for 10 to 50 covariates with
   continuous times and 1.5-3.8x with tied ones. Penalized fits without a sparse
   frailty do the same, so a pspline term (about 11 basis columns) makes `coxph`
-  1.7-2x faster at 10^5 rows. Counting-process fits weight each `(start, stop]`
-  row by a difference of double-double prefix sums over the death times, and are
-  1.1-1.5x faster for 12 to 32 covariates at 2 x 10^5 rows. Log-likelihoods and scores are unchanged bit for
+  1.7-2x faster at 10^5 rows. Counting-process fits, penalized ones included,
+  weight each `(start, stop]` row by a difference of double-double prefix sums
+  over the death times: they are 1.1-1.5x faster for 12 to 32 covariates at
+  2 x 10^5 rows, and a pspline fit on 1.6 x 10^5 rows 1.3x. Log-likelihoods and scores are unchanged bit for
   bit; the information agrees to about 1e-15 of its second moments, and fits
   whose sums overflow keep R's sweep.
 - Robust and cluster variances, counting-process martingale residuals, and

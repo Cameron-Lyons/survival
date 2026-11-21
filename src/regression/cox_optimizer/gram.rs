@@ -7,8 +7,8 @@
 //! missing values behave as before.
 
 use super::*;
-use crate::regression::cox_gram::CoxGram;
 pub(super) use crate::regression::cox_gram::GRAM_MIN_VARIABLES;
+use crate::regression::cox_gram::{CoxGram, IntervalWeights};
 
 /// Scratch storage of [`CoxData::coxfit6_gram`].
 #[derive(Debug)]
@@ -21,14 +21,10 @@ pub(crate) struct GramWorkspace {
     groups: Vec<(usize, usize, usize, f64, f64)>,
     /// Counting data: each row's entry time, read from the walk once.
     entry: Vec<f64>,
-    /// Counting data: each death time's `(stratum, time, alpha, gamma)`, in
-    /// walk order.
-    death_times: Vec<(usize, f64, f64, f64)>,
-    /// Counting data: one stratum's death times, increasing, with the
-    /// double-double prefix sums of their alphas and their gammas.
-    ascending: Vec<f64>,
-    prefix: Vec<(f64, f64)>,
-    gammas: Vec<f64>,
+    /// Counting data: each death time's stratum and `(time, alpha, gamma)`,
+    /// in walk order.
+    death_times: Vec<(usize, (f64, f64, f64))>,
+    intervals: IntervalWeights,
     gram: CoxGram,
 }
 
@@ -41,9 +37,7 @@ impl GramWorkspace {
             groups: Vec::new(),
             entry: Vec::new(),
             death_times: Vec::new(),
-            ascending: Vec::new(),
-            prefix: Vec::new(),
-            gammas: Vec::new(),
+            intervals: IntervalWeights::default(),
             gram: CoxGram::new(n, nvar),
         }
     }
@@ -208,8 +202,9 @@ impl CoxData {
     /// [`Self::agfit4`]'s walk on risks centred at zero, with Gram-matrix
     /// information; `None` sends the caller to the walk on zeroed `u` and
     /// `imat`. A row at risk over `(entry, stop]` is weighted by the alphas of
-    /// the death times in that interval, a difference of double-double prefix
-    /// sums, so short intervals late in follow-up keep their precision.
+    /// the death times in that interval ([`IntervalWeights`]), a difference of
+    /// double-double prefix sums, so short intervals late in follow-up keep
+    /// their precision.
     pub(super) fn agfit4_gram(
         &self,
         walk: &AgWalk,
@@ -278,7 +273,7 @@ impl CoxData {
                     &mut workspace.gram,
                 )?;
                 loglik += set_loglik;
-                workspace.death_times.push((stratum, time, alpha, gamma));
+                workspace.death_times.push((stratum, (time, alpha, gamma)));
             }
         }
 
@@ -292,32 +287,13 @@ impl CoxData {
                 .count();
             let times = &workspace.death_times[taken..taken + count];
             taken += count;
-            workspace.ascending.clear();
-            workspace.gammas.clear();
-            workspace.prefix.clear();
-            workspace.prefix.push((0.0, 0.0));
-            for &(_, time, alpha, gamma) in times.iter().rev() {
-                workspace.ascending.push(time);
-                workspace.gammas.push(gamma);
-                let &(high, low) = workspace.prefix.last().expect("starts with zero");
-                workspace.prefix.push(add_double_double(high, low, alpha));
-            }
-            let interval = |from: usize, to: usize| {
-                let (high_to, low_to) = workspace.prefix[to];
-                let (high_from, low_from) = workspace.prefix[from];
-                (high_to - high_from) + (low_to - low_from)
-            };
+            workspace.intervals.reset(times.iter().map(|time| &time.1));
             for joining in &walk.by_stop[start..end] {
                 let person = joining.row;
-                let through = workspace.ascending.partition_point(|&t| t <= joining.time);
-                let before = workspace
-                    .ascending
-                    .partition_point(|&t| t <= workspace.entry[person]);
-                let share = if joining.death {
-                    interval(before, through - 1) + workspace.gammas[through - 1]
-                } else {
-                    interval(before, through)
-                };
+                let share =
+                    workspace
+                        .intervals
+                        .share(workspace.entry[person], joining.time, joining.death);
                 let omega = risk[person] * share;
                 if !omega.is_finite() {
                     return None;
@@ -336,15 +312,4 @@ impl CoxData {
             && (0..nvar).all(|k| (k..nvar).all(|i| imat[(k, i)].is_finite()));
         finite.then_some(loglik)
     }
-}
-
-/// `high + low + value` as a double-double sum (Knuth's two-sum, then a fast
-/// renormalization), so prefix sums keep twice the precision of a double.
-fn add_double_double(high: f64, low: f64, value: f64) -> (f64, f64) {
-    let sum = high + value;
-    let virtual_value = sum - high;
-    let error = (high - (sum - virtual_value)) + (value - virtual_value);
-    let low = low + error;
-    let total = sum + low;
-    (total, low - (total - sum))
 }

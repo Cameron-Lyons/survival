@@ -141,3 +141,61 @@ impl CoxGram {
         &self.gram
     }
 }
+
+/// `high + low + value` as a double-double sum (Knuth's two-sum, then a fast
+/// renormalization), so prefix sums keep twice the precision of a double.
+pub(crate) fn add_double_double(high: f64, low: f64, value: f64) -> (f64, f64) {
+    let sum = high + value;
+    let virtual_value = sum - high;
+    let error = (high - (sum - virtual_value)) + (value - virtual_value);
+    let low = low + error;
+    let total = sum + low;
+    (total, low - (total - sum))
+}
+
+/// The death times of one stratum in increasing order, with the double-double
+/// prefix sums of their alphas and their gammas, for weighting counting-process
+/// rows: a row at risk over `(entry, stop]` gets the alphas of the death times
+/// in that interval, with its own death time's gamma in place of that time's
+/// alpha.
+#[derive(Debug, Default)]
+pub(crate) struct IntervalWeights {
+    times: Vec<f64>,
+    prefix: Vec<(f64, f64)>,
+    gammas: Vec<f64>,
+}
+
+impl IntervalWeights {
+    /// Starts a stratum from its `(time, alpha, gamma)` in decreasing time.
+    pub(crate) fn reset<'a>(
+        &mut self,
+        decreasing: impl DoubleEndedIterator<Item = &'a (f64, f64, f64)>,
+    ) {
+        self.times.clear();
+        self.gammas.clear();
+        self.prefix.clear();
+        self.prefix.push((0.0, 0.0));
+        for &(time, alpha, gamma) in decreasing.rev() {
+            self.times.push(time);
+            self.gammas.push(gamma);
+            let &(high, low) = self.prefix.last().expect("starts with zero");
+            self.prefix.push(add_double_double(high, low, alpha));
+        }
+    }
+
+    /// The weight of a row at risk over `(entry, stop]`.
+    pub(crate) fn share(&self, entry: f64, stop: f64, death: bool) -> f64 {
+        let interval = |from: usize, to: usize| {
+            let (high_to, low_to) = self.prefix[to];
+            let (high_from, low_from) = self.prefix[from];
+            (high_to - high_from) + (low_to - low_from)
+        };
+        let through = self.times.partition_point(|&t| t <= stop);
+        let before = self.times.partition_point(|&t| t <= entry);
+        if death && through > before && self.times[through - 1] == stop {
+            interval(before, through - 1) + self.gammas[through - 1]
+        } else {
+            interval(before, through)
+        }
+    }
+}

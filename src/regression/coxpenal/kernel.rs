@@ -104,8 +104,8 @@ pub(super) struct Kernel {
     /// The current tie set's death steps, whose dense information
     /// [`Self::finish_information`] adds when there is no sparse frailty.
     steps: EfronStepSums,
-    /// The Gram evaluation's storage, for right-censored fits without a
-    /// sparse frailty and with at least [`GRAM_MIN_VARIABLES`] covariates.
+    /// The Gram evaluation's storage, for fits without a sparse frailty and
+    /// with at least [`GRAM_MIN_VARIABLES`] covariates.
     gram: Option<Box<gram::PenalizedGram>>,
 }
 
@@ -311,7 +311,7 @@ impl Kernel {
             tied_mark: vec![false; nf],
             tie_sums: TieSums::new(nvar),
             steps: EfronStepSums::default(),
-            gram: (nf == 0 && data.start.is_none() && nvar >= GRAM_MIN_VARIABLES)
+            gram: (nf == 0 && nvar >= GRAM_MIN_VARIABLES)
                 .then(|| Box::new(gram::PenalizedGram::new(n, nvar))),
         }
     }
@@ -833,7 +833,13 @@ impl Kernel {
         }
         self.stable_score = None;
         Ok(if self.start.is_some() {
-            self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
+            if let Some(loglik) = self.evaluate_counting_gram(beta, fbeta, u, jmat) {
+                loglik
+            } else {
+                u.fill(0.0);
+                jmat.fill(0.0);
+                self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
+            }
         } else if let Some(loglik) = self.evaluate_right_gram(beta, fbeta, u, jmat) {
             loglik
         } else {
