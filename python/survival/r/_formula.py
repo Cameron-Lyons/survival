@@ -2879,18 +2879,6 @@ def _formula_design_row_count(data: Any, design: _FormulaDesign) -> int:
     raise ValueError("newdata must include at least one column")
 
 
-def _combine_aligned_columns(columns: list[list[Any]], n: int) -> list[Any]:
-    if any(len(column) != n for column in columns):
-        raise ValueError("formula columns must have the same length as the Surv response")
-    if len(columns) == 1:
-        return columns[0]
-    return [tuple(column[i] for column in columns) for i in range(n)]
-
-
-def _combined_columns(data: Any, terms: list[str], n: int) -> list[Any]:
-    return _combine_aligned_columns([_column(data, term) for term in terms], n)
-
-
 def _offset_vector(
     data: Any,
     terms: Sequence[_CovariateTerm],

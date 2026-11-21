@@ -272,3 +272,35 @@ def test_brier_detail_is_still_checked_after_scoring():
         r.brier(fit, detail="yes")
     assert r.brier(fit, detail=np.False_).p0 is None
     assert r.brier(fit, detail=None).p0 is None
+
+
+def _reference_string_column_missing(column):
+    if all(isinstance(value, str) or r_coerce._is_missing_value(value) for value in column) and any(
+        isinstance(value, str) for value in column
+    ):
+        return any(r_coerce._is_missing_value(value) for value in column)
+    return None
+
+
+STRING_POOL = [
+    "male",
+    "female",
+    np.str_("male"),
+    None,
+    math.nan,
+    1,
+    2.5,
+    True,
+    pd.NaT,
+    date(2000, 1, 1),
+]
+
+
+def test_string_rate_columns_match_the_per_value_scan():
+    rng = np.random.default_rng(11)
+    for size in (0, 1, 2, 5, 30):
+        for _ in range(200):
+            column = [STRING_POOL[i] for i in rng.integers(0, len(STRING_POOL), size)]
+            assert r_pyears._string_column_missing(column) == _reference_string_column_missing(
+                column
+            ), column

@@ -6,8 +6,15 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PYO3_PYTHON");
     println!("cargo:rerun-if-env-changed=PYO3_CONFIG_FILE");
 
-    let plain_cargo_extension_module = env::var_os("CARGO_FEATURE_EXTENSION_MODULE").is_some()
-        && env::var_os("PYO3_BUILD_EXTENSION_MODULE").is_none();
+    let extension_module = env::var_os("CARGO_FEATURE_EXTENSION_MODULE").is_some();
+    if extension_module {
+        // An extension module resolves the Python C API from the interpreter that
+        // loads it. maturin passes these linker flags itself; this keeps a direct
+        // `cargo build --features extension-module` linkable on macOS.
+        add_extension_module_link_args();
+    }
+    let plain_cargo_extension_module =
+        extension_module && env::var_os("PYO3_BUILD_EXTENSION_MODULE").is_none();
     let unix_test_host = matches!(
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("linux" | "macos")
@@ -28,5 +35,13 @@ fn link_libpython() {
     }
 }
 
+#[cfg(feature = "python")]
+fn add_extension_module_link_args() {
+    pyo3_build_config::add_extension_module_link_args();
+}
+
 #[cfg(not(feature = "python"))]
 fn link_libpython() {}
+
+#[cfg(not(feature = "python"))]
+fn add_extension_module_link_args() {}
