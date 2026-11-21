@@ -67,6 +67,27 @@ Numerical corrections are described under Fixed below.
   covariates in row-major passes, and skip the tied-death sums that Breslow
   fits and single-death times never read. `coxph.fit` is 1.3-2.1x faster at
   10^6 rows with bitwise-identical results.
+- Tied deaths add Efron's information in O(d + p²) per event time instead of
+  R's O(d p²) loop over the d deaths, in ordinary Cox fits and in penalized fits
+  without a sparse frailty, whose Breslow ties also looped over every death.
+  Log-likelihoods and scores are unchanged bit for bit; information entries agree
+  with the per-death sums to about 1e-15 of their second moments, coefficients to
+  about 1e-13 and variances to about 1e-14 (2e-11 for ill-conditioned pspline
+  information). With about 40 deaths per event time, a ten-covariate Efron `coxph`
+  is 1.2x faster and pspline fits 1.3-1.4x.
+- Right-censored Breslow and Efron fits with eight or more covariates build their
+  information from two weighted Gram matrices, `X' diag(w) X` for each subject's
+  hazard-weighted risk and the outer products of the death-time means, instead of
+  R's running second-moment sums, which cost `p^2` per subject and per death time.
+  At 10^5 rows `coxph.fit` is 1.1-2.2x faster for 10 to 50 covariates with
+  continuous times and 1.5-3.8x with tied ones. Penalized fits without a sparse
+  frailty do the same, so a pspline term (about 11 basis columns) makes `coxph`
+  1.7-2x faster at 10^5 rows. Counting-process fits, penalized ones included,
+  weight each `(start, stop]` row by a difference of double-double prefix sums
+  over the death times: they are 1.1-1.5x faster for 12 to 32 covariates at
+  2 x 10^5 rows, and a pspline fit on 1.6 x 10^5 rows 1.3x. Log-likelihoods and scores are unchanged bit for
+  bit; the information agrees to about 1e-15 of its second moments, and fits
+  whose sums overflow keep R's sweep.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals reuse the fit's row order and dense
   cluster ids instead of re-sorting and regrouping rows. `cox.zph` buckets
@@ -151,6 +172,8 @@ Numerical corrections are described under Fixed below.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
   NumPy masks as missing values across designs, responses, risks, weights and
   covariance inputs. Ordinary arrays retain their direct conversion path.
+- `coxph_detail` reports exactly zero information for a risk set of one subject,
+  instead of the rounding left by its moment difference.
 - Stratum-centered Cox predictions compute finite weighted means when intermediate
   sums overflow, preserving predictions and standard errors for large covariates.
 - Aalen–Johansen restricted-mean standard errors integrate retained probability

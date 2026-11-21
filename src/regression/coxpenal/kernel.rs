@@ -1,10 +1,13 @@
 use crate::error::SurvivalResult;
+use crate::regression::cox_gram::GRAM_MIN_VARIABLES;
+use crate::regression::efron_steps::{EfronStepSums, scaled_first};
 use crate::regression::log_scale::LogScale;
 use crate::regression::penalized::cholesky3::{chinv3, cholesky3, chsolve3, finish_factors};
 use crate::regression::penalized::terms::{PenaltyCallback, PenaltyShape};
 use ndarray::Array2;
 use std::sync::OnceLock;
 
+mod gram;
 #[cfg(test)]
 mod reference_tests;
 mod stable;
@@ -98,6 +101,12 @@ pub(super) struct Kernel {
     tied_mark: Vec<bool>,
     /// The current tie set's corrections of the `tied` frailty groups.
     tie_sums: TieSums,
+    /// The current tie set's death steps, whose dense information
+    /// [`Self::finish_information`] adds when there is no sparse frailty.
+    steps: EfronStepSums,
+    /// The Gram evaluation's storage, for fits without a sparse frailty and
+    /// with at least [`GRAM_MIN_VARIABLES`] covariates.
+    gram: Option<Box<gram::PenalizedGram>>,
 }
 
 /// Efron's second moments (`a2`, `cmat2`) enter death step `k` of a tie set
@@ -301,6 +310,9 @@ impl Kernel {
             tied: Vec::new(),
             tied_mark: vec![false; nf],
             tie_sums: TieSums::new(nvar),
+            steps: EfronStepSums::default(),
+            gram: (nf == 0 && nvar >= GRAM_MIN_VARIABLES)
+                .then(|| Box::new(gram::PenalizedGram::new(n, nvar))),
         }
     }
 
@@ -507,7 +519,9 @@ impl Kernel {
     /// Death step `k` of a tie set of `ndead`: its log-likelihood term, with
     /// its score and information added in. The Efron corrections of the tied
     /// frailty groups are only summed here; [`Self::finish_tie_set`] applies
-    /// them once the set's steps are done.
+    /// them once the set's steps are done. Without a sparse frailty, a set of
+    /// several deaths only records the step, and [`Self::finish_information`]
+    /// adds the information of all its steps.
     #[allow(clippy::too_many_arguments)]
     fn death_step(
         &mut self,
@@ -533,18 +547,10 @@ impl Kernel {
             *mean = temp2;
             *score -= meanwt * temp2;
         }
-        let means = &self.tmean[nf..];
-        for (ii, &mean_i) in means.iter().enumerate() {
-            let span = nf..=nf + ii;
-            let cmat = self.cmat.row(ii);
-            let cmat2 = self.cmat2.row(ii);
-            let mut info = jmat.row_mut(ii);
-            let info = &mut info.as_slice_mut().expect("information is row-major")[span.clone()];
-            let cmat = &cmat.to_slice().expect("moment matrices are row-major")[span.clone()];
-            let cmat2 = &cmat2.to_slice().expect("moment matrices are row-major")[span];
-            for (((value, &c), &c2), &mean_j) in info.iter_mut().zip(cmat).zip(cmat2).zip(means) {
-                *value += meanwt * ((c - temp * c2) / d2 - mean_i * mean_j);
-            }
+        if nf == 0 && ndead > 1.0 {
+            self.steps.add(1.0 - temp, d2, denom);
+        } else {
+            self.add_step_information(temp, d2, meanwt, jmat);
         }
         if nf > 0 {
             let weight = meanwt / d2;
@@ -559,6 +565,76 @@ impl Kernel {
             }
         }
         -meanwt * d2.ln()
+    }
+
+    /// R's dense information update of one death step, from the step means
+    /// in `tmean`.
+    fn add_step_information(&self, temp: f64, d2: f64, meanwt: f64, jmat: &mut Array2<f64>) {
+        let nf = self.nf;
+        let means = &self.tmean[nf..];
+        for (ii, &mean_i) in means.iter().enumerate() {
+            let span = nf..=nf + ii;
+            let cmat = self.cmat.row(ii);
+            let cmat2 = self.cmat2.row(ii);
+            let mut info = jmat.row_mut(ii);
+            let info = &mut info.as_slice_mut().expect("information is row-major")[span.clone()];
+            let cmat = &cmat.to_slice().expect("moment matrices are row-major")[span.clone()];
+            let cmat2 = &cmat2.to_slice().expect("moment matrices are row-major")[span];
+            for (((value, &c), &c2), &mean_j) in info.iter_mut().zip(cmat).zip(cmat2).zip(means) {
+                *value += meanwt * ((c - temp * c2) / d2 - mean_i * mean_j);
+            }
+        }
+    }
+
+    /// The dense information of a tie set's recorded death steps: collapsed
+    /// over the steps (see [`crate::regression::efron_steps`]) when its sums
+    /// are finite, and otherwise R's update of each step in turn, which is
+    /// what [`Self::death_step`] would have added.
+    fn finish_information(
+        &mut self,
+        denom: f64,
+        efron_wt: f64,
+        ndead: usize,
+        meanwt: f64,
+        jmat: &mut Array2<f64>,
+    ) {
+        if self.nf > 0 || ndead < 2 {
+            return;
+        }
+        let steps = std::mem::take(&mut self.steps);
+        let nvar = self.nvar;
+        let finite = self.a.iter().chain(&self.a2).all(|v| v.is_finite())
+            && (0..nvar).all(|ii| {
+                (0..=ii)
+                    .all(|jj| self.cmat[(ii, jj)].is_finite() && self.cmat2[(ii, jj)].is_finite())
+            });
+        if steps.is_usable() && finite {
+            let scale = 1.0 / denom;
+            for ii in 0..nvar {
+                let moments_i = scaled_first(self.a[ii], self.a2[ii], scale);
+                for jj in 0..=ii {
+                    let moments_j = scaled_first(self.a[jj], self.a2[jj], scale);
+                    jmat[(ii, jj)] += meanwt
+                        * steps.entry(
+                            moments_i,
+                            moments_j,
+                            self.cmat[(ii, jj)],
+                            self.cmat2[(ii, jj)],
+                            scale,
+                        );
+                }
+            }
+            return;
+        }
+        let deaths = ndead as f64;
+        for k in 0..ndead {
+            let temp = k as f64 * self.method / deaths;
+            let d2 = denom - temp * efron_wt;
+            for ((mean, &a), &a2) in self.tmean.iter_mut().zip(&self.a).zip(&self.a2) {
+                *mean = (a - temp * a2) / d2;
+            }
+            self.add_step_information(temp, d2, meanwt, jmat);
+        }
     }
 
     fn reset_sums(&mut self, second: bool) {
@@ -635,6 +711,7 @@ impl Kernel {
                 for k in 0..self.mark[p] {
                     newlk += self.death_step(denom, efron_wt, k, ndead, wtave, u, jmat);
                 }
+                self.finish_information(denom, efron_wt, self.mark[p], wtave, jmat);
                 self.finish_tie_set(denom, u, jmat, fdiag);
                 efron_wt = 0.0;
                 self.reset_sums(true);
@@ -723,6 +800,7 @@ impl Kernel {
                     }
                     person += 1;
                 }
+                self.finish_information(denom, efron_wt, itemp, meanwt, jmat);
                 self.finish_tie_set(denom, u, jmat, fdiag);
             }
             if person == self.strata_end[istrat] {
@@ -755,8 +833,18 @@ impl Kernel {
         }
         self.stable_score = None;
         Ok(if self.start.is_some() {
-            self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
+            if let Some(loglik) = self.evaluate_counting_gram(beta, fbeta, u, jmat) {
+                loglik
+            } else {
+                u.fill(0.0);
+                jmat.fill(0.0);
+                self.evaluate_counting(beta, fbeta, u, jmat, fdiag)
+            }
+        } else if let Some(loglik) = self.evaluate_right_gram(beta, fbeta, u, jmat) {
+            loglik
         } else {
+            u.fill(0.0);
+            jmat.fill(0.0);
             self.evaluate_right(beta, fbeta, u, jmat, fdiag)
         })
     }

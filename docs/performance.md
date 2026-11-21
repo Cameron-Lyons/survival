@@ -254,6 +254,35 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   indices through a comparator, and centres and scales covariates in row-major
   passes. Tied-death second moments are accumulated only at Efron death times
   with several deaths, the only place they are read.
+- A tie set of d deaths adds Efron's information in O(d + p²) instead of the
+  O(d p²) of R's per-death loop, for both unpenalized fits and penalized fits
+  without a sparse frailty (where Breslow ties also loop over every death). The
+  steps' log-likelihood and score are still summed one at a time, so they match R's
+  sums bit for bit; the information is written with the survivors' sums so that
+  five positive scalar sums over the steps carry it (`efron_steps.rs`). Sets with
+  non-finite sums keep the per-death loop. With heavy ties (about 40 deaths per
+  event time, 10^5 rows) an Efron `coxph` with ten covariates is about 1.2x faster,
+  and penalized spline fits 1.3-1.4x.
+- Right-censored fits with at least eight covariates skip the running
+  second-moment sums altogether (`cox_optimizer/gram.rs`). Each death time adds
+  `sum_j wtave / d_j` to the weight of every subject still at risk (its own deaths
+  take `sum_j wtave s_j / d_j` instead), so the second-moment part of the
+  information is one weighted Gram matrix `X' diag(w) X`. The mean part is a Gram
+  matrix of the death-time means, two rows per Efron tie set from the Cholesky
+  factor of its step sums. Rows pass through the products in blocks of 4,096, so
+  the scratch storage is O(p^2 + 4096 p). Both products run through
+  `matrixmultiply` (`cox_gram.rs`); with 50 covariates and continuous times at
+  10^5 rows a fit takes 150 ms instead of 325 ms. The penalized right-censored
+  sweep without a sparse frailty (`coxpenal/kernel/gram.rs`) shares the
+  construction: `coxph(~ pspline(x1) + x2)` at 10^5 rows takes 251 ms instead of
+  423 ms. Counting-process fits on risks centred at zero weight each
+  `(start, stop]` row by the alphas of the death times in its interval, a
+  difference of double-double prefix sums found by binary search, so late short
+  intervals keep their precision; R's running sums lose the rounding of every row
+  that leaves them, so against explicit risk sets the Gram information is as
+  accurate as theirs. The penalized counting-process sweep without a sparse
+  frailty does the same (a pspline fit on 1.6 x 10^5 rows takes 349 ms instead
+  of 466 ms); sparse-frailty sweeps keep the running sums.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in

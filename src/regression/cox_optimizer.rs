@@ -7,11 +7,13 @@ use ndarray::{Array1, Array2, ArrayView2, CowArray, Ix1, Ix2};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::efron_steps::{EfronStepSums, scaled_first};
 use super::exact_ties::{
     ExactRiskAccumulator, ExactRiskTree, ExactTiedSweep, exact_tied_moments, linear_sweep_shift,
     sweep_levels,
 };
 
+mod gram;
 mod workspace;
 use workspace::EvaluationWorkspace;
 mod log_risk;
@@ -539,6 +541,12 @@ fn add_scaled(u: &mut [f64], w: f64, x: &[f64]) {
 /// term. Only Efron's steps after the first read the deaths' own
 /// risk-weighted sums `tied`, so callers accumulate those only when `efron`
 /// and `ndead > 1`: Breslow fits and untied deaths skip that work.
+///
+/// The log-likelihood and score visit Efron's steps one by one, as R's
+/// `coxfit6` does. The information of several steps is collapsed into five
+/// sums over the steps ([`crate::regression::efron_steps`]), taking
+/// O(ndead + nvar^2) instead of O(ndead nvar^2) time, whenever the risk-set
+/// sums and step sums are finite; otherwise each step is added in turn.
 fn death_time_update(
     efron: bool,
     risk_set: &RiskSetSums,
@@ -551,17 +559,44 @@ fn death_time_update(
     let nvar = u.len();
     let steps = if efron { ndead } else { 1 };
     let wtave = death_weight / steps as f64;
-    let (cmat, cmat2) = (&risk_set.cmat, &tied.cmat);
-    let imat = imat.as_slice_mut().expect("standard layout");
     let mut loglik = 0.0;
+    let mut step_sums = EfronStepSums::default();
     for j in 0..steps {
         let fraction = j as f64 / ndead as f64;
         let sum = |all: f64, deaths: f64| if j == 0 { all } else { all - fraction * deaths };
         let denom = sum(risk_set.denom, tied.denom);
         loglik -= wtave * denom.ln();
+        for (i, score) in u.iter_mut().enumerate() {
+            *score -= wtave * (sum(risk_set.a[i], tied.a[i]) / denom);
+        }
+        step_sums.add(1.0 - fraction, denom, risk_set.denom);
+    }
+    let imat = imat.as_slice_mut().expect("standard layout");
+    if steps > 1 && step_sums.is_usable() && lower_sums_finite(risk_set, tied, nvar) {
+        add_collapsed_information(&step_sums, risk_set, tied, wtave, imat);
+    } else {
+        add_step_information(risk_set, ndead, steps, wtave, tied, imat);
+    }
+    loglik
+}
+
+/// R's information update for each of the `steps` Efron steps in turn.
+fn add_step_information(
+    risk_set: &RiskSetSums,
+    ndead: usize,
+    steps: usize,
+    wtave: f64,
+    tied: &RiskSetSums,
+    imat: &mut [f64],
+) {
+    let nvar = risk_set.a.len();
+    let (cmat, cmat2) = (&risk_set.cmat, &tied.cmat);
+    for j in 0..steps {
+        let fraction = j as f64 / ndead as f64;
+        let sum = |all: f64, deaths: f64| if j == 0 { all } else { all - fraction * deaths };
+        let denom = sum(risk_set.denom, tied.denom);
         for i in 0..nvar {
             let mean = sum(risk_set.a[i], tied.a[i]) / denom;
-            u[i] -= wtave * mean;
             for k in 0..=i {
                 let second = sum(cmat[i * nvar + k], cmat2[i * nvar + k]);
                 let first = sum(risk_set.a[k], tied.a[k]);
@@ -569,7 +604,36 @@ fn death_time_update(
             }
         }
     }
-    loglik
+}
+
+/// The information of a tie set's Efron steps from their [`EfronStepSums`].
+fn add_collapsed_information(
+    step_sums: &EfronStepSums,
+    risk_set: &RiskSetSums,
+    tied: &RiskSetSums,
+    wtave: f64,
+    imat: &mut [f64],
+) {
+    let nvar = risk_set.a.len();
+    let scale = 1.0 / risk_set.denom;
+    for i in 0..nvar {
+        let moments_i = scaled_first(risk_set.a[i], tied.a[i], scale);
+        for k in 0..=i {
+            let moments_k = scaled_first(risk_set.a[k], tied.a[k], scale);
+            let (second, tied_second) = (risk_set.cmat[i * nvar + k], tied.cmat[i * nvar + k]);
+            imat[k * nvar + i] +=
+                wtave * step_sums.entry(moments_i, moments_k, second, tied_second, scale);
+        }
+    }
+}
+
+fn lower_sums_finite(risk_set: &RiskSetSums, tied: &RiskSetSums, nvar: usize) -> bool {
+    let lower = |cmat: &[f64]| {
+        (0..nvar).all(|i| cmat[i * nvar..=i * nvar + i].iter().all(|v| v.is_finite()))
+    };
+    risk_set.a.iter().chain(&tied.a).all(|v| v.is_finite())
+        && lower(&risk_set.cmat)
+        && lower(&tied.cmat)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -691,8 +755,16 @@ impl CoxData {
             eta,
             risk_set,
             tied,
+            gram,
             ..
         } = workspace;
+        if let Some(gram) = gram {
+            if let Some(loglik) = self.coxfit6_gram(beta, eta, gram, u, imat) {
+                return loglik;
+            }
+            u.fill(0.0);
+            imat.fill(0.0);
+        }
         self.fill_linear_predictors(beta, eta);
         risk_set.clear();
         let mut loglik = 0.0;
@@ -756,7 +828,11 @@ impl CoxData {
             return self.agfit4_scales(beta, walk, u, imat);
         }
         let EvaluationWorkspace {
-            eta, risk, tied, ..
+            eta,
+            risk,
+            tied,
+            gram,
+            ..
         } = workspace;
         self.fill_linear_predictors(beta, eta);
         if eta.iter().all(|eta| eta.abs() < 199.0) {
@@ -764,6 +840,13 @@ impl CoxData {
             risk_set.sums.clear();
             for ((value, eta), weight) in risk.iter_mut().zip(eta.iter()).zip(self.weights.iter()) {
                 *value = eta.exp() * weight;
+            }
+            if let Some(gram) = gram {
+                if let Some(loglik) = self.agfit4_gram(walk, eta, risk, gram, u, imat) {
+                    return Ok(loglik);
+                }
+                u.fill(0.0);
+                imat.fill(0.0);
             }
             let centred = CentredAtZero {
                 sums: &mut risk_set.sums,
