@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain, pairwise, repeat
+from itertools import pairwise, repeat
 from typing import Any
 
 import numpy as np
@@ -509,18 +509,14 @@ def _pspline_combine(combine: Any, ncol: int, intercept: bool) -> tuple[int, ...
     return groups
 
 
-def _combine_basis(rows: Sequence[Sequence[float]], groups: Sequence[int]) -> list[list[float]]:
+def _combine_basis_array(matrix: np.ndarray, groups: Sequence[int]) -> np.ndarray:
     """``newx %*% tmat``: the sums of each row over the columns of every group, in
-    increasing group order."""
+    increasing group order, adding each group's columns to zero from left to right."""
 
-    index = {group: i for i, group in enumerate(sorted(set(groups)))}
-    target = [index[group] for group in groups]
-    combined = []
-    for row in rows:
-        sums = [0.0] * len(index)
-        for value, i in zip(row, target, strict=True):
-            sums[i] += value
-        combined.append(sums)
+    order = sorted(set(groups))
+    combined = np.zeros((matrix.shape[0], len(order)))
+    for column, group in enumerate(groups):
+        combined[:, order.index(group)] += matrix[:, column]
     return combined
 
 
@@ -552,17 +548,15 @@ def penalty_columns(
     if spec.kind == "pspline":
         if spec.boundary is None:
             raise ValueError("spline prediction requires basis boundaries")
-        basis = _core.pspline_basis(
-            [float(value) for value in x], spec.nterm, spec.degree, spec.boundary
-        ).basis
+        matrix = _core.pspline_basis(
+            list(map(float, x)), spec.nterm, spec.degree, spec.boundary
+        ).to_arrays()["basis"]
         if spec.combine is not None:
-            basis = _combine_basis(basis, spec.combine)
-        first = 0 if spec.intercept else 1
-        if not basis:
+            matrix = _combine_basis_array(matrix, spec.combine)
+        if not len(matrix):
             return []
-        rows, width = len(basis), len(basis[0])
-        matrix = np.fromiter(chain.from_iterable(basis), dtype=float, count=rows * width)
-        columns = matrix.reshape(rows, width)[:, first:].T
+        first = 0 if spec.intercept else 1
+        columns = matrix[:, first:].T
         return list(columns) if as_arrays else columns.tolist()
     lookup = {level: i + 1 for i, level in enumerate(spec.levels)}
     if spec.penalty.sparse:

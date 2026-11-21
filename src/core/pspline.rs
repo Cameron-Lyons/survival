@@ -20,6 +20,24 @@ pub struct PsplineBasis {
     pub boundary_knots: (f64, f64),
 }
 
+#[cfg(feature = "python")]
+#[pymethods]
+impl PsplineBasis {
+    #[doc = " Independent writable NumPy snapshots: the `n x (nterm + degree)` basis"]
+    #[doc = " matrix and the knots."]
+    fn to_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        use numpy::IntoPyArray;
+        let width = self.nterm + self.degree;
+        let flat: Vec<f64> = self.basis.iter().flatten().copied().collect();
+        let basis = ndarray::Array2::from_shape_vec((self.basis.len(), width), flat)
+            .expect("every basis row has nterm + degree columns");
+        let result = pyo3::types::PyDict::new(py);
+        result.set_item("basis", basis.into_pyarray(py))?;
+        result.set_item("knots", self.knots.clone().into_pyarray(py))?;
+        Ok(result)
+    }
+}
+
 pub fn pspline_basis(
     x: &[f64],
     nterm: usize,
@@ -157,6 +175,19 @@ mod tests {
         assert!(out.basis[1].iter().all(|value| value.is_nan()));
         assert!((out.basis[0].iter().sum::<f64>() - 1.0).abs() < 1e-12);
         assert!((out.basis[2].iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn every_row_has_one_value_per_basis_function() {
+        for (x, nterm, degree, boundary) in [
+            (vec![0.0, 1.0, f64::NAN, 5.0, 6.0], 8, 3, (1.0, 5.0)),
+            (vec![2.0, f64::NAN], 5, 3, (2.0, 2.0)),
+            (vec![1.5, 4.0], 4, 1, (1.0, 5.0)),
+        ] {
+            let out = pspline_basis(&x, nterm, degree, boundary).unwrap();
+            assert_eq!(out.basis.len(), x.len());
+            assert!(out.basis.iter().all(|row| row.len() == nterm + degree));
+        }
     }
 
     #[test]

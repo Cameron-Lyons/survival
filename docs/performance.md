@@ -82,8 +82,16 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   factor coding and omission. Row labels of integer- and string-indexed frames
   are read in bulk, increasing row selections keep their labels without
   `make.unique`, and `tt()` terms expand into an array design. Numeric columns stay NumPy arrays until they are
-  copied into the design. The R bridge adds reticulate conversion, which is done in
-  bulk for numeric columns and native results.
+  copied into the design. List columns, as the bundled datasets and the
+  `survSplit`, `finegray` and `tmerge` results hold them, are classified as logical,
+  character or numeric and as integer or double storage from their distinct value
+  types, so inference costs one C-level pass per column. The R bridge adds
+  reticulate conversion, which is done in bulk for numeric columns and native results.
+- Row expansions build their columns with NumPy: the `tt()` risk-set rows
+  (one per subject at risk at each event time), the `finegray` weighted rows and the
+  backward-interval check of counting-process `Surv` objects. Their output sizes
+  are those of R; for `tt()` and `finegray` they grow with the number of event
+  times times the number at risk.
 - Formula interactions fit each distinct component once. An interaction can
   reuse a main effect's design columns when both use the same coding.
   Interaction terms that need full factor indicators build those columns

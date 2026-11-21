@@ -2341,7 +2341,7 @@ def _fit_single_design_term(
         if term.transform is not None and term.transform != "tt":
             _numeric_variable(data, term, n)
             return _NumericDesignTerm(term)
-        if not any(isinstance(value, str | bytes) for value in values):
+        if not any(issubclass(kind, str | bytes) for kind in set(map(type, values))):
             try:
                 _numeric_variable(data, term, n)
             except (TypeError, ValueError):
