@@ -267,7 +267,13 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   10^5 rows a fit takes 150 ms instead of 325 ms. The penalized right-censored
   sweep without a sparse frailty (`coxpenal/kernel/gram.rs`) shares the
   construction: `coxph(~ pspline(x1) + x2)` at 10^5 rows takes 251 ms instead of
-  423 ms. Counting-process and sparse-frailty sweeps keep the running sums.
+  423 ms. Counting-process fits on risks centred at zero weight each
+  `(start, stop]` row by the alphas of the death times in its interval, a
+  difference of double-double prefix sums found by binary search, so late short
+  intervals keep their precision; R's running sums lose the rounding of every row
+  that leaves them, so against explicit risk sets the Gram information is as
+  accurate as theirs. Penalized counting-process and sparse-frailty sweeps keep
+  the running sums.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in

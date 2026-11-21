@@ -6,11 +6,16 @@
 //! fits with many covariates build it from Gram matrices (`gram.rs`), so each
 //! of their entries must match within `1e-12 * sqrt(s_ii s_kk)` for the
 //! diagonal second-moment magnitudes `s` the reference sums, which bound every
-//! term either sweep adds to it.
+//! term either sweep adds to it. For counting data the magnitudes count every
+//! row the running sums ever held, scaled by the ratio of that mass to the
+//! current denominator: removing a row leaves its rounding in R's sums.
 
 use super::*;
 use crate::internal::rng::Rng;
 
+/// `mass` is, for counting data, the denominator and diagonal second moments
+/// of every row ever added to the running sums, whose removal leaves rounding
+/// in them: the error bound of the running sums scales with it.
 fn reference_death_time_update(
     efron: bool,
     risk_set: &RiskSetSums,
@@ -18,6 +23,7 @@ fn reference_death_time_update(
     u: &mut [f64],
     imat: &mut Array2<f64>,
     scale: &mut [f64],
+    mass: Option<(f64, &[f64])>,
 ) -> f64 {
     let nvar = u.len();
     let ndead = tied.count;
@@ -40,7 +46,13 @@ fn reference_death_time_update(
                 imat[k * nvar + i] += wtave * ((second - mean * first) / denom);
             }
             // Non-finite tie sets take the per-step path in both sweeps.
-            let magnitude = (wtave * sum(cmat[i * nvar + i], cmat2[i * nvar + i]) / denom).abs();
+            let second = sum(cmat[i * nvar + i], cmat2[i * nvar + i]);
+            let magnitude = match mass {
+                None => (wtave * second / denom).abs(),
+                Some((total, diagonal)) => {
+                    (wtave * (diagonal[i].max(second) / denom) * (total.max(denom) / denom)).abs()
+                }
+            };
             if magnitude.is_finite() {
                 scale[i] += magnitude;
             }
@@ -90,7 +102,8 @@ fn reference_coxfit6(
             }
         }
         if tied.count > 0 {
-            loglik += reference_death_time_update(data.efron, &risk_set, &tied, u, imat, scale);
+            loglik +=
+                reference_death_time_update(data.efron, &risk_set, &tied, u, imat, scale, None);
             tied.clear();
         }
     }
@@ -109,8 +122,10 @@ fn reference_agfit4_walk(
     let row = data.rows();
     let mut tied = RiskSetSums::zeros(u.len(), true);
     let mut loglik = 0.0;
+    let nvar = u.len();
     for &(start, end) in &walk.bounds {
         risk_set.clear();
+        let (mut mass_total, mut mass_diagonal) = (0.0, vec![0.0; nvar]);
         let (by_stop, by_entry) = (&walk.by_stop[start..end], &walk.by_entry[start..end]);
         let (mut joined, mut left) = (0, 0);
         while let Some(next) = by_stop[joined..].iter().position(|j| j.death) {
@@ -124,6 +139,11 @@ fn reference_agfit4_walk(
             while joined < by_stop.len() && by_stop[joined].time >= time {
                 let person = by_stop[joined].row;
                 risk_set.add(person, row(person))?;
+                let risk = risk_set.risk(person);
+                mass_total += risk;
+                for (sum, &x) in mass_diagonal.iter_mut().zip(row(person)) {
+                    *sum += risk * x * x;
+                }
                 joined += 1;
             }
             tied.clear();
@@ -134,8 +154,15 @@ fn reference_agfit4_walk(
                 loglik += weight * (eta[person] - risk_set.recenter());
                 add_scaled(u, weight, x);
             }
-            loglik +=
-                reference_death_time_update(data.efron, risk_set.sums(), &tied, u, imat, scale);
+            loglik += reference_death_time_update(
+                data.efron,
+                risk_set.sums(),
+                &tied,
+                u,
+                imat,
+                scale,
+                Some((mass_total, &mass_diagonal)),
+            );
         }
     }
     Ok(loglik)
@@ -215,6 +242,14 @@ fn bits(values: &[f64]) -> Vec<u64> {
         .collect()
 }
 
+fn uses_gram(fit: &CoxFit) -> bool {
+    match &fit.fitter {
+        Fitter::Coxfit6 { workspace } => workspace.gram.is_some(),
+        Fitter::Agfit4 { workspace, .. } => workspace.gram.is_some(),
+        _ => false,
+    }
+}
+
 /// Efron information, and the information of Gram evaluations, within
 /// `1e-12 * sqrt(s_ii s_kk)` of R's per-step sums; other Breslow information
 /// bit for bit. Non-finite entries must agree exactly.
@@ -222,7 +257,7 @@ fn assert_information(fit: &CoxFit, reference: &Reference, label: &str) {
     let nvar = reference.u.len();
     let actual = fit.imat.as_slice().unwrap();
     let expected = reference.imat.as_slice().unwrap();
-    let gram = matches!(&fit.fitter, Fitter::Coxfit6 { workspace } if workspace.gram.is_some());
+    let gram = uses_gram(fit);
     if !fit.data.efron && !gram {
         assert_eq!(bits(actual), bits(expected), "{label}: information");
         return;
@@ -449,9 +484,9 @@ fn large_nearly_complete_tie_sets_keep_their_information() {
     }
 }
 
-/// Right-censored fits with enough covariates take the Gram evaluation; its
-/// information must match R's sweep, with the same fallbacks for zero weights
-/// and extreme risks.
+/// Fits with enough covariates take the Gram evaluation; its information
+/// must match R's sweeps, with the same fallbacks for zero weights, recentred
+/// counting-process risks and extreme risks.
 #[test]
 fn gram_evaluations_match_sweeps_that_sum_every_death() {
     let mut rng = Rng::with_seed(0x0067_7a3e_11a5);
@@ -459,12 +494,13 @@ fn gram_evaluations_match_sweeps_that_sum_every_death() {
         let nvar = super::gram::GRAM_MIN_VARIABLES + case_index % 5;
         let case = random_case(&mut rng, nvar, case_index % 5 == 4);
         for method in [TieMethod::Breslow, TieMethod::Efron] {
-            for offset_shift in [0.0, -300.0] {
-                let mut fit = build(&case, method, false, offset_shift);
-                assert!(
-                    matches!(&fit.fitter, Fitter::Coxfit6 { workspace } if workspace.gram.is_some())
-                );
-                let label = format!("gram case {case_index} {method:?} {offset_shift}");
+            for (counting, offset_shift) in
+                [(false, 0.0), (false, -300.0), (true, 0.0), (true, -300.0)]
+            {
+                let mut fit = build(&case, method, counting, offset_shift);
+                assert!(uses_gram(&fit));
+                let label =
+                    format!("gram case {case_index} {method:?} counting {counting} {offset_shift}");
                 for scale in [0.0, 0.5, 2.0, 40.0] {
                     let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
                     assert_same_evaluation(&mut fit, &beta, &label);
@@ -519,6 +555,62 @@ fn gram_evaluations_of_large_nearly_complete_tie_sets_match() {
                 let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
                 assert_same_evaluation(&mut fit, &beta, &label);
             }
+        }
+    }
+}
+
+/// Long-format counting data: every subject split into many short intervals,
+/// so late intervals hold one or two death times out of thousands and their
+/// weights are differences of large prefix sums.
+#[test]
+fn gram_evaluations_of_split_counting_data_match() {
+    let mut rng = Rng::with_seed(0x5b1e_7c0d);
+    let nvar = super::gram::GRAM_MIN_VARIABLES + 2;
+    let subjects = 600;
+    let (mut entry, mut time, mut status, mut rows) = (vec![], vec![], vec![], vec![]);
+    for subject in 0..subjects {
+        let exit = 1.0 + rng.f64() * 400.0;
+        let died = rng.f64() < 0.8;
+        let mut start = 0.0;
+        while start < exit {
+            let stop = (start + 1.0 + rng.f64() * 6.0).min(exit);
+            entry.push(start);
+            time.push(stop.round());
+            status.push(i32::from(died && stop >= exit));
+            rows.push(subject);
+            start = stop;
+        }
+    }
+    // Rounding the stops ties death times and can empty an interval; keep
+    // the intervals that still have positive length.
+    let keep: Vec<usize> = (0..time.len()).filter(|&i| time[i] > entry[i]).collect();
+    let entry: Vec<f64> = keep.iter().map(|&i| entry[i]).collect();
+    let time: Vec<f64> = keep.iter().map(|&i| time[i]).collect();
+    let status: Vec<i32> = keep.iter().map(|&i| status[i]).collect();
+    let n = keep.len();
+    let base: Vec<f64> = (0..subjects * nvar).map(|_| rng.f64() - 0.5).collect();
+    let covar = Array2::from_shape_fn((n, nvar), |(i, j)| {
+        base[rows[keep[i]] * nvar + j] + if j == 0 { 0.01 * time[i] } else { 0.0 }
+    });
+    for method in [TieMethod::Breslow, TieMethod::Efron] {
+        let mut fit = CoxFitBuilder::new(
+            Array1::from_vec(time.clone()),
+            Array1::from_vec(status.clone()),
+            covar.clone(),
+        )
+        .entry_times(Array1::from_vec(entry.clone()))
+        .method(method)
+        .build()
+        .unwrap();
+        assert!(uses_gram(&fit));
+        let label = format!("gram split counting {method:?}");
+        for scale in [0.0, 0.4, 1.5] {
+            let beta: Vec<f64> = (0..nvar).map(|_| (rng.f64() - 0.5) * scale).collect();
+            assert_same_evaluation(&mut fit, &beta, &label);
+        }
+        if fit.fit().is_ok() {
+            let beta = fit.beta.clone();
+            assert_same_evaluation(&mut fit, &beta, &label);
         }
     }
 }

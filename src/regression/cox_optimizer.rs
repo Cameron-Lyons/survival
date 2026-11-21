@@ -828,7 +828,11 @@ impl CoxData {
             return self.agfit4_scales(beta, walk, u, imat);
         }
         let EvaluationWorkspace {
-            eta, risk, tied, ..
+            eta,
+            risk,
+            tied,
+            gram,
+            ..
         } = workspace;
         self.fill_linear_predictors(beta, eta);
         if eta.iter().all(|eta| eta.abs() < 199.0) {
@@ -836,6 +840,13 @@ impl CoxData {
             risk_set.sums.clear();
             for ((value, eta), weight) in risk.iter_mut().zip(eta.iter()).zip(self.weights.iter()) {
                 *value = eta.exp() * weight;
+            }
+            if let Some(gram) = gram {
+                if let Some(loglik) = self.agfit4_gram(walk, eta, risk, gram, u, imat) {
+                    return Ok(loglik);
+                }
+                u.fill(0.0);
+                imat.fill(0.0);
             }
             let centred = CentredAtZero {
                 sums: &mut risk_set.sums,
