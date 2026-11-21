@@ -13,6 +13,7 @@ pub(crate) mod coxph_lowlevel;
 pub(crate) mod coxph_wtest;
 pub(crate) mod coxphms;
 pub(crate) mod cure_models;
+pub(crate) mod efron_steps;
 pub(crate) mod elastic_net;
 pub(crate) mod exact_ties;
 pub(crate) mod fast_cox;

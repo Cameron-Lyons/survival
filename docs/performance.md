@@ -246,6 +246,15 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   indices through a comparator, and centres and scales covariates in row-major
   passes. Tied-death second moments are accumulated only at Efron death times
   with several deaths, the only place they are read.
+- A tie set of d deaths adds Efron's information in O(d + p²) instead of the
+  O(d p²) of R's per-death loop, for both unpenalized fits and penalized fits
+  without a sparse frailty (where Breslow ties also loop over every death). The
+  steps' log-likelihood and score are still summed one at a time, so they match R's
+  sums bit for bit; the information is written with the survivors' sums so that
+  five positive scalar sums over the steps carry it (`efron_steps.rs`). Sets with
+  non-finite sums keep the per-death loop. With heavy ties (about 40 deaths per
+  event time, 10^5 rows) an Efron `coxph` with ten covariates is about 1.2x faster,
+  and penalized spline fits 1.3-1.4x.
 - Robust and cluster variances, counting-process martingale residuals, and
   score, dfbeta and Schoenfeld residuals derive their row orders from the fit's
   sorted rows in O(n) instead of sorting again, and sum clusters by dense ids in

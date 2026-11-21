@@ -1,9 +1,11 @@
 //! The penalized Cox kernel as it stood before its loops were restructured for
 //! speed, kept verbatim as an oracle. Every case asserts the production kernel
-//! reproduces it bit for bit, except for the frailty entries of Efron fits with
-//! tied deaths: the production kernel re-associates their tie corrections (see
-//! `tied_frailty.rs`), so those agree to [`EVALUATION_TOLERANCE`] of their
-//! scale instead, and Newton steps through them to [`FIT_TOLERANCE`].
+//! reproduces it bit for bit, except for two re-associated sums of fits with
+//! tied deaths, which agree to [`EVALUATION_TOLERANCE`] of their scale instead,
+//! and Newton steps through them to [`FIT_TOLERANCE`]: the frailty entries of
+//! Efron fits, whose tie corrections are summed per set (see
+//! `tied_frailty.rs`), and the dense information of fits without a sparse
+//! frailty, whose death steps are collapsed (see `efron_steps.rs`).
 
 use super::*;
 use crate::internal::rng::Rng;
@@ -813,6 +815,11 @@ fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
     } else {
         assert_bits
     };
+    let dense_check = if nf == 0 && case.has_tied_deaths() {
+        assert_close
+    } else {
+        assert_bits
+    };
     let mut kernel = Kernel::new(case.data(efron));
     let mut reference = Reference::new(&case.data(efron));
     let means: Vec<f64> = (0..nvar)
@@ -862,7 +869,7 @@ fn compare(case: &Case, efron: bool, label: &str) -> Evaluation {
         for i in 0..nvar {
             let (new_row, old_row) = (new.jmat.row(i), old.jmat.row(i));
             let (new_row, old_row) = (new_row.as_slice().unwrap(), old_row.as_slice().unwrap());
-            assert_bits(
+            dense_check(
                 &format!("{label} jmat row {i}"),
                 &new_row[nf..=nf + i],
                 &old_row[nf..=nf + i],
@@ -1111,7 +1118,13 @@ fn newton_steps(
 fn newton_steps_with_reassociated_tie_corrections_match_the_reference() {
     let mut rng = Rng::with_seed(0x7ead);
     for counting in [false, true] {
-        for (distinct_times, nfrail) in [(Some(4), 40), (Some(15), 9), (Some(1), 25)] {
+        for (distinct_times, nfrail) in [
+            (Some(4), 40),
+            (Some(15), 9),
+            (Some(1), 25),
+            (Some(4), 0),
+            (Some(1), 0),
+        ] {
             let case = Case::random(
                 &mut rng,
                 Shape {

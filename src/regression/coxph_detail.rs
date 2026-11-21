@@ -175,6 +175,9 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                 .collect();
             let mut info = vec![vec![0.0; nvar]; nvar];
             let mut xbar = vec![0.0; nvar];
+            // A risk set of one subject has no covariate variance; its moment
+            // difference would leave only the rounding of `(r x) / r`.
+            let lone = death.risk_set.count == 1;
             for step in 0..steps {
                 let d2 = death.efron_denom(step);
                 let increment = step_weight / d2;
@@ -188,6 +191,9 @@ pub fn coxph_detail(fit: &CoxPHFit, riskmat: bool) -> SurvivalResult<CoxphDetail
                 for i in 0..nvar {
                     mean[i] += (fit.means[i] + xbar[i]) / steps_f;
                     u[i] -= step_weight * xbar[i];
+                    if lone {
+                        continue;
+                    }
                     for k in 0..=i {
                         // Normalize the weight first: a tied death weight can
                         // overflow the raw moment even when information is finite.
@@ -437,6 +443,32 @@ mod tests {
             ..CoxphOptions::default()
         };
         CoxPHFit::fit(data, options).unwrap()
+    }
+
+    #[test]
+    fn a_lone_subject_at_risk_has_exactly_zero_information() {
+        for scale in [1.0, 31.7, -58.3, 1e3] {
+            for method in [TieMethod::Breslow, TieMethod::Efron] {
+                let time = vec![1.0, 2.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0];
+                let status = vec![1, 1, 1, 0, 1, 1, 0, 1];
+                let x = Array2::from_shape_fn((8, 2), |(i, j)| {
+                    scale * (0.37 * i as f64 - 0.11 * j as f64).sin()
+                });
+                let data = CoxphData::try_new(time, None, status, x, None, None, None).unwrap();
+                let options = CoxphOptions {
+                    method,
+                    ..CoxphOptions::default()
+                };
+                let fit = CoxPHFit::fit(data, options).unwrap();
+                let detail = coxph_detail(&fit, false).unwrap();
+                assert_eq!(detail.nrisk.last(), Some(&1));
+                let lone = detail.imat.last().unwrap();
+                assert!(
+                    lone.iter().flatten().all(|&value| value == 0.0),
+                    "{scale} {method:?}: {lone:?}"
+                );
+            }
+        }
     }
 
     #[test]
