@@ -815,6 +815,15 @@ counts. Parallel fits preserve the sequential addition order.
   times leave the risk set in stop-time order rather than data order, and
   Efron's j-th terms are formed as `sum - j/d * deaths`. Results agree to
   rounding whenever the center does not move mid death time.
+- Cox information at a time with several tied deaths is summed over Efron's
+  steps in closed form from the survivors' and deaths' moments instead of one
+  step at a time; log-likelihoods and scores keep R's per-step sums. The
+  information therefore agrees with `coxfit6`, `agfit4` and `coxfit5` to
+  rounding (about 1e-15 of the second moments), and `coxph.detail` gives a risk
+  set of one subject exactly zero information. Fits with eight or more
+  covariates (right-censored ones, penalized fits without a sparse frailty
+  included, and counting-process fits) sum that information as two Gram matrices
+  rather than at each death time, with the same agreement.
 - `kernels.coxph_fit` (and the R bridge's `coxph.fit`, `agreg.fit` and
   `agexact.fit` wrappers) follows `coxph()` rather than the bare fitters: it
   centers the offset, so `agreg.fit`'s info rescale count differs for a large
