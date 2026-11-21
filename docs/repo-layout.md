@@ -67,7 +67,10 @@ must inspect or build Python objects belongs behind `#[cfg(feature =
 
 `build.rs` links `libpython` only for a plain `cargo` invocation with the
 `extension-module` feature (`cargo test --all-features`); maturin sets
-`PYO3_BUILD_EXTENSION_MODULE=1`, so wheels never depend on `libpython`.
+`PYO3_BUILD_EXTENSION_MODULE=1`, so wheels never depend on `libpython`. With
+`extension-module` it also emits PyO3's extension link arguments (`-undefined
+dynamic_lookup` on macOS), so `PYO3_BUILD_EXTENSION_MODULE=1 cargo build --release
+--lib --features extension-module` produces a loadable extension without maturin.
 
 ### Boundary input types
 
