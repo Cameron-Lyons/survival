@@ -198,6 +198,26 @@ const KNOWN_FAILURES: &[(&str, &str)] = &[
         "yates/veteran_celltype_predict_risk",
         "missing feature: yates predict = risk (Monte-Carlo variance)",
     ),
+    (
+        "yates/lung_sas_I_adjuster",
+        "missing feature: harness: formula term I(age/10)",
+    ),
+    (
+        "yates/lung_sas_I_ratio",
+        "missing feature: harness: formula term I(age/ph.karno)",
+    ),
+    (
+        "yates/lung_sas_cut_and_numeric",
+        "missing feature: harness: formula term cut(age, c(0, 60, 100))",
+    ),
+    (
+        "yates/lung_sas_numeric_interaction",
+        "missing feature: harness: formula term sex:age",
+    ),
+    (
+        "yates/lung_sas_I_reads_tested",
+        "missing feature: harness: formula term I(ph.ecog * sex)",
+    ),
 ];
 
 fn manifest_path(relative: &str) -> PathBuf {

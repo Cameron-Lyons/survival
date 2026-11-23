@@ -537,3 +537,23 @@ def test_cch_with_an_unused_level():
 def test_aareg_with_an_unused_level_has_no_full_rank_time():
     with pytest.raises(ValueError, match="no Aalen model can be fit"):
         r.aareg("Surv(time, status) ~ g", _lung_with_unused_level())
+
+
+def test_yates_populations_treat_each_model_frame_variable_apart():
+    lung = survival.datasets.load_lung()
+    rows = [
+        row
+        for row in range(len(lung["time"]))
+        if not any(
+            value is None or (isinstance(value, float) and math.isnan(value))
+            for value in (lung["age"][row], lung["ph.ecog"][row])
+        )
+    ]
+    data = {name: [values[row] for row in rows] for name, values in lung.items()}
+    shared = r.coxph("Surv(time, status) ~ factor(sex) + cut(age, c(0, 60, 100)) + age", data)
+    # cut(age) is categorical and age continuous, so a factorial population refuses,
+    # as R's yates_factorial_pop does, and a SAS one keeps age's data rows.
+    with pytest.raises(ValueError, match="all the adjusting terms are categorical"):
+        r.yates(shared, "factor(sex)", population="factorial")
+    sas = r.yates(shared, "factor(sex)", population="sas").estimate["pmm"]
+    assert all(math.isfinite(value) for value in sas)
