@@ -10,7 +10,7 @@ in the Rust engine.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise, repeat
 from typing import Any
@@ -36,6 +36,7 @@ from ._coerce import (
     _strata_value_label,
     _warn_outside_package,
 )
+from ._expression import _expression_label
 from ._splines import basis_columns
 from ._types import CoxPenaltyBasis, _CovariateTerm, _PenaltyDesignTerm
 
@@ -346,9 +347,12 @@ def fit_penalty(
     values: Mapping[str, Sequence[Any]],
     options: Mapping[str, Any],
     levels: Sequence[Any] | None = None,
+    expressions: Collection[str] = (),
 ) -> _PenaltyDesignTerm:
     """Evaluate a penalty function on its data *values* before ``subset`` and ``na.action``;
-    *levels* are the categories of a factor frailty column."""
+    *levels* are the categories of a factor frailty column, and *expressions* the
+    *columns* that name evaluated expressions (deparsed keeping integer suffixes, as
+    pspline's ``deparse(substitute(x))`` names them)."""
 
     if term.call is None:
         raise ValueError("a penalty term must have a function call")
@@ -357,9 +361,12 @@ def fit_penalty(
     if kind == "ridge":
         scale_values = [_r_var(_observed(values[name])) for name in columns]
         penalty = _core.CoxPenalty.ridge(scale_values=scale_values, **kwargs)
-        return _PenaltyDesignTerm(
-            term, tuple(columns), tuple(f"ridge({name})" for name in columns), penalty
+        # ridge's names come from as.character() on its cbind(...) call, which drops
+        # integer suffixes that pspline's deparse keeps.
+        names = tuple(
+            f"ridge({_expression_label(name) if name in expressions else name})" for name in columns
         )
+        return _PenaltyDesignTerm(term, tuple(columns), names, penalty)
     if len(columns) != 1:
         raise ValueError(f"{kind}() requires exactly one data column")
     column = columns[0]

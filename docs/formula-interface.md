@@ -374,9 +374,11 @@ input columns independently, so a missing `age` leaves an observed `rx` intact i
 - **Labels.** Formula and basis column labels are separate from penalized
   coefficient labels: `ridge(age, theta = 2)` keeps the coefficient name
   `ridge(age)` but uses the formula call for its matrix column. Multi-column
-  ridge terms append argument names; spline and dense frailty bases append
-  numbered suffixes; named time-transform penalty matrices keep their basis
-  suffixes.
+  ridge columns follow `cbind()`'s names: a column argument appends its name and
+  an expression argument nothing (`ridge(age, I(age^2), theta = 1)age`,
+  `ridge(age, I(age^2), theta = 1)`), and a ridge of expressions alone numbers
+  its columns; spline and dense frailty bases append numbered suffixes; named
+  time-transform penalty matrices keep their basis suffixes.
 - **Frailty.** Stored Cox matrices include sparse frailty columns in their
   formula positions with the original numeric codes. New-data Cox matrices
   evaluate the complete design. Sparse group coding precedes omission and accepts
@@ -471,6 +473,16 @@ units; the default scales by each column's unweighted sample variance before
 subset or omission. Omitting `theta` selects the penalty by effective degrees of
 freedom. A penalty term inside an interaction raises "Penalty terms cannot be in
 an interaction".
+
+Penalty arguments may be expressions, which are evaluated like any model-frame
+variable before subset and omission: `pspline(log(age))`, `ridge(age, I(age^2))`,
+`frailty(factor(inst))`. Coefficients carry R's deparsed names (`ps(log(age))3`,
+`ridge(I(age^2))`). A backquoted name, such as `` pspline(`log(age)`) ``, reads the
+column of that name. A factor argument gives `ridge` its level codes, as `cbind()`
+does, and `pspline` stops with "'range' not meaningful for factors"; frailty terms
+group by the factor's levels. Two arguments of one call that share a name but
+read different values (a column named `log(age)` beside `log(age)`) are refused,
+because R would keep them as separate, unnamed and named columns.
 
 `predict(pspline(x), newx)` and `predict_pspline(basis, newx)` evaluate the basis
 at new values with the original boundaries, degree, number of terms, intercept and
