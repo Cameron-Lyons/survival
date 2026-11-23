@@ -646,8 +646,8 @@ survfit_confint(p, se, logse = TRUE, conf.type, conf.int = 0.95,
 
 pseudo(fit, times, type, collapse = TRUE, data.frame = FALSE, ...)
 
-survSplit(formula, data, subset, na.action = na.pass, cut,
-  start = "tstart", id, zero = 0, episode, end = "tstop",
+survSplit(formula, data, subset, na.action = na.pass, id, cut,
+  zero = 0, episode, start = "tstart", end = "tstop",
   event = "event", added, timefix = TRUE)
 
 survcondense(formula, data, subset, weights, na.action = na.pass,

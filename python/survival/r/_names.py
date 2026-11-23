@@ -36,7 +36,10 @@ def _make_names(value: str) -> str:
     reserved word."""
 
     first, second = value[:1], value[1:2]
-    if not (first.isalpha() or (first == "." and not "0" <= second <= "9")):
+    # R tests iswalpha, which in UTF-8 locales also accepts non-ASCII digits and
+    # letter-numbers (Ⅷ, ١); of the digits, only ASCII ones need the X.
+    letter = first.isalpha() or (not first.isascii() and first.isalnum())
+    if not (letter or (first == "." and not "0" <= second <= "9")):
         value = f"X{value}"
     name = "".join(ch if ch.isalnum() or ch in "._" else "." for ch in value)
     return f"{name}." if name in _RESERVED_WORDS else name
