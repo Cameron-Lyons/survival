@@ -96,6 +96,31 @@ test_that("an unused Surv column of newdata is carried through curves and summar
   expect_equal(unclass(frame$s2_)[], unclass(survival::Surv2(newdata$time, newdata$status - 1))[])
 })
 
+test_that("a Surv column keeps its place and name among other newdata columns", {
+  lung <- survival::lung[1:80, c("time", "status", "age")]
+  cox <- coxph(Surv(time, status) ~ age, data = lung)
+  stock_cox <- eval(quote(survival::coxph(Surv(time, status) ~ age, data = lung)),
+    list(Surv = survival::Surv, lung = lung))
+  newdata <- data.frame(.survival_response = c(7, 8), age = c(50, 60))
+  newdata$`my y` <- survival::Surv(c(100, 200), c(1, 0))
+  ours <- summary(survfit(cox, newdata = newdata), times = c(100, 200), data.frame = TRUE)
+  stock <- summary(survival::survfit(stock_cox, newdata = newdata), times = c(100, 200),
+    data.frame = TRUE)
+  expect_named(ours, names(stock))
+  expect_equal(ours$.survival_response, stock$.survival_response)
+  expect_equal(unclass(ours$`my y`)[], unclass(stock$`my y`)[])
+  d <- survival::mgus2[1:300, ]
+  d$etime <- with(d, ifelse(pstat == 0, futime, ptime))
+  d$event <- factor(with(d, ifelse(pstat == 0, 2 * death, 1)), 0:2, c("censor", "pcm", "death"))
+  multistate <- coxph(Surv(etime, event) ~ age, data = d, id = id)
+  nd <- data.frame(age = c(60, 70))
+  nd$`my y` <- survival::Surv(c(1, 2), c(1, 0))
+  curves <- suppressWarnings(survfit(multistate, newdata = nd))
+  frame <- as.data.frame(curves)
+  expect_s3_class(frame$my.y, "Surv")
+  expect_s3_class(as.data.frame(curves, optional = TRUE)$`my y`, "Surv")
+})
+
 test_that("a one-row frame with a Surv column converts", {
   lung <- survival::lung[1:80, c("time", "status", "age")]
   lung$y <- survival::Surv(lung$time, lung$status)

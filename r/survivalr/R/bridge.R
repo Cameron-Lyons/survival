@@ -855,21 +855,12 @@ attrassign <- function(object, tt) {
   inherits(value, c("survival.r._surv.Surv", "survival.r._surv.Surv2"))
 }
 
-# A data frame of Python columns; a Surv or Surv2 column is one matrix column, as in R.
+# A data frame of Python columns; a Surv or Surv2 column becomes survival's matrix,
+# which as.data.frame keeps as one column, as in R.
 .as_r_frame <- function(columns, ...) {
   response <- vapply(columns, .is_python_response, logical(1))
-  if (!any(response)) return(as.data.frame(columns, ...))
-  native <- lapply(columns[response], .as_native_response)
-  # Placeholders hold each column's place, which other list columns may shift.
-  placeholders <- paste0(".survival_response_", seq_along(native))
-  original <- names(columns)[response]
-  names(columns)[response] <- placeholders
-  columns[response] <- lapply(native, function(value) seq_len(nrow(value)))
-  frame <- as.data.frame(columns, ...)
-  at <- match(placeholders, names(frame))
-  for (k in seq_along(native)) frame[[at[[k]]]] <- native[[k]]
-  names(frame)[at] <- original
-  frame
+  if (any(response)) columns[response] <- lapply(columns[response], .as_native_response)
+  as.data.frame(columns, ...)
 }
 
 .as_r_data_frame <- function(x, row.names = NULL, optional = FALSE, ...) {
