@@ -271,3 +271,24 @@ def test_arguments_sharing_a_name_but_not_their_values_are_refused(lung):
     # The same values twice, however spelled, fit as before.
     for term in ("ridge(log(age), log( age ), theta=1)", "ridge(age, age, theta=1)"):
         assert r.coxph(f"Surv(time, status) ~ {term}", data).n == len(lung["time"])
+
+
+@pytest.mark.parametrize(
+    "term", ["pspline(log(2))", "ridge(sqrt(4), theta=1)", "frailty(factor(3))"]
+)
+def test_expressions_without_data_columns_are_still_rejected(lung, term):
+    with pytest.raises(ValueError, match="unsupported penalty variable"):
+        r.coxph(f"Surv(time, status) ~ {term}", lung)
+
+
+def test_infinite_expression_values_fail_as_precomputed_columns_do(lung):
+    lung = {**lung, "offset40": [age - 40 for age in lung["age"]]}
+    lung["log_offset40"] = [
+        math.log(value) if value > 0 else (-math.inf if value == 0 else math.nan)
+        for value in lung["offset40"]
+    ]
+    for term in ("pspline(log(offset40))", "pspline(log_offset40)"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with pytest.raises(ValueError, match="Boundary.knots"):
+                r.coxph(f"Surv(time, status) ~ {term}", lung)
