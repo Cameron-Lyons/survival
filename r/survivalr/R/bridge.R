@@ -9872,14 +9872,19 @@ dim.survival_py_survfit <- function(x) {
   arrays <- .python_attr("_cox_curve_arrays")(.restore_python(x))
   curves <- function(name) {
     value <- arrays[[name]]
+    # An empty array cannot tell an absent curve ([]) from zero curves over the time
+    # grid (one empty row per time), so read those from the field, whose lists keep
+    # the difference and cost nothing to build when empty.
+    if (!is.null(value) && length(value) == 0L) value <- .result_field(x, name)
     if (is.null(value) || length(value) == 0L && name != "surv" && length(vector("time")))
       return(NULL)
     if (!matrix) return(.as_numeric_vector(value))
     result <- if (is.matrix(value)) {
       value
     } else {
-      base::matrix(as.numeric(value), nrow = length(vector("time")),
-        ncol = as.integer(.result_field(x, "ncurve")), byrow = TRUE)
+      base::matrix(as.numeric(unlist(value, recursive = TRUE, use.names = FALSE)),
+        nrow = length(vector("time")), ncol = as.integer(.result_field(x, "ncurve")),
+        byrow = TRUE)
     }
     labels <- .result_field(x, "colnames")
     if (name == "surv" && !is.null(labels)) colnames(result) <- as.character(labels)

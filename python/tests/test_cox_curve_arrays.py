@@ -388,3 +388,22 @@ def test_the_r_bridge_reads_the_arrays_without_lists(cox):
     assert not any(_listed(fit, name) for name in CURVES if _lazy(fit, name))
     assert arrays["surv"].shape == (len(fit.time), 3)
     np.testing.assert_array_equal(arrays["surv"], np.asarray(fit.surv))
+
+
+def test_empty_curves_keep_their_list_shapes(cox, stratified):
+    # The R bridge reads an empty array's field instead, since only the lists tell zero
+    # curves over the times (one empty row per time) from an absent curve ([]).
+    none = r.survfit(cox, newdata=NEWDATA).subset(data=[])
+    ntime = len(none.time)
+    assert ntime
+    for name in ("surv", "cumhaz", "std_err", "lower", "upper"):
+        assert none.to_arrays()[name].shape == (ntime, 0)
+        assert getattr(none, name) == [[] for _ in range(ntime)]
+    timeless = r.survfit(stratified, newdata={"age": [55.0, 65.0]}).subset(strata=[])
+    assert timeless.time == []
+    for name in ("surv", "cumhaz", "upper"):
+        assert timeless.to_arrays()[name].shape == (0,)
+        assert getattr(timeless, name) == []
+    aggregated = r.aggregate_survfit(r.survfit(cox, newdata=NEWDATA), by=[1, 1, 2])
+    assert aggregated.to_arrays()["cumhaz"].shape == (0,)
+    assert aggregated.cumhaz == []
