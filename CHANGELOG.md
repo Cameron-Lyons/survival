@@ -167,6 +167,14 @@ Numerical corrections are described under Fixed below.
 
 ### Fixed
 
+- The R bridge's `yates`:
+  - runs on Cox fits with `pspline()` or `ridge()` terms, aligning their basis
+    columns with the coefficients by position as R does, and on fits with ordered
+    factors, which keep their polynomial contrasts. All three refused with
+    "population design does not match fitted coefficients".
+  - runs with `predict = "survival"` for survivalr Cox fits, which failed assigning
+    into the immutable Python curve.
+  - has R's `print.yates` layout, through the port's report.
 - R bridge arguments are matched as R matches them:
   - `coxph` and `survreg` take partial names of their formals and of their control
     options passed through `...`. Examples are `coxph(..., meth = "breslow")`,

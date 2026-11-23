@@ -2,6 +2,7 @@
 
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from ._binding_utils import bind_names
@@ -249,7 +250,52 @@ def _yates_model_metadata(fit: Any) -> dict[str, Any]:
         "raw_levels": {
             part.term.column: list(part.levels) for part in factors if not part.term.strata
         },
+        # A factor's own contrasts (contr.poly for an ordered factor), so that R's
+        # population design names and codes its columns as the fit's coefficients.
+        "contrasts": {
+            _covariate_term_name(part.term): {
+                "matrix": [list(row) for row in part.contrasts],
+                "names": list(part.contrast_names),
+            }
+            for part in factors
+            if part.contrasts and part.contrast_names and not part.term.strata
+        },
     }
+
+
+@dataclass(frozen=True)
+class _YatesTestRow:
+    """One row of an R yates object's test matrix, as print_yates reads it."""
+
+    name: str
+    chisq: float
+    df: float | None
+    ss: float | None = None
+
+
+def _print_yates(
+    estimate: dict[str, list[Any]],
+    tests: list[dict[str, Any]],
+    digits: Any,
+    dig_tst: Any,
+    eps: Any,
+    width: Any,
+) -> Any:
+    """``print.yates`` of the R bridge's yates object, through ``print_yates``."""
+    from .r._population_print import print_yates
+    from .r._types import YatesResult
+
+    rows = [
+        _YatesTestRow(
+            str(row["name"]),
+            float(row["chisq"]),
+            None if row["df"] is None or row["df"] != row["df"] else float(row["df"]),
+            None if row.get("ss") is None else float(row["ss"]),
+        )
+        for row in tests
+    ]
+    result = YatesResult(estimate=estimate, test=rows, mvar=[], cmat=[], cmat_names=[])  # type: ignore[arg-type]
+    return print_yates(result, digits=digits, dig_tst=dig_tst, eps=eps, width=width)
 
 
 def _concordance_lm_data(

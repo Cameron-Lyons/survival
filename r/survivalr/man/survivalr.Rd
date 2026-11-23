@@ -81,6 +81,7 @@
 \alias{survcondense}
 \alias{survcheck}
 \alias{print.survcheck}
+\alias{print.yates}
 \alias{survdiff}
 \alias{survexp}
 \alias{finegray}
@@ -700,6 +701,8 @@ survcheck(formula, data = NULL, subset = NULL, na.action = na.pass,
   id, istate, istate0 = "(s0)", timefix = TRUE, ...)
 
 \method{print}{survcheck}(x, ...)
+\method{print}{yates}(x, digits = max(3, getOption("digits") - 2),
+  dig.tst = max(1, min(5, digits - 1)), eps = 1e-08, ...)
 
 rttright(formula, data, weights, subset, na.action, times, id,
   timefix = TRUE, renorm = TRUE)
@@ -1206,6 +1209,7 @@ fitting is not yet supported.}
 \item{dlist}{Distribution-list object for \code{survregDtest}.}
 \item{row.names, optional, make.names}{Standard \code{as.data.frame}
 arguments.}
+\item{dig.tst}{Digits for the test statistics \code{print.yates} shows.}
 \item{digits}{Number of significant digits used by concordance and model
 summary printers.}
 \item{signif.stars}{Logical flag controlling significance stars in printed

@@ -7,6 +7,14 @@
       raw[[name]] <- factor(raw[[name]], levels = metadata$raw_levels[[name]])
     }
     frame <- stats::model.frame(Terms, raw, xlev = xlevels, na.action = stats::na.pass)
+    # The fit's own contrasts (contr.poly for an ordered factor), so the population
+    # design's columns are the coefficients' columns.
+    for (name in intersect(names(metadata$contrasts), names(frame))) {
+      spec <- metadata$contrasts[[name]]
+      values <- .as_numeric_matrix(spec$matrix)
+      dimnames(values) <- list(levels(frame[[name]]), as.character(unlist(spec$names)))
+      stats::contrasts(frame[[name]], ncol(values)) <- values
+    }
     extra_factors <- setdiff(names(frame)[vapply(frame, is.factor, logical(1))], names(xlevels))
     xlevels <- c(xlevels, lapply(frame[extra_factors], levels))
     for (name in intersect(c("(weights)", "(id)"), names(raw))) frame[[name]] <- raw[[name]]
@@ -301,6 +309,12 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
   xold <- stats::model.matrix(fit)
   cox <- inherits(fit, c("coxph", "survival_py_coxph"))
   columns <- match(names(beta), colnames(matrices[[1L]]))
+  if (anyNA(columns)) {
+    # A penalized term (pspline, ridge) names its basis columns apart from its
+    # coefficients; R's yates multiplies the design by the coefficients by position.
+    spare <- setdiff(which(colnames(matrices[[1L]]) != "(Intercept)"), columns)
+    if (length(spare) == sum(is.na(columns))) columns[is.na(columns)] <- spare
+  }
   if (anyNA(columns)) stop("population design does not match fitted coefficients", call. = FALSE)
   matrices <- lapply(matrices, function(x) x[, columns, drop = FALSE])
   estimable <- if (all(kept)) rep(TRUE, length(matrices)) else {
@@ -372,4 +386,24 @@ yates <- function(fit, term, population = c("data", "factorial", "sas"),
   output$call <- Call
   class(output) <- "yates"
   output
+}
+
+print.yates <- function(x, digits = max(3, getOption("digits") - 2),
+                        dig.tst = max(1, min(5, digits - 1)), eps = 1e-8, ...) {
+  tests <- x$test
+  rows <- lapply(seq_len(nrow(tests)), function(i) {
+    row <- list(name = rownames(tests)[i], chisq = unname(tests[i, "chisq"]),
+      df = unname(tests[i, "df"]))
+    if ("ss" %in% colnames(tests)) row$ss <- unname(tests[i, "ss"])
+    row
+  })
+  estimate <- lapply(x$estimate, function(column) {
+    if (is.factor(column)) column <- as.character(column)
+    .as_python_vector(column)
+  })
+  report <- .pybridge_attr("_print_yates")(estimate, rows, digits, dig.tst, eps,
+    getOption("width"))
+  cat(paste0(as.character(unlist(.result_field(report, "lines"), use.names = FALSE)), "\n"),
+    sep = "")
+  invisible(x)
 }
