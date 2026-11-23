@@ -81,6 +81,8 @@ from ._types import (
     _ModelCovariateTerm,
     _ModelOffsetTerm,
     _ModelStrataTerm,
+    _present_curve,
+    _stored_curve,
 )
 
 if TYPE_CHECKING:
@@ -1027,6 +1029,8 @@ def _engine_of(x: Any) -> Any:
 
 
 def _is_matrix(values: Any) -> bool:
+    if isinstance(values, np.ndarray):
+        return values.ndim == 2 and len(values) > 0
     return bool(values) and isinstance(values[0], list)
 
 
@@ -1095,7 +1099,7 @@ def _subset_cox_survfit(
         ]
 
         def linear_values(name: str) -> Any:
-            original = getattr(x, name)
+            original = x._curve_values(name)
             if original is None or len(original) == 0:
                 return original
             array = np.asarray(original)
@@ -1131,14 +1135,19 @@ def _subset_cox_survfit(
     keep_matrix = matrix and not (drop and len(rows) != 1 and len(kept_data) == 1)
 
     def margin_values(name: str) -> Any:
-        original = getattr(x, name)
+        original = x._curve_values(name)
         if original is None or len(original) == 0:
             return original
         array = np.asarray(original)
         if array.ndim == 1:
-            return array[rows].tolist()
-        selected = array[np.ix_(rows, kept_data)]
-        return selected.tolist() if keep_matrix else selected[:, 0].tolist()
+            selected = array[rows]
+        else:
+            selected = array[np.ix_(rows, kept_data)]
+            if not keep_matrix:
+                selected = selected[:, 0]
+        # A curve that is still only its array stays one; given lists keep their
+        # element types.
+        return _stored_curve(selected) if x._curve_is_lazy(name) else selected.tolist()
 
     labels = [names[group] for group in kept_strata] if x.strata is not None else []
     kept_mapping = (
@@ -1222,7 +1231,10 @@ def _survfit_matrix(
             (c.ncurve if is_cox else 1) != ncolumns
             or (len(c.strata) if c.strata is not None else 1) != nstrata
             or (c.strata is None) != (first.strata is None)
-            or (is_cox and _is_matrix(c.surv) != _is_matrix(first.surv))
+            or (
+                is_cox
+                and _is_matrix(c._curve_values("surv")) != _is_matrix(first._curve_values("surv"))
+            )
         ):
             raise ValueError("all curves must be of the same dimension")
     start = _start_time_value(start_time)
@@ -1263,7 +1275,7 @@ def _survfit_matrix(
         method,
         start,
     )
-    if is_cox and first.strata is not None and _is_matrix(first.surv):
+    if is_cox and first.strata is not None and _is_matrix(first._curve_values("surv")):
         labels = [f"{s}, new{j + 1}" for j in range(ncolumns) for s in first.strata]
     else:
         labels = [f"new{i + 1}" for i in range(ncolumns * nstrata)]
@@ -1288,15 +1300,15 @@ def _cox_engines(x: CoxSurvfitResult) -> list[_core.SurvfitKMResult]:
         x.time,
         x.n_risk,
         x.n_event,
-        x.surv,
+        x._curve_values("surv"),
         x.n,
         strata=list(x.strata.values()) if x.strata else None,
         n_censor=x.n_censor,
-        std_err=x.std_err or None,
-        cumhaz=x.cumhaz or None,
-        std_chaz=x.std_chaz or None,
-        lower=x.lower or None,
-        upper=x.upper or None,
+        std_err=_present_curve(x._curve_values("std_err")),
+        cumhaz=_present_curve(x._curve_values("cumhaz")),
+        std_chaz=_present_curve(x._curve_values("std_chaz")),
+        lower=_present_curve(x._curve_values("lower")),
+        upper=_present_curve(x._curve_values("upper")),
         logse=x.logse is not False,
         conf_int=0.95 if x.conf_int is None else x.conf_int,
         conf_type=x.conf_type or "none",
@@ -1320,7 +1332,7 @@ def _cox_curve_labels(x: CoxSurvfitResult) -> list[str]:
     strata varying fastest (``[]`` for one unnamed curve)."""
 
     strata = x.strata_names
-    if not _is_matrix(x.surv):
+    if not _is_matrix(x._curve_values("surv")):
         return strata
     if x.colnames is None:
         return strata * x.ncurve
@@ -1334,10 +1346,10 @@ def _survfit0_cox(x: CoxSurvfitResult) -> CoxSurvfitResult:
 
     engines = [_core.survfit0(engine) for engine in _cox_engines(x)]
     first = engines[0]
-    matrix = _is_matrix(x.surv)
+    matrix = _is_matrix(x._curve_values("surv"))
 
     def stacked(name: str) -> Any:
-        if not getattr(x, name):
+        if _present_curve(x._curve_values(name)) is None:
             return getattr(x, name)
         return _joined_columns([getattr(engine, name) for engine in engines], matrix)
 
@@ -1910,12 +1922,18 @@ def summary_survfit(
         ]
     matrix = (
         isinstance(object, CoxSurvfitResult)
-        and _is_matrix(object.surv)
+        and _is_matrix(object._curve_values("surv"))
         and (times is None or object.ncurve != 1 or len(object.strata or ()) <= 1)
     )
 
     def curves(name: str) -> Any:
         return _joined_columns([getattr(summary, name) for summary in summaries], matrix)
+
+    has_cumhaz = (
+        _present_curve(object._curve_values("cumhaz")) is not None
+        if isinstance(object, CoxSurvfitResult)
+        else bool(object.cumhaz)
+    )
 
     columns = {
         "time": [value / scale for value in rows.time],
@@ -1923,7 +1941,7 @@ def summary_survfit(
         "n_event": rows.n_event,
         "n_censor": rows.n_censor,
         "surv": curves("surv"),
-        "cumhaz": curves("cumhaz") if object.cumhaz else [],
+        "cumhaz": curves("cumhaz") if has_cumhaz else [],
         "strata": strata,
         "std_err": curves("std_err"),
         "std_chaz": curves("std_chaz"),
@@ -1931,7 +1949,7 @@ def summary_survfit(
         "upper": curves("upper"),
     }
     if data_frame:
-        if not object.cumhaz:
+        if not has_cumhaz:
             columns["cumhaz"] = None
         return _ordinary_summary_frame(
             columns,
@@ -2243,7 +2261,7 @@ def aggregate_survfit(
 
     if isinstance(x, CoxSurvfitMultiStateResult):
         return _aggregate_coxms(x, by, FUN)
-    surv = getattr(x, "surv", None)
+    surv = x._curve_values("surv") if isinstance(x, CoxSurvfitResult) else getattr(x, "surv", None)
     pstate = getattr(x, "pstate", None)
     if isinstance(surv, np.ndarray):
         surv = surv if surv.ndim == 2 else None
@@ -2269,7 +2287,12 @@ def aggregate_survfit(
         if name in names
     }
     if "cumhaz" in names:
-        updates["cumhaz"] = [] if isinstance(getattr(x, "cumhaz", None), list) else None
+        reads_as_list = (
+            x._curve_reads_as_list("cumhaz")
+            if isinstance(x, CoxSurvfitResult)
+            else isinstance(getattr(x, "cumhaz", None), list)
+        )
+        updates["cumhaz"] = [] if reads_as_list else None
     if result.surv is not None:
         updates["surv"] = result.surv
     if "colnames" in names:

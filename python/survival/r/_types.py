@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import math
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field
+from dataclasses import fields as dataclasses_fields
 from operator import index
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -1007,6 +1010,119 @@ class BasehazResult:
     strata: list[str] | None = None
 
 
+class _CurveArray:
+    """A curve field held as a float64 array until it is read as lists.
+
+    ``values`` is 1-D for one curve and ``ntime x ncurve`` otherwise, the shapes
+    ``tolist()`` turns into R's vector or matrix rows. The lists are built once,
+    under a lock, so fields that share one ``_CurveArray`` (``std_chaz`` and
+    ``std_err`` of a cumulative-hazard curve) and concurrent readers all get one list
+    object. Once built, the lists are the curve: callers may edit them in place, as
+    they could edit the stored lists before, so readers (:meth:`current`), pickling
+    and copying use the lists from then on.
+    """
+
+    __slots__ = ("_lists", "values")
+
+    def __init__(self, values: NDArray[np.float64]) -> None:
+        self.values = values
+        self._lists: list[Any] | None = None
+
+    def lists(self) -> list[Any]:
+        lists = self._lists
+        if lists is None:
+            with _CURVE_LISTS_LOCK:
+                if self._lists is None:
+                    self._lists = self.values.tolist()
+                lists = self._lists
+        return lists
+
+    def current(self) -> Any:
+        """The lists once they have been built, else the array."""
+
+        return self.values if self._lists is None else self._lists
+
+    def __reduce__(self) -> tuple[Any, tuple[Any]]:
+        # A plain tuple of arguments pickles under every protocol; built (and
+        # possibly edited) lists are kept as the plain lists they read as.
+        if self._lists is not None:
+            return (list, (self._lists,))
+        return (_CurveArray, (self.values,))
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> list[Any]:
+        # A deep copy of the lists shares their float objects, as a deep copy of the
+        # stored lists always did, so a copy still compares equal when a curve
+        # holds NaN.
+        return copy.deepcopy(self.lists(), memo)
+
+
+class _CurveField:
+    """A ``CoxSurvfitResult`` curve field: read as nested lists, stored as given.
+
+    The value lives in the instance ``__dict__`` under the field's own name, so
+    pickles made before curve fields were lazy (whose state holds the lists) load
+    unchanged. A stored :class:`_CurveArray` becomes its lists on first read.
+    """
+
+    def __init__(self, name: str, default: Any) -> None:
+        self.name = name
+        self.default = default
+
+    def __get__(self, instance: Any, owner: type | None = None) -> Any:
+        if instance is None:
+            if self.default is _NO_DEFAULT:
+                raise AttributeError(self.name)
+            return self.default
+        value = instance.__dict__.get(self.name)
+        return value.lists() if isinstance(value, _CurveArray) else value
+
+    def __set__(self, instance: Any, value: Any) -> None:
+        instance.__dict__[self.name] = value
+
+
+_CURVE_FIELD_USE: dict[tuple[type, str], bool] = {}
+
+
+def _uses_curve_field(cls: type, name: str) -> bool:
+    """Whether ``cls`` reads field ``name`` through :class:`_CurveField`; a dataclass
+    subclass that redeclares the field, or one with ``slots=True``, does not."""
+
+    key = (cls, name)
+    uses = _CURVE_FIELD_USE.get(key)
+    if uses is None:
+        attribute = next(
+            (klass.__dict__[name] for klass in cls.__mro__ if name in klass.__dict__), None
+        )
+        uses = _CURVE_FIELD_USE[key] = isinstance(attribute, _CurveField)
+    return uses
+
+
+_CURVE_LISTS_LOCK = threading.Lock()
+
+
+def _stored_curve(values: NDArray[np.float64]) -> _CurveArray | list[Any]:
+    """A curve field's value as ``CoxSurvfitResult`` stores it: the array, until it is
+    read as lists, or the empty list a curve without times reads as."""
+
+    import numpy as np
+
+    if not len(values):
+        return values.tolist()
+    return _CurveArray(np.ascontiguousarray(values, dtype=np.float64))
+
+
+def _present_curve(values: Any) -> Any:
+    """A curve field, or ``None`` when it is absent or empty: ``values or None`` for
+    lists, without testing an array's truth."""
+
+    return None if values is None or len(values) == 0 else values
+
+
+_NO_DEFAULT = object()
+_CURVE_FIELDS = ("surv", "cumhaz", "std_err", "std_chaz", "lower", "upper")
+_COUNT_FIELDS = ("time", "n_risk", "n_event", "n_censor")
+
+
 @dataclass(frozen=True)
 class CoxSurvfitResult:
     """R's ``survfit.coxph`` object (class ``survfitcox``).
@@ -1016,6 +1132,10 @@ class CoxSurvfitResult:
     ``surv``, ``cumhaz``, ``std_err``, ``std_chaz``, ``lower`` and ``upper`` are vectors
     for one curve, or ``ntime x ncurve`` matrices (one column per ``newdata`` row, named
     by ``colnames``, R's ``colnames(fit$surv)``).
+
+    The curve fields read as nested lists. ``survfit`` stores them as arrays and builds
+    each list on its first read, so callers that want arrays should use
+    :meth:`to_arrays`, which never builds the lists.
     """
 
     n: list[int]
@@ -1043,14 +1163,58 @@ class CoxSurvfitResult:
     def strata_names(self) -> list[str]:
         return self.strata_labels if self.strata_labels is not None else list(self.strata or {})
 
+    def _stored_curve_value(self, name: str) -> Any:
+        if _uses_curve_field(type(self), name):
+            return self.__dict__.get(name)
+        return getattr(self, name)
+
+    def _curve_values(self, name: str) -> Any:
+        """A curve field for the package's readers: the float64 array ``survfit``
+        stored, without building its lists, or the lists once they exist (they may
+        have been edited), or else the value the field was given."""
+
+        value = self._stored_curve_value(name)
+        return value.current() if isinstance(value, _CurveArray) else value
+
+    def _curve_is_lazy(self, name: str) -> bool:
+        """Whether a curve field is still only its stored array."""
+
+        value = self._stored_curve_value(name)
+        return isinstance(value, _CurveArray) and value._lists is None
+
+    def _curve_reads_as_list(self, name: str) -> bool:
+        """Whether a curve field reads as a list (stored as one, or as its array)."""
+
+        return isinstance(self._stored_curve_value(name), list | _CurveArray)
+
+    def to_arrays(self) -> dict[str, NDArray[np.float64]]:
+        """Independent writable NumPy snapshots of the time grid and curves.
+
+        ``time``, ``n_risk``, ``n_event`` and ``n_censor`` are vectors over the strata
+        blocks; ``surv``, ``cumhaz``, ``std_err``, ``std_chaz``, ``lower`` and
+        ``upper`` are vectors for one curve or ``ntime x ncurve`` matrices, as the
+        fields are. Fields that are absent (``None``) are left out. Reading curves
+        this way never builds their nested lists.
+        """
+
+        import numpy as np
+
+        arrays = {name: np.array(getattr(self, name), dtype=np.float64) for name in _COUNT_FIELDS}
+        for name in _CURVE_FIELDS:
+            value = self._curve_values(name)
+            if value is not None:
+                arrays[name] = np.array(value, dtype=np.float64)
+        return arrays
+
     @property
     def has_data_margin(self) -> bool:
         if self.logse is None and self.newdata is None:
             return False
-        ndim = getattr(self.surv, "ndim", None)
+        surv = self._curve_values("surv")
+        ndim = getattr(surv, "ndim", None)
         if ndim is not None:
             return bool(ndim == 2)
-        return isinstance(self.surv[0], list) if self.surv else self.colnames is not None
+        return isinstance(surv[0], list) if surv else self.colnames is not None
 
     @property
     def dim(self) -> dict[str, int]:
@@ -1061,13 +1225,14 @@ class CoxSurvfitResult:
 
     @property
     def ncurve(self) -> int:
-        ndim = getattr(self.surv, "ndim", None)
+        surv = self._curve_values("surv")
+        ndim = getattr(surv, "ndim", None)
         if ndim is not None:
-            shape: Any = getattr(self.surv, "shape", None)
+            shape: Any = getattr(surv, "shape", None)
             return int(shape[1]) if ndim == 2 else 1
-        if not self.surv and self.colnames is not None:
+        if not surv and self.colnames is not None:
             return len(self.colnames)
-        return len(self.surv[0]) if self.surv and isinstance(self.surv[0], list) else 1
+        return len(surv[0]) if surv and isinstance(surv[0], list) else 1
 
     def subset(
         self, *, strata: Any | None = None, data: Any | None = None, drop: bool = True
@@ -1076,6 +1241,23 @@ class CoxSurvfitResult:
         from ._survfit import _subset_cox_survfit
 
         return _subset_cox_survfit(self, strata=strata, data=data, drop=drop)
+
+
+def _install_curve_fields(cls: type) -> None:
+    """Route the dataclass's curve fields through :class:`_CurveField`.
+
+    Installed after ``@dataclass`` so the fields keep their declared defaults and
+    ``repr=False``: the generated ``__init__`` sets them with ``object.__setattr__``,
+    which a data descriptor on the class intercepts.
+    """
+
+    defaults = {item.name: item.default for item in dataclasses_fields(cls)}
+    for name in _CURVE_FIELDS:
+        default = defaults[name]
+        setattr(cls, name, _CurveField(name, _NO_DEFAULT if default is MISSING else default))
+
+
+_install_curve_fields(CoxSurvfitResult)
 
 
 @dataclass(frozen=True)

@@ -554,7 +554,7 @@ def yates(
                 vmat,
                 means,
                 baseline.time,
-                baseline.cumhaz,
+                baseline._curve_values("cumhaz"),
                 setup.rmean,
                 conf_int=baseline.conf_int if baseline.conf_int is not None else 0.95,
                 **simulation,

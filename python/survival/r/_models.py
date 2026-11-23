@@ -147,6 +147,7 @@ from ._types import (
     YatesPrint,
     _ModelCovariateTerm,
     _ModelStrataTerm,
+    _present_curve,
 )
 
 _SurvfitCurves = SurvfitResult | SurvfitMultiStateResult | CoxSurvfitResult
@@ -1369,6 +1370,8 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     ntime = len(result.time)
 
     def column(values: Any, curve: int) -> list[float]:
+        if isinstance(values, np.ndarray):
+            return (values[:, curve] if values.ndim == 2 else values).astype(float).tolist()
         if values and isinstance(values[0], list):
             return [float(row[curve]) for row in values]
         return [float(value) for value in values]
@@ -1378,12 +1381,13 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
     }
     if result.strata is not None:
         frame["strata"] = []
+    # The curves are read as stored, so building the frame never builds their lists.
     optional = {
-        "cumhaz": result.cumhaz or None,
-        "std.err": result.std_err,
-        "std.chaz": result.std_chaz,
-        "lower": result.lower,
-        "upper": result.upper,
+        "cumhaz": _present_curve(result._curve_values("cumhaz")),
+        "std.err": result._curve_values("std_err"),
+        "std.chaz": result._curve_values("std_chaz"),
+        "lower": result._curve_values("lower"),
+        "upper": result._curve_values("upper"),
     }
     for name, values in optional.items():
         if values is not None:
@@ -1399,7 +1403,7 @@ def _cox_survfit_frame(result: CoxSurvfitResult) -> dict[str, list[Any]]:
         frame["n.risk"].extend(result.n_risk)
         frame["n.event"].extend(result.n_event)
         frame["n.censor"].extend(result.n_censor)
-        frame["surv"].extend(column(result.surv, curve))
+        frame["surv"].extend(column(result._curve_values("surv"), curve))
         if result.strata is not None:
             frame["strata"].extend(strata)
         for name, values in optional.items():

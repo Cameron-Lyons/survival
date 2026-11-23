@@ -86,6 +86,14 @@ class SurvivalPlotData:
         return np.asarray([curve.estimate[-1] for curve in self.curves])
 
 
+def _fit_values(fit: Any, name: str, *, required: bool = False) -> Any:
+    """A curve field of ``fit``; a Cox curve's as stored, so its lists are never built."""
+
+    if isinstance(fit, CoxSurvfitResult):
+        return fit._curve_values(name)
+    return getattr(fit, name) if required else getattr(fit, name, None)
+
+
 def _array(values: Any, rows: int, name: str) -> FloatArray:
     if values is None:
         raise ValueError(f"{name} is missing from the fitted curves")
@@ -206,8 +214,10 @@ def survfit_plot_data(
     cumulative = not isinstance(cumprob, bool | np.bool_) or bool(cumprob)
     if cumulative and not multi:
         raise ValueError("cumprob requires multistate curves")
-    source = getattr(
-        fit, "cumhaz" if hazard and expected_fit is None else "pstate" if multi else "surv"
+    source = _fit_values(
+        fit,
+        "cumhaz" if hazard and expected_fit is None else "pstate" if multi else "surv",
+        required=True,
     )
     if source is None:
         raise ValueError("survfit object does not contain a cumulative hazard")
@@ -217,7 +227,7 @@ def survfit_plot_data(
             estimate = -np.log(estimate)
     if estimate.shape[1] == 0:
         raise ValueError("no fitted curves to plot")
-    raw_std = getattr(fit, "std_chaz" if hazard else "std_err", None)
+    raw_std = _fit_values(fit, "std_chaz" if hazard else "std_err")
     ndata = np.shape(source)[1] if np.ndim(source) == 3 else 1
     states = list(multi_fit.states) if multi_fit is not None else []
     names = (
@@ -292,7 +302,7 @@ def survfit_plot_data(
         raise ValueError("object does not have standard errors, CI not possible")
     lower = upper = None
     if show_ci and not hazard and not changed_level:
-        raw_lower, raw_upper = getattr(fit, "lower", None), getattr(fit, "upper", None)
+        raw_lower, raw_upper = _fit_values(fit, "lower"), _fit_values(fit, "upper")
         if raw_lower is not None and raw_upper is not None:
             lower = _array(raw_lower, len(time), "lower")[:, selection]
             upper = _array(raw_upper, len(time), "upper")[:, selection]
