@@ -425,6 +425,13 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 - Yates survival setups fill one N by (T + 2) result row by row with constant
   scratch space, and response simulations reuse one predictor buffer and
   accumulate the covariance online without keeping each draw's responses.
+- Yates `risk` and `survival` simulations evaluate chunks of coefficient draws in
+  parallel, sized to about 64 MiB of simulated populations but at least one draw
+  per thread. Each draw's
+  population depends on that draw alone, and the running moments fold the draws in
+  order, so the result does not depend on the thread count. Simulations with an
+  external inverse link or prediction callback call into Python once per draw and
+  stay sequential.
 - Evaluated R model-frame columns with numeric dtypes skip per-value boolean and
   string scans during classification.
 - `interaction(..., drop=TRUE)` labels only observed combinations after adding

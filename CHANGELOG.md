@@ -164,6 +164,11 @@ Numerical corrections are described under Fixed below.
 - `coxph_detail` and `rttright` release the GIL during their native computations.
 - `neardate` with integer id arrays passes them to the kernel without per-element
   conversion: 100,000 rows take 9 ms instead of 34 ms (R: 10 ms).
+- `yates(..., predict="risk")` and `predict="survival"` evaluate their simulated
+  coefficient draws in parallel and fold them into the running moments in draw
+  order, so results are bitwise identical. Survival predictions for 10,000 rows
+  take 2.4 s instead of 12.5 s, and risk predictions for 100,000 rows take
+  0.31 s instead of 0.91 s.
 
 ### Fixed
 
