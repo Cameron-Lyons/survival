@@ -480,3 +480,42 @@ def test_rttright_multistate_data_match_r():
     expected = [[0, p, p, p, p, p, p, p], [0, p, 0, q, q, q, q, q], [0, p, 0, q, q, 0, u, 0]]
     for column, values in enumerate(expected):
         assert [row[column] for row in matrix] == pytest.approx(values, rel=1e-13)
+
+
+def test_tmerge_applies_repeated_names_in_order():
+    # R's tmerge works through its arguments in order, so infect=event(t1),
+    # infect=event(t2) adds both sets of events to one column (the cgd vignette).
+    data = {
+        "id": [1, 2, 3],
+        "fu": [10.0, 10.0, 10.0],
+        "e1": [2.0, 3.0, math.nan],
+        "e2": [5.0, math.nan, math.nan],
+        "e3": [7.0, 8.0, 9.0],
+    }
+    base = r.tmerge({"id": data["id"], "fu": data["fu"]}, data, id="id", tstop="fu")
+    merged = r.tmerge(
+        base,
+        data,
+        id="id",
+        operations=[("ev", r.event("e1")), ("ev", r.event("e2")), ("ev", r.event("e3"))],
+    )
+    # Stock R (survival 3.8-12) on the same data.
+    assert merged["tstart"] == [0, 2, 5, 7, 0, 3, 8, 0, 9]
+    assert merged["tstop"] == [2, 5, 7, 10, 3, 8, 10, 9, 10]
+    assert merged["ev"] == [1, 1, 1, 0, 1, 1, 0, 1, 0]
+    assert [name for name, _counts in merged.tcount_rows] == ["ev", "ev", "ev"]
+    assert [counts["within"] for _name, counts in merged.tcount_rows] == [2, 1, 3]
+    assert merged.copy().tcount_rows == merged.tcount_rows
+    # A mapping, and keyword arguments, still work, without repeats.
+    single = r.tmerge(base, data, id="id", operations={"ev": r.event("e1")})
+    assert sum(single["ev"]) == 2
+
+
+def test_tmerge_character_tdc_gaps_are_missing():
+    first = r.tmerge(
+        {"id": [1, 2], "fu": [10.0, 10.0]}, {"id": [1, 2], "fu": [10.0, 10.0]}, id="id", tstop="fu"
+    )
+    merged = r.tmerge(
+        first, {"id": [1, 2], "t": [4.0, 6.0], "v": ["lo", "hi"]}, id="id", z=r.tdc("t", "v")
+    )
+    assert merged["z"] == [None, "lo", None, "hi"]

@@ -891,13 +891,18 @@ class TmergeOperation:
 
 @dataclass(frozen=True)
 class TmergeFrame(Mapping[str, list[Any]]):
-    """Column-oriented start/stop data with retained ``tmerge`` metadata."""
+    """Column-oriented start/stop data with retained ``tmerge`` metadata.
+
+    ``tcount`` holds each argument's counts by name (the last call's for a repeated
+    name); ``tcount_rows`` keeps every argument's row in order, repeats included, as
+    R's ``tcount`` matrix does."""
 
     columns: dict[str, list[Any]]
     tname: dict[str, str]
     tevent: dict[str, Any]
     tdcvar: tuple[str, ...]
     tcount: dict[str, dict[str, int]]
+    tcount_rows: tuple[tuple[str, dict[str, int]], ...] = ()
 
     def __getitem__(self, key: str) -> list[Any]:
         return self.columns[key]
@@ -915,6 +920,7 @@ class TmergeFrame(Mapping[str, list[Any]]):
             tevent=dict(self.tevent),
             tdcvar=tuple(self.tdcvar),
             tcount={name: dict(counts) for name, counts in self.tcount.items()},
+            tcount_rows=tuple((name, dict(counts)) for name, counts in self.tcount_rows),
         )
 
 
