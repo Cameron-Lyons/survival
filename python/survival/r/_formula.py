@@ -120,6 +120,8 @@ def _column_length(
     """``len(materialize(source, name))``, without the copy for a one-dimensional numeric
     array or column, whose values are scalars that neither reader would reject."""
 
+    if isinstance(source, Surv | Surv2):
+        return len(source)
     dtype = getattr(source, "dtype", None)
     if isinstance(dtype, np.dtype) and dtype.kind in "biuf" and getattr(source, "ndim", None) == 1:
         return len(source)
@@ -645,6 +647,8 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
 
     lhs = lhs.strip()
     if not (lhs.startswith(_SURV_CALLS) and lhs.endswith(")")):
+        if _stored_response_name(formula) is not None:
+            return _stored_response_spec(formula)
         raise ValueError("formula response must be Surv(...)")
     response_inner = lhs.partition("(")[2][:-1]
     if lhs.startswith(_SURV2_CALLS):
@@ -695,6 +699,59 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         type=surv_type,
         origin=origin,
     )
+
+
+@lru_cache(maxsize=512)
+def _stored_response_name(formula: str) -> str | None:
+    """The variable a left-hand side that is a bare (or backquoted, or parenthesized)
+    name reads, the only left-hand side whose kind the data decides; else ``None``."""
+
+    lhs = formula.partition("~")[0].strip()
+    if not lhs or lhs.startswith(_SURV_CALLS):
+        return None
+    try:
+        tree = _parse_expression(lhs)
+    except ValueError:
+        return None
+    return str(tree.value) if tree.kind == "column" else None
+
+
+@lru_cache(maxsize=512)
+def _stored_response_spec(formula: str, timeline: bool = False) -> _SurvResponseSpec:
+    """The response spec of a bare-name left-hand side that holds a ``Surv`` (or, with
+    *timeline*, a ``Surv2``) object."""
+
+    name = _stored_response_name(formula)
+    if name is None:
+        raise ValueError("formula response must be Surv(...)")
+    lhs = formula.partition("~")[0].strip()
+    return _SurvResponseSpec(
+        arguments=(lhs,), columns=(name,), type=None, timeline=timeline, stored=True
+    )
+
+
+def _data_response_spec(formula: str, data: Any) -> _SurvResponseSpec | None:
+    """:func:`_response_spec`, except that a bare-name left-hand side whose value in
+    *data* is a ``Surv`` or ``Surv2`` object gives the stored response spec.
+
+    Only the callers that choose between a survival and a numeric response (model
+    frames, timeline data, concordance, survSplit) need it; the formula alone decides
+    every other left-hand side.
+    """
+
+    spec = _response_spec(formula)
+    name = _stored_response_name(formula)
+    if name is None or data is None:
+        return spec
+    try:
+        value = _column_source(data, name)
+    except (KeyError, TypeError, ValueError):
+        return spec
+    if isinstance(value, Surv2):
+        return _stored_response_spec(formula, True)
+    if isinstance(value, Surv):
+        return _stored_response_spec(formula)
+    return spec
 
 
 def _timeline_response_spec(inner: str) -> _SurvResponseSpec:
@@ -1392,6 +1449,10 @@ def _data_order(data: Any, columns: Sequence[str]) -> list[str]:
 def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray, n: int) -> Any:
     """``source[rows]`` of the data column *name* (*index* is *rows* as an array)."""
 
+    if isinstance(source, Surv | Surv2):
+        if len(source) != n:
+            raise ValueError(f"variable lengths differ (found for '{name}')")
+        return _subset_surv(source, list(rows))
     array = _numeric_ndarray(source)
     if array is None:
         array = _numeric_ndarray(source, ndim=2)
@@ -1472,7 +1533,7 @@ def _subset_formula_inputs(
 def _with_response_cache(data: Any, spec: _SurvResponseSpec | None, n: int) -> Any:
     """Evaluate Surv before subset/na.action, then carry its normalized rows forward."""
 
-    if spec is None or not spec.surv or spec.timeline:
+    if spec is None or not spec.surv or spec.timeline or spec.stored:
         return data
     response = _surv_from_spec(data, spec)
     if not isinstance(data, _FormulaRows):
@@ -1682,7 +1743,18 @@ def _formula_missing_rows(
     sources = [(name, _column_source(data, name)) for name in columns if name in raw]
     sources.extend((_covariate_term_name(term), _term_values(data, term, n)) for term in computed)
     sources.extend((spec.call, _strata_term_values(data, spec)) for spec in strata)
-    return _missing_row_indices(sources, n)
+    # A Surv or Surv2 column (a stored response) is missing where is.na(Surv) is.
+    stored = [(name, values) for name, values in sources if isinstance(values, Surv | Surv2)]
+    if not stored:
+        return _missing_row_indices(sources, n)
+    missing = _missing_row_indices(
+        [(name, values) for name, values in sources if not isinstance(values, Surv | Surv2)], n
+    )
+    for name, values in stored:
+        if len(values) != n:
+            raise ValueError(f"{name} must have length {n}")
+        missing.update(np.flatnonzero(_missing_rows(values)).tolist())
+    return missing
 
 
 def _na_action_record(na_action: str | None, removed: Sequence[int]) -> NaAction | None:
@@ -2880,7 +2952,8 @@ def _formula_model_frame(
         raise ValueError("survival model frame requires a response specification")
     frame: dict[str, Any] = {design.response.name: response}
     columns: list[str] = []
-    _append_unique(columns, design.response.columns)
+    if not design.response.stored:
+        _append_unique(columns, design.response.columns)
     _append_unique(columns, _formula_design_columns(design, include_unused=True))
     _append_unique(columns, list(design.strata))
     _append_unique(columns, list(extra_columns))
@@ -2947,6 +3020,11 @@ def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
     cached = getattr(data, "response_cache", None) if isinstance(data, _FormulaRows) else None
     if cached is not None and cached[0] == spec:
         return cached[1]
+    if spec.stored and not spec.timeline:
+        value = _column_source(data, spec.columns[0])
+        if isinstance(value, Surv):
+            return value
+        raise ValueError("response must be a survival object")
     if spec.timeline:
         raise ValueError("response must be a survival object")
     args = _formula_response_values(data, spec)
@@ -2958,6 +3036,11 @@ def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
 def _surv2_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv2:
     """Evaluate a ``Surv2(...)`` response spec against *data*."""
 
+    if spec.stored:
+        value = _column_source(data, spec.columns[0])
+        if isinstance(value, Surv2):
+            return value
+        raise ValueError("response must be a survival object")
     time, event = _formula_response_values(data, spec)
     return Surv2(time, event, spec.repeated)
 
@@ -3000,7 +3083,9 @@ def _timeline_counting(
     }
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
-    spec = _formula_response_spec(formula)
+    spec = _data_response_spec(formula, data)
+    if spec is None or not spec.surv:
+        raise ValueError("response must be a survival object")
     response: Surv | Surv2
     if spec.timeline:
         response = _surv2_from_spec(data, spec)
@@ -3078,12 +3163,13 @@ def _timeline_counting(
     return counting_formula, _FormulaRows(columns, len(rows)), converted
 
 
-def _timeline_response(formula: Any) -> bool:
-    """Whether *formula* is a formula string with a ``Surv2`` response."""
+def _timeline_response(formula: Any, data: Any = None) -> bool:
+    """Whether *formula* is a formula string with a ``Surv2`` response: a ``Surv2(...)``
+    call, or a bare name whose value in *data* is a ``Surv2`` object."""
 
     if not isinstance(formula, str):
         return False
-    spec = _response_spec(formula)
+    spec = _data_response_spec(formula, data)
     return spec is not None and spec.timeline
 
 
@@ -3092,7 +3178,9 @@ def _timeline_model_frame(columns: dict[str, Any], formula: str) -> dict[str, An
     R's: the counting-process response (the first column) under the ``Surv2`` name,
     without the columns it was built from.  Other formulas' frames are returned as is."""
 
-    if not _timeline_response(formula):
+    # The frame, not the formula, says whether it was fitted on timeline data: a stored
+    # Surv2 response is a bare name.
+    if _TSTOP not in columns:
         return columns
     (_name, response), *rest = columns.items()
     reserved = {_TSTART, _TSTOP, _STATUS}
@@ -3217,7 +3305,7 @@ def model_frame(
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
     data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
 
-    spec = _response_spec(formula)
+    spec = _data_response_spec(formula, data)
     n = _formula_input_row_count(data, formula, arguments)
     response: Surv | Surv2 | None = None
     y: list[float] | np.ndarray | None = None

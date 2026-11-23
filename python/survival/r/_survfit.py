@@ -279,7 +279,7 @@ def _formula_model_frame(
         name: _column_source(data, values) if isinstance(values, str) else values
         for name, values in extras.items()
     }
-    if _timeline_response(formula):
+    if _timeline_response(formula, data):
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
     elif subset is not None:
         data, extras = _subset_formula_inputs(formula, data, subset, **extras)

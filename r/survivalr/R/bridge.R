@@ -189,7 +189,33 @@ if (getRversion() >= "2.15.1") {
   .as_python_vector(value)
 }
 
+# A Surv2 response matrix as the Python Surv2 object.
+.as_python_surv2 <- function(value) {
+  repeated <- attr(value, "repeated")
+  .python_attr("Surv2")$`_from_normalized`(
+    time = as.list(as.numeric(value[, 1L])),
+    status = as.list(.as_python_vector(as.integer(value[, 2L]))),
+    states = as.list(as.character(attr(value, "states"))),
+    repeated = if (is.null(repeated)) FALSE else repeated,
+    clabel = attr(value, "clabel")
+  )
+}
+
+.is_response_column <- function(column) {
+  inherits(column, c("Surv", "Surv2", "survival_py_surv"))
+}
+
+# A Surv, Surv2 or bridge Surv column, as a response stored in the data (y ~ x), is
+# the Python object; as a vector it would lose its rows.
+.as_python_response_column <- function(column) {
+  if (inherits(column, "Surv2")) return(.as_python_surv2(column))
+  .restore_python(.as_python_surv(column))
+}
+
 .as_python_data_column <- function(column) {
+  if (.is_response_column(column)) {
+    return(.as_python_response_column(column))
+  }
   if (is.logical(column) && is.null(dim(column))) {
     return(.pybridge_attr("_r_logical")(as.list(.as_python_vector(column))))
   }
@@ -224,6 +250,7 @@ if (getRversion() >= "2.15.1") {
   if (is.list(data)) {
     if (!length(data)) return(reticulate::dict())
     return(lapply(data, function(column) {
+      if (.is_response_column(column)) return(.as_python_response_column(column))
       if (is.null(column) || !is.atomic(column) || !is.null(dim(column))) return(column)
       .as_python_data_column(column)
     }))
@@ -8091,6 +8118,13 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     `_id_name` = id_name,
     `_weights_name` = weight_name
   )
+  # A response stored in the data (yc ~ x) comes back condensed under its name.
+  stored <- NULL
+  if (is.name(response_call) && !is.null(result[[as.character(response_call)]])) {
+    stored <- as.character(response_call)
+    stored_value <- result[[stored]]
+    result[[stored]] <- NULL
+  }
   frame <- as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE)
   strata_columns <- grep("^strata\\(", names(frame), value = TRUE)
   for (column in strata_columns) {
@@ -8102,6 +8136,11 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     frame[[event]] <- factor(
       as.character(event_values),
       levels = c("censor", levels(event_source)[-1L])
+    )
+  }
+  if (!is.null(stored)) {
+    frame[[stored]] <- .as_native_surv(
+      .wrap_python(stored_value, c("survival_py_surv", "survival_py_object"))
     )
   }
   frame

@@ -39,6 +39,7 @@ from ._fit import _model_frame, _ModelFrame, _newdata_frame
 from ._formula import (
     _column_source,
     _data_column_names,
+    _data_response_spec,
     _data_row_count,
     _data_row_labels,
     _design_rows_from_spec,
@@ -310,8 +311,15 @@ def _is_matrix(x: Any) -> bool:
     return isinstance(x, list | tuple) and bool(x) and isinstance(x[0], list | tuple)
 
 
-def _is_surv_response(lhs: str) -> bool:
-    return lhs.startswith(("Surv(", "survival::Surv("))
+def _is_surv_response(formula: str, data: Any) -> bool:
+    """Whether *formula*'s response is a survival object: a ``Surv(...)`` call, or a
+    bare name holding a ``Surv`` in *data*."""
+
+    lhs = formula.partition("~")[0].strip()
+    if lhs.startswith(("Surv(", "survival::Surv(")):
+        return True
+    spec = _data_response_spec(formula, data)
+    return spec is not None and spec.stored and not spec.timeline
 
 
 def _is_ordered(column: Any) -> bool:
@@ -377,7 +385,7 @@ def _concordance_frame(formula: str, data: Any, **arguments: Any) -> _ModelFrame
     is needed."""
 
     lhs, sep, rhs = formula.partition("~")
-    if sep and not _is_surv_response(lhs.strip()):
+    if sep and not _is_surv_response(formula, data):
         formula = f"Surv({lhs.strip()}) ~ {rhs.strip()}"
     frame = _model_frame(formula, data, as_array=True, **arguments)
     if frame.terms.offsets:
@@ -405,7 +413,7 @@ def _concordance_formula(
 
     frame_formula = formula
     lhs, sep, rhs = formula.partition("~")
-    if sep and not _is_surv_response(lhs.strip()):
+    if sep and not _is_surv_response(formula, data):
         data, supplied = _prepare_formula_inputs(
             data, subset=subset, weights=weights, cluster=cluster
         )

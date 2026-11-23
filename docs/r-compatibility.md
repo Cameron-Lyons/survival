@@ -657,6 +657,9 @@ counts. Parallel fits preserve the sequential addition order.
 - `survSplit`: a row with a missing endpoint is episode 2 as in R, keeps its
   status and gets `added = FALSE`; `survsplit.c` leaves its censor flag
   uninitialized, so R's status and `added` there depend on memory contents.
+- `fromtimeline(y2 ~ x)` with a stored `Surv2` response needs `yname`; without it
+  the port raises "yname is required", where R fails while building the default
+  names ("object of type 'symbol' is not subsettable").
 - `survcondense` on data not sorted by id and time: R's two special-case
   branches (a single merged block) index `Y` by sorted position without
   `index[]` and move the wrong start time. For `data.frame(id = c(2, 1, 1),

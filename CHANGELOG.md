@@ -13,6 +13,11 @@ Numerical corrections are described under Fixed below.
 
 ### Added
 
+- A response may be a `Surv` or `Surv2` object stored in the data, R's `y ~ x`
+  idiom (`d$y <- Surv(time, status); coxph(y ~ age, d)`). It works in Python and in
+  the R bridge, with survival's `Surv` matrices or survivalr's `Surv` as columns. Every
+  formula fitter and data-preparation function reads it as R's model frame does;
+  `survSplit` and `survcondense` store their result under the response's name.
 - Typed Rust multistate Cox fitting and curve APIs, available without Python,
   with named results and validation of mutable input fields.
 - Spline and polynomial formula terms accept composed numeric inputs, including

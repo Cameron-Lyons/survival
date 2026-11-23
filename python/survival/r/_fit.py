@@ -56,8 +56,8 @@ from ._formula import (
     _formula_missing_rows,
     _formula_model_frame,
     _formula_response_spec,
-    _formula_response_values,
     _FormulaRows,
+    _surv_from_spec,
     _na_action_record,
     _offset_vector,
     _parse_formula,
@@ -926,8 +926,7 @@ def _newdata_response(newdata: Any, spec: _SurvResponseSpec | None) -> Surv | No
 
     if spec is None or not set(spec.columns) <= set(_newdata_columns(newdata)):
         return None
-    args = _formula_response_values(newdata, spec)
-    return Surv(*args, type=spec.type, origin=spec.origin)
+    return _surv_from_spec(newdata, spec)
 
 
 def _newdata_frame(
