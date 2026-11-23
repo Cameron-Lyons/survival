@@ -167,6 +167,19 @@ Numerical corrections are described under Fixed below.
 
 ### Fixed
 
+- R bridge arguments are matched as R matches them:
+  - `coxph` and `survreg` take partial names of their formals and of their control
+    options passed through `...`. Examples are `coxph(..., meth = "breslow")`,
+    `coxph(..., iter = 2)` (R's `pmatch` against `coxph.control`) and
+    `survreg(..., maxit = 1)`.
+  - `brier(fit, times = 300)` takes a single time.
+  - `concordance(formula, timewt = "n/G")` matches `"n/G2"`, and `concordance`
+    ignores arguments its formula method lacks, such as `std.err`.
+  - `survfit0(fit, start.time = 0)` ignores extra arguments, as R's
+    `survfit0(x, ...)` does.
+  - `cox.zph(transform = sqrt)` takes any R function, primitives included. It is
+    labelled `deparse(substitute(transform))` as in R, also in Python's `cox_zph`
+    for callables other than lambdas.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
