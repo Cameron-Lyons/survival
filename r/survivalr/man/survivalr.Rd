@@ -1032,6 +1032,8 @@ special-term inputs for \code{untangle.specials}.}
 \item{formula}{Formula, formula string, bridged \code{Surv} response, or
 bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
+\item{use.fallback}{Accepted for compatibility with \code{stats::nobs}; a bridged
+fit always knows its number of observations.}
 \item{subset}{Optional row subset, evaluated in the data and formula environment.
 R row indexing applies, including one-based numeric positions, negative exclusions,
 logical recycling and data-frame row names. Missing selections are handled by
