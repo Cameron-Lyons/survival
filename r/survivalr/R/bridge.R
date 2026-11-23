@@ -9065,12 +9065,16 @@ vcov.survival_py_model <- function(object, ..., complete = TRUE) {
 
 .as_named_matrix <- function(value) {
   values <- .as_numeric_matrix(.result_field(value, "values"))
-  rownames <- .result_field(value, "rownames")
-  dimnames(values) <- list(
-    if (is.null(rownames)) NULL else as.character(unlist(rownames)),
-    as.character(unlist(.result_field(value, "colnames")))
-  )
+  rownames <- as.character(unlist(.result_field(value, "rownames")))
+  columns <- as.character(unlist(.result_field(value, "colnames")))
+  if (!length(values)) values <- matrix(numeric(), length(rownames), length(columns))
+  dimnames(values) <- list(if (length(rownames)) rownames, if (length(columns)) columns)
   values
+}
+
+.is_named_matrix_result <- function(value) {
+  inherits(value, "python.builtin.object") &&
+    reticulate::py_has_attr(value, "values") && reticulate::py_has_attr(value, "colnames")
 }
 
 confint.survival_py_model <- function(object, parm, level = 0.95, ...) {
@@ -9412,6 +9416,8 @@ predict.survival_py_model <- function(object, newdata = NULL, ..., type = NULL, 
   }
   result <- do.call(.call_r_api, c(list("predict", fit = object, newdata = .as_python_data(newdata),
                                     type = type, `se.fit` = se.fit), dots))
+  # A multi-state fit predicts one column per transition (R ignores se.fit there).
+  if (.is_coxphms_fit(object) && .is_named_matrix_result(result)) return(.as_named_matrix(result))
   group_names <- if (grouped) result[["group_names"]] else NULL
   row_metadata <- if (!grouped && with_row_names) result else NULL
   if (grouped || !is.null(row_metadata)) result <- result[["values"]]
@@ -9520,6 +9526,8 @@ residuals.survival_py_model <- function(object, ..., type = NULL) {
   arguments <- list("residuals", object, type = type)
   if (metadata) names(arguments)[2L] <- "fit"
   result <- do.call(.call_r_api, c(arguments, dots))
+  # A multi-state fit's residuals come as a matrix with R's transition column names.
+  if (.is_coxphms_fit(object) && .is_named_matrix_result(result)) return(.as_named_matrix(result))
   group_names <- if (metadata) result[["group_names"]] else NULL
   if (metadata) result <- result[["values"]]
   value <- .as_residual_result(object, result, type, terms = dots[["terms"]])
