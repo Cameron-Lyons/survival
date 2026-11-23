@@ -2646,10 +2646,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_true(all(c("hazard", "time") %in% names(hazard_frame)))
   stratified_fit <- coxph(Surv(time, status) ~ x + strata(group), data = data, iter.max = 0)
   stratified_hazard_frame <- as.data.frame(basehaz(stratified_fit, centered = FALSE))
-  expect_equal(unique(stratified_hazard_frame$strata), c("control", "treated"))
-  hazard_summary <- summary(basehaz(fit))
-  expect_s3_class(hazard_summary, "summary.survival_py_basehaz")
-  expect_true(all(c("hazard", "time") %in% names(hazard_summary)))
+  expect_equal(levels(stratified_hazard_frame$strata), c("control", "treated"))
+  # R's basehaz is a data frame, so summary() is summary.data.frame's table.
+  expect_s3_class(summary(basehaz(fit)), "table")
 
   zph_frame <- as.data.frame(cox.zph(fit))
   expect_s3_class(zph_frame, "data.frame")

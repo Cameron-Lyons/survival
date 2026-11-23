@@ -317,6 +317,8 @@ Numerical corrections are described under Fixed below.
 - `residuals()` and `predict()` of R bridge multi-state Cox fits return R's
   matrices, with one column per transition (`1:2`, `sexM_1:2`) and R's row names.
   They failed for every type except Schoenfeld residuals.
+- The R bridge's `basehaz()` returns R's data frame, with `strata` a factor, so
+  `head()` and data-frame code work on it.
 - `neardate(nomatch=)` refuses a value that is also a zero-based row of `id2`
   (such as R's `nomatch=0`), which made a match and a non-match look alike.
 - Warnings raised under the model generics report the caller's line, not a

@@ -23,3 +23,20 @@ test_that("multi-state Cox residuals and predictions are R's transition matrices
     tolerance = 1e-6)
   expect_equal(predict(counting), predict(reference), tolerance = 1e-6)
 })
+
+test_that("basehaz is R's data frame with a strata factor", {
+  lung <- survival::lung
+  result <- basehaz(coxph(Surv(time, status) ~ age + strata(sex), data = lung))
+  reference <- survival::basehaz(
+    survival::coxph(survival::Surv(time, status) ~ age + strata(sex), data = lung)
+  )
+  expect_equal(result, reference, tolerance = 1e-8)
+  expect_equal(head(result, 2), head(reference, 2), tolerance = 1e-8)
+  newdata <- data.frame(age = c(50, 60))
+  expect_equal(
+    basehaz(coxph(Surv(time, status) ~ age, data = lung), newdata = newdata),
+    survival::basehaz(survival::coxph(survival::Surv(time, status) ~ age, data = lung),
+      newdata = newdata),
+    tolerance = 1e-8
+  )
+})

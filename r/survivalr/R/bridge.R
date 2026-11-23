@@ -8574,7 +8574,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
 }
 
 basehaz <- function(fit, newdata, centered = TRUE, ...) {
-  .call_r_api(
+  result <- .call_r_api(
     "basehaz",
     fit,
     newdata = if (missing(newdata)) NULL else .as_python_data(newdata),
@@ -8582,6 +8582,10 @@ basehaz <- function(fit, newdata, centered = TRUE, ...) {
     ...,
     .wrap = c("survival_py_basehaz", "survival_py_object")
   )
+  # R's basehaz is a data frame, its strata a factor in the fit's strata order.
+  frame <- as.data.frame(result)
+  if (!is.null(frame$strata)) frame$strata <- factor(frame$strata, levels = unique(frame$strata))
+  frame
 }
 
 .as_brier_result <- function(result, labels = NULL) {
