@@ -1040,15 +1040,24 @@ attrassign <- function(object, tt) {
     if (!is.numeric(times)) {
       stop("times must be a numeric vector", call. = FALSE)
     }
-    if (any(is.na(times))) {
-      stop("times contains missing values", call. = FALSE)
-    }
-    if (missing(dosum)) {
-      dosum <- all(diff(times) > 0)
+    if (.is_survival_py_multistate_survfit(object)) {
+      # summary.survfitms: times <- unique(sort(times)), and dosum defaults to TRUE.
+      if (!all(is.finite(times))) {
+        stop("times contains missing or infinite values", call. = FALSE)
+      }
+      times <- unique(sort(times))
+      dosum <- if (missing(dosum)) TRUE else .survival_py_summary_logical(dosum, "dosum")
     } else {
-      dosum <- .survival_py_summary_logical(dosum, "dosum")
-      if (dosum && !all(diff(times) > 0)) {
-        stop("dosum=TRUE requires the times to be increasing", call. = FALSE)
+      if (any(is.na(times))) {
+        stop("times contains missing values", call. = FALSE)
+      }
+      if (missing(dosum)) {
+        dosum <- all(diff(times) > 0)
+      } else {
+        dosum <- .survival_py_summary_logical(dosum, "dosum")
+        if (dosum && !all(diff(times) > 0)) {
+          stop("dosum=TRUE requires the times to be increasing", call. = FALSE)
+        }
       }
     }
     pieces <- lapply(
@@ -7375,12 +7384,21 @@ survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, 
   )
 }
 
-survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., se.fit = TRUE) {
+survfit.survival_py_coxph <- function(formula, newdata = NULL, ..., id, se.fit = TRUE) {
+  # R builds a model frame from newdata for id (survfit.coxph's tcall), so a bare
+  # name reads a newdata column before the calling environment.
+  id_values <- if (missing(id)) {
+    NULL
+  } else {
+    value <- eval(substitute(id), if (is.list(newdata)) newdata else NULL, parent.frame())
+    if (is.character(value) && length(value) == 1L) value else .as_python_vector(value)
+  }
   result <- .call_r_api(
     "survfit",
     response = formula,
     newdata = .as_python_data(newdata),
     `se.fit` = se.fit,
+    id = id_values,
     ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
@@ -10376,10 +10394,7 @@ dim.survival_py_survfit <- function(x) {
         names(curves)
       )
       selected <- lapply(curves[group_indices], subset_curve)
-      return(structure(
-        selected,
-        class = c("survival_py_survfit", "survival_py_object", "list")
-      ))
+      return(.subset_grouped_survfit(x, selected, group_indices, state_indices))
     }
     if (has_second_dimension && !missing(i) && !all(seq_len(1L)[i] == 1L)) {
       stop("subscript out of bounds", call. = FALSE)
@@ -10399,15 +10414,26 @@ dim.survival_py_survfit <- function(x) {
     if (isTRUE(drop) && length(selected) == 1L) {
       return(.as_survival_py_survfit_curve(selected[[1L]]))
     }
-    return(structure(
-      selected,
-      class = c("survival_py_survfit", "survival_py_object", "list")
-    ))
+    return(.subset_grouped_survfit(x, selected, idx))
   }
   if (isTRUE(all(i == 1))) {
     return(x)
   }
   stop("subscript out of bounds", call. = FALSE)
+}
+
+# Selected curves of a grouped fit, with the Python fit of those curves (and states)
+# that summary(times =), survfit0 and the other whole-fit methods read.
+.subset_grouped_survfit <- function(x, selected, group_indices, state_indices = NULL) {
+  python_object <- attr(x, "python_survfit", exact = TRUE)
+  if (!is.null(python_object)) {
+    attr(selected, "python_survfit") <- .snapshot_python(.python_attr("_subset_survfit")(
+      .restore_python(python_object),
+      strata = as.list(as.integer(group_indices - 1L)),
+      states = if (is.null(state_indices)) NULL else as.list(as.integer(state_indices - 1L))
+    ))
+  }
+  structure(selected, class = c("survival_py_survfit", "survival_py_object", "list"))
 }
 
 `[[.survival_py_survfit` <- function(x, i, ..., exact = TRUE) {
