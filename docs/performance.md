@@ -454,6 +454,9 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   order, so the result does not depend on the thread count. Simulations with an
   external inverse link or prediction callback call into Python once per draw and
   stay sequential.
+- Yates population, SGTT and estimability designs are owned float64 arrays from
+  the formula's array design builder, so no row lists are built or copied; the
+  simulations select the kept coefficient columns with one array index.
 - Evaluated R model-frame columns with numeric dtypes skip per-value boolean and
   string scans during classification.
 - `interaction(..., drop=TRUE)` labels only observed combinations after adding

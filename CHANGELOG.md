@@ -207,6 +207,10 @@ Numerical corrections are described under Fixed below.
   are summed directly, with compensated sums throughout. The result is within a few
   ulps of the exact pair sum and no longer depends on the thread count. 100,000
   rows take 38 ms instead of 1.7 s.
+- `yates` builds each level's population design, and the SGTT and estimability
+  designs, as float64 arrays that the native kernels read directly, instead of
+  lists of row lists that were then copied column by column. Results are bitwise
+  identical; population means for 100,000 rows take 40 ms instead of 90 ms.
 
 ### Fixed
 
