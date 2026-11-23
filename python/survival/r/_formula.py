@@ -56,7 +56,7 @@ from ._expression import (
 )
 from ._names import _make_unique
 from ._penalties import PENALTY_FUNCTIONS, fit_penalty, penalty_columns
-from ._splines import BASIS_FUNCTIONS, basis_arguments, fit_basis
+from ._splines import BASIS_FUNCTIONS, basis_arguments, call_function, fit_basis
 from ._surv import (
     Surv,
     Surv2,
@@ -167,7 +167,11 @@ def _scan(text: str, *, quotes: bool = True) -> list[tuple[int, str, int]]:
     in_backtick = False
     quote: str | None = None
     escaped = False
+    namespace_colons = 0
     for idx, char in enumerate(text):
+        if namespace_colons:
+            namespace_colons -= 1
+            continue
         if (quote is not None or in_backtick) and escaped:
             escaped = False
             continue
@@ -185,6 +189,10 @@ def _scan(text: str, *, quotes: bool = True) -> list[tuple[int, str, int]]:
             continue
         if quotes and char in {"'", '"'}:
             quote = char
+            continue
+        if char == ":" and text.startswith("::", idx):
+            # pkg::name (or pkg:::name) is a name, never an interaction.
+            namespace_colons = 2 if text.startswith(":::", idx) else 1
             continue
         if char == "(":
             items.append((idx, char, depth))
@@ -1368,7 +1376,7 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
                 )
             )
         )
-    if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
+    if term.call is not None and call_function(term.call) in BASIS_FUNCTIONS:
         return _expression_columns(basis_arguments(term.call)[0])
     if term.arithmetic is not None:
         return _expression_columns(term.arithmetic)
@@ -1622,7 +1630,7 @@ def _evaluated_variable(term: _CovariateTerm) -> _CovariateTerm:
     if term.arithmetic is not None and term.call is not None:
         # Cache the argument, not the basis or penalty matrix. Its rows must survive
         # subset and omission, including expressions such as scale(x) and NA^0.
-        function = term.call.split("(", 1)[0]
+        function = call_function(term.call)
         if function in BASIS_FUNCTIONS:
             return replace(term, call=None, categorical=False)
         if function in PENALTY_FUNCTIONS:
@@ -2122,7 +2130,10 @@ def _parse_call_term(term: str) -> _CovariateTerm | None:
 
     for function in _CALL_TERMS:
         prefix = f"{function}("
-        if not (term.startswith(prefix) and term.endswith(")")):
+        if not (
+            (term.startswith(prefix) or "::" in term and call_function(term) == function)
+            and term.endswith(")")
+        ):
             continue
         if function in _CALL_FORMALS:
             x = _call_arguments(term).get("x")
@@ -2536,7 +2547,7 @@ def _fit_single_design_term(
         return fit_penalty(
             term, columns, penalty_values, options, levels, _penalty_expressions(term.call)
         )
-    if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
+    if term.call is not None and call_function(term.call) in BASIS_FUNCTIONS:
         _expression, options = basis_arguments(term.call)
         columns = _covariate_term_columns(term)
         full_n = len(_column(full_data, columns[0]))
