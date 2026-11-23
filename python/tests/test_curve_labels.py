@@ -60,3 +60,28 @@ def test_grouped_counting_curves_retain_internal_events():
     assert fit.time == [3, 5, 6, 5, 7, 8]
     assert sum(fit.n_event) == 4
     np.testing.assert_allclose(r.pseudo(fit, times=[3, 5]), [[1, 0.25], [0, 0.25], [1, 1], [1, 0]])
+
+
+@pytest.mark.parametrize(
+    ("rhs", "labels"),
+    [
+        ("sex", ["1", "2"]),
+        ("strata(sex)", ["sex=1", "sex=2"]),
+        ("sex + ph.ecog", ["1, 0", "1, 1"]),
+        ("strata(sex, ph.ecog)", ["sex=1, ph.ecog=0", "sex=1, ph.ecog=1"]),
+        ("strata(sex) + ph.ecog", ["sex=1, 0", "sex=1, 1"]),
+        ("factor(sex, levels = c(2, 1))", ["2", "1"]),
+    ],
+)
+def test_bridge_curves_drop_each_term_label_once(rhs, labels):
+    # R names strata "term=value, term=value"; the bridge keys curves by the values,
+    # and a term label holding commas (strata(a, b), factor(x, levels = ...)) stays whole.
+    curve = r.survfit(f"Surv(time, status) ~ {rhs}", survival.datasets.load_lung())
+    assert list(survival.pybridge._survfit_strata_curves(curve))[:2] == labels
+
+
+def test_bare_labels_without_terms_drop_every_leading_name():
+    bare = r._models._bare_strata_label
+    assert bare("rx=1") == "1"
+    assert bare("a=1, b=x") == "1, x"
+    assert bare("x=1", ("y",)) == "1"

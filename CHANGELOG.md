@@ -226,6 +226,10 @@ Numerical corrections are described under Fixed below.
   - runs with `predict = "survival"` for survivalr Cox fits, which failed assigning
     into the immutable Python curve.
   - has R's `print.yates` layout, through the port's report.
+- The R bridge's per-stratum Kaplan–Meier curves keep whole level labels when a
+  term label holds commas: `survfit(Surv(time, status) ~ strata(sex, ph.ecog))`
+  curves are `sex=1, ph.ecog=0` instead of `strata(sex, sex=1, 0`, and
+  `factor(sex, levels = c(2, 1))` curves are `2` and `1`.
 - R bridge results take R's shapes:
   - `brier(detail = TRUE)` names `phat`'s columns by the rows scored.
   - `concordancefit`'s `cvar` is a vector, and its `dfbeta` is named by cluster.
