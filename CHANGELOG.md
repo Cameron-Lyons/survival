@@ -341,14 +341,14 @@ Numerical corrections are described under Fixed below.
   `survival::Surv()`: the same columns, `type`, `states`, `clabel`,
   `inputAttributes` (difftime units, names and labels included), NaN times and
   warnings, and `aeqSurv()` is `identical()` to survival's. A fit's `$y`, the
-  response in `$model` and `cch$y` are survival `Surv` matrices too (without R's
-  row names or `inputAttributes`), so base R, `saveRDS` and survival's own
-  methods work on them without Python. A `Surv` passed straight to `coxph`, `survreg(x = matrix)`,
-  `survfit`, `pyears` or a low-level fitter converts at the call, one-row
-  responses included; `survreg.fit` keeps the
-  fitter's status codes as given. `aeqSurv()` returns untied input unchanged, NaN
-  included, and survSplit's and survcheck's own `Surv()` keeps multi-state
-  events. Proxies saved by earlier builds still convert and print.
+  response in `$model` and `cch$y` are survival `Surv` matrices too (without R's row
+  names or `inputAttributes`), so base R, `saveRDS` and survival's own methods work
+  on them without Python. A `Surv` passed straight to `coxph`,
+  `survreg(x = matrix)`, `survfit`, `pyears` or a low-level fitter converts at the
+  call, one-row responses included; `survreg.fit` keeps the fitter's status codes as
+  given. `aeqSurv()` returns untied input unchanged, NaN included, and survSplit's
+  and survcheck's own `Surv()` keeps multi-state events. Proxies saved by earlier
+  builds still convert and print.
 - The bundled data sets keep R's factor levels, so models on `veteran`,
   `colon`, `pbc` and others use R's reference levels and R's multi-state
   examples on `hoel` and `mgus1` run. Factor columns are `survival.r.Factor`
