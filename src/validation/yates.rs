@@ -8,7 +8,15 @@ use crate::internal::simd::dot_product;
 use crate::internal::validation::{validate_finite, validate_length};
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+
+/// Rows times (output width + coefficients) per draw above which simulated draws
+/// run in parallel.
+const PARALLEL_DRAW_WORK: usize = 1 << 12;
+/// Memory for one parallel chunk of simulated populations.
+const DRAW_CHUNK_BYTES: usize = 64 << 20;
+
 mod rng;
 mod sgtt;
 pub(crate) use sgtt::yates_sgtt_py;
@@ -777,11 +785,14 @@ pub fn yates_simulate_with_draws(
     let mut mean = vec![vec![0.0; width]; nlev];
     let mut squares = vec![vec![0.0; width]; nlev];
     let mut comoment = vec![vec![0.0; nlev]; nlev];
-    for (draw, z) in z.iter().enumerate() {
-        let coef: Vec<f64> = (0..p)
+    let draw_coef = |z: &[f64]| -> Vec<f64> {
+        (0..p)
             .map(|j| input.beta[j] + (0..p).map(|k| z[k] * root[k][j]).sum::<f64>())
-            .collect();
-        let sims = population(&coef)?;
+            .collect()
+    };
+    let mut folded = 0usize;
+    let mut fold = |sims: Vec<Vec<f64>>| -> SurvivalResult<()> {
+        folded += 1;
         validate_length(width, sims[0].len(), "prediction columns")?;
         let first: Vec<f64> = sims.iter().map(|row| row[0]).collect();
         validate_finite(&first, "simulated prediction")?;
@@ -790,7 +801,7 @@ pub fn yates_simulate_with_draws(
             .zip(&mean)
             .map(|(value, running)| value - running[0])
             .collect();
-        let count = (draw + 1) as f64;
+        let count = folded as f64;
         for ((running, square), sim) in mean.iter_mut().zip(&mut squares).zip(&sims) {
             for ((m, s), &value) in running.iter_mut().zip(square.iter_mut()).zip(sim) {
                 let change = value - *m;
@@ -801,6 +812,35 @@ pub fn yates_simulate_with_draws(
         for (row, d) in comoment.iter_mut().zip(&delta) {
             for (value, (sim, running)) in row.iter_mut().zip(first.iter().zip(&mean)) {
                 *value += d * (sim - running[0]);
+            }
+        }
+        Ok(())
+    };
+    // A built-in predictor's population for a draw depends on that draw alone, so
+    // chunks of draws are evaluated in parallel and folded into the running moments
+    // in draw order: the result is the sequential one, bit for bit. Callback
+    // predictors call into Python and stay sequential.
+    let rows: usize = input.xmatlist.iter().map(Vec::len).sum();
+    match prediction
+        .as_ref()
+        .filter(|_| rows.saturating_mul(width + p) >= PARALLEL_DRAW_WORK)
+    {
+        Some(prediction) => {
+            let draw_bytes = (nlev * width).saturating_mul(std::mem::size_of::<f64>());
+            let chunk = (DRAW_CHUNK_BYTES / draw_bytes.max(1))
+                .max(rayon::current_num_threads())
+                .max(1);
+            for draws in z.chunks(chunk) {
+                let sims: Vec<Vec<Vec<f64>>> = draws
+                    .par_iter()
+                    .map(|z| prediction.population(input.xmatlist, input.means, &draw_coef(z)))
+                    .collect();
+                sims.into_iter().try_for_each(&mut fold)?;
+            }
+        }
+        None => {
+            for z in &z {
+                fold(population(&draw_coef(z))?)?;
             }
         }
     }
@@ -1462,6 +1502,65 @@ mod tests {
         input.predictor = YatesPredictor::Response(&inverse);
         assert_eq!(yates_simulate(&input).unwrap(), expected);
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 38);
+    }
+
+    #[test]
+    fn parallel_draws_match_the_sequential_callback_paths_bit_for_bit() {
+        // Sizes above PARALLEL_DRAW_WORK, so the built-in predictors evaluate their
+        // draws in parallel while the callback predictors fold one draw at a time.
+        let row = |level: usize, i: usize| {
+            let u = (i as f64 * 0.618_033_988_749_895).fract();
+            let v = (i as f64 * 0.414_213_562_373_095).fract();
+            vec![level as f64, 2.0 * u - 1.0, (3.0 * v).ln_1p()]
+        };
+        let xmatlist: Vec<Vec<Vec<f64>>> = (0..3)
+            .map(|level| (0..700).map(|i| row(level, i)).collect())
+            .collect();
+        let time: Vec<f64> = (1..=30).map(f64::from).collect();
+        let cumhaz: Vec<f64> = time.iter().map(|t| 0.01 * t * t.sqrt()).collect();
+        let survival = YatesPredictor::Survival {
+            time: &time,
+            cumhaz: &cumhaz,
+            rmean: 24.5,
+            conf_int: 0.9,
+        };
+        let prepared = YatesPrediction::new(survival).unwrap();
+        let exp_link = |eta: &[f64]| Ok(eta.iter().map(|v| v.exp()).collect());
+        let evaluate = |eta: &[f64]| Ok(prepared.evaluate(eta));
+        let mut input = YatesSimulation {
+            xmatlist: &xmatlist,
+            beta: &[0.3, -0.4, 0.25],
+            vmat: &[
+                vec![0.02, 0.004, -0.001],
+                vec![0.004, 0.03, 0.002],
+                vec![-0.001, 0.002, 0.015],
+            ],
+            means: &[1.0, 0.0, 0.7],
+            estimable: None,
+            predictor: YatesPredictor::Risk,
+            nsim: 73,
+            seed: 11,
+            test: YatesTest::Pairwise,
+        };
+        let rows: usize = xmatlist.iter().map(Vec::len).sum();
+        assert!(rows * (1 + 3) >= PARALLEL_DRAW_WORK);
+        let risk = yates_simulate(&input).unwrap();
+        input.predictor = YatesPredictor::Response(&exp_link);
+        assert_eq!(yates_simulate(&input).unwrap(), risk);
+
+        input.predictor = survival;
+        let curves = yates_simulate(&input).unwrap();
+        input.predictor = YatesPredictor::Custom(&evaluate);
+        let sequential = yates_simulate(&input).unwrap();
+        assert_eq!(curves.estimate, sequential.estimate);
+        assert_eq!(curves.mvar, sequential.mvar);
+        assert_eq!(curves.test, sequential.test);
+        let mean = sequential.prediction_mean.unwrap();
+        let variance = sequential.prediction_variance.unwrap();
+        let expected = survival_curves(3, time.len(), 0.9, |level, t| {
+            (mean[level][t + 2], variance[level][t + 2])
+        });
+        assert_eq!(curves.summary.unwrap(), expected);
     }
 
     #[test]
