@@ -4,6 +4,9 @@
 \alias{$.survival_py_object}
 \alias{[[.survival_py_object}
 \alias{$<-.survival_py_object}
+\alias{$.survival_py_model}
+\alias{[[.survival_py_model}
+\alias{$<-.survival_py_model}
 \alias{Surv}
 \alias{Surv2}
 \alias{aareg}
@@ -832,7 +835,7 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{deviance}{survival_py_model}(object, ...)
 
-\method{nobs}{survival_py_model}(object, ...)
+\method{nobs}{survival_py_model}(object, use.fallback = FALSE, ...)
 
 \method{df.residual}{survival_py_survreg}(object, ...)
 

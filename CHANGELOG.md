@@ -237,6 +237,10 @@ Numerical corrections are described under Fixed below.
 - `strata(x, na.group = TRUE)` keeps its missing-x stratum when the formula also
   has a transformed variable such as `log(ph.karno)`; the transformed variable's
   evaluation had returned x to the missing-value scan.
+- `update()`, `getCall()`, `drop1()`, `add1()` and `step()` work on R bridge Cox and
+  survreg fits. A fit records the call that made it, so it can be refit from that
+  call. `step()`'s assignments to `fit$formula` and `fit$call` are kept on the R
+  side, since the Python fit is immutable. `nobs()` accepts `use.fallback`.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
