@@ -1743,18 +1743,7 @@ def _formula_missing_rows(
     sources = [(name, _column_source(data, name)) for name in columns if name in raw]
     sources.extend((_covariate_term_name(term), _term_values(data, term, n)) for term in computed)
     sources.extend((spec.call, _strata_term_values(data, spec)) for spec in strata)
-    # A Surv or Surv2 column (a stored response) is missing where is.na(Surv) is.
-    stored = [(name, values) for name, values in sources if isinstance(values, Surv | Surv2)]
-    if not stored:
-        return _missing_row_indices(sources, n)
-    missing = _missing_row_indices(
-        [(name, values) for name, values in sources if not isinstance(values, Surv | Surv2)], n
-    )
-    for name, values in stored:
-        if len(values) != n:
-            raise ValueError(f"{name} must have length {n}")
-        missing.update(np.flatnonzero(_missing_rows(values)).tolist())
-    return missing
+    return _missing_row_indices(sources, n)
 
 
 def _na_action_record(na_action: str | None, removed: Sequence[int]) -> NaAction | None:
@@ -3163,6 +3152,12 @@ def _timeline_counting(
     return counting_formula, _FormulaRows(columns, len(rows)), converted
 
 
+_TIMELINE_RESPONSE_NAMES = frozenset(
+    _formula_response_spec(f"Surv({', '.join(f'`{name}`' for name in names)}) ~ 1").name
+    for names in ((_TSTART, _TSTOP, _STATUS), (_TSTOP, _STATUS))
+)
+
+
 def _timeline_response(formula: Any, data: Any = None) -> bool:
     """Whether *formula* is a formula string with a ``Surv2`` response: a ``Surv2(...)``
     call, or a bare name whose value in *data* is a ``Surv2`` object."""
@@ -3178,9 +3173,9 @@ def _timeline_model_frame(columns: dict[str, Any], formula: str) -> dict[str, An
     R's: the counting-process response (the first column) under the ``Surv2`` name,
     without the columns it was built from.  Other formulas' frames are returned as is."""
 
-    # The frame, not the formula, says whether it was fitted on timeline data: a stored
-    # Surv2 response is a bare name.
-    if _TSTOP not in columns:
+    # The frame, not the formula, says whether it was fitted on timeline data (a stored
+    # Surv2 response is a bare name): its response is _timeline_counting's.
+    if next(iter(columns), None) not in _TIMELINE_RESPONSE_NAMES:
         return columns
     (_name, response), *rest = columns.items()
     reserved = {_TSTART, _TSTOP, _STATUS}
@@ -3320,10 +3315,17 @@ def model_frame(
         n = len(y)
     terms = _split_terms(rhs, _dot_terms(data, list(spec.columns) if spec else []))
 
-    aligned: dict[str, list[Any] | None] = {}
+    aligned: dict[str, Any] = {}
     for name, values in arguments.items():
         if values is None:
             aligned[name] = None
+            continue
+        if isinstance(values, Surv | Surv2):
+            # An extra column holding a survival object (survexp's individual methods
+            # carry a rate table's stored response) stays whole.
+            if len(values) != n:
+                raise ValueError(f"{name} must have the same length as the response")
+            aligned[name] = values
             continue
         materialized = _materialize_labels(values, name)
         if len(materialized) == 1 and n != 1 and name in extra_names:
@@ -3353,7 +3355,12 @@ def model_frame(
         cluster=aligned["cluster"],
         istate=aligned["istate"],
         na_action=_na_action_record(action, removed),
-        extra={name: _rows_of(arguments[name], aligned[name] or []) for name in extra_names},
+        extra={
+            name: aligned[name]
+            if isinstance(aligned[name], Surv | Surv2)
+            else _rows_of(arguments[name], aligned[name] or [])
+            for name in extra_names
+        },
     )
 
 

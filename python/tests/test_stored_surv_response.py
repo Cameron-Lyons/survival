@@ -150,3 +150,47 @@ def test_specs_stay_textual_and_hashable():
     assert hash(stored) == hash(_formula_response_spec("y ~ age"))
     assert _formula_response_spec("(y) ~ age").name == "(y)"
     assert _formula_response_spec("`my y` ~ age").name == "my y"
+
+
+def test_individual_expected_survival_reads_a_stored_rate_table_response(lung):
+    for method in ("individual.s", "individual.h"):
+        for formula in ("time ~ 1", "y ~ 1", "Surv(time, status) ~ 1"):
+            assert r.survexp(
+                formula, lung, ratetable=r.coxph("y ~ age", lung), method=method
+            ) == r.survexp(
+                formula, lung, ratetable=r.coxph("Surv(time, status) ~ age", lung), method=method
+            )
+
+
+def test_survival_object_columns_are_carried_by_row(lung):
+    # tmerge(b, b, id = id, death = event(time, status)) keeps y as a Surv, as R does.
+    data = {
+        "id": list(range(1, len(lung["time"]) + 1)),
+        "age": lung["age"],
+        "time": lung["time"],
+        "status": lung["status"],
+        "y": lung["y"],
+    }
+    merged = r.tmerge(data, data, "id", death=r.event("time", "status"))
+    assert list(merged) == ["id", "age", "time", "status", "y", "tstart", "tstop", "death"]
+    assert merged["y"].time == lung["y"].time
+    again = r.tmerge(
+        merged, data, "id", x=r.tdc([value / 2 for value in lung["time"]], lung["age"])
+    )
+    assert len(again["y"]) == len(again["id"]) == 2 * len(lung["time"])
+    assert list(again["y"].time) == [value for value in lung["time"] for _ in range(2)]
+    # A Surv column that is not the response is split with its rows.
+    frame = {name: lung[name] for name in ("time", "status", "age")}
+    frame["other"] = lung["y"]
+    split = r.survSplit("Surv(time, status) ~ .", frame, cut=[100, 300])
+    assert len(split["other"]) == len(split["tstart"])
+    # as_data_frame keeps a Surv column whole.
+    table = r.as_data_frame(r.survSplit("y ~ age", lung, cut=[100]))
+    assert list(table) == ["age", "y"]
+    assert table["y"].type == "counting"
+
+
+def test_a_covariate_named_like_a_timeline_column_stays_in_the_model_frame(lung):
+    data = {"time": lung["time"], "status": lung["status"], "(tstop)": lung["age"]}
+    fit = r.coxph("Surv(time, status) ~ `(tstop)`", data)
+    assert list(r.model_frame(fit)) == ["time", "status", "(tstop)"]

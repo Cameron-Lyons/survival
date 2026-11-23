@@ -796,11 +796,13 @@ def _data_column_sources(data: Any, name: str) -> dict[str, Any]:
     return {column: _column_source(data, column) for column in names}
 
 
-def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
+def _data_columns(data: Any, name: str) -> dict[str, Any]:
     """Every retained column as a list, in data order."""
 
     columns = {
-        column: _rows_of(source, _materialize_1d(source, column))
+        column: source
+        if isinstance(source, Surv | Surv2)
+        else _rows_of(source, _materialize_1d(source, column))
         for column, source in _data_column_sources(data, name).items()
     }
     if len({len(values) for values in columns.values()}) > 1:

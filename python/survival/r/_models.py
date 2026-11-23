@@ -1625,14 +1625,16 @@ def _anova_frame(result: AnovaResult) -> dict[str, list[Any]]:
 
 
 @as_data_frame.register(Mapping)
-def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, Any]:
     if result and all(isinstance(curve, _SurvfitCurves) for curve in result.values()):
         return _grouped_survfit_frame(result)
-    columns: dict[str, list[Any]] = {}
+    columns: dict[str, Any] = {}
     for name, values in result.items():
         if isinstance(values, str | bytes | Mapping | _SurvfitCurves) or not hasattr(
             values, "__iter__"
         ):
             raise TypeError("as_data_frame requires a survival result object")
-        columns[str(name)] = list(values)
+        # A survival object column (survSplit or survcondense of a stored response)
+        # stays whole, as R's data frame keeps it.
+        columns[str(name)] = values if isinstance(values, Surv | Surv2) else list(values)
     return columns
