@@ -433,3 +433,35 @@ def test_the_r_bridge_checks_curve_fields_without_lists(cox):
     )
     assert present(empty, "cumhaz")
     assert not present(empty, "cumhaz", True)
+
+
+def _listed_copy(result):
+    """The same curves with every field given as the lists it reads as, as main
+    stored them."""
+
+    return dataclasses.replace(result, **{name: getattr(result, name) for name in CURVES})
+
+
+def test_array_readers_give_what_the_listed_curves_give(cox, stratified):
+    for label in _results(cox, stratified):
+        listed = _listed_copy(_results(cox, stratified)[label])
+        for fun in (None, "cumhaz"):
+            if fun == "cumhaz" and not listed.cumhaz:
+                continue
+            kwargs = {} if fun is None else {"fun": fun}
+            fresh = _results(cox, stratified)[label]
+            expected = plot_data.survfit_plot_data(listed, **kwargs)
+            actual = plot_data.survfit_plot_data(fresh, **kwargs)
+            assert not any(_listed(fresh, name) for name in CURVES if _lazy(fresh, name))
+            assert len(actual.curves) == len(expected.curves), (label, fun)
+            for got, want in zip(actual.curves, expected.curves, strict=True):
+                np.testing.assert_array_equal(got.time, want.time, err_msg=f"{label} {fun}")
+                np.testing.assert_array_equal(got.estimate, want.estimate, err_msg=f"{label} {fun}")
+                for band in ("lower", "upper"):
+                    a, b = getattr(got, band), getattr(want, band)
+                    assert (a is None) == (b is None), (label, fun, band)
+                    if a is not None:
+                        np.testing.assert_array_equal(a, b, err_msg=f"{label} {fun} {band}")
+        fresh = _results(cox, stratified)[label]
+        assert r.as_data_frame(fresh) == r.as_data_frame(listed), label
+        assert r.summary_survfit(fresh).surv == r.summary_survfit(listed).surv, label
