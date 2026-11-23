@@ -119,27 +119,46 @@ impl CoxGram {
     /// finished, symmetric matrix.
     pub(crate) fn finish(&mut self, covar: ArrayView2<'_, f64>, omega: &[f64]) -> &Array2<f64> {
         self.flush_means();
-        let n = covar.nrows();
-        let mut first = 0;
-        while first < n {
-            let last = (first + self.scratch.nrows()).min(n);
-            let rows = covar.slice(s![first..last, ..]);
-            let mut weighted = self.scratch.slice_mut(s![..last - first, ..]);
-            for ((mut target, source), &omega) in weighted
-                .rows_mut()
-                .into_iter()
-                .zip(rows.rows())
-                .zip(&omega[first..last])
-            {
-                for (value, &x) in target.iter_mut().zip(source) {
-                    *value = omega * x;
-                }
-            }
-            general_mat_mul(1.0, &rows.t(), &weighted, 1.0, &mut self.gram);
-            first = last;
-        }
+        add_weighted_gram(&mut self.gram, covar, omega, 1.0, &mut self.scratch);
         &self.gram
     }
+}
+
+/// Adds `alpha * sum_i weights_i x_i x_i'` over the rows `x_i` of `covar` to
+/// `gram`, passing the rows through `scratch` (at least one row by
+/// `covar.ncols()`) a block at a time, so the storage does not grow with the
+/// data. The weights may have either sign.
+pub(crate) fn add_weighted_gram(
+    gram: &mut Array2<f64>,
+    covar: ArrayView2<'_, f64>,
+    weights: &[f64],
+    alpha: f64,
+    scratch: &mut Array2<f64>,
+) {
+    let n = covar.nrows();
+    let mut first = 0;
+    while first < n {
+        let last = (first + scratch.nrows()).min(n);
+        let rows = covar.slice(s![first..last, ..]);
+        let mut weighted = scratch.slice_mut(s![..last - first, ..]);
+        for ((mut target, source), &weight) in weighted
+            .rows_mut()
+            .into_iter()
+            .zip(rows.rows())
+            .zip(&weights[first..last])
+        {
+            for (value, &x) in target.iter_mut().zip(source) {
+                *value = weight * x;
+            }
+        }
+        general_mat_mul(alpha, &rows.t(), &weighted, 1.0, gram);
+        first = last;
+    }
+}
+
+/// Scratch rows for [`add_weighted_gram`] over `n` rows of `nvar` columns.
+pub(crate) fn gram_scratch(n: usize, nvar: usize) -> Array2<f64> {
+    Array2::zeros((BLOCK.min(n.max(1)), nvar))
 }
 
 /// `high + low + value` as a double-double sum (Knuth's two-sum, then a fast

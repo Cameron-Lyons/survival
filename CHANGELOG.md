@@ -112,6 +112,10 @@ Numerical corrections are described under Fixed below.
   count rows and missing responses without copying columns, and `survSplit`,
   `tmerge` and `survcondense` select rows through storage, not value by value
   (1.3-2x faster).
+- `survreg` fits with eight or more covariates build the covariate block of
+  their information, robust squared scores and starting values from weighted Gram
+  products: 1.1-1.35x faster for 20 to 50 covariates at 10^5 rows. Log-likelihoods
+  and scores are unchanged bit for bit; variances agree to about 1e-12.
 - `survreg` is 1.4-1.6x faster with bitwise-identical results. Each built-in
   family's likelihood sweep is compiled separately, each stratum's scale and
   its logarithm are computed once per evaluation, the robust and cluster

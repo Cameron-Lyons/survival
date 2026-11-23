@@ -424,3 +424,110 @@ fn batch_sweeps_match_the_reference_dispatch_bit_for_bit() {
         check_sweeps(&model, &sample, seed, &format!("mixture nstrat={nstrat}"));
     }
 }
+
+/// The magnitudes `sum |w ddg| x_i^2` (information) and `sum w dg^2 x_i^2`
+/// (squared scores) of each covariate's diagonal, which bound every term the
+/// sweeps add to a covariate-block entry, from the reference dispatch.
+fn reference_magnitudes(model: &SurvregKernel<'_>, beta: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let nvar = model.nvar();
+    let design = model.covariates.as_standard_layout();
+    let design = design.as_slice().expect("standard layout");
+    let scales = model.scales(beta, 0);
+    let contributions = model
+        .prepare_contributions(beta, None, design, &scales)
+        .unwrap();
+    let (mut information, mut scores) = (vec![0.0; nvar], vec![0.0; nvar]);
+    for person in 0..model.n() {
+        let stratum = model.stratum(person);
+        let x = &design[person * nvar..(person + 1) * nvar];
+        let contribution = match &contributions {
+            Contributions::Builtin(distribution) => {
+                let eta = model.offset[person]
+                    + x.iter().zip(&beta[..nvar]).map(|(x, b)| x * b).sum::<f64>();
+                reference_contribution(model, distribution, person, eta, &scales, stratum)
+            }
+            Contributions::Batch(rows) => rows[person],
+        };
+        let w = model.weights[person];
+        for (j, &xj) in x.iter().enumerate() {
+            let information_term = (contribution.ddg * w * xj * xj).abs();
+            let score_term = (contribution.dg * contribution.dg * w * xj * xj).abs();
+            if information_term.is_finite() {
+                information[j] += information_term;
+            }
+            if score_term.is_finite() {
+                scores[j] += score_term;
+            }
+        }
+    }
+    (information, scores)
+}
+
+/// Entries outside the covariate block bit for bit; covariate-block entries
+/// within `1e-12 sqrt(s_i s_j)` for the magnitudes `s`.
+fn assert_gram_matrix(
+    actual: &Array2<f64>,
+    expected: &Array2<f64>,
+    nvar: usize,
+    magnitudes: &[f64],
+    context: &str,
+) {
+    for ((i, j), &e) in expected.indexed_iter() {
+        let a = actual[[i, j]];
+        if i >= nvar || j >= nvar || same_bits(a, e) {
+            assert!(same_bits(a, e), "{context} [{i}, {j}]: {a} != {e}");
+            continue;
+        }
+        let tolerance = 1e-12 * (magnitudes[i] * magnitudes[j]).sqrt();
+        assert!(
+            a.is_finite() && e.is_finite() && (a - e).abs() <= tolerance,
+            "{context} [{i}, {j}]: {a} != {e} (tolerance {tolerance})"
+        );
+    }
+}
+
+/// With eight or more covariates `evaluate` builds the covariate block from
+/// Gram matrices; it must match the reference dispatch, falling back to the
+/// scalar sweep (bit for bit) wherever a term is not finite.
+#[test]
+fn gram_sweeps_match_the_reference_dispatch() {
+    let distributions = builtin_distributions();
+    for (case, &(nvar, nstrata, nstrat, extreme)) in [
+        (GRAM_MIN_VARIABLES, 1, 1, false),
+        (GRAM_MIN_VARIABLES + 2, 3, 3, false),
+        (GRAM_MIN_VARIABLES + 1, 1, 0, false),
+        (GRAM_MIN_VARIABLES + 4, 2, 2, true),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let seed = 300 + case as u64;
+        let sample = Sample::new(seed, 700, nvar, nstrata, extreme);
+        for distribution in &distributions {
+            let model = sample.kernel(nstrat, distribution);
+            let context = format!(
+                "{} nvar={nvar} nstrat={nstrat} extreme={extreme}",
+                distribution.name
+            );
+            for scale in [0.0, 1.0, 3.0] {
+                let beta0: Vec<f64> = beta(seed, nvar + nstrat.max(1))
+                    .into_iter()
+                    .map(|b| b * scale)
+                    .collect();
+                let (information, scores) = reference_magnitudes(&model, &beta0);
+                for with_jj in [false, true] {
+                    let context = format!("{context} scale={scale} jj={with_jj}");
+                    let actual = model.evaluate(&beta0, with_jj).unwrap();
+                    let expected = reference_evaluate(&model, &beta0, with_jj);
+                    assert_same(&[actual.loglik], &[expected.loglik], &context);
+                    assert_same(&actual.u, &expected.u, &context);
+                    assert_gram_matrix(&actual.imat, &expected.imat, nvar, &information, &context);
+                    assert_eq!(actual.jj.is_some(), expected.jj.is_some(), "{context}");
+                    if let (Some(a), Some(e)) = (&actual.jj, &expected.jj) {
+                        assert_gram_matrix(a, e, nvar, &scores, &context);
+                    }
+                }
+            }
+        }
+    }
+}

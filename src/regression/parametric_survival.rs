@@ -6,6 +6,7 @@ use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::validation::{
     validate_finite, validate_length, validate_non_empty, validate_positive,
 };
+use crate::regression::cox_gram::{GRAM_MIN_VARIABLES, add_weighted_gram, gram_scratch};
 use crate::regression::survreg_distributions::{
     SurvregDistribution, SurvregFamily, SurvregTransform,
 };
@@ -842,11 +843,23 @@ fn glim_start(x: ArrayView2<'_, f64>, wt: &[f64], rhs_weight: &[f64], tol_chol: 
     let nvar = x.ncols();
     let mut matrix = Array2::<f64>::zeros((nvar, nvar));
     let mut rhs = vec![0.0; nvar];
-    for (i, row) in x.outer_iter().enumerate() {
-        for j in 0..nvar {
-            rhs[j] += rhs_weight[i] * row[j];
-            for k in 0..=j {
-                matrix[[j, k]] += wt[i] * row[j] * row[k];
+    if nvar >= GRAM_MIN_VARIABLES {
+        // The weighted least-squares matrix as one Gram product; the lower
+        // triangle is mirrored below, as the running sums' is.
+        for (i, row) in x.outer_iter().enumerate() {
+            for (sum, &value) in rhs.iter_mut().zip(row) {
+                *sum += rhs_weight[i] * value;
+            }
+        }
+        let mut scratch = gram_scratch(x.nrows(), nvar);
+        add_weighted_gram(&mut matrix, x, wt, 1.0, &mut scratch);
+    } else {
+        for (i, row) in x.outer_iter().enumerate() {
+            for j in 0..nvar {
+                rhs[j] += rhs_weight[i] * row[j];
+                for k in 0..=j {
+                    matrix[[j, k]] += wt[i] * row[j] * row[k];
+                }
             }
         }
     }
