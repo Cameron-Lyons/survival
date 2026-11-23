@@ -5920,10 +5920,13 @@ xtfrm.survival_py_surv <- function(x) {
 .cox_curve_fields <- c("surv", "cumhaz", "std_err", "std_chaz", "lower", "upper")
 
 # A curve field: a Cox curve's as one NumPy array (a vector, or an ntime x ncurve
-# matrix), read without building nested lists; other curves' as stored.
+# matrix), read without building nested lists; other curves' as stored. An empty
+# array is read from the field, as in .as_survival_py_cox_curve_list, since only
+# its lists tell zero curves over the times from an absent curve.
 .survfit_curve_field <- function(curve, name) {
   if (.is_cox_curves(curve)) {
-    return(.python_attr("_cox_curve_array")(.restore_python(curve), name))
+    value <- .python_attr("_cox_curve_array")(.restore_python(curve), name)
+    if (length(value) > 0L) return(value)
   }
   .result_field(curve, name)
 }
