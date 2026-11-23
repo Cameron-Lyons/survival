@@ -33,6 +33,12 @@ Term and coefficient labels are R's deparsed expressions, whatever the spacing o
 the formula: `I(age>60)` is labelled `I(age > 60)TRUE` and `I(age*1e-3)` is
 `I(age * 0.001)`.
 
+As in R, `coxph`, `survreg`, `survfit`, `survdiff`, `concordance`, `aareg` and
+`survcheck` drop the `survival::` prefix from `strata`, `cluster`, `pspline`, `tt`,
+`ridge` and the frailty terms (R's `removeDoubleColonSurv()`), so
+`survival::strata(sex)` is the special `strata(sex)` and fits and labels as it
+does. `survival::Surv` responses are read as `Surv`.
+
 Interaction identity ignores factor order: `age:sex` and `sex:age` name the same
 term, so subtraction and duplicate removal follow R. Grouped nesting such as
 `(a + b)/c` produces `a + b + a:b:c`; powers bind before interactions and

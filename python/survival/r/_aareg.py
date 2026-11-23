@@ -21,6 +21,7 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._fit import _model_frame
+from ._formula import _without_survival_namespace
 from ._types import AaregModel, SummaryAaregResult
 
 _TESTS = ("aalen", "variance", "nrisk")
@@ -62,6 +63,7 @@ def aareg(
     test_name = _match_string_arg(
         test, "test", _TESTS, "test must be one of aalen, variance, nrisk"
     )
+    formula = _without_survival_namespace(formula)
     frame = _model_frame(
         formula, data, subset=subset, na_action=na_action, weights=weights, cluster=cluster
     )

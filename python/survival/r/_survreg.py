@@ -91,6 +91,7 @@ from ._formula import (
     _strata_keep,
     _strata_specs,
     _subset_formula_inputs,
+    _without_survival_namespace,
 )
 from ._surv import Surv, _complete_codes, _survreg_response_arrays
 from ._survpenal import fit_penalized, penalty_terms
@@ -774,6 +775,7 @@ def survreg(
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
+    formula = _without_survival_namespace(formula)
     control = _resolve_control(control, kwargs)
     keep_model = _normalize_bool_option_with_default(model, "model", False)
     keep_y = _normalize_bool_option_with_default(y, "y", True)

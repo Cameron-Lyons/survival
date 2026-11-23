@@ -60,6 +60,7 @@ from ._formula import (
     _term_values,
     _timeline_counting,
     _timeline_response,
+    _without_survival_namespace,
 )
 from ._names import _make_unique
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _strata, _subset_surv, is_na_surv
@@ -481,6 +482,7 @@ def survfit(
     """
 
     response = _first_argument(response, kwargs, "response", "formula", "survfit")
+    response = _without_survival_namespace(response)
 
     se_fit = _pop_dotted_keyword(kwargs, "se.fit", "se_fit", se_fit, None)
     conf_int = _pop_dotted_keyword(kwargs, "conf.int", "conf_int", conf_int, 0.95)

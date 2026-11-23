@@ -49,8 +49,8 @@ from ._fit import _formula_design_for_fit
 from ._formula import (
     _apply_formula_na_action,
     _column,
-    _column_source,
     _column_or_values,
+    _column_source,
     _covariate_term_columns,
     _covariate_term_name,
     _parse_formula,
@@ -61,6 +61,7 @@ from ._formula import (
     _term_values,
     _timeline_counting,
     _timeline_response,
+    _without_survival_namespace,
 )
 from ._formula import (
     model_frame as _shared_model_frame,
@@ -632,6 +633,7 @@ def survcheck(
 
     if formula is _MISSING:
         raise ValueError("a formula argument is required")
+    formula = _without_survival_namespace(formula)
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
     extras = {"id": id, "istate": istate}

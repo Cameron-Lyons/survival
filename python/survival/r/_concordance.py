@@ -48,6 +48,7 @@ from ._formula import (
     _prepare_formula_inputs,
     _response_arg_values,
     _strata_specs,
+    _without_survival_namespace,
     model_frame,
 )
 from ._surv import Surv
@@ -706,6 +707,7 @@ def concordance(
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     object = _pop_dotted_keyword(kwargs, "response", "object", object, None)
     object = _pop_dotted_keyword(kwargs, "formula", "object", object, None)
+    object = _without_survival_namespace(object)
     scores = _pop_dotted_keyword(kwargs, "risk_scores", "scores", scores, None)
     if kwargs:
         raise TypeError(f"concordance got unexpected argument(s): {', '.join(sorted(kwargs))}")

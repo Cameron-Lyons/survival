@@ -99,6 +99,7 @@ from ._formula import (
     _timeline_counting,
     _timeline_model_frame,
     _timeline_response,
+    _without_survival_namespace,
 )
 from ._names import _make_unique
 from ._penalties import _pspline_cbase
@@ -1240,6 +1241,7 @@ def coxph(
     """
 
     formula = _pop_dotted_keyword(kwargs, "response", "formula", formula, None)
+    formula = _without_survival_namespace(formula)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
     weights_column = kwargs.pop("_weights_column", None)
