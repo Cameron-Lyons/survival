@@ -380,6 +380,17 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
 
 ### Other routines
 
+- `royston()`'s Gönen–Heller concordance sums `1 / (1 + exp(s_i - s_j))` over the
+  pairs of the sorted predictor by halving the index range. Pairs across two halves
+  are counted as one each once the halves are 37 apart (the kernel rounds to one),
+  summed directly when there are at most 4096 of them, and otherwise interpolated in
+  both arguments at Chebyshev nodes once both value ranges are at most one wide. The
+  kernel is analytic and bounded in the strip `|Im d| ≤ 2π/3`, so at most 19 nodes
+  per range keep the interpolation error below 2^-56 per pair. Wider ranges split
+  again. Expansions use local coordinates, and the direct sums and interpolation
+  weights are compensated, so tied predictors do not accumulate one-sided rounding.
+  Work is O(n p log n) for p nodes, and the fixed splits make the result
+  independent of the thread count.
 - Raw Cox and Andersen–Gill martingale residuals use logarithmic risk-set sums
   for extreme or zero risks and weights. Range sums of log-hazard increments
   preserve small contributions after large ones, including disjoint entry/exit

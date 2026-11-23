@@ -188,6 +188,12 @@ Numerical corrections are described under Fixed below.
   order, so results are bitwise identical. Survival predictions for 10,000 rows
   take 2.4 s instead of 12.5 s, and risk predictions for 100,000 rows take
   0.31 s instead of 0.91 s.
+- `royston()` computes Gönen and Heller's concordance in O(n log n) work instead of
+  summing all n²/2 pairs: pairs across sorted halves use separated Chebyshev
+  expansions of the logistic kernel, saturated pairs count as one and small blocks
+  are summed directly, with compensated sums throughout. The result is within a few
+  ulps of the exact pair sum and no longer depends on the thread count. 100,000
+  rows take 38 ms instead of 1.7 s.
 
 ### Fixed
 
