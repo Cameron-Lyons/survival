@@ -28,14 +28,25 @@
   value
 }
 
+# Python Surv values (fit$y, fit$model) reach R as survival's Surv matrix.
+.r_value_from_python <- function(value) {
+  if (inherits(value, "survival.r._surv.Surv")) return(.as_native_surv(value))
+  # Only a dict such as fit$model can hold one; row lists stay unscanned.
+  if (is.list(value) && !is.object(value) && !is.null(names(value))) {
+    surv <- vapply(value, inherits, logical(1), what = "survival.r._surv.Surv")
+    if (any(surv)) value[surv] <- lapply(value[surv], .as_native_surv)
+  }
+  value
+}
+
 `$.survival_py_object` <- function(x, name) {
   x <- .restore_python(x)
-  .snapshot_python(NextMethod("$"))
+  .snapshot_python(.r_value_from_python(NextMethod("$")))
 }
 
 `[[.survival_py_object` <- function(x, ...) {
   x <- .restore_python(x)
-  .snapshot_python(NextMethod("[["))
+  .snapshot_python(.r_value_from_python(NextMethod("[[")))
 }
 
 `$<-.survival_py_object` <- function(x, name, value) {

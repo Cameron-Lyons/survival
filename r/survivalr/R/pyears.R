@@ -413,7 +413,9 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
   }
   result <- .call_r_api(
     "pyears",
-    if (is.null(direct_time)) NULL else .as_python_vector(direct_time),
+    if (is.null(direct_time)) NULL
+    else if (inherits(direct_time, "Surv")) .as_python_surv(direct_time)
+    else .as_python_vector(direct_time),
     time = if (missing(time) || !is.null(direct_time)) NULL else .as_python_vector(time),
     start = if (missing(start)) NULL else .as_python_vector(start),
     stop = if (missing(stop)) NULL else .as_python_vector(stop),

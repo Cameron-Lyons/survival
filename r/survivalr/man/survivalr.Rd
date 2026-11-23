@@ -1029,7 +1029,7 @@ logical or 0/1 variable is taken as \code{FALSE}/0.}
 compatibility.}
 \item{tt, special, order}{Term-object inputs for \code{attrassign} and
 special-term inputs for \code{untangle.specials}.}
-\item{formula}{Formula, formula string, bridged \code{Surv} response, or
+\item{formula}{Formula, formula string, \code{Surv} response, or
 bridged fitted Cox model accepted by \code{survival.r_api}.}
 \item{data, newdata}{Optional data frames or Python-compatible data objects.}
 \item{use.fallback}{Accepted for compatibility with \code{stats::nobs}; a bridged
@@ -1282,9 +1282,10 @@ value depending on the delegated Python function.
 This package is intentionally named \pkg{survivalr} so it can coexist with
 CRAN's \pkg{survival} package while the bridge matures. The Python package must
 be installed in the Python environment selected by \pkg{reticulate}.
-Fitted models and responses support \code{saveRDS}/\code{readRDS},
+Fitted models support \code{saveRDS}/\code{readRDS},
 \code{save}/\code{load}, and \code{serialize}/\code{unserialize} with
-serialization version 3. Saving captures the current Python state and original
+serialization version 3; \code{Surv} responses are survival's own R matrices and
+save as ordinary R objects. Saving captures the current Python state and original
 R callbacks with their environments. Loading defers Python reconstruction until
 first use. Compatible installed R and Python packages are required, and model
 files must be trusted because their state uses Python pickle. Files created
