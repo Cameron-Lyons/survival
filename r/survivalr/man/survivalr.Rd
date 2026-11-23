@@ -919,21 +919,25 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 
 \method{print}{concordance}(x, digits = max(1L, getOption("digits") - 3L), ...)
 
-\method{print}{survival_py_model}(x, ...)
+\method{print}{survival_py_model}(x, digits = NULL, signif.stars = FALSE, ...)
 
 \method{print}{survival_py_object}(x, ...)
 
 \method{print}{survival_py_surv}(x, ...)
 
-\method{print}{survival_py_survfit}(x, ...)
+\method{print}{survival_py_survfit}(x, scale = 1,
+  digits = max(options()$digits - 4, 3),
+  print.rmean = getOption("survfit.print.rmean"),
+  rmean = getOption("survfit.rmean"), ...)
 
 \method{print}{survival_py_basehaz}(x, ...)
 
-\method{print}{survival_py_survdiff}(x, ...)
+\method{print}{survival_py_survdiff}(x, digits = max(options()$digits - 4, 3), ...)
 
-\method{print}{survival_py_concordance}(x, ...)
+\method{print}{survival_py_concordance}(x, digits = max(1L, getOption("digits") - 3L), ...)
 
-\method{print}{survival_py_cox_zph}(x, ...)
+\method{print}{survival_py_cox_zph}(x, digits = max(options()$digits - 4, 3),
+  signif.stars = FALSE, ...)
 
 \method{print}{survival_py_coxph_detail}(x, ...)
 
@@ -1052,6 +1056,8 @@ for a time-changing group.}
 \code{survfit} prediction curves across their \code{data} margin.}
 \item{FUN}{Summary function for \code{aggregate.survival_py_survfit};
 currently \code{mean} is supported.}
+\item{print.rmean}{Whether \code{print} of a curve shows the restricted mean, as R's
+\code{print.survfit}.}
 \item{rmean, dosum}{Accepted \code{summary.survival_py_survfit}
 compatibility arguments. The tabular bridge summary uses \code{dosum} for
 interval event/censor counts when explicit \code{times} are supplied.}

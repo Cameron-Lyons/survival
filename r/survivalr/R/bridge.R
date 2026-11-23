@@ -4888,7 +4888,8 @@ clogit <- function(formula, data, weights, subset, na.action,
   eval_env <- new.env(parent = parent.frame())
   eval_env$.survivalr_clogit_coxph <- coxph
   fit <- eval(coxcall, eval_env)
-  attr(fit, "userCall") <- sys.call()
+  # R's clogit keeps the user's call as fit$userCall, which print.clogit shows.
+  fit$userCall <- sys.call()
   class(fit) <- unique(c("clogit", class(fit), "coxph"))
   fit
 }
@@ -7300,7 +7301,10 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
   evaluated_dots <- .name_id_column(evaluated_dots, dots, data)
-  do.call(
+  # R's print.survfit shows the call, made to survfit().
+  call <- match.call()
+  call[[1L]] <- as.name("survfit")
+  .with_object_call(do.call(
     .call_r_api,
     c(
       list(
@@ -7313,7 +7317,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
       evaluated_dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
-  )
+  ), call)
 }
 
 survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
@@ -7325,7 +7329,10 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
     vector_args = c("weights", "id", "cluster", "group", "istate", "etype")
   )
   evaluated_dots <- .name_id_column(evaluated_dots, dots, data)
-  do.call(
+  # R's print.survfit shows the call, made to survfit().
+  call <- match.call()
+  call[[1L]] <- as.name("survfit")
+  .with_object_call(do.call(
     .call_r_api,
     c(
       list(
@@ -7338,7 +7345,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
       evaluated_dots,
       list(.wrap = c("survival_py_survfit", "survival_py_object"))
     )
-  )
+  ), call)
 }
 
 survfit.Surv <- function(formula, ..., group = NULL, subset = NULL, na.action = NULL) {
@@ -7625,7 +7632,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = NULL,
   env <- parent.frame()
   group_values <- .eval_formula_arg(substitute(group), missing(group), data, env, vector = TRUE)
   subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
-  .call_r_api(
+  .with_object_call(.call_r_api(
     "survdiff",
     response = if (inherits(formula, "Surv")) .as_python_surv(formula) else .as_formula_string(formula),
     data = .as_python_data(data),
@@ -7636,7 +7643,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = NULL,
     timefix = timefix,
     ...,
     .wrap = c("survival_py_survdiff", "survival_py_object")
-  )
+  ), match.call())
 }
 
 .survcheck_events <- function(status, id, states) {
@@ -8659,7 +8666,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   if (!is.null(extra$timewt)) {
     extra$timewt <- match.arg(extra$timewt, c("n", "S", "S/G", "n/G2", "I"))
   }
-  do.call(.call_r_api, c(
+  result <- do.call(.call_r_api, c(
     list(
       "concordance",
       .as_formula_string(formula),
@@ -8674,6 +8681,10 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     extra,
     list(.wrap = c("survival_py_concordance", "survival_py_object"))
   ))
+  # R's concordance.formula records its own call.
+  call <- match.call()
+  if (inherits(formula, "formula") || is.character(formula)) call[[1L]] <- as.name("concordance.formula")
+  .with_object_call(result, call)
 }
 
 coef.survival_py_concordance <- function(object, ...) {
@@ -9528,13 +9539,50 @@ residuals.survival_py_model <- function(object, ..., type = NULL) {
 }
 
 anova.survival_py_model <- function(object, ..., test = "Chisq") {
-  .call_r_api(
+  result <- .call_r_api(
     "anova",
     object,
     ...,
     test = test,
     .wrap = c("survival_py_anova", "survival_py_object")
   )
+  .as_r_anova(result, survreg = inherits(object, "survival_py_survreg"),
+    nested = ...length() > 0L)
+}
+
+# R's anova object: a data frame of class "anova" whose heading attribute
+# print.anova writes above the table, shaped as anova.coxph, anova.coxphlist,
+# anova.survreg and anova.survreglist shape it.
+.as_r_anova <- function(result, survreg = FALSE, nested = FALSE) {
+  columns <- .result_field(result, "columns")
+  frame <- lapply(columns, function(values) {
+    if (is.list(values)) {
+      values <- unlist(lapply(values, function(value) if (is.null(value)) NA else value))
+    }
+    if (is.numeric(values)) values[is.nan(values)] <- NA
+    values
+  })
+  frame <- as.data.frame(frame, check.names = FALSE, stringsAsFactors = FALSE)
+  rows <- as.character(unlist(.result_field(result, "row_names"), use.names = FALSE))
+  if (length(rows) == nrow(frame)) row.names(frame) <- rows
+  for (name in intersect(c("Df", "Resid. Df"), names(frame))) {
+    if (survreg && nested && all(is.na(frame[[name]]) | frame[[name]] == round(frame[[name]]))) {
+      frame[[name]] <- as.integer(frame[[name]])
+    }
+  }
+  lines <- as.character(unlist(.result_field(result, "heading"), use.names = FALSE))
+  if (survreg && nested) {
+    # anova.survreglist returns a plain data frame.
+    return(frame)
+  }
+  heading <- if (survreg) {
+    paste0(lines, c(rep("\n", length(lines) - 1L), ""))
+  } else if (nested) {
+    c(paste(lines[1:2], collapse = "\n"), paste(lines[-(1:2)], collapse = "\n"))
+  } else {
+    paste0(paste(lines, collapse = "\n"), "\n")
+  }
+  structure(frame, heading = heading, class = c("anova", "data.frame"))
 }
 
 summary.survival_py_survfit <- function(object, times, censored = FALSE, scale = 1,
@@ -10466,8 +10514,44 @@ as.data.frame.survival_py_anova <- function(x, row.names = NULL, optional = FALS
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
 
-print.survival_py_survfit <- function(x, ...) {
-  .print_tabular_result(x, ...)
+# print methods render through Python's R-format reports (survival.r.print_*), with
+# R's default digits, the console width and the call header R prints.
+.cat_report <- function(report) {
+  cat(paste0(as.character(unlist(.result_field(report, "lines"), use.names = FALSE)), "\n"),
+    sep = "")
+}
+
+.print_call <- function(call, inline = NULL, blank = TRUE) {
+  if (is.null(call)) return(invisible())
+  if (is.null(inline)) {
+    cat("Call:\n")
+  } else {
+    cat("Call:", inline, sep = "")
+  }
+  dput(call)
+  if (blank) cat("\n")
+}
+
+.object_call <- function(x) attr(x, "survival_call", exact = TRUE)
+
+.with_object_call <- function(x, call) {
+  attr(x, "survival_call") <- call
+  x
+}
+
+print.survival_py_survfit <- function(x, scale = 1, digits = max(options()$digits - 4, 3),
+                                      print.rmean = getOption("survfit.print.rmean"),
+                                      rmean = getOption("survfit.rmean"), ...) {
+  .print_call(.object_call(x), inline = " ")
+  if (.is_survival_py_multistate_survfit(x) || .is_coxms_curves(x)) {
+    report <- .call_r_api("print_survfitms", x, scale = scale, rmean = rmean,
+      digits = digits, width = getOption("width"))
+  } else {
+    report <- .call_r_api("print_survfit", x, scale = scale, digits = digits,
+      print_rmean = print.rmean, rmean = rmean, width = getOption("width"))
+  }
+  .cat_report(report)
+  invisible(x)
 }
 
 print.survival_py_surv <- function(x, ...) {
@@ -10479,16 +10563,23 @@ print.survival_py_basehaz <- function(x, ...) {
   .print_tabular_result(x, ...)
 }
 
-print.survival_py_survdiff <- function(x, ...) {
-  .print_tabular_result(x, ...)
+print.survival_py_survdiff <- function(x, digits = max(options()$digits - 4, 3), ...) {
+  .print_call(.object_call(x))
+  .cat_report(.call_r_api("print_survdiff", x, digits = digits, width = getOption("width")))
+  invisible(x)
 }
 
-print.survival_py_concordance <- function(x, ...) {
-  .print_tabular_result(x, ...)
+print.survival_py_concordance <- function(x, digits = max(1L, getOption("digits") - 3L), ...) {
+  .print_call(.object_call(x))
+  .cat_report(.call_r_api("print_concordance", x, digits = digits, width = getOption("width")))
+  invisible(x)
 }
 
-print.survival_py_cox_zph <- function(x, ...) {
-  .print_tabular_result(x, ...)
+print.survival_py_cox_zph <- function(x, digits = max(options()$digits - 4, 3),
+                                      signif.stars = FALSE, ...) {
+  .cat_report(.call_r_api("print_cox_zph", x, digits = digits, signif_stars = signif.stars,
+    width = getOption("width")))
+  invisible(x)
 }
 
 print.survival_py_coxph_detail <- function(x, ...) {
@@ -10499,35 +10590,34 @@ print.survival_py_anova <- function(x, ...) {
   .print_tabular_result(x, ...)
 }
 
-print.survival_py_model <- function(x, ...) {
-  cat("Call:\n")
-  call <- tryCatch(stats::formula(x), error = function(e) NULL)
-  if (is.null(call)) {
-    cat("<unavailable>\n")
-  } else {
-    print(call)
-  }
-  if (inherits(x, "survival_py_survreg") && !is.null(.result_field(x, "penalized"))) {
-    printed <- .call_r_api("print_survreg_penal", x, ...)
-    cat("\n", paste(.result_field(printed, "lines"), collapse = "\n"), "\n", sep = "")
+print.survival_py_model <- function(x, digits = NULL, signif.stars = FALSE, ...) {
+  fields <- attr(x, "survival_r_fields", exact = TRUE)
+  call <- if (!is.null(fields$userCall)) fields$userCall else fields$call
+  width <- getOption("width")
+  if (inherits(x, "survival_py_survreg")) {
+    # print.survreg prints at the default digits and takes no digits argument;
+    # print.survreg.penal's default is max(options()$digits - 4, 3).
+    if (is.null(digits) && !is.null(.result_field(x, "penalized"))) {
+      digits <- max(options()$digits - 4, 3)
+    }
+    .print_call(call, blank = FALSE)
+    .cat_report(.call_r_api("print_survreg", x, digits = digits, width = width))
     return(invisible(x))
   }
-
-  cat("\nCoefficients:\n")
-  print(coef(x), ...)
-
-  likelihood <- logLik(x)
-  metadata <- .call_r_api("model_summary", x)
-  cat(
-    "\nlogLik=", format(as.numeric(likelihood)),
-    " df=", attr(likelihood, "df"),
-    " n=", metadata$n,
-    sep = ""
-  )
-  if (inherits(x, "survival_py_coxph")) {
-    cat(" events=", metadata$nevent, sep = "")
+  penalized <- !is.null(.result_field(x, "penalized"))
+  if (!penalized && !length(.result_field(x, "coefficient_names"))) {
+    # print.coxph.null puts the call on its own line after "Call:  ".
+    if (is.null(digits)) digits <- max(options()$digits - 4, 3)
+    .print_call(call, inline = "  ")
+  } else {
+    if (is.null(digits)) {
+      digits <- if (penalized) max(options()$digits - 4, 3) else max(1L, getOption("digits") - 3L)
+    }
+    .print_call(call)
   }
-  cat("\n")
+  report <- .call_r_api("print_coxph", x, digits = digits, signif_stars = signif.stars,
+    width = width)
+  .cat_report(report)
   invisible(x)
 }
 
