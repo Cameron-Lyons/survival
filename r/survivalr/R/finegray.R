@@ -17,13 +17,13 @@ finegray <- function(formula, data, weights, subset, na.action = na.pass,
   }
   if (missing(formula)) stop("A formula argument is required", call. = FALSE)
   Call <- match.call()
-  formula <- .formula_with_native_surv_response(formula, parent.frame())
+  formula <- .formula_with_package_surv(formula, parent.frame())
   Terms <- if (missing(data)) stats::terms(formula, c("strata", "cluster")) else {
     stats::terms(formula, c("strata", "cluster"), data = data)
   }
   if (!attr(Terms, "response")) stop("Response must be a survival object", call. = FALSE)
   response <- eval(attr(Terms, "variables")[[2L]], if (missing(data)) NULL else data, environment(Terms))
-  if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
+  if (inherits(response, "survival.r._surv.Surv")) response <- .as_native_surv(response)
   predvars <- attr(Terms, "variables")
   predvars[[2L]] <- as.call(list(function() response))
   attr(Terms, "predvars") <- predvars

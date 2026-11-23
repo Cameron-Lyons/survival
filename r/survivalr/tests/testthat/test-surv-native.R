@@ -206,3 +206,104 @@ test_that("survreg.fit takes a Surv response's fitter codes as given", {
     tolerance = 1e-6
   )
 })
+
+test_that("wrappers that build R model frames work without survivalr attached", {
+  skip_if_not_installed("callr")
+  result <- callr::r(function() {
+    loadNamespace("survivalr")
+    lung <- survival::lung
+    d <- survival::mgus2
+    d$etime <- with(d, ifelse(pstat == 0, futime, ptime))
+    d$event <- factor(with(d, ifelse(pstat == 0, 2 * death, 1)), 0:2, c("censor", "pcm", "death"))
+    nwtco <- survival::nwtco
+    cases <- nwtco[nwtco$rel == 1 | nwtco$in.subcohort == 1, ]
+    unattached <- tryCatch(stats::model.frame(Surv(time, status) ~ age, lung),
+      error = conditionMessage)
+    list(
+      aareg = survivalr::aareg(Surv(time, status) ~ age, data = lung)$test.statistic,
+      cch = coef(survivalr::cch(Surv(edrel, rel) ~ age, data = cases, subcoh = ~in.subcohort,
+        id = ~seqno, cohort.size = 4028)),
+      split = nrow(survivalr::survSplit(Surv(time, status) ~ ., data = lung, cut = c(100, 300))),
+      transitions = unname(survivalr::survcheck(Surv(etime, event) ~ 1, data = d, id = id)$transitions),
+      pyears = sum(survivalr::pyears(Surv(time, status) ~ sex, data = lung, scale = 1)$pyears),
+      unattached = unattached,
+      registered = !is.null(getS3method("model.frame", "formula", optional = TRUE))
+    )
+  }, libpath = .libPaths())
+  lung <- survival::lung
+  nwtco <- survival::nwtco
+  cases <- nwtco[nwtco$rel == 1 | nwtco$in.subcohort == 1, ]
+  expect_equal(result$aareg, aareg(Surv(time, status) ~ age, data = lung)$test.statistic)
+  expect_equal(unname(result$cch), unname(coef(survival::cch(survival::Surv(edrel, rel) ~ age,
+    data = cases, subcoh = ~in.subcohort, id = ~seqno, cohort.size = 4028))), tolerance = 1e-6)
+  expect_identical(result$split, nrow(survSplit(Surv(time, status) ~ ., data = lung, cut = c(100, 300))))
+  expect_equal(sum(result$transitions), 1384)
+  expect_equal(result$pyears, sum(pyears(Surv(time, status) ~ sex, data = lung, scale = 1)$pyears))
+  # As without survivalr: an unqualified Surv() is not found when nothing attaches it.
+  expect_match(result$unattached, "could not find function \"Surv\"")
+  expect_false(result$registered)
+})
+
+test_that("a Surv proxy saved by an earlier build converts", {
+  native <- Surv(c(5, 3, NA, 8, 2), c(1, 0, 1, 1, 0))
+  # survivalr 2.1.0's Surv() returned this proxy class.
+  legacy <- .wrap_python(.as_python_surv(native), c("survival_py_surv", "survival_py_object"))
+  path <- tempfile(fileext = ".rds")
+  on.exit(unlink(path))
+  saveRDS(legacy, path)
+  # Each check reads the file afresh, before anything has restored the Python object.
+  fresh <- function() readRDS(path)
+  expect_identical(Surv(fresh()), native)
+  expect_identical(fresh()[2:3], native[2:3])
+  expect_identical(fresh()[, 1], native[, 1])
+  expect_identical(head(fresh(), 2), head(native, 2))
+  expect_identical(tail(fresh(), 2), tail(native, 2))
+  expect_identical(length(fresh()), length(native))
+  expect_identical(rev(fresh()), rev(native))
+  expect_identical(c(fresh(), fresh()), c(native, native))
+  expect_identical(format(fresh()), format(native))
+  expect_identical(as.character(fresh()), as.character(native))
+  expect_identical(is.na(fresh()), is.na(native))
+  expect_identical(as.matrix(fresh()), as.matrix(native))
+  expect_output(print(fresh()), "3+", fixed = TRUE)
+  expect_equal(survfit(fresh())$surv, survfit(native)$surv)
+  expect_equal(survfit(formula = fresh())$surv, survfit(native)$surv)
+  expect_identical(c(a = fresh(), b = fresh()), c(a = native, b = native))
+  expect_identical(summary(fresh()), summary(native))
+  expect_identical(fresh()[[2]], native[[2]])
+  expect_identical(fresh()[["type"]], "right")
+  printed <- fresh()
+  invisible(capture.output(print(printed)))
+  expect_equal(
+    survdiff(printed, group = c(1, 1, 2, 2, 2), subset = c(TRUE, TRUE, TRUE, TRUE, FALSE))$chisq,
+    survdiff(native, group = c(1, 1, 2, 2, 2), subset = c(TRUE, TRUE, TRUE, TRUE, FALSE))$chisq
+  )
+  expect_equal(
+    survdiff(fresh(), group = c(1, 1, 2, 2, 2), subset = c(TRUE, TRUE, TRUE, TRUE, FALSE))$chisq,
+    survdiff(native, group = c(1, 1, 2, 2, 2), subset = c(TRUE, TRUE, TRUE, TRUE, FALSE))$chisq
+  )
+  expect_error(Surv(fresh(), type = "left"), "takes no other arguments")
+  lung <- survival::lung
+  response <- .wrap_python(.as_python_surv(Surv(lung$time, lung$status)),
+    c("survival_py_surv", "survival_py_object"))
+  expect_equal(
+    sum(pyears(response ~ sex, data = lung, scale = 1)$pyears),
+    sum(pyears(Surv(time, status) ~ sex, data = lung, scale = 1)$pyears)
+  )
+  x <- cbind(`(Intercept)` = 1, age = lung$age)
+  expect_named(coef(survreg(response, x = x)), c("(Intercept)", "age"))
+})
+
+test_that("survSplit and survcheck read the response with survivalr's full Surv()", {
+  lung <- survival::lung
+  ours <- survcheck(Surv(time, status) ~ 1, data = lung, id = seq_len(nrow(lung)))
+  stock <- survival::survcheck(survival::Surv(time, status) ~ 1, data = lung,
+    id = seq_len(nrow(lung)))
+  expect_equal(unclass(ours$transitions), unclass(stock$transitions), ignore_attr = TRUE)
+  split <- survSplit(Surv(time, status) ~ age, data = lung, cut = c(100, 300), episode = "ep")
+  # survival's survSplit reads a bare Surv() on the left-hand side.
+  reference <- eval(quote(survival::survSplit(Surv(time, status) ~ age, data = lung,
+    cut = c(100, 300), episode = "ep")), list(Surv = survival::Surv, lung = lung))
+  expect_equal(split$status, reference$status)
+  expect_equal(split$tstart, reference$tstart)
+})

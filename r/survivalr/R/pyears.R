@@ -357,12 +357,12 @@ pyears <- function(formula, data, weights, subset, na.action, rmap, ratetable,
       }
       rate_call <- .pyears_rate_call(rate_call, ratetable)
     }
-    model_formula <- .formula_with_native_surv_response(formula(output_terms), parent.frame())
+    model_formula <- .formula_with_package_surv(formula(output_terms), parent.frame())
     for (name in all.vars(rate_call)) model_formula[[3L]] <- call("+", model_formula[[3L]], as.name(name))
     formula_terms <- if (missing(data)) stats::terms(model_formula) else stats::terms(model_formula, data = data)
     if (!attr(formula_terms, "response")) base::stop("Follow-up time must appear in the formula", call. = FALSE)
     response <- eval(attr(formula_terms, "variables")[[2L]], if (missing(data)) NULL else data, environment(formula_terms))
-    if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
+    if (inherits(response, "survival.r._surv.Surv")) response <- .as_native_surv(response)
     predvars <- attr(formula_terms, "variables")
     predvars[[2L]] <- as.call(list(function() response))
     attr(formula_terms, "predvars") <- predvars

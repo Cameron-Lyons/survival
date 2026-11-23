@@ -209,6 +209,12 @@ def test_r_bridge_registers_model_s3_methods():
         assert f"\\alias{{{method}}}" in manual
 
 
+def test_r_bridge_has_no_global_model_frame_method():
+    # The wrappers bind survivalr's Surv() themselves, so no global model.frame.formula
+    # method rewrites other packages' formulas.
+    assert ("model.frame", "formula") not in _namespace_s3_methods()
+
+
 def test_r_bridge_has_ci_check_with_python_extension():
     workflow = CI_WORKFLOW.read_text()
 

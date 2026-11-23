@@ -3,10 +3,10 @@
   if (is.list(formula) && !inherits(formula, "formula")) formula <- formula[[1L]]
   if (inherits(formula, "formula") && !is.null(environment(formula))) env <- environment(formula)
   value <- if (is.null(data)) eval(expr, env) else eval(expr, data, env)
-  n <- if (inherits(formula, "survival_py_surv")) {
-    reticulate::py_len(formula)
-  } else if (inherits(formula, "Surv")) {
+  n <- if (inherits(formula, "Surv")) {
     NROW(formula)
+  } else if (inherits(formula, "survival.r._surv.Surv")) {
+    reticulate::py_len(.restore_python(formula))
   } else NULL
   .as_python_formula_subset(value, data, n)
 }

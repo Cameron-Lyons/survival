@@ -32,7 +32,7 @@
   }
   response <- if (is.null(fit$y)) stats::model.response(frame) else fit$y
   if (is.null(fit$y) && !identical(fit$timefix, FALSE)) {
-    response <- .as_native_surv(aeqSurv(response))
+    response <- aeqSurv(response)
   }
   if (!attr(response, "type") %in% c("right", "counting")) {
     stop("Invalid Cox survival response", call. = FALSE)

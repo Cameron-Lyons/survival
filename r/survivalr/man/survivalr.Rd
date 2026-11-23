@@ -257,6 +257,7 @@
 \alias{unique.survival_py_surv}
 \alias{xtfrm.survival_py_surv}
 \alias{[.survival_py_surv}
+\alias{[[.survival_py_surv}
 \alias{coef.survival_py_model}
 \alias{vcov.survival_py_model}
 \alias{confint.survival_py_model}
@@ -270,7 +271,6 @@
 \alias{labels.survival_py_model}
 \alias{weights.survival_py_model}
 \alias{model.matrix.survival_py_model}
-\alias{model.frame.formula}
 \alias{model.frame.survival_py_model}
 \alias{model.frame.survival_py_survfit}
 \alias{fitted.survival_py_model}
@@ -304,6 +304,7 @@
 \alias{print.survival_py_model}
 \alias{print.survival_py_object}
 \alias{print.survival_py_surv}
+\alias{summary.survival_py_surv}
 \alias{print.survival_py_survfit}
 \alias{print.survival_py_basehaz}
 \alias{print.survival_py_survdiff}
@@ -527,12 +528,9 @@ survfit(formula, ...)
 \method{survfit}{Surv}(formula, ..., group = NULL, subset = NULL,
   na.action = NULL)
 
-\method{survfit}{survival_py_surv}(formula, ..., group = NULL, subset = NULL,
-  na.action = NULL)
+\method{survfit}{survival_py_surv}(formula, ...)
 
 \method{survfit}{survival_py_coxph}(formula, newdata = NULL, ..., id, se.fit = TRUE)
-
-\method{model.frame}{formula}(formula, ...)
 
 survfitKM(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
   se.fit = TRUE, conf.int = 0.95,
@@ -638,6 +636,8 @@ survfitKM(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 \method{xtfrm}{survival_py_surv}(x)
 
 \method{[}{survival_py_surv}(x, i, j, drop = FALSE)
+
+\method{[[}{survival_py_surv}(x, i, ...)
 
 survfit0(x, ...)
 
@@ -924,6 +924,8 @@ neardate(id1, id2, y1, y2, best = c("after", "prior"),
 \method{print}{survival_py_object}(x, ...)
 
 \method{print}{survival_py_surv}(x, ...)
+
+\method{summary}{survival_py_surv}(object, ...)
 
 \method{print}{survival_py_survfit}(x, scale = 1,
   digits = max(options()$digits - 4, 3),
