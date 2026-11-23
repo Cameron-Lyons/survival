@@ -38,6 +38,7 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _normalize_conf_level,
     _normalize_na_action,
+    _select_rows,
 )
 from ._coxph import (
     CoxphModel,
@@ -1089,7 +1090,12 @@ def _subset_coxms_curves(
         ),
         newdata=None
         if result.newdata is None
-        else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
+        else {
+            name: _select_rows(values, kept_data)
+            if isinstance(values, Surv | Surv2)
+            else [values[i] for i in kept_data]
+            for name, values in result.newdata.items()
+        },
         engine=engine,
     )
 

@@ -475,20 +475,16 @@ attrassign <- function(object, tt) {
     )
     return(.wrap_python(result, c("survival_py_surv", "survival_py_object")))
   }
+  column <- function(k) array(as.numeric(value[, k]))
   if (ncol(value) == 2L) {
     return(.wrap_python(
-      .python_attr("Surv")(as.numeric(value[, 1L]), as.numeric(value[, 2L]), type = surv_type),
+      .python_attr("Surv")(column(1L), column(2L), type = surv_type),
       c("survival_py_surv", "survival_py_object")
     ))
   }
   if (ncol(value) == 3L) {
     return(.wrap_python(
-      .python_attr("Surv")(
-        as.numeric(value[, 1L]),
-        as.numeric(value[, 2L]),
-        as.numeric(value[, 3L]),
-        type = surv_type
-      ),
+      .python_attr("Surv")(column(1L), column(2L), column(3L), type = surv_type),
       c("survival_py_surv", "survival_py_object")
     ))
   }
@@ -6583,6 +6579,25 @@ model.frame.formula <- function(formula, ...) {
   values
 }
 
+# survival's Surv or Surv2 matrix for a Python response object.
+.as_native_response <- function(x) {
+  if (!inherits(x, "survival.r._surv.Surv2")) {
+    return(.as_native_surv(.wrap_python(x, c("survival_py_surv", "survival_py_object"))))
+  }
+  out <- cbind(
+    time = .surv_na_times(.as_numeric_vector(.result_field(x, "time"))),
+    status = as.integer(.as_nullable_numeric_vector(.result_field(x, "status")))
+  )
+  clabel <- .result_field(x, "clabel")
+  if (!is.null(clabel)) {
+    attr(out, "states") <- as.character(.result_field(x, "states"))
+    attr(out, "clabel") <- clabel
+  }
+  attr(out, "repeated") <- .result_field(x, "repeated")
+  class(out) <- "Surv2"
+  out
+}
+
 .as_native_surv <- function(x) {
   if (inherits(x, "Surv")) {
     return(x)
@@ -9470,9 +9485,16 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
       dosum = if (missing(dosum)) NULL else dosum,
       data_frame = TRUE
     )
-    frame <- as.data.frame(lapply(columns, function(value) {
+    # A Surv or Surv2 column of newdata comes back whole; it is one matrix column, as in R.
+    surv <- vapply(columns, inherits, logical(1),
+      what = c("survival.r._surv.Surv", "survival.r._surv.Surv2"))
+    frame <- as.data.frame(lapply(columns[!surv], function(value) {
       if (length(value)) unlist(value, use.names = FALSE) else numeric()
     }), stringsAsFactors = FALSE, check.names = FALSE)
+    if (any(surv)) {
+      for (name in names(columns)[surv]) frame[[name]] <- .as_native_response(columns[[name]])
+      frame <- frame[names(columns)]
+    }
     curve <- .restore_python(object)
     present <- function(name, nonempty = FALSE) {
       if (.is_cox_curves(object) && name %in% .cox_curve_fields) {

@@ -42,3 +42,66 @@ test_that("survcondense stores a condensed Surv response under its name", {
   expect_named(result, names(reference))
   expect_equal(unclass(result$y)[, 1:3], unclass(reference$y)[, 1:3], ignore_attr = TRUE)
 })
+
+test_that("an unused Surv column of newdata is carried through curves and summaries", {
+  lung <- survival::lung[1:80, c("time", "status", "age")]
+  cox <- coxph(Surv(time, status) ~ age, data = lung)
+  stock_cox <- eval(quote(survival::coxph(Surv(time, status) ~ age, data = lung)),
+    list(Surv = survival::Surv, lung = lung))
+  newdata <- lung[1:3, ]
+  newdata$sy <- survival::Surv(newdata$time, newdata$status)
+  curves <- survfit(cox, newdata = newdata)
+  stock <- survival::survfit(stock_cox, newdata = newdata)
+  expect_equal(curves[2]$surv, stock[2]$surv)
+  ours <- summary(curves, times = 200, data.frame = TRUE)
+  reference <- summary(stock, times = 200, data.frame = TRUE)
+  expect_named(ours, names(reference))
+  expect_equal(ours$surv, reference$surv)
+  expect_equal(unclass(ours$sy_)[], unclass(reference$sy_)[])
+
+  d <- survival::mgus2[1:300, ]
+  d$etime <- with(d, ifelse(pstat == 0, futime, ptime))
+  d$event <- factor(with(d, ifelse(pstat == 0, 2 * death, 1)), 0:2, c("censor", "pcm", "death"))
+  multistate <- coxph(Surv(etime, event) ~ age, data = d, id = id)
+  nd <- d[1:2, c("age", "etime", "event", "futime", "death")]
+  with_surv <- nd
+  with_surv$sy <- survival::Surv(nd$futime, nd$death)
+  expect_equal(
+    suppressWarnings(survfit(multistate, newdata = with_surv))$pstate,
+    suppressWarnings(survfit(multistate, newdata = nd))$pstate
+  )
+  stock_multistate <- eval(quote(survival::coxph(Surv(etime, event) ~ age, data = d, id = id)),
+    list(Surv = survival::Surv, d = d))
+  ours <- summary(suppressWarnings(survfit(multistate, newdata = with_surv)), times = c(30, 60),
+    data.frame = TRUE)
+  reference <- summary(survival::survfit(stock_multistate, newdata = with_surv), times = c(30, 60),
+    data.frame = TRUE)
+  expect_identical(dim(ours), dim(reference))
+  expect_equal(ours$pstate, reference$pstate)
+  expect_equal(unclass(ours$sy)[], unclass(reference$sy)[])
+  expect_s3_class(ours$sy, "Surv")
+  # A Surv2 column is carried whole too.
+  with_surv2 <- newdata
+  with_surv2$s2 <- Surv2(newdata$time, newdata$status - 1)
+  frame <- summary(survfit(cox, newdata = with_surv2), times = 200, data.frame = TRUE)
+  expect_s3_class(frame$s2_, "Surv2")
+  expect_equal(unclass(frame$s2_)[], unclass(survival::Surv2(newdata$time, newdata$status - 1))[])
+})
+
+test_that("a one-row frame with a Surv column converts", {
+  lung <- survival::lung[1:80, c("time", "status", "age")]
+  lung$y <- survival::Surv(lung$time, lung$status)
+  cox <- coxph(Surv(time, status) ~ age, data = lung)
+  stock <- eval(quote(survival::coxph(Surv(time, status) ~ age, data = lung)),
+    list(Surv = survival::Surv, lung = lung))
+  expect_equal(unname(predict(cox, newdata = lung[1, ])), unname(predict(stock, newdata = lung[1, ])))
+  expect_equal(survfit(cox, newdata = lung[1, ])$surv,
+    survival::survfit(stock, newdata = lung[1, ])$surv)
+  heart <- survival::heart[1:60, ]
+  heart$y <- survival::Surv(heart$start, heart$stop, heart$event)
+  fit <- coxph(Surv(start, stop, event) ~ age, data = heart)
+  expect_equal(unname(predict(fit, newdata = heart[1, ])),
+    unname(predict(fit, newdata = heart[1, c("start", "stop", "event", "age")])))
+  stored <- coxph(y ~ age, data = lung)
+  expect_equal(unname(predict(stored, newdata = lung[1, ])), unname(predict(stock, newdata = lung[1, ])))
+})

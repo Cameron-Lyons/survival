@@ -7,6 +7,7 @@ works wherever ``Surv(...)`` does; each fit here must equal the same fit to the
 
 import math
 
+import numpy as np
 import pytest
 
 from .helpers import setup_survival_import
@@ -194,3 +195,36 @@ def test_a_covariate_named_like_a_timeline_column_stays_in_the_model_frame(lung)
     data = {"time": lung["time"], "status": lung["status"], "(tstop)": lung["age"]}
     fit = r.coxph("Surv(time, status) ~ `(tstop)`", data)
     assert list(r.model_frame(fit)) == ["time", "status", "(tstop)"]
+
+
+def test_an_unused_survival_object_column_of_newdata_is_carried_whole(lung):
+    # R keeps a Surv column of newdata as one column of curve summaries.
+    fit = r.coxph("Surv(time, status) ~ age", lung)
+    rows = [0, 1, 2]
+    newdata = {name: [lung[name][row] for row in rows] for name in ("time", "status", "age")}
+    plain = dict(newdata)
+    newdata["y"] = r.Surv(newdata["time"], newdata["status"])
+    curves = r.survfit(fit, newdata=newdata)
+    frame = r.summary_survfit(curves, times=[200], data_frame=True)
+    reference = r.summary_survfit(r.survfit(fit, newdata=plain), times=[200], data_frame=True)
+    # newdata's time collides with a summary column, so R suffixes every newdata name.
+    assert list(frame) == [*reference, "y_"]
+    assert frame["surv"] == reference["surv"]
+    assert list(frame["y_"].time) == newdata["time"]
+    multistate_data = {
+        "age": [80.0, 70.0, 60.0, 50.0, 75.0, 65.0],
+        "time": [5.0, 8.0, 3.0, 9.0, 4.0, 7.0],
+        "id": [1, 2, 3, 4, 5, 6],
+        "event": Factor(
+            ["censor", "pcm", "death", "pcm", "censor", "death"], levels=["censor", "pcm", "death"]
+        ),
+    }
+    multistate = r.coxph("Surv(time, event) ~ age", multistate_data, id="id")
+    new = {"age": [60.0, 70.0]}
+    with_surv = {**new, "y": r.Surv([1.0, 2.0], [1, 0])}
+    curves = r.survfit(multistate, newdata=with_surv)
+    np.testing.assert_array_equal(curves.pstate, r.survfit(multistate, newdata=new).pstate)
+    frame = r.summary_survfit(curves, times=[5], data_frame=True)
+    assert isinstance(frame["y"], survival.r.Surv)
+    assert len(frame["y"]) == len(frame["pstate"])
+    assert isinstance(curves.subset(data=[1]).newdata["y"], survival.r.Surv)

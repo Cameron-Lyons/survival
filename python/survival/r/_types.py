@@ -1573,7 +1573,8 @@ class CoxSurvfitMultiStateResult:
     t0: float
     start_time: float | None
     strata: dict[str, int] | None
-    newdata: dict[str, list[Any]] | None = field(repr=False)
+    # Per-row values; a Surv or Surv2 column stays one object.
+    newdata: dict[str, Any] | None = field(repr=False)
     stype: int = 2
     ctype: int = 1
     time0: bool = False
@@ -1630,7 +1631,8 @@ class SummarySurvfitCoxmsResult:
     table: NamedMatrix
     rmean_endtime: list[float] | None
     states: list[str]
-    newdata: dict[str, list[Any]] | None = field(repr=False)
+    # Per-row values; a Surv or Surv2 column stays one object.
+    newdata: dict[str, Any] | None = field(repr=False)
     start_time: float | None = None
     strata_levels: list[str] | None = None
 

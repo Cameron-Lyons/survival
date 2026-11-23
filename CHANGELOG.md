@@ -18,6 +18,8 @@ Numerical corrections are described under Fixed below.
   the R bridge, with survival's `Surv` matrices or survivalr's `Surv` as columns. Every
   formula fitter and data-preparation function reads it as R's model frame does;
   `survSplit` and `survcondense` store their result under the response's name.
+  A survival-object column of `newdata` is kept whole through Cox curves, their
+  subsets and `summary(data.frame = TRUE)`, as one `Surv` or `Surv2` column.
 - Typed Rust multistate Cox fitting and curve APIs, available without Python,
   with named results and validation of mutable input fields.
 - Spline and polynomial formula terms accept composed numeric inputs, including
