@@ -28,6 +28,7 @@ from ._formula import (
     _subset_formula_inputs,
     _surv_from_spec,
     _term_values,
+    _without_survival_namespace,
 )
 from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
 from ._survfit import _curve_factor
@@ -158,6 +159,7 @@ def survdiff(
     """
 
     response = _first_argument(response, kwargs, "response", "formula", "survdiff")
+    response = _without_survival_namespace(response)
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.omit")
     if kwargs:

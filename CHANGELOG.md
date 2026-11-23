@@ -18,6 +18,11 @@ Numerical corrections are described under Fixed below.
 - Spline and polynomial formula terms accept composed numeric inputs, including
   `ns(log(age), df=3)` and `poly(age / 10, 2)`. Fitted bases retain their knots
   and coefficients for prediction, with expressions evaluated before row selection.
+- `coxph`, `survreg`, `survfit`, `survdiff`, `concordance`, `aareg` and `survcheck`
+  read `survival::strata(...)`, `survival::cluster(...)`, `survival::pspline(...)`,
+  `survival::tt(...)`, `survival::ridge(...)` and the `survival::frailty*` terms as
+  the specials, as R's `removeDoubleColonSurv()` does: the fit is the unprefixed
+  formula's, and stores that formula.
 - `summary_survfit(..., data_frame=True)` supports ordinary and multi-state Cox
   curves, with requested-time selection and new-data columns.
 - `survival.datasets.load_uspop2()` provides R's complete US population

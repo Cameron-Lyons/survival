@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -604,6 +605,36 @@ def _parse_formula_origin_option(value: str) -> float:
 
 _SURV2_CALLS = ("Surv2(", "survival::Surv2(")
 _SURV_CALLS = ("Surv(", "survival::Surv(", *_SURV2_CALLS)
+
+# R's removeDoubleColonSurv() names; survival::Surv stays, as it does there.
+_SURVIVAL_NAMESPACE_CALL = re.compile(
+    r"(?<![\w.])survival\s*::\s*"
+    r"(frailty\.gaussian|frailty\.gamma|frailty\.t|frailty|strata|cluster|pspline|ridge|tt)"
+    r"(?=\s*\()"
+)
+_QUOTED = re.compile(r"""'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`""")
+
+
+def _without_survival_namespace(formula: Any) -> Any:
+    """*formula* with ``survival::`` removed from its survival specials, as R's
+    ``removeDoubleColonSurv`` does in ``coxph``, ``survreg``, ``survfit``, ``survdiff``,
+    ``concordance``, ``aareg`` and ``survcheck``, so that ``survival::strata(sex)`` is the
+    special ``strata(sex)`` and the fit names it so. Strings and backquoted names are left
+    as written; a list of formulas is rewritten formula by formula; other values pass
+    through."""
+
+    if isinstance(formula, list | tuple) and all(isinstance(item, str) for item in formula):
+        return type(formula)(_without_survival_namespace(item) for item in formula)
+    if not isinstance(formula, str) or "::" not in formula:
+        return formula
+    pieces = []
+    last = 0
+    for quoted in _QUOTED.finditer(formula):
+        pieces.append(_SURVIVAL_NAMESPACE_CALL.sub(r"\1", formula[last : quoted.start()]))
+        pieces.append(quoted.group())
+        last = quoted.end()
+    pieces.append(_SURVIVAL_NAMESPACE_CALL.sub(r"\1", formula[last:]))
+    return "".join(pieces)
 
 
 @lru_cache(maxsize=512)
