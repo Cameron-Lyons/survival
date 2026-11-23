@@ -8747,7 +8747,19 @@ royston <- function(fit, newdata, ties = TRUE, adjust = FALSE) {
   )
   values <- as.numeric(unlist(result, use.names = FALSE))
   names(values) <- names(result)
+  # Python's NaN is R's NA here: a null model's D, R.D and R.N.
+  values[is.nan(values)] <- NA_real_
   values
+}
+
+# R's na.action object for a Python NaAction: the omitted rows, named by their data
+# row names, with class "omit" or "exclude".
+.as_r_na_action <- function(action, data = NULL) {
+  if (is.null(action)) return(NULL)
+  rows <- as.integer(.as_numeric_vector(.result_field(action, "rows")))
+  if (!length(rows)) return(NULL)
+  labels <- if (is.data.frame(data)) row.names(data)[rows] else as.character(rows)
+  structure(rows, names = labels, class = as.character(.result_field(action, "kind")))
 }
 
 survConcordance <- function(formula, data, weights, subset, na.action) {
@@ -8772,6 +8784,8 @@ survConcordance <- function(formula, data, weights, subset, na.action) {
     std.err = c(`std(c-d)` = as.numeric(.result_field(result, "std_err"))),
     call = call
   )
+  omitted <- .as_r_na_action(.result_field(result, "na_action"), data_values)
+  if (length(omitted)) fit$na.action <- omitted
   class(fit) <- "survConcordance"
   fit
 }

@@ -1,6 +1,15 @@
 .cox_fixed_design <- function(fit, frame, training = FALSE) {
   stored <- fit[["x"]]
-  design <- if (training && !is.null(stored)) stored else stats::model.matrix(fit, frame)
+  design <- if (training && !is.null(stored)) {
+    stored
+  } else {
+    # Contrasts apply to the frame's factors only: R's survexp and survfit.coxph build
+    # new data's design without them, so a numeric 0/1 column reads as its indicator
+    # (with R's "is not a factor" warning from the model frame).
+    contrasts <- fit$contrasts
+    factors <- names(frame)[vapply(frame, is.factor, logical(1L))]
+    stats::model.matrix(fit, frame, contrast.arg = contrasts[names(contrasts) %in% factors])
+  }
   if (!is.null(fit$frail)) {
     sparse <- names(fit$pterms)[fit$pterms == 2L]
     design <- design[, !colnames(design) %in% sparse, drop = FALSE]

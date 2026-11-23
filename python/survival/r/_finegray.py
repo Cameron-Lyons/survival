@@ -67,8 +67,17 @@ def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, list[int], list[float] | Non
         istrat = _complete_codes(factor, "strata must not contain missing values")
     else:
         istrat = [0] * mf.n
-    weights = None if mf.weights is None else [_finite_float(v, "weights") for v in mf.weights]
+    weights = None if mf.weights is None else [_case_weight(v) for v in mf.weights]
     return response, istrat, weights
+
+
+def _case_weight(value: Any) -> float:
+    """A case weight: a missing one is NaN, which R's finegray carries into the weights of
+    the rows it scales (``split$wt * user.weights[split$row]``)."""
+
+    if _is_missing_value(value):
+        return math.nan
+    return _finite_float(value, "weights")
 
 
 def finegray(

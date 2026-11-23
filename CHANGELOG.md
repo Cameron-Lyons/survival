@@ -303,6 +303,15 @@ Numerical corrections are described under Fixed below.
   unmatched queries, including with a custom `nomatch` value.
 - `lvcf` preserves factor levels, and `nostutter` returns a factor with the
   censoring level first, so downstream `Surv` calls retain multi-state events.
+- `finegray` accepts a missing case weight under the default `na.pass`. As in R,
+  where the weights only scale the expanded rows, it is NA in that subject's rows
+  only; Python and the R bridge raised an error.
+- The R bridge's `survexp` with a Cox rate table reads a numeric `newdata` column
+  for a factor covariate as R does, with R's "is not a factor" warning. It used to
+  fail with "contrasts apply only to factors".
+- `royston` of a null Cox model gives `R.N` as NA, as R does, where it gave 0; the
+  bridge's `D` and `R.D` are NA rather than NaN.
+- The R bridge's `survConcordance` keeps R's `na.action` component.
 - Raw `coxmart` and `agmart` residuals handle extreme finite risks and weights
   without overflowing or losing later small risk sets. Negative risks and
   positive-weight events with zero risk-set denominators raise errors.
