@@ -3375,18 +3375,49 @@ cipoisson <- function(k, time = 1, p = 0.95, method = c("exact", "anscombe")) {
     method = method
   )
   values <- .as_numeric_vector(result)
-  values[is.nan(values)] <- NA_real_
   if (length(values) == 0L) {
     return(numeric())
   }
-  if (nn == 1L) {
-    out <- values[seq_len(2L)]
-    names(out) <- c("lower", "upper")
-    return(out)
+  # The names and shape R's cipoisson gives, around the port's values: lower takes k's
+  # names; upper takes p's (qgamma(1 - p, k + 1)) or, for anscombe, k's; a time <= 0
+  # replaces both with time's (ifelse(time <= 0, NA, .)), and an NA there.
+  if (nn > 1L) {
+    k <- rep(k, length.out = nn)
+    time <- rep(time, length.out = nn)
+    p <- rep(p, length.out = nn)
   }
-  out <- matrix(values, ncol = 2L, byrow = TRUE)
-  colnames(out) <- c("lower", "upper")
-  out
+  values <- matrix(values, ncol = 2L, byrow = TRUE)
+  # Python's NaN is R's NA, except Anscombe's square root of a negative value, which is
+  # NaN in R and warns.
+  nan <- is.nan(values)
+  values[nan] <- NA_real_
+  if (method == "anscombe") {
+    valid <- !is.na(k) & !is.na(p) & !is.na(time) & time > 0
+    values[nan[, 1L] & valid & k < 1 / 8, 1L] <- NaN
+    values[nan[, 2L] & valid & k < -7 / 8, 2L] <- NaN
+    invisible(sqrt(k - 1 / 8))
+  }
+  lower <- values[, 1L]
+  upper <- values[, 2L]
+  names(lower) <- names(k)
+  names(upper) <- if (method == "exact") names(p) else names(k)
+  if (any(time <= 0, na.rm = TRUE)) {
+    nonpositive <- !is.na(time) & time <= 0
+    lower[nonpositive] <- NA_real_
+    upper[nonpositive] <- NA_real_
+    names(lower) <- names(upper) <- names(time)
+  }
+  if (nn == 1L) return(c(lower = lower, upper = upper))
+  temp <- cbind(lower = lower, upper = upper)
+  if (is.array(k)) {
+    dd <- dimnames(k)
+    return(if (is.null(dd)) {
+      array(temp, dim = c(dim(k), 2L), dimnames = list(NULL, NULL, c("lower", "upper")))
+    } else {
+      array(temp, dim = c(dim(k), 2L), dimnames = list(dd, c("lower", "upper")))
+    })
+  }
+  temp
 }
 
 lvcf <- function(id, x, time, first = TRUE) {
@@ -8611,10 +8642,18 @@ survregDtest <- function(dlist, verbose = FALSE) {
   invisible(NULL)
 }
 
+# The names R's d/p/qsurvreg results carry: those its arithmetic gives
+# (x - mean) / scale, or for quantiles p * scale + mean.
+.dpqr_named <- function(values, template) {
+  labels <- tryCatch(suppressWarnings(names(template())), error = function(e) NULL)
+  if (!is.null(labels) && length(labels) == length(values)) names(values) <- labels
+  values
+}
+
 dsurvreg <- function(x, mean, scale = 1, distribution = "weibull", parms) {
   .check_dpqr_null_query(x, distribution)
   uses_parms <- .dpqr_uses_parameters(distribution)
-  .as_numeric_vector(.call_r_api(
+  .dpqr_named(.as_numeric_vector(.call_r_api(
     "dsurvreg",
     x = .as_python_dpqr_vector(x),
     mean = .as_python_dpqr_vector(mean),
@@ -8622,13 +8661,13 @@ dsurvreg <- function(x, mean, scale = 1, distribution = "weibull", parms) {
     distribution = distribution,
     parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
     `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
-  ))
+  )), function() (x - mean) / scale)
 }
 
 psurvreg <- function(q, mean, scale = 1, distribution = "weibull", parms) {
   .check_dpqr_null_query(q, distribution)
   uses_parms <- .dpqr_uses_parameters(distribution)
-  .as_numeric_vector(.call_r_api(
+  .dpqr_named(.as_numeric_vector(.call_r_api(
     "psurvreg",
     q = .as_python_dpqr_vector(q),
     mean = .as_python_dpqr_vector(mean),
@@ -8636,13 +8675,13 @@ psurvreg <- function(q, mean, scale = 1, distribution = "weibull", parms) {
     distribution = distribution,
     parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
     `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
-  ))
+  )), function() (q - mean) / scale)
 }
 
 qsurvreg <- function(p, mean, scale = 1, distribution = "weibull", parms) {
   .check_dpqr_null_query(p, distribution, quantile = TRUE)
   uses_parms <- .dpqr_uses_parameters(distribution)
-  .as_numeric_vector(.call_r_api(
+  .dpqr_named(.as_numeric_vector(.call_r_api(
     "qsurvreg",
     p = .as_python_dpqr_vector(p),
     mean = .as_python_dpqr_vector(mean),
@@ -8650,7 +8689,7 @@ qsurvreg <- function(p, mean, scale = 1, distribution = "weibull", parms) {
     distribution = distribution,
     parms = if (!uses_parms || missing(parms)) NULL else .as_python_dpqr_parameters(parms),
     `_parms_null` = uses_parms && !missing(parms) && (is.null(parms) || is.list(parms))
-  ))
+  )), function() p * scale + mean)
 }
 
 rsurvreg <- function(n, mean, scale = 1, distribution = "weibull", parms) {
@@ -9219,6 +9258,15 @@ coef.survival_py_model <- function(object, ...) {
   } else {
     .as_numeric_vector(values)
   }
+  # A coefficient Python leaves undefined (NaN: aliased, or no events) is NA in R; with
+  # no events R's coefficients are rep(NA, nvar), a logical vector.
+  if (inherits(object, "survival_py_coxph")) {
+    values[is.nan(values)] <- NA_real_
+    nevent <- .result_field(object, "nevent")
+    if (length(values) && !is.null(nevent) && identical(as.numeric(nevent), 0)) {
+      values <- rep(NA, length(values))
+    }
+  }
   names(values) <- as.character(.call_r_api("coef_names", object))
   values
 }
@@ -9338,14 +9386,16 @@ nobs.survival_py_model <- function(object, use.fallback = FALSE, ...) {
   x
 }
 
+# stats' default reads object$df.residual, which a coxph fit lacks.
+df.residual.survival_py_coxph <- function(object, ...) NULL
+
 df.residual.survival_py_survreg <- function(object, ...) {
   as.numeric(.call_r_api("df_residual", object, ...))
 }
 
 extractAIC.survival_py_model <- function(fit, scale = 0, k = 2, ...) {
-  values <- .as_numeric_vector(.call_r_api("extract_aic", fit, scale = scale, k = k, ...))
-  names(values) <- c("df", "AIC")
-  values
+  # R's extractAIC methods return an unnamed c(edf, AIC).
+  unname(.as_numeric_vector(.call_r_api("extract_aic", fit, scale = scale, k = k, ...)))
 }
 
 formula.survival_py_model <- function(x, ...) {
@@ -9567,6 +9617,11 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
       result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
     }
   }
+  # R's robscore, like its other tests, is a named numeric vector.
+  if (is.list(result$robscore)) {
+    result$robscore <- vapply(c("test", "df", "pvalue"),
+      function(name) as.numeric(result$robscore[[name]]), numeric(1))
+  }
   class(result) <- c("summary.survival_py_model", class(result))
   result
 }
@@ -9703,11 +9758,28 @@ residuals.survival_py_model <- function(object, ..., type = NULL) {
   result <- do.call(.call_r_api, c(arguments, dots))
   # A multi-state fit's residuals come as a matrix with R's transition column names.
   if (.is_coxphms_fit(object) && .is_named_matrix_result(result)) return(.as_named_matrix(result))
+  labels <- if (metadata) result[c("row_names", "column_names", "constant")] else list()
   group_names <- if (metadata) result[["group_names"]] else NULL
   if (metadata) result <- result[["values"]]
   value <- .as_residual_result(object, result, type, terms = dots[["terms"]])
   if (is.null(group_names)) value <- .excluded_rows_na(object, value)
-  .attach_group_names(value, group_names)
+  value <- .attach_group_names(value, group_names)
+  # R names the rows names(object$residuals); partial residuals also have term columns
+  # and attr(, "constant").
+  rows <- as.character(unlist(labels[["row_names"]], use.names = FALSE))
+  if (length(rows)) {
+    if (is.matrix(value) && nrow(value) == length(rows)) {
+      rownames(value) <- rows
+    } else if (!is.matrix(value) && length(value) == length(rows)) {
+      names(value) <- rows
+    }
+  }
+  columns <- as.character(unlist(labels[["column_names"]], use.names = FALSE))
+  if (is.matrix(value) && length(columns) && ncol(value) == length(columns)) {
+    colnames(value) <- columns
+  }
+  if (!is.null(labels[["constant"]])) attr(value, "constant") <- as.numeric(labels[["constant"]])
+  value
 }
 
 anova.survival_py_model <- function(object, ..., test = "Chisq") {

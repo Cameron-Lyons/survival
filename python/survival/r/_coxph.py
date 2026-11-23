@@ -61,6 +61,7 @@ from ._fit import (
     _design_names_and_assign,
     _empty_prediction,
     _excluded_rows,
+    _fitted_row_labels,
     _fitted_xlevels,
     _model_frame,
     _model_frame_levels,
@@ -2181,13 +2182,7 @@ def predict_coxph(
         if not (fit_named or se_named):
             return row_result(None, None)
         if new is None:
-            omitted_rows = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
-            labels = _prediction_row_labels(
-                fit._prediction_rows,
-                fit.n + len(omitted_rows),
-                omitted_rows,
-                bool(_excluded_rows(fit.na_action)),
-            )
+            labels = _fitted_row_labels(fit._prediction_rows, fit.n, fit.na_action)
         else:
             count = new.n + len(new.missing)
             labels = _prediction_row_labels(
@@ -2445,7 +2440,18 @@ def residuals_coxph(
         if otype in {"martingale", "deviance", "partial"}
         else _drop_single_column(values, nvar)
     )
-    return {"values": output, "group_names": group_names} if with_group_names else output
+    if not with_group_names:
+        return output
+    # The R bridge's labels: R names the rows as names(object$residuals) and the partial
+    # residuals' columns by term, with attr(, "constant") unless naresid padded them.
+    labelled: dict[str, Any] = {"values": output, "group_names": group_names}
+    if group_names is None:
+        labelled["row_names"] = _fitted_row_labels(fit._prediction_rows, fit.n, fit.na_action)
+    if otype == "partial":
+        labelled["column_names"] = list(fit.assign)
+        if group_names is None and not excluded and _sparse_term(fit) is None:
+            labelled["constant"] = _terms_constant(fit)
+    return labelled
 
 
 _SURVFIT_TYPES = (

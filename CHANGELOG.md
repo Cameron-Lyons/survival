@@ -270,6 +270,17 @@ Numerical corrections are described under Fixed below.
 - The R bridge's `summary(coxph)$waldtest` tests `coef - init`, as R's `wald.test`
   does; it tested `coef`, so fits with `init` (or `iter.max = 0`) reported the wrong
   statistic.
+- R bridge results carry R's names and shapes:
+  - Cox and survreg residuals are named by model-frame row, with the rows
+    `na.exclude` pads named too. Partial residuals have their term columns (also
+    with `strata()`) and `attr(, "constant")`.
+  - `d/p/qsurvreg` keep the names R's arithmetic gives.
+  - `cipoisson` names its rows and limits as R does, and returns NaN with R's
+    warning for an Anscombe interval at `k = 0`.
+  - `extractAIC` is unnamed.
+  - `summary(coxph)$robscore` is a named vector.
+  - `df.residual` of a Cox fit is `NULL`.
+  - The coefficients of a Cox fit with no events are `NA`.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
