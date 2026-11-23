@@ -1250,6 +1250,24 @@ def _cox_curve_arrays(fit: CoxSurvfitResult) -> dict[str, NDArray[np.float64]]:
     return fit.to_arrays()
 
 
+def _cox_curve_array(fit: CoxSurvfitResult, name: str) -> NDArray[np.float64] | None:
+    """One curve field of a Cox curve for the R bridge, as a float64 array (``None``
+    when absent), read without building the field's lists."""
+
+    import numpy as np
+
+    values = fit._curve_values(name)
+    return None if values is None else np.array(values, dtype=np.float64)
+
+
+def _cox_curve_present(fit: CoxSurvfitResult, name: str, nonempty: bool = False) -> bool:
+    """Whether a Cox curve has field ``name`` (non-empty with ``nonempty``), for the R
+    bridge's checks, without building the field's lists."""
+
+    values = fit._curve_values(name)
+    return values is not None and (not nonempty or len(values) > 0)
+
+
 def _install_curve_fields(cls: type) -> None:
     """Route the dataclass's curve fields through :class:`_CurveField`.
 

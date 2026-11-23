@@ -407,3 +407,29 @@ def test_empty_curves_keep_their_list_shapes(cox, stratified):
     aggregated = r.aggregate_survfit(r.survfit(cox, newdata=NEWDATA), by=[1, 1, 2])
     assert aggregated.to_arrays()["cumhaz"].shape == (0,)
     assert aggregated.cumhaz == []
+
+
+def test_the_r_bridge_reads_one_curve_field_as_an_array(cox):
+    fit = r.survfit(cox, newdata=NEWDATA, se_fit=False)
+    read = survival.pybridge._cox_curve_array
+    np.testing.assert_array_equal(read(fit, "surv"), np.asarray(fit.__dict__["surv"].values))
+    assert read(fit, "lower") is None
+    assert not any(_listed(fit, name) for name in CURVES if _lazy(fit, name))
+    edited = r.survfit(cox)
+    edited.surv[0] = 0.25
+    assert read(edited, "surv")[0] == 0.25
+
+
+def test_the_r_bridge_checks_curve_fields_without_lists(cox):
+    fit = r.survfit(cox, newdata=NEWDATA, se_fit=False)
+    present = survival.pybridge._cox_curve_present
+    assert present(fit, "surv", True)
+    assert present(fit, "cumhaz", True)
+    assert not present(fit, "lower")
+    assert not present(fit, "std_err", True)
+    assert not any(_listed(fit, name) for name in CURVES if _lazy(fit, name))
+    empty = r_types.CoxSurvfitResult(
+        n=[0], time=[], n_risk=[], n_event=[], n_censor=[], surv=[], cumhaz=[], type="right"
+    )
+    assert present(empty, "cumhaz")
+    assert not present(empty, "cumhaz", True)

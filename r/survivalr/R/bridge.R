@@ -5916,14 +5916,26 @@ xtfrm.survival_py_surv <- function(x) {
   ) * (1 / scale)
 }
 
+# The curve fields of a Cox curve, which it stores as NumPy arrays.
+.cox_curve_fields <- c("surv", "cumhaz", "std_err", "std_chaz", "lower", "upper")
+
+# A curve field: a Cox curve's as one NumPy array (a vector, or an ntime x ncurve
+# matrix), read without building nested lists; other curves' as stored.
+.survfit_curve_field <- function(curve, name) {
+  if (.is_cox_curves(curve)) {
+    return(.python_attr("_cox_curve_array")(.restore_python(curve), name))
+  }
+  .result_field(curve, name)
+}
+
 .survfit_curve_quantile <- function(curve, probs, conf.int, scale, tolerance) {
   time <- .as_numeric_vector(.result_field(curve, "time"))
-  surv <- .as_numeric_vector(.result_field(curve, "surv"))
+  surv <- .as_numeric_vector(.survfit_curve_field(curve, "surv"))
   if (length(time) == 0L || length(surv) == 0L) {
     stop("quantile requires Kaplan-Meier survfit time and survival estimates", call. = FALSE)
   }
-  lower <- .as_numeric_vector(.result_field(curve, "lower"))
-  upper <- .as_numeric_vector(.result_field(curve, "upper"))
+  lower <- .as_numeric_vector(.survfit_curve_field(curve, "lower"))
+  upper <- .as_numeric_vector(.survfit_curve_field(curve, "upper"))
   firstx <- .result_field(curve, "start_time")
   if (is.null(firstx)) firstx <- 0
   if (length(lower) == 0L || length(upper) == 0L) {
@@ -5948,8 +5960,8 @@ xtfrm.survival_py_surv <- function(x) {
 }
 
 .survfit_curve_has_confint <- function(curve) {
-  length(.as_numeric_vector(.result_field(curve, "lower"))) > 0L &&
-    length(.as_numeric_vector(.result_field(curve, "upper"))) > 0L
+  length(.as_numeric_vector(.survfit_curve_field(curve, "lower"))) > 0L &&
+    length(.as_numeric_vector(.survfit_curve_field(curve, "upper"))) > 0L
 }
 
 quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
@@ -5997,7 +6009,7 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
   }
 
   conf.int <- if (!.survfit_curve_has_confint(x)) FALSE else if (conf.int) TRUE else FALSE
-  surv <- .survfit_quantile_curve_matrix(.result_field(x, "surv"))
+  surv <- .survfit_quantile_curve_matrix(.survfit_curve_field(x, "surv"))
   strata <- .result_field(x, "strata")
   strata_names <- if (.is_cox_curves(x)) as.character(.result_field(x, "strata_names"))
     else names(strata)
@@ -6007,8 +6019,12 @@ quantile.survival_py_survfit <- function(x, probs = c(0.25, 0.5, 0.75),
     sizes <- if (length(strata)) as.integer(.as_numeric_vector(strata)) else length(time)
     ends <- cumsum(sizes)
     starts <- c(0L, head(ends, -1L))
-    lower <- if (conf.int) .survfit_quantile_curve_matrix(.result_field(x, "lower")) else NULL
-    upper <- if (conf.int) .survfit_quantile_curve_matrix(.result_field(x, "upper")) else NULL
+    lower <- if (conf.int) {
+      .survfit_quantile_curve_matrix(.survfit_curve_field(x, "lower"))
+    } else NULL
+    upper <- if (conf.int) {
+      .survfit_quantile_curve_matrix(.survfit_curve_field(x, "upper"))
+    } else NULL
     firstx <- .result_field(x, "start_time")
     curve_names <- .result_field(x, "colnames")
     if (!is.null(curve_names)) curve_names <- as.character(unlist(curve_names, use.names = FALSE))
@@ -9362,6 +9378,9 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
     }), stringsAsFactors = FALSE, check.names = FALSE)
     curve <- .restore_python(object)
     present <- function(name, nonempty = FALSE) {
+      if (.is_cox_curves(object) && name %in% .cox_curve_fields) {
+        return(isTRUE(.python_attr("_cox_curve_present")(curve, name, nonempty)))
+      }
       value <- reticulate::py_get_attr(curve, name)
       !inherits(value, "python.builtin.NoneType") && (!nonempty || reticulate::py_len(value) > 0L)
     }
@@ -9939,7 +9958,7 @@ dim.survival_py_survfit <- function(x) {
   }
   if (length(subscripts) == 2L && is.character(subscripts[[2L]]) &&
       any(vapply(c("cumhaz", "std_err", "std_chaz", "lower", "upper"),
-        function(name) !is.null(.result_field(x, name)) && length(.result_field(x, name)) > 0L,
+        function(name) isTRUE(.python_attr("_cox_curve_present")(.restore_python(x), name, TRUE)),
         logical(1)))) stop("no 'dimnames' attribute for array", call. = FALSE)
   if ("strata" %in% names(selectors) && is.null(.result_field(x, "strata"))) {
     if (identical(selectors$strata, list(0L))) return(x)
