@@ -257,6 +257,29 @@ if (getRversion() >= "2.15.1") {
   .pybridge_attr("_r_model_frame")(columns, nrow(data), labels, metadata)
 }
 
+# R's matching of the names in ... for a wrapper whose R function takes them as
+# formals: a name that is a unique prefix of one formal not given exactly becomes that
+# formal, as R's partial matching does, and otherwise a unique prefix of one of
+# `control`'s names (R's coxph pmatches its extra arguments against coxph.control and
+# survreg passes them to survreg.control). Other names are left for Python to refuse.
+.r_partial_dots <- function(dots, formals, control = character()) {
+  tags <- names(dots)
+  if (is.null(tags)) return(dots)
+  given <- tags[tags %in% c(formals, control)]
+  for (k in seq_along(tags)) {
+    tag <- tags[[k]]
+    if (!nzchar(tag) || tag %in% given) next
+    hits <- setdiff(formals[startsWith(formals, tag)], given)
+    if (!length(hits)) hits <- setdiff(control[startsWith(control, tag)], given)
+    if (length(hits) == 1L) {
+      tags[[k]] <- hits
+      given <- c(given, hits)
+    }
+  }
+  names(dots) <- tags
+  dots
+}
+
 .eval_formula_dots <- function(dots, data, env, vector_args = character()) {
   if (is.null(dots) || length(dots) == 0L) {
     return(list())
@@ -7373,10 +7396,10 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
 }
 
 survfit0 <- function(x, ...) {
+  # R's survfit0(x, ...) ignores its other arguments (older code passes start.time).
   result <- .call_r_api(
     "survfit0",
     x,
-    ...,
     .wrap = c("survival_py_survfit", "survival_py_object")
   )
   .copy_survival_py_aggregate_context(x, result)
@@ -8066,7 +8089,12 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
 }
 
 coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
-  dots <- match.call(expand.dots = FALSE)$...
+  dots <- .r_partial_dots(
+    match.call(expand.dots = FALSE)$...,
+    c("weights", "init", "control", "ties", "singular.ok", "robust", "model", "x", "y",
+      "tt", "method", "id", "cluster", "istate", "statedata", "nocenter"),
+    c("eps", "toler.chol", "iter.max", "toler.inf", "outer.max", "timefix", "survcheckallow")
+  )
   evaluated_dots <- .eval_formula_dots(
     dots,
     data,
@@ -8428,7 +8456,12 @@ rsurvreg <- function(n, mean, scale = 1, distribution = "weibull", parms) {
 }
 
 survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
-  dots <- match.call(expand.dots = FALSE)$...
+  dots <- .r_partial_dots(
+    match.call(expand.dots = FALSE)$...,
+    c("weights", "dist", "init", "scale", "control", "parms", "model", "x", "y", "robust",
+      "cluster", "score"),
+    c("maxiter", "rel.tolerance", "toler.chol", "iter.max", "debug", "outer.max")
+  )
   evaluated_dots <- .eval_formula_dots(
     dots,
     data,
@@ -8490,7 +8523,7 @@ brier <- function(fit, times, newdata, ties = TRUE, detail = FALSE,
   .as_brier_result(.call_r_api(
     "brier",
     fit,
-    times = if (missing(times)) NULL else .as_python_vector(times),
+    times = if (missing(times)) NULL else as.list(as.numeric(times)),
     newdata = if (missing(newdata)) NULL else .as_python_data(newdata),
     ties = ties,
     detail = detail,
@@ -8523,19 +8556,30 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
   weight_values <- .eval_formula_arg(substitute(weights), missing(weights), data, env, vector = TRUE)
   cluster_values <- .eval_formula_arg(substitute(cluster), missing(cluster), data, env, vector = TRUE)
   subset_values <- .eval_formula_subset(substitute(subset), missing(subset), formula, data, env)
-  .call_r_api(
-    "concordance",
-    .as_formula_string(formula),
-    data = .as_python_data(data),
-    scores = score_values,
-    risk_scores = risk_score_values,
-    weights = weight_values,
-    cluster = cluster_values,
-    subset = subset_values,
-    `na.action` = .as_na_action(na.action),
-    ...,
-    .wrap = c("survival_py_concordance", "survival_py_object")
-  )
+  # concordance.formula's other formals, partially matched as R matches them; R's
+  # method ignores the rest of ..., such as std.err.
+  options <- c("ymin", "ymax", "timewt", "influence", "ranks", "reverse", "timefix",
+    "keepstrata")
+  extra <- .r_partial_dots(list(...), options)
+  extra <- extra[names(extra) %in% options]
+  if (!is.null(extra$timewt)) {
+    extra$timewt <- match.arg(extra$timewt, c("n", "S", "S/G", "n/G2", "I"))
+  }
+  do.call(.call_r_api, c(
+    list(
+      "concordance",
+      .as_formula_string(formula),
+      data = .as_python_data(data),
+      scores = score_values,
+      risk_scores = risk_score_values,
+      weights = weight_values,
+      cluster = cluster_values,
+      subset = subset_values,
+      `na.action` = .as_na_action(na.action)
+    ),
+    extra,
+    list(.wrap = c("survival_py_concordance", "survival_py_object"))
+  ))
 }
 
 coef.survival_py_concordance <- function(object, ...) {
@@ -8822,6 +8866,17 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
 
 cox.zph <- function(fit, transform = "km", terms = TRUE, singledf = FALSE,
                     global = TRUE, ...) {
+  if (is.function(transform)) {
+    # Any R function, sqrt and log among the primitives, runs in R on the times and is
+    # labelled as R labels it: deparse(substitute(transform)).
+    label <- deparse(substitute(transform))
+    if (length(label) > 1L) label <- "user"
+    f <- transform
+    transform <- .pybridge_attr("_named_transform")(
+      function(times) as.numeric(f(as.numeric(unlist(times)))),
+      label
+    )
+  }
   .call_r_api(
     "cox_zph",
     fit,

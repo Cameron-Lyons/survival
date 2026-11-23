@@ -4,6 +4,7 @@ Reference values were computed with R 4.5.3 and survival 3.8-12 on the bundled
 datasets; the R calls are quoted above each test.
 """
 
+import functools
 import math
 
 import pytest
@@ -13,6 +14,7 @@ from .helpers import setup_survival_import
 survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
+pybridge = survival.pybridge
 
 
 def _complete(data, *columns):
@@ -166,6 +168,10 @@ def test_a_function_transform_is_applied_to_the_stop_times(lung):
     anonymous = r.cox_zph(fit, transform=lambda times: times)
     assert anonymous.transform == "user"
     assert anonymous.table == r.cox_zph(fit, transform="identity").table
+    assert r.cox_zph(fit, transform=functools.partial(sqrt_times)).transform == "user"
+    # The R bridge names an R function as R does, by deparse(substitute(transform)).
+    labelled = pybridge._named_transform(sqrt_times, "function(t) sqrt(t)")
+    assert r.cox_zph(fit, transform=labelled).transform == "function(t) sqrt(t)"
     with pytest.raises(ValueError, match="one finite value per observation"):
         r.cox_zph(fit, transform=lambda times: times[1:])
     with pytest.raises(ValueError, match="one finite value per observation"):

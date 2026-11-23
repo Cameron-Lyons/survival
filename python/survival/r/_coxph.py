@@ -2838,7 +2838,9 @@ def cox_zph(
         transform_arg = transform_name
     elif callable(transform):
         name = getattr(transform, "__name__", "")
-        transform_name = name if name.isidentifier() else "user"
+        # A lambda or a callable without a name is "user"; other names (the R bridge's
+        # deparsed label among them) are kept.
+        transform_name = name if isinstance(name, str) and name and name[0] != "<" else "user"
         times = fit.fit.time if multistate else fit.y.time
         transform_arg = [float(value) for value in transform(list(times))]
     else:

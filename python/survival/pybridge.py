@@ -181,6 +181,16 @@ def _r_subset(rows: list[int]) -> Any:
     return _RSubset(rows)
 
 
+def _named_transform(function: Any, name: str) -> Any:
+    """An R function for ``cox.zph(transform=)`` under R's label for it."""
+
+    def transform(times: Any) -> Any:
+        return function(times)
+
+    transform.__name__ = name
+    return transform
+
+
 def _r_logical(values: Any) -> Any:
     """Retain R's logical declaration even when every value is NA or absent."""
     from .r._expression import _ExpressionVector
