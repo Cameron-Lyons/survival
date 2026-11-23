@@ -24,6 +24,17 @@ no robust-variance workspace is allocated. A fitted Cox model with optional
 `newdata` gives model-based curves, and a multi-state Cox model gives R's
 `survfit.coxphms` state-probability curves.
 
+A Cox curve (`CoxSurvfitResult`) keeps `surv`, `cumhaz`, `std_err`, `std_chaz`,
+`lower` and `upper` as float64 arrays and builds each field's nested lists on its
+first read; the fields read as R's vector for one curve or `ntime x ncurve` rows.
+`to_arrays()` returns independent writable NumPy snapshots of the time grid and
+curves without building any lists, and the package's own summaries, prints,
+quantiles, `survfit0`, subsets, aggregates, data frames and plot data read the
+arrays too. Once a field has been read, its lists are the curve: edits made to
+them in place reach those readers, pickles and copies, as before. The instance
+dictionary (`vars(fit)`) holds the stored arrays in a private wrapper; read the
+fields, `dataclasses.asdict(fit)` or `to_arrays()` instead.
+
 `surv_analysis.survfitkm` accepts NumPy arrays, pandas or Polars columns and
 sequences for right-censored and counting-process curves. It checks status values
 for binary codes, accepts integral floats and releases the GIL during fitting.

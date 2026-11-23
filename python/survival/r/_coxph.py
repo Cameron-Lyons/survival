@@ -132,6 +132,7 @@ from ._types import (
     _NumericDesignTerm,
     _PenaltyDesignTerm,
     _SingleDesignTerm,
+    _stored_curve,
 )
 
 _TIE_METHOD_NAMES = ("breslow", "efron", "exact")
@@ -2504,25 +2505,25 @@ def _curve_matrix(arrays: list[dict[str, Any]], name: str) -> np.ndarray | None:
     return np.vstack([block if len(block) else np.empty((0, width)) for block in blocks])
 
 
-def _curve_block(matrix: np.ndarray) -> list[Any]:
-    """A curve matrix as nested rows, or a vector for one column."""
+def _curve_field(matrix: np.ndarray) -> Any:
+    """A curve matrix as ``CoxSurvfitResult`` stores it: a vector for one column,
+    held as an array until it is read as lists. A curve without times is the empty
+    list it reads as."""
 
-    if matrix.ndim == 2 and matrix.shape[1] == 1:
-        return matrix[:, 0].tolist()
-    return matrix.tolist()
+    return _stored_curve(matrix[:, 0] if matrix.ndim == 2 and matrix.shape[1] == 1 else matrix)
 
 
 def _confidence_limits(
     surv: np.ndarray, std_err: np.ndarray, conf_type: str, conf_int: float
-) -> tuple[list[Any], list[Any]]:
+) -> tuple[Any, Any]:
     """``survfit_confint`` on the whole ``surv`` matrix at once, as R calls it (it works
     elementwise), with the limits cut back into rows."""
 
     band = _core.survfit_confint(surv.ravel(), std_err.ravel(), True, conf_type, conf_int)
     limits = band.to_arrays()
     return (
-        _curve_block(limits["lower"].reshape(surv.shape)),
-        _curve_block(limits["upper"].reshape(surv.shape)),
+        _curve_field(limits["lower"].reshape(surv.shape)),
+        _curve_field(limits["upper"].reshape(surv.shape)),
     )
 
 
@@ -2743,10 +2744,13 @@ def survfit_coxph(
     surv_matrix = _curve_matrix(arrays, "surv")
     std_err_matrix = _curve_matrix(arrays, "std_err") if include_se else None
     cumhaz_matrix = _curve_matrix(arrays, "cumhaz")
-    surv = [] if surv_matrix is None else _curve_block(surv_matrix)
-    std_err = None if std_err_matrix is None else _curve_block(std_err_matrix)
-    cumhaz = [] if cumhaz_matrix is None else _curve_block(cumhaz_matrix)
-    lower = upper = None
+    # The curves stay arrays until they are read as lists (see ``_CurveField``).
+    surv = [] if surv_matrix is None else _curve_field(surv_matrix)
+    std_err = None if std_err_matrix is None else _curve_field(std_err_matrix)
+    cumhaz = [] if cumhaz_matrix is None else _curve_field(cumhaz_matrix)
+    # A curve field accepts its ``_CurveArray`` where the list is declared.
+    lower: Any = None
+    upper: Any = None
     if surv_matrix is not None and std_err_matrix is not None and conf_type_name != "none":
         lower, upper = _confidence_limits(surv_matrix, std_err_matrix, conf_type_name, level)
     return CoxSurvfitResult(
@@ -2770,7 +2774,12 @@ def survfit_coxph(
         conf_int=level if conf_type_name != "none" else None,
         start_time=start,
         newdata=newdata,
-        colnames=column_names if surv and isinstance(surv[0], list) else None,
+        colnames=column_names
+        if surv_matrix is not None
+        and surv_matrix.ndim == 2
+        and surv_matrix.shape[0] > 0
+        and surv_matrix.shape[1] > 1
+        else None,
     )
 
 

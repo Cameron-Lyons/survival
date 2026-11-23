@@ -332,6 +332,9 @@ _R_BRIDGE_HELPERS = {
     "_survfit_strata_curves": ("_models", "_survfit_strata_curves"),
     "_penalty_control": ("_penalties", "_penalty_control"),
     "_subset_cox_survfit": ("_survfit", "_subset_cox_survfit"),
+    "_cox_curve_arrays": ("_types", "_cox_curve_arrays"),
+    "_cox_curve_array": ("_types", "_cox_curve_array"),
+    "_cox_curve_present": ("_types", "_cox_curve_present"),
     "_survreg_vcov_names": ("_survreg", "survreg_vcov_names"),
 }
 

@@ -182,7 +182,7 @@ def yates_setup(
         if kind in ("expected", "terms"):
             raise ValueError("type expected is not supported")
         baseline, horizon = _cox_survival_baseline(fit, options)
-        native = _core.YatesPrediction(baseline.time, baseline.cumhaz, horizon)
+        native = _core.YatesPrediction(baseline.time, baseline._curve_values("cumhaz"), horizon)
         return YatesSurvivalSetup(baseline, native, horizon)
     inverse = _inverse_link(fit)
     if inverse is not None:

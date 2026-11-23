@@ -40,9 +40,19 @@ Numerical corrections are described under Fixed below.
   (including `survexp_us()`) pickle and copy.
 - `coef`, `vcov`, `concat_surv` and `model_summary` have precise return types.
 - `PsplineBasis.to_arrays()` returns the basis matrix and knots as NumPy arrays.
+- `CoxSurvfitResult.to_arrays()` returns the time grid and the `surv`, `cumhaz`,
+  `std_err`, `std_chaz`, `lower` and `upper` curves as independent NumPy arrays,
+  without building the fields' nested lists.
 
 ### Performance
 
+- `survfit` on a Cox fit stores its curve matrices as arrays and builds a field's
+  nested lists on first read; summaries, prints, quantiles, `survfit0`, subsets,
+  aggregates, data frames and plot data read the arrays. `survfit(coxph,
+  newdata=)` is 3-3.6x faster, 50 ms instead of 182 ms for 1,000 new rows at 10^4
+  observations. The fields read as the same lists as before, and lists that have
+  been read keep carrying in-place edits through every reader, pickle and copy;
+  only `vars(fit)` now shows the stored arrays in a private wrapper.
 - Formula calls on list columns, as the bundled datasets and the `survSplit`,
   `finegray` and `tmerge` results hold them, classify each column from its
   distinct value types: `coxph` on 100,000 list rows is 1.6x faster and `survreg`
