@@ -9867,13 +9867,20 @@ dim.survival_py_survfit <- function(x) {
 .as_survival_py_cox_curve_list <- function(x) {
   vector <- function(name) .as_numeric_vector(.result_field(x, name))
   matrix <- isTRUE(.result_field(x, "has_data_margin"))
+  # One call converts every curve as a NumPy array: a vector, or an ntime x ncurve
+  # matrix that arrives as an R matrix, so neither side builds nested lists.
+  arrays <- .python_attr("_cox_curve_arrays")(.restore_python(x))
   curves <- function(name) {
-    value <- .result_field(x, name)
+    value <- arrays[[name]]
     if (is.null(value) || length(value) == 0L && name != "surv" && length(vector("time")))
       return(NULL)
     if (!matrix) return(.as_numeric_vector(value))
-    result <- base::matrix(as.numeric(unlist(value, recursive = TRUE, use.names = FALSE)),
-      nrow = length(vector("time")), ncol = as.integer(.result_field(x, "ncurve")), byrow = TRUE)
+    result <- if (is.matrix(value)) {
+      value
+    } else {
+      base::matrix(as.numeric(value), nrow = length(vector("time")),
+        ncol = as.integer(.result_field(x, "ncurve")), byrow = TRUE)
+    }
     labels <- .result_field(x, "colnames")
     if (name == "surv" && !is.null(labels)) colnames(result) <- as.character(labels)
     else dimnames(result) <- NULL

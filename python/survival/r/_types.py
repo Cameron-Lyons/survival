@@ -1243,6 +1243,13 @@ class CoxSurvfitResult:
         return _subset_cox_survfit(self, strata=strata, data=data, drop=drop)
 
 
+def _cox_curve_arrays(fit: CoxSurvfitResult) -> dict[str, NDArray[np.float64]]:
+    """The R bridge's reader of a Cox curve: :meth:`CoxSurvfitResult.to_arrays`, which
+    reticulate hands over as vectors and matrices without any nested lists."""
+
+    return fit.to_arrays()
+
+
 def _install_curve_fields(cls: type) -> None:
     """Route the dataclass's curve fields through :class:`_CurveField`.
 

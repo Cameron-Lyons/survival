@@ -379,3 +379,12 @@ def test_asdict_reads_the_lists(cox):
     as_dict = dataclasses.asdict(fit)
     assert as_dict["surv"] == fit.surv
     assert isinstance(as_dict["surv"], list)
+
+
+def test_the_r_bridge_reads_the_arrays_without_lists(cox):
+    fit = r.survfit(cox, newdata=NEWDATA)
+    arrays = survival.pybridge._cox_curve_arrays(fit)
+    assert set(arrays) == set(fit.to_arrays())
+    assert not any(_listed(fit, name) for name in CURVES if _lazy(fit, name))
+    assert arrays["surv"].shape == (len(fit.time), 3)
+    np.testing.assert_array_equal(arrays["surv"], np.asarray(fit.surv))
