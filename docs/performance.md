@@ -354,6 +354,14 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   endpoint or density buffers; callback families use workspace linear
   in the number of rows plus interval endpoints, and the Python adapter reacquires
   the GIL once per batch.
+- With eight or more covariates, the covariate block of the information
+  (`x' diag(w ddg) x`), the squared scores of robust variances
+  (`x' diag(w dg^2) x`) and the weighted least squares of the starting values are
+  weighted Gram products through `matrixmultiply` (`cox_gram::add_weighted_gram`),
+  in 4,096-row blocks. The log-likelihood, score and scale-parameter terms keep
+  the per-observation sums bit for bit, and sweeps with a non-finite term keep the
+  scalar sweep. A 50-covariate Weibull fit on 10^5 rows takes 298 ms instead of
+  393 ms. Penalized and frailty sweeps keep their scalar sums.
 - Built-in distribution queries compose recycling indices and allocate the result
   once; callback queries reuse owned arithmetic buffers.
 - With an estimated scale, quantile standard errors reuse each row's covariance

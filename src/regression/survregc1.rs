@@ -1,4 +1,5 @@
 use crate::error::SurvivalResult;
+use crate::regression::cox_gram::{GRAM_MIN_VARIABLES, add_weighted_gram, gram_scratch};
 use crate::regression::survreg_density::{SurvregDensitySource, check_density_batch};
 use crate::regression::survreg_distributions::SurvregDistribution;
 use crate::regression::survreg_kernels::{BuiltinKernel, with_builtin_kernel};
@@ -155,18 +156,52 @@ impl Contribution {
             }
         }
         if let Some(k) = scale {
-            let row = k * nvar2..k * nvar2 + x.len();
-            u[k] += w * self.dsig;
-            for (m, &xi) in imat[row.clone()].iter_mut().zip(x) {
-                *m -= self.dsg * xi * w;
+            self.accumulate_scale(x, k, w, u, imat, jj);
+        }
+    }
+
+    /// [`Self::accumulate`] without the covariate block of `imat` and `jj`, which
+    /// [`SurvregKernel::likelihood_sweep_gram`] adds as matrix products: the
+    /// score and the scale parameter's terms, with the same arithmetic.
+    fn accumulate_outside_block(
+        &self,
+        x: &[f64],
+        scale: Option<usize>,
+        w: f64,
+        u: &mut [f64],
+        imat: &mut [f64],
+        jj: Option<&mut [f64]>,
+    ) {
+        for (score, &xi) in u.iter_mut().zip(x) {
+            let temp = self.dg * xi * w;
+            *score += temp;
+        }
+        if let Some(k) = scale {
+            self.accumulate_scale(x, k, w, u, imat, jj);
+        }
+    }
+
+    fn accumulate_scale(
+        &self,
+        x: &[f64],
+        k: usize,
+        w: f64,
+        u: &mut [f64],
+        imat: &mut [f64],
+        jj: Option<&mut [f64]>,
+    ) {
+        let nvar2 = u.len();
+        let row = k * nvar2..k * nvar2 + x.len();
+        u[k] += w * self.dsig;
+        for (m, &xi) in imat[row.clone()].iter_mut().zip(x) {
+            *m -= self.dsg * xi * w;
+        }
+        imat[k * nvar2 + k] -= self.ddsig * w;
+        if let Some(jj) = jj {
+            for (q, &xi) in jj[row].iter_mut().zip(x) {
+                *q += self.dsig * xi * self.dg * w;
             }
-            imat[k * nvar2 + k] -= self.ddsig * w;
-            if let Some(jj) = jj {
-                for (q, &xi) in jj[row].iter_mut().zip(x) {
-                    *q += self.dsig * xi * self.dg * w;
-                }
-                jj[k * nvar2 + k] += self.dsig * self.dsig * w;
-            }
+            jj[k * nvar2 + k] += self.dsig * self.dsig * w;
         }
     }
 }
@@ -284,7 +319,113 @@ impl SurvregKernel<'_> {
     /// `survreg6`'s sweep over the observations: the log-likelihood, score,
     /// information and (with `with_jj`) the sum of squared scores, with
     /// `contribution(person, stratum, x)` giving each observation's terms.
+    /// With [`GRAM_MIN_VARIABLES`] or more covariates the covariate block of
+    /// the information comes from matrix products
+    /// ([`Self::likelihood_sweep_gram`]).
     fn likelihood_sweep(
+        &self,
+        design: &[f64],
+        with_jj: bool,
+        contribution: impl Fn(usize, usize, &[f64]) -> Contribution,
+    ) -> SurvregLikelihood {
+        if self.nvar() >= GRAM_MIN_VARIABLES
+            && let Some(likelihood) = self.likelihood_sweep_gram(design, with_jj, &contribution)
+        {
+            return likelihood;
+        }
+        self.likelihood_sweep_scalar(design, with_jj, contribution)
+    }
+
+    /// The covariate block `x' diag(w ddg) x` of the information, and with
+    /// `with_jj` `x' diag(w dg^2) x` of the squared scores, as weighted Gram
+    /// matrices: `O(n p^2)` through `matrixmultiply` instead of scalar sums.
+    /// The log-likelihood, score and scale-parameter terms are those of
+    /// [`Self::likelihood_sweep_scalar`], bit for bit. `None` when a weight or
+    /// entry is not finite, so that the scalar sweep keeps its arithmetic there.
+    fn likelihood_sweep_gram(
+        &self,
+        design: &[f64],
+        with_jj: bool,
+        contribution: &impl Fn(usize, usize, &[f64]) -> Contribution,
+    ) -> Option<SurvregLikelihood> {
+        let nvar = self.nvar();
+        let nvar2 = self.nvar2();
+        let n = self.n();
+        let mut loglik = 0.0;
+        let mut u = vec![0.0; nvar2];
+        let mut imat = vec![0.0; nvar2 * nvar2];
+        let mut jj = with_jj.then(|| vec![0.0; nvar2 * nvar2]);
+        let mut information_weights = Vec::with_capacity(n);
+        let mut score_weights = Vec::with_capacity(if with_jj { n } else { 0 });
+        for person in 0..n {
+            let stratum = self.stratum(person);
+            let x = &design[person * nvar..(person + 1) * nvar];
+            let contribution = contribution(person, stratum, x);
+            let w = self.weights[person];
+            loglik += contribution.g * w;
+            let scale = (self.nstrat != 0).then_some(nvar + stratum);
+            contribution.accumulate_outside_block(
+                x,
+                scale,
+                w,
+                &mut u,
+                &mut imat,
+                jj.as_deref_mut(),
+            );
+            information_weights.push(contribution.ddg * w);
+            if with_jj {
+                score_weights.push(contribution.dg * contribution.dg * w);
+            }
+        }
+        if !information_weights
+            .iter()
+            .chain(&score_weights)
+            .all(|value| value.is_finite())
+        {
+            return None;
+        }
+        let rows =
+            ArrayView2::from_shape((n, nvar), design).expect("one design row per observation");
+        let mut scratch = gram_scratch(n, nvar);
+        let mut block = Array2::zeros((nvar, nvar));
+        add_weighted_gram(&mut block, rows, &information_weights, -1.0, &mut scratch);
+        for i in 0..nvar {
+            for j in 0..=i {
+                imat[i * nvar2 + j] += block[[i, j]];
+            }
+        }
+        if let Some(jj) = jj.as_deref_mut() {
+            block.fill(0.0);
+            add_weighted_gram(&mut block, rows, &score_weights, 1.0, &mut scratch);
+            for i in 0..nvar {
+                for j in 0..=i {
+                    jj[i * nvar2 + j] += block[[i, j]];
+                }
+            }
+        }
+        let lower_finite = |values: &[f64]| {
+            (0..nvar2).all(|i| {
+                values[i * nvar2..=i * nvar2 + i]
+                    .iter()
+                    .all(|v| v.is_finite())
+            })
+        };
+        if !loglik.is_finite()
+            || !lower_finite(&imat)
+            || jj.as_deref().is_some_and(|jj| !lower_finite(jj))
+        {
+            return None;
+        }
+        Some(SurvregLikelihood {
+            loglik,
+            u,
+            imat: symmetric_from_lower(nvar2, imat),
+            jj: jj.map(|jj| symmetric_from_lower(nvar2, jj)),
+        })
+    }
+
+    /// R's sweep, adding each observation's terms to running sums.
+    fn likelihood_sweep_scalar(
         &self,
         design: &[f64],
         with_jj: bool,
