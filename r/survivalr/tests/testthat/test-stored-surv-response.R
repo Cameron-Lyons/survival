@@ -80,6 +80,14 @@ test_that("an unused Surv column of newdata is carried through curves and summar
   expect_equal(ours$pstate, reference$pstate)
   expect_equal(unclass(ours$sy)[], unclass(reference$sy)[])
   expect_s3_class(ours$sy, "Surv")
+  for (column in list(with_surv$sy, survival::Surv2(nd$futime, nd$death))) {
+    shown <- nd
+    shown$sy <- column
+    curves <- suppressWarnings(survfit(multistate, newdata = shown))
+    expect_output(print(curves))
+    expect_output(print(curves[1, ]))
+    expect_s3_class(as.data.frame(curves)$sy, class(column)[[1L]])
+  }
   # A Surv2 column is carried whole too.
   with_surv2 <- newdata
   with_surv2$s2 <- Surv2(newdata$time, newdata$status - 1)

@@ -851,9 +851,29 @@ attrassign <- function(object, tt) {
   values
 }
 
+.is_python_response <- function(value) {
+  inherits(value, c("survival.r._surv.Surv", "survival.r._surv.Surv2"))
+}
+
+# A data frame of Python columns; a Surv or Surv2 column is one matrix column, as in R.
+.as_r_frame <- function(columns, ...) {
+  response <- vapply(columns, .is_python_response, logical(1))
+  if (!any(response)) return(as.data.frame(columns, ...))
+  native <- lapply(columns[response], .as_native_response)
+  # Placeholders hold each column's place, which other list columns may shift.
+  placeholders <- paste0(".survival_response_", seq_along(native))
+  original <- names(columns)[response]
+  names(columns)[response] <- placeholders
+  columns[response] <- lapply(native, function(value) seq_len(nrow(value)))
+  frame <- as.data.frame(columns, ...)
+  at <- match(placeholders, names(frame))
+  for (k in seq_along(native)) frame[[at[[k]]]] <- native[[k]]
+  names(frame)[at] <- original
+  frame
+}
+
 .as_r_data_frame <- function(x, row.names = NULL, optional = FALSE, ...) {
-  columns <- .call_r_api("as_data_frame", x)
-  as.data.frame(columns, row.names = row.names, optional = optional, ...)
+  .as_r_frame(.call_r_api("as_data_frame", x), row.names = row.names, optional = optional, ...)
 }
 
 .as_summary_data_frame <- function(x, class_name, ...) {
@@ -6588,11 +6608,10 @@ model.frame.formula <- function(formula, ...) {
     time = .surv_na_times(.as_numeric_vector(.result_field(x, "time"))),
     status = as.integer(.as_nullable_numeric_vector(.result_field(x, "status")))
   )
+  states <- as.character(.result_field(x, "states"))
+  if (length(states)) attr(out, "states") <- states
   clabel <- .result_field(x, "clabel")
-  if (!is.null(clabel)) {
-    attr(out, "states") <- as.character(.result_field(x, "states"))
-    attr(out, "clabel") <- clabel
-  }
+  if (!is.null(clabel)) attr(out, "clabel") <- clabel
   attr(out, "repeated") <- .result_field(x, "repeated")
   class(out) <- "Surv2"
   out
@@ -9485,16 +9504,11 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
       dosum = if (missing(dosum)) NULL else dosum,
       data_frame = TRUE
     )
-    # A Surv or Surv2 column of newdata comes back whole; it is one matrix column, as in R.
-    surv <- vapply(columns, inherits, logical(1),
-      what = c("survival.r._surv.Surv", "survival.r._surv.Surv2"))
-    frame <- as.data.frame(lapply(columns[!surv], function(value) {
-      if (length(value)) unlist(value, use.names = FALSE) else numeric()
+    # A Surv or Surv2 column of newdata comes back whole.
+    frame <- .as_r_frame(lapply(columns, function(value) {
+      if (.is_python_response(value)) value
+      else if (length(value)) unlist(value, use.names = FALSE) else numeric()
     }), stringsAsFactors = FALSE, check.names = FALSE)
-    if (any(surv)) {
-      for (name in names(columns)[surv]) frame[[name]] <- .as_native_response(columns[[name]])
-      frame <- frame[names(columns)]
-    }
     curve <- .restore_python(object)
     present <- function(name, nonempty = FALSE) {
       if (.is_cox_curves(object) && name %in% .cox_curve_fields) {
