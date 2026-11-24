@@ -430,8 +430,17 @@ def _datetime_missing_mask(values: Any) -> Any | None:
 
 
 def _missing_row_indices(columns: list[tuple[str, Any]], n: int) -> set[int]:
+    from ._surv import Surv, Surv2, _missing_rows
+
     missing: set[int] = set()
     for name, values in columns:
+        if isinstance(values, Surv | Surv2):
+            # A survival object (a stored response) is one column, missing where
+            # is.na() is.
+            if len(values) != n:
+                raise ValueError(f"{name} must have length {n}")
+            missing.update(np.flatnonzero(_missing_rows(values)).tolist())
+            continue
         nat = _datetime_missing_mask(values)
         if nat is not None:
             if len(values) != n:
@@ -667,9 +676,14 @@ def _rows_of(source: Any, kept: list[Any]) -> Any:
     )
 
 
-def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
-    """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does."""
+def _select_rows(values: Any, rows: Sequence[int]) -> Any:
+    """``values[rows]`` as a list, keeping a factor's levels as R's ``[.factor`` does, and
+    a ``Surv`` or ``Surv2`` object whole."""
 
+    from ._surv import Surv, Surv2, _subset_surv
+
+    if isinstance(values, Surv | Surv2):
+        return _subset_surv(values, list(rows))
     # The factor classes' own __getitem__ is Python code; their storage's is not.
     if type(values) is _RFactorVector:
         getter = values._values.__getitem__
@@ -686,6 +700,12 @@ def _select_rows(values: Any, rows: Sequence[int]) -> list[Any]:
 
 
 def _subset_sequence(values: Any, indices: list[int], name: str) -> Any:
+    from ._surv import Surv, Surv2, _subset_surv
+
+    if isinstance(values, Surv | Surv2):
+        if indices and max(indices) >= len(values):
+            raise ValueError(f"{name} must have enough rows for subset")
+        return _subset_surv(values, indices)
     materialized = _coerce_array_like(values, name)
     if indices and max(indices) >= len(materialized):
         raise ValueError(f"{name} must have enough rows for subset")

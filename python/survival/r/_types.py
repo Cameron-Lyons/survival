@@ -343,7 +343,10 @@ class _SurvResponseSpec:
 
     ``surv`` is ``False`` for a formula such as ``time ~ 1`` (``pyears``, ``survexp``),
     whose single argument is the follow-up expression.  ``timeline`` marks a
-    ``Surv2(time, event)`` response, whose ``repeated`` option it keeps.
+    ``Surv2(time, event)`` response, whose ``repeated`` option it keeps.  ``stored``
+    marks a response that is already a ``Surv`` (or, with ``timeline``, ``Surv2``)
+    object, the data column (or variable) a bare name such as ``y ~ x`` reads; its only
+    column is that name, and ``type``/``origin`` are the object's own.
     """
 
     arguments: tuple[str, ...]
@@ -353,11 +356,16 @@ class _SurvResponseSpec:
     surv: bool = True
     timeline: bool = False
     repeated: bool | str = False
+    stored: bool = False
 
     @property
     def name(self) -> str:
         """R's name of the response column in the model frame."""
 
+        if self.stored:
+            # R deparses a symbol bare (`my y` is my y) and keeps a parenthesized one.
+            lhs = self.arguments[0]
+            return lhs if lhs.startswith("(") else self.columns[0]
         if not self.surv:
             return self.arguments[0]
         return f"{'Surv2' if self.timeline else 'Surv'}({', '.join(self.arguments)})"
@@ -1608,7 +1616,8 @@ class CoxSurvfitMultiStateResult:
     t0: float
     start_time: float | None
     strata: dict[str, int] | None
-    newdata: dict[str, list[Any]] | None = field(repr=False)
+    # Per-row values; a Surv or Surv2 column stays one object.
+    newdata: dict[str, Any] | None = field(repr=False)
     stype: int = 2
     ctype: int = 1
     time0: bool = False
@@ -1665,7 +1674,8 @@ class SummarySurvfitCoxmsResult:
     table: NamedMatrix
     rmean_endtime: list[float] | None
     states: list[str]
-    newdata: dict[str, list[Any]] | None = field(repr=False)
+    # Per-row values; a Surv or Surv2 column stays one object.
+    newdata: dict[str, Any] | None = field(repr=False)
     start_time: float | None = None
     strata_levels: list[str] | None = None
 

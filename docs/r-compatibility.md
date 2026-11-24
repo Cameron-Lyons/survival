@@ -54,6 +54,13 @@ alongside the corrected oracle.
 
 ### Formulas and model matrices
 
+- **Integer literals in penalty terms**: R's `coxph` and `survreg` stop with
+  "missing value where TRUE/FALSE needed" for any penalty term whose call holds an
+  integer literal, such as `pspline(age^2L)`, `pspline(age, df = 2L)` or
+  `frailty(inst + 0L)`. Model-frame names keep the `L` while term labels drop it,
+  so `match()` against the term labels returns NA. The port fits them; the
+  coefficients take the names R's constructors give (`ps(age^2L)3`,
+  `ridge(I(age^2))`).
 - **Strata interactions after a multi-column factor**: R's `predict.coxph` can
   remove the wrong columns when a strata interaction follows a multi-column
   factor, so linear prediction errors and term predictions can silently use
@@ -657,6 +664,9 @@ counts. Parallel fits preserve the sequential addition order.
 - `survSplit`: a row with a missing endpoint is episode 2 as in R, keeps its
   status and gets `added = FALSE`; `survsplit.c` leaves its censor flag
   uninitialized, so R's status and `added` there depend on memory contents.
+- `fromtimeline(y2 ~ x)` with a stored `Surv2` response needs `yname`; without it
+  the port raises "yname is required", where R fails while building the default
+  names ("object of type 'symbol' is not subsettable").
 - `survcondense` on data not sorted by id and time: R's two special-case
   branches (a single merged block) index `Y` by sorted position without
   `index[]` and move the wrong start time. For `data.frame(id = c(2, 1, 1),
@@ -697,6 +707,17 @@ counts. Parallel fits preserve the sequential addition order.
 
 ### Marginal means
 
+- `yates` over an ordered factor: R builds the population rows with treatment
+  columns but multiplies them by the fit's polynomial (`contr.poly`)
+  coefficients, so its means are wrong. For `lm(age ~ oe + sex, lung)` R gives
+  64.49 70.85 65.82 62.97, where the means of the predictions at each level are
+  61.23 61.39 66.27 69.08. The port codes the population with the fit's contrasts
+  and gives the latter, for `lm` and for Cox fits.
+- `yates` on a Cox fit with a `frailty()` term: R's Cmat gains a `frailty(inst)`
+  column and drops a factor column, so it is misaligned with the coefficients. For
+  `coxph(Surv(time, status) ~ ecog + age + frailty(inst), lung)` R gives
+  133.73 133.73 134.10 134.63. The port gives 0 0.367 0.898 2.152, the fit's
+  coefficient differences.
 - `yates` on a Cox fit with `strata()`: R builds its population rows with
   `model.matrix(Terms)`, which includes the strata column that the fit's design
   leaves out, so Cmat is misaligned with the coefficients (with an aliased

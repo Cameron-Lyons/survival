@@ -34,6 +34,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_factor_levels,
     _rows_of,
+    _select_rows,
     _start_time_value,
     _warn_outside_package,
 )
@@ -63,7 +64,7 @@ from ._formula import (
     _strata_term,
     _top_level,
 )
-from ._surv import Surv, _missing_rows
+from ._surv import Surv, Surv2, _missing_rows
 from ._types import (
     CoxSurvfitMultiStateResult,
     NaAction,
@@ -1257,14 +1258,19 @@ def _stacked_strata_labels(codes: Sequence[int]) -> list[str]:
     return [str(int(code) + 1) for code in codes]
 
 
-def _as_frame_columns(newdata: Any) -> dict[str, list[Any]]:
+def _as_frame_columns(newdata: Any) -> dict[str, Any]:
     """``newdata`` as named columns; a mapping of scalars is one row (R allows a named
-    list there)."""
+    list there). A ``Surv`` or ``Surv2`` column, which has no elements, stays whole."""
 
     columns = {str(name): _column_source(newdata, name) for name in _newdata_columns(newdata)}
-    if isinstance(newdata, Mapping) and all(np.ndim(value) == 0 for value in columns.values()):
+    if isinstance(newdata, Mapping) and all(
+        not isinstance(value, Surv | Surv2) and np.ndim(value) == 0 for value in columns.values()
+    ):
         return {name: [value] for name, value in columns.items()}
-    return {name: list(values) for name, values in columns.items()}
+    return {
+        name: values if isinstance(values, Surv | Surv2) else list(values)
+        for name, values in columns.items()
+    }
 
 
 def _share_dummies(fit: CoxphmsModel, newdata: dict[str, list[Any]]) -> dict[str, list[Any]]:
@@ -1310,7 +1316,7 @@ def _check_newdata_strata(fit: CoxphmsModel, newdata: dict[str, list[Any]]) -> N
 
 def _coxms_newdata(
     fit: CoxphmsModel, newdata: Any, na_action: Any | None
-) -> tuple[np.ndarray, np.ndarray | None, dict[str, list[Any]]]:
+) -> tuple[np.ndarray, np.ndarray | None, dict[str, Any]]:
     """``model.frame(Terms2, newdata, na.action)`` and ``model.matrix`` for the curves:
     the design and offset of the complete rows, and those rows of ``newdata``."""
 
@@ -1331,7 +1337,12 @@ def _coxms_newdata(
     kept = [row for row in range(new.n + len(missing)) if row not in missing]
     x = np.asarray(new.x, dtype=np.float64).reshape(new.n, len(fit.ms.x_names))
     offset = None if new.offset is None else np.asarray(new.offset, dtype=np.float64)
-    used = {name: [values[row] for row in kept] for name, values in columns.items()}
+    used = {
+        name: _select_rows(values, kept)
+        if isinstance(values, Surv | Surv2)
+        else [values[row] for row in kept]
+        for name, values in columns.items()
+    }
     return x, offset, used
 
 

@@ -38,6 +38,7 @@ from ._coerce import (
     _pop_dotted_keyword,
     _r_factor,
     _scalar_or_vector,
+    _select_rows,
     _start_time_value,
     _strata_value_label,
     _subset_indices,
@@ -65,6 +66,7 @@ from ._formula import (
 from ._names import _make_unique
 from ._surv import (
     Surv,
+    Surv2,
     _apply_surv_na_action,
     _complete_codes_fast,
     _strata,
@@ -286,7 +288,7 @@ def _formula_model_frame(
         name: _column_source(data, values) if isinstance(values, str) else values
         for name, values in extras.items()
     }
-    if _timeline_response(formula):
+    if _timeline_response(formula, data):
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
     elif subset is not None:
         data, extras = _subset_formula_inputs(formula, data, subset, **extras)
@@ -1620,11 +1622,12 @@ def _ordinary_summary_frame(
     columns: Mapping[str, Any],
     *,
     ncurve: int | None = None,
-    newdata: Mapping[str, Sequence[Any]] | None = None,
-) -> dict[str, list[Any]]:
-    """Summary rows in R's column order, stacking prediction columns if present."""
+    newdata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Summary rows in R's column order, stacking prediction columns if present. A
+    ``Surv`` or ``Surv2`` column of ``newdata`` is repeated by row and stays whole."""
 
-    frame: dict[str, list[Any]] = {}
+    frame: dict[str, Any] = {}
     for name in (
         "time",
         "n_risk",
@@ -1652,7 +1655,11 @@ def _ordinary_summary_frame(
         suffix = "_" if frame.keys() & newdata.keys() else ""
         ntime = len(columns["time"])
         for name, values in newdata.items():
-            frame[name + suffix] = [value for value in values for _ in range(ntime)]
+            if isinstance(values, Surv | Surv2):
+                rows = [row for row in range(len(values)) for _ in range(ntime)]
+                frame[name + suffix] = _select_rows(values, rows)
+            else:
+                frame[name + suffix] = [value for value in values for _ in range(ntime)]
     return frame
 
 
@@ -1662,16 +1669,17 @@ def _coxms_summary_frame(
     pstate: NDArray[np.float64],
     strata: list[str] | None,
     states: list[str],
-    newdata: Mapping[str, Sequence[Any]] | None,
-) -> dict[str, list[Any]]:
-    """Time/stratum rows vary fastest, then prediction rows, then states."""
+    newdata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Time/stratum rows vary fastest, then prediction rows, then states. A ``Surv`` or
+    ``Surv2`` column of ``newdata`` is repeated by row and stays whole."""
 
     nt, nd, ns = pstate.shape
 
     def by_state(values: list[list[float]]) -> list[float]:
         return [float(values[t][s]) for s in range(ns) for _ in range(nd) for t in range(nt)]
 
-    frame: dict[str, list[Any]] = {
+    frame: dict[str, Any] = {
         "time": time * (nd * ns),
         "n.risk": by_state(counts.n_risk),
         "n.event": by_state(counts.n_event),
@@ -1682,12 +1690,17 @@ def _coxms_summary_frame(
         frame["strata"] = strata * (nd * ns)
     frame["state"] = [state for state in states for _ in range(nd * nt)]
     suffix = "_" if newdata is not None and frame.keys() & newdata.keys() else ""
+    rows = [i for _ in range(ns) for i in range(nd) for _ in range(nt)]
     for name, values in (newdata or {}).items():
-        frame[name + suffix] = [values[i] for _ in range(ns) for i in range(nd) for _ in range(nt)]
+        frame[name + suffix] = (
+            _select_rows(values, rows)
+            if isinstance(values, Surv | Surv2)
+            else [values[i] for i in rows]
+        )
     return frame
 
 
-def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, list[Any]]:
+def _summary_coxms_frame(summary: SummarySurvfitCoxmsResult) -> dict[str, Any]:
     return _coxms_summary_frame(
         summary.time, summary, summary.pstate, summary.strata, summary.states, summary.newdata
     )

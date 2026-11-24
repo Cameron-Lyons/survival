@@ -14,7 +14,7 @@ import copy
 import math
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar, cast, overload
 
 import numpy as np
 
@@ -627,9 +627,27 @@ def as_character_surv(x: Any) -> list[str]:
     ]
 
 
-def _subset_surv(response: Surv, indices: list[int]) -> Surv:
+@overload
+def _subset_surv(response: Surv, indices: list[int]) -> Surv: ...
+
+
+@overload
+def _subset_surv(response: Surv2, indices: list[int]) -> Surv2: ...
+
+
+def _subset_surv(response: Surv | Surv2, indices: list[int]) -> Surv | Surv2:
     """Internal row selection, with -1 for an R model-frame missing row."""
 
+    if isinstance(response, Surv2):
+        if any(row < 0 for row in indices):
+            return Surv2._from_normalized(
+                time=[math.nan if row < 0 else response.time[row] for row in indices],
+                status=[None if row < 0 else response.status[row] for row in indices],
+                states=response.states,
+                repeated=response.repeated,
+                clabel=response.clabel,
+            )
+        return response.subset(indices)
     if any(row < 0 for row in indices):
         return Surv._from_normalized(
             time=[math.nan if row < 0 else response.time[row] for row in indices],

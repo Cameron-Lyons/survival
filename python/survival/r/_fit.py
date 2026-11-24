@@ -37,6 +37,7 @@ from ._formula import (
     _column_length,
     _column_or_values,
     _column_source,
+    _covariate_term_columns,
     _covariate_term_name,
     _data_row_count,
     _data_row_labels,
@@ -52,18 +53,20 @@ from ._formula import (
     _formula_missing_rows,
     _formula_model_frame,
     _formula_response_spec,
-    _formula_response_values,
     _FormulaRows,
     _na_action_record,
     _offset_vector,
     _parse_formula,
     _penalty_arguments,
+    _penalty_expressions,
+    _penalty_values,
     _prepare_formula_inputs,
     _strata_covariate,
     _strata_keep,
     _strata_specs,
     _strata_term_values,
     _subset_formula_inputs,
+    _surv_from_spec,
     _term_values,
     _with_evaluated_variables,
     _with_strata_cache,
@@ -318,11 +321,14 @@ def _model_matrix_column_names(term: _SingleDesignTerm) -> list[str]:
     width = len(term.names)
     if width == 1:
         return [prefix]
-    suffixes = (
-        term.columns
-        if term.kind == "ridge" and term.term.transform != "tt"
-        else tuple(str(j + 1) for j in range(width))
-    )
+    suffixes = tuple(str(j + 1) for j in range(width))
+    if term.kind == "ridge" and term.term.transform != "tt":
+        # ridge's cbind(...) names the columns of its symbol arguments only; with no
+        # symbol argument the matrix has no column names and R numbers them.
+        expressions = _penalty_expressions(term.term.call) if term.term.call else {}
+        named = tuple("" if column in expressions else column for column in term.columns)
+        if any(named):
+            suffixes = named
     return [prefix + suffix for suffix in suffixes]
 
 
@@ -357,13 +363,20 @@ def _model_matrix_newdata_design(design: _FormulaDesign, data: Any) -> _FormulaD
         if term.term.call is None:
             raise ValueError("a frailty term must have a function call")
         columns, options = _penalty_arguments(term.term.call)
-        source = _column_source(data, columns[0])
+        rows = len(_column(data, _covariate_term_columns(term.term)[0]))
+        values = _penalty_values(data, term.term.call, columns, rows)
+        source = (
+            values[columns[0]]
+            if columns[0] in _penalty_expressions(term.term.call)
+            else _column_source(data, columns[0])
+        )
         fresh = fit_penalty(
             term.term,
             columns,
-            {column: _column(data, column) for column in columns},
+            values,
             options,
             _mstate_categories(source),
+            _penalty_expressions(term.term.call),
         )
         if not fresh.penalty.sparse and len(fresh.levels) < 2:
             raise ValueError("not enough degrees of freedom to define contrasts")
@@ -709,8 +722,7 @@ def _newdata_response(newdata: Any, spec: _SurvResponseSpec | None) -> Surv | No
 
     if spec is None or not set(spec.columns) <= set(_newdata_columns(newdata)):
         return None
-    args = _formula_response_values(newdata, spec)
-    return Surv(*args, type=spec.type, origin=spec.origin)
+    return _surv_from_spec(newdata, spec)
 
 
 def _newdata_frame(

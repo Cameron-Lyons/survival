@@ -120,6 +120,8 @@ def _column_length(
     """``len(materialize(source, name))``, without the copy for a one-dimensional numeric
     array or column, whose values are scalars that neither reader would reject."""
 
+    if isinstance(source, Surv | Surv2):
+        return len(source)
     dtype = getattr(source, "dtype", None)
     if isinstance(dtype, np.dtype) and dtype.kind in "biuf" and getattr(source, "ndim", None) == 1:
         return len(source)
@@ -645,6 +647,8 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
 
     lhs = lhs.strip()
     if not (lhs.startswith(_SURV_CALLS) and lhs.endswith(")")):
+        if _stored_response_name(formula) is not None:
+            return _stored_response_spec(formula)
         raise ValueError("formula response must be Surv(...)")
     response_inner = lhs.partition("(")[2][:-1]
     if lhs.startswith(_SURV2_CALLS):
@@ -695,6 +699,59 @@ def _formula_response_spec(formula: str) -> _SurvResponseSpec:
         type=surv_type,
         origin=origin,
     )
+
+
+@lru_cache(maxsize=512)
+def _stored_response_name(formula: str) -> str | None:
+    """The variable a left-hand side that is a bare (or backquoted, or parenthesized)
+    name reads, the only left-hand side whose kind the data decides; else ``None``."""
+
+    lhs = formula.partition("~")[0].strip()
+    if not lhs or lhs.startswith(_SURV_CALLS):
+        return None
+    try:
+        tree = _parse_expression(lhs)
+    except ValueError:
+        return None
+    return str(tree.value) if tree.kind == "column" else None
+
+
+@lru_cache(maxsize=512)
+def _stored_response_spec(formula: str, timeline: bool = False) -> _SurvResponseSpec:
+    """The response spec of a bare-name left-hand side that holds a ``Surv`` (or, with
+    *timeline*, a ``Surv2``) object."""
+
+    name = _stored_response_name(formula)
+    if name is None:
+        raise ValueError("formula response must be Surv(...)")
+    lhs = formula.partition("~")[0].strip()
+    return _SurvResponseSpec(
+        arguments=(lhs,), columns=(name,), type=None, timeline=timeline, stored=True
+    )
+
+
+def _data_response_spec(formula: str, data: Any) -> _SurvResponseSpec | None:
+    """:func:`_response_spec`, except that a bare-name left-hand side whose value in
+    *data* is a ``Surv`` or ``Surv2`` object gives the stored response spec.
+
+    Only the callers that choose between a survival and a numeric response (model
+    frames, timeline data, concordance, survSplit) need it; the formula alone decides
+    every other left-hand side.
+    """
+
+    spec = _response_spec(formula)
+    name = _stored_response_name(formula)
+    if name is None or data is None:
+        return spec
+    try:
+        value = _column_source(data, name)
+    except (KeyError, TypeError, ValueError):
+        return spec
+    if isinstance(value, Surv2):
+        return _stored_response_spec(formula, True)
+    if isinstance(value, Surv):
+        return _stored_response_spec(formula)
+    return spec
 
 
 def _timeline_response_spec(inner: str) -> _SurvResponseSpec:
@@ -912,6 +969,30 @@ def _covariate_columns(terms: Iterable[_CovariateSpec]) -> list[str]:
     for term in terms:
         for factor in _covariate_factors(term):
             _append_unique(columns, _covariate_term_columns(factor))
+    return columns
+
+
+def _raw_columns(terms: Iterable[_CovariateSpec]) -> list[str]:
+    """The data columns that the missing-value scan reads as stored: those of
+    :func:`_covariate_columns`, except a penalty call's expression arguments, which the
+    scan reads as the evaluated variables they are (R's model frame holds the penalty
+    matrix, not its sources)."""
+
+    columns: list[str] = []
+    for term in terms:
+        for factor in _covariate_factors(term):
+            if factor.call is not None and factor.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
+                expressions = _penalty_expressions(factor.call)
+                _append_unique(
+                    columns,
+                    [
+                        name
+                        for name in _penalty_arguments(factor.call)[0]
+                        if name not in expressions
+                    ],
+                )
+            else:
+                _append_unique(columns, _covariate_term_columns(factor))
     return columns
 
 
@@ -1255,7 +1336,18 @@ def _covariate_term_columns(term: _CovariateTerm) -> list[str]:
     if term.strata:
         return list(term.strata.columns)
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
-        return _penalty_arguments(term.call)[0]
+        expressions = _penalty_expressions(term.call)
+        return list(
+            dict.fromkeys(
+                column
+                for name in _penalty_arguments(term.call)[0]
+                for column in (
+                    _expression_columns(expressions[name].arithmetic or "")
+                    if name in expressions
+                    else [name]
+                )
+            )
+        )
     if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
         return _expression_columns(basis_arguments(term.call)[0])
     if term.arithmetic is not None:
@@ -1372,6 +1464,10 @@ def _data_order(data: Any, columns: Sequence[str]) -> list[str]:
 def _column_rows(source: Any, name: str, rows: Sequence[int], index: np.ndarray, n: int) -> Any:
     """``source[rows]`` of the data column *name* (*index* is *rows* as an array)."""
 
+    if isinstance(source, Surv | Surv2):
+        if len(source) != n:
+            raise ValueError(f"variable lengths differ (found for '{name}')")
+        return _subset_surv(source, list(rows))
     array = _numeric_ndarray(source)
     if array is None:
         array = _numeric_ndarray(source, ndim=2)
@@ -1452,7 +1548,7 @@ def _subset_formula_inputs(
 def _with_response_cache(data: Any, spec: _SurvResponseSpec | None, n: int) -> Any:
     """Evaluate Surv before subset/na.action, then carry its normalized rows forward."""
 
-    if spec is None or not spec.surv or spec.timeline:
+    if spec is None or not spec.surv or spec.timeline or spec.stored:
         return data
     response = _surv_from_spec(data, spec)
     if not isinstance(data, _FormulaRows):
@@ -1503,22 +1599,35 @@ def _frame_variables(terms: _FormulaTerms) -> list[_CovariateTerm]:
 def _evaluated_variable(term: _CovariateTerm) -> _CovariateTerm:
     if term.special in {"offset", "cluster"}:
         term = replace(term, special=None)
-    if (
-        term.arithmetic is not None
-        and term.call is not None
-        and term.call.split("(", 1)[0] in BASIS_FUNCTIONS
-    ):
-        # Cache the argument, not the basis matrix. Its rows must survive subset
-        # and omission, including expressions such as scale(x) and NA^0.
-        return replace(term, call=None, categorical=False)
+    if term.arithmetic is not None and term.call is not None:
+        # Cache the argument, not the basis or penalty matrix. Its rows must survive
+        # subset and omission, including expressions such as scale(x) and NA^0.
+        function = term.call.split("(", 1)[0]
+        if function in BASIS_FUNCTIONS:
+            return replace(term, call=None, categorical=False)
+        if function in PENALTY_FUNCTIONS:
+            names = _penalty_arguments(term.call)[0]
+            expressions = _penalty_expressions(term.call)
+            if len(names) == 1 and names[0] in expressions:
+                return expressions[names[0]]
     return term
+
+
+def _with_penalty_expressions(variables: Iterable[_CovariateTerm]) -> Iterator[_CovariateTerm]:
+    """*variables*, each penalty call preceded by its expression arguments, which the
+    model frame evaluates like any transformed variable."""
+
+    for term in variables:
+        if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
+            yield from _penalty_expressions(term.call).values()
+        yield term
 
 
 def _evaluated_variables(variables: Iterable[_CovariateTerm]) -> list[_CovariateTerm]:
     return list(
         dict.fromkeys(
             term
-            for term in map(_evaluated_variable, variables)
+            for term in map(_evaluated_variable, _with_penalty_expressions(variables))
             if term.strata is None
             and (
                 _is_cut_call(term.call)
@@ -1648,7 +1757,7 @@ def _formula_missing_rows(
     if strata:
         raw.difference_update(column for spec in strata for column in spec.columns)
         raw.update(
-            set(_covariate_columns([term for term in variables if term.strata not in strata]))
+            set(_raw_columns([term for term in variables if term.strata not in strata]))
             & set(columns)
         )
         raw.update(required)
@@ -1656,8 +1765,14 @@ def _formula_missing_rows(
     if computed:
         raw.difference_update(_covariate_columns(computed))
         keys = set(computed)
-        ordinary = [term for term in variables if _evaluated_variable(term) not in keys]
-        raw.update(set(_covariate_columns(ordinary)) & set(columns))
+        # The strata above are scanned through their values, so only the other
+        # variables that are not evaluated read their columns as stored.
+        ordinary = [
+            term
+            for term in variables
+            if term.strata not in strata and _evaluated_variable(term) not in keys
+        ]
+        raw.update(set(_raw_columns(ordinary)) & set(columns))
         raw.update(required)
     sources = [(name, _column_source(data, name)) for name in columns if name in raw]
     sources.extend((_covariate_term_name(term), _term_values(data, term, n)) for term in computed)
@@ -1851,16 +1966,105 @@ _CALL_TERMS = ("tcut", "cut", *PENALTY_FUNCTIONS, *BASIS_FUNCTIONS)
 
 
 def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
-    """Parse data-column arguments and literal penalty options without eval."""
+    """The variable arguments and literal options of a penalty call, parsed without eval.
 
+    A bare data column keeps its name. Any other argument is an expression that R's
+    model frame evaluates, such as ``log(age)`` or ``factor(inst)``; it is named by its R
+    deparse, the name R's coefficients carry, and :func:`_penalty_expressions` holds the
+    formula variable that evaluates it."""
+
+    columns, options, _expressions = _parse_penalty_call(call)
+    return list(columns), {
+        name: list(value) if isinstance(value, list) else value for name, value in options.items()
+    }
+
+
+def _penalty_expressions(call: str) -> dict[str, _CovariateTerm]:
+    """The expression arguments of a penalty call, by deparsed name, as the formula
+    variables that evaluate their source text (the form a basis term's argument is
+    cached in)."""
+
+    return dict(_parse_penalty_call(call)[2])
+
+
+def _penalty_values(data: Any, call: str, names: Sequence[str], n: int) -> dict[str, Any]:
+    """The values of penalty arguments *names* at the rows of *data*: a data column as it
+    is stored, an expression as the formula evaluates it before subset and omission.
+
+    A factor argument follows R: ``ridge``'s ``cbind(...)`` reads its integer codes, and
+    ``pspline``'s ``range(x)`` stops. Frailty terms group by the factor's levels."""
+
+    expressions = _parse_penalty_call(call)[2]
+    kind = call.split("(", 1)[0]
+    values = {}
+    for name in names:
+        if name in expressions:
+            value = source = _term_values(data, expressions[name], n)
+        else:
+            value, source = _column(data, name), _column_source(data, name)
+        levels = _mstate_categories(source) if kind in {"ridge", "pspline"} else None
+        if levels is not None:
+            if kind == "pspline":
+                raise ValueError("'range' not meaningful for factors")
+            codes = {level: float(code) for code, level in enumerate(levels, start=1)}
+            value = [codes.get(level, _NA_REAL) for level in value]
+        values[name] = value
+    return values
+
+
+def _expression_key(node: Any) -> tuple[Any, ...]:
+    """An expression tree without its source text and parentheses: equal for spellings
+    of one expression, distinct for constants that differ past R's 15-digit deparse."""
+
+    return (
+        node.kind,
+        node.value,
+        node.names,
+        node.declared_kind,
+        node.declared_storage,
+        tuple(_expression_key(child) for child in node.children),
+    )
+
+
+@lru_cache(maxsize=512)
+def _parse_penalty_call(
+    call: str,
+) -> tuple[tuple[str, ...], dict[str, Any], dict[str, _CovariateTerm]]:
     columns = []
     options: dict[str, Any] = {}
+    expressions: dict[str, _CovariateTerm] = {}
+    # What each name reads: a column, or an expression's source. R's cbind() keeps two
+    # arguments that share a name apart (a column named `log(age)` beside log(age)),
+    # which arguments keyed by name cannot, so those are refused.
+    sources: dict[str, object] = {}
+
+    def claim(name: str, source: object, argument: str) -> None:
+        if sources.setdefault(name, source) != source:
+            raise ValueError(
+                f"penalty argument {argument!r} has the same name, {name!r}, as an earlier "
+                "argument that reads different values; rename the column or rewrite one "
+                "expression"
+            )
+
     for argument in _formula_response_parts(call.split("(", 1)[1][:-1]):
         named = _formula_named_option(argument)
         if named is None:
             name, quoted = _formula_name(argument)
             if _unsupported_formula_name(name, quoted):
-                raise ValueError(f"unsupported penalty variable {argument!r}")
+                # R evaluates the expression as written; only its name is deparsed.
+                source = argument.strip()
+                try:
+                    label = _expression_label(source, keep_integer=True)
+                    dependencies = _expression_columns(source)
+                except ValueError:
+                    dependencies = []
+                if not dependencies:
+                    raise ValueError(f"unsupported penalty variable {argument!r}") from None
+                claim(label, _expression_key(_parse_expression(source)), argument)
+                expressions[label] = _CovariateTerm(dependencies[0], arithmetic=source)
+                columns.append(label)
+                continue
+            claim(name, "column", argument)
             columns.append(name)
             continue
         name, value = named
@@ -1876,7 +2080,7 @@ def _penalty_arguments(call: str) -> tuple[list[str], dict[str, Any]]:
             options[name] = values[0] if len(values) == 1 else values
     if not columns:
         raise ValueError("penalty terms require a data column")
-    return columns, options
+    return tuple(columns), options, expressions
 
 
 _CALL_FORMALS = {
@@ -1907,7 +2111,11 @@ def _parse_call_term(term: str) -> _CovariateTerm | None:
         elif function in BASIS_FUNCTIONS:
             x = basis_arguments(term)[0]
         else:
-            x = _penalty_arguments(term)[0][0]
+            first = _penalty_arguments(term)[0][0]
+            expression = _penalty_expressions(term).get(first)
+            if expression is None:
+                return _CovariateTerm(first, categorical=True, call=term)
+            return replace(expression, categorical=True, call=term)
         column, quoted = _formula_name(x)
         if not _unsupported_formula_name(column, quoted):
             return _CovariateTerm(column, categorical=True, call=term)
@@ -2297,9 +2505,17 @@ def _fit_single_design_term(
         return _NumericDesignTerm(term)
     if term.call is not None and term.call.split("(", 1)[0] in PENALTY_FUNCTIONS:
         columns, options = _penalty_arguments(term.call)
-        penalty_values = {column: _column(full_data, column) for column in columns}
-        levels = _mstate_categories(_column_source(full_data, columns[0]))
-        return fit_penalty(term, columns, penalty_values, options, levels)
+        full_n = len(_column(full_data, _covariate_term_columns(term)[0]))
+        penalty_values = _penalty_values(full_data, term.call, columns, full_n)
+        first = columns[0]
+        levels = _mstate_categories(
+            penalty_values[first]
+            if first in _penalty_expressions(term.call)
+            else _column_source(full_data, first)
+        )
+        return fit_penalty(
+            term, columns, penalty_values, options, levels, _penalty_expressions(term.call)
+        )
     if term.call is not None and term.call.split("(", 1)[0] in BASIS_FUNCTIONS:
         _expression, options = basis_arguments(term.call)
         columns = _covariate_term_columns(term)
@@ -2565,6 +2781,8 @@ def _single_design_columns(
             penalty_values = {
                 spec.columns[0]: _numeric_variable(data, _evaluated_variable(spec.term), n)
             }
+        elif spec.basis is None and spec.term.call is not None:
+            penalty_values = _penalty_values(data, spec.term.call, spec.columns, n)
         else:
             penalty_values = {column: _column(data, column) for column in spec.columns}
         if any(len(penalty_value) != n for penalty_value in penalty_values.values()):
@@ -2860,7 +3078,8 @@ def _formula_model_frame(
         raise ValueError("survival model frame requires a response specification")
     frame: dict[str, Any] = {design.response.name: response}
     columns: list[str] = []
-    _append_unique(columns, design.response.columns)
+    if not design.response.stored:
+        _append_unique(columns, design.response.columns)
     _append_unique(columns, _formula_design_columns(design, include_unused=True))
     _append_unique(columns, list(design.strata))
     _append_unique(columns, list(extra_columns))
@@ -2927,6 +3146,11 @@ def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
     cached = getattr(data, "response_cache", None) if isinstance(data, _FormulaRows) else None
     if cached is not None and cached[0] == spec:
         return cached[1]
+    if spec.stored and not spec.timeline:
+        value = _column_source(data, spec.columns[0])
+        if isinstance(value, Surv):
+            return value
+        raise ValueError("response must be a survival object")
     if spec.timeline:
         raise ValueError("response must be a survival object")
     args = _formula_response_values(data, spec)
@@ -2938,6 +3162,11 @@ def _surv_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv:
 def _surv2_from_spec(data: Any, spec: _SurvResponseSpec) -> Surv2:
     """Evaluate a ``Surv2(...)`` response spec against *data*."""
 
+    if spec.stored:
+        value = _column_source(data, spec.columns[0])
+        if isinstance(value, Surv2):
+            return value
+        raise ValueError("response must be a survival object")
     time, event = _formula_response_values(data, spec)
     return Surv2(time, event, spec.repeated)
 
@@ -2980,7 +3209,9 @@ def _timeline_counting(
     }
     if subset is not None:
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
-    spec = _formula_response_spec(formula)
+    spec = _data_response_spec(formula, data)
+    if spec is None or not spec.surv:
+        raise ValueError("response must be a survival object")
     response: Surv | Surv2
     if spec.timeline:
         response = _surv2_from_spec(data, spec)
@@ -3058,12 +3289,19 @@ def _timeline_counting(
     return counting_formula, _FormulaRows(columns, len(rows)), converted
 
 
-def _timeline_response(formula: Any) -> bool:
-    """Whether *formula* is a formula string with a ``Surv2`` response."""
+_TIMELINE_RESPONSE_NAMES = frozenset(
+    _formula_response_spec(f"Surv({', '.join(f'`{name}`' for name in names)}) ~ 1").name
+    for names in ((_TSTART, _TSTOP, _STATUS), (_TSTOP, _STATUS))
+)
+
+
+def _timeline_response(formula: Any, data: Any = None) -> bool:
+    """Whether *formula* is a formula string with a ``Surv2`` response: a ``Surv2(...)``
+    call, or a bare name whose value in *data* is a ``Surv2`` object."""
 
     if not isinstance(formula, str):
         return False
-    spec = _response_spec(formula)
+    spec = _data_response_spec(formula, data)
     return spec is not None and spec.timeline
 
 
@@ -3072,7 +3310,9 @@ def _timeline_model_frame(columns: dict[str, Any], formula: str) -> dict[str, An
     R's: the counting-process response (the first column) under the ``Surv2`` name,
     without the columns it was built from.  Other formulas' frames are returned as is."""
 
-    if not _timeline_response(formula):
+    # The frame, not the formula, says whether it was fitted on timeline data (a stored
+    # Surv2 response is a bare name): its response is _timeline_counting's.
+    if next(iter(columns), None) not in _TIMELINE_RESPONSE_NAMES:
         return columns
     (_name, response), *rest = columns.items()
     reserved = {_TSTART, _TSTOP, _STATUS}
@@ -3197,7 +3437,7 @@ def model_frame(
         data, arguments = _subset_formula_inputs(formula, data, subset, **arguments)
     data, arguments, removed = _apply_formula_na_action(formula, data, action, **arguments)
 
-    spec = _response_spec(formula)
+    spec = _data_response_spec(formula, data)
     n = _formula_input_row_count(data, formula, arguments)
     response: Surv | Surv2 | None = None
     y: list[float] | np.ndarray | None = None
@@ -3212,10 +3452,17 @@ def model_frame(
         n = len(y)
     terms = _split_terms(rhs, _dot_terms(data, list(spec.columns) if spec else []))
 
-    aligned: dict[str, list[Any] | None] = {}
+    aligned: dict[str, Any] = {}
     for name, values in arguments.items():
         if values is None:
             aligned[name] = None
+            continue
+        if isinstance(values, Surv | Surv2):
+            # An extra column holding a survival object (survexp's individual methods
+            # carry a rate table's stored response) stays whole.
+            if len(values) != n:
+                raise ValueError(f"{name} must have the same length as the response")
+            aligned[name] = values
             continue
         materialized = _materialize_labels(values, name)
         if len(materialized) == 1 and n != 1 and name in extra_names:
@@ -3245,7 +3492,12 @@ def model_frame(
         cluster=aligned["cluster"],
         istate=aligned["istate"],
         na_action=_na_action_record(action, removed),
-        extra={name: _rows_of(arguments[name], aligned[name] or []) for name in extra_names},
+        extra={
+            name: aligned[name]
+            if isinstance(aligned[name], Surv | Surv2)
+            else _rows_of(arguments[name], aligned[name] or [])
+            for name in extra_names
+        },
     )
 
 

@@ -55,17 +55,17 @@ from ._formula import (
     _column,
     _column_source,
     _data_column_names,
+    _data_response_spec,
     _data_row_count,
     _formula_name,
     _model_strata,
     _model_variables,
     _prepare_formula_inputs,
-    _response_spec,
     _timeline_counting,
     _unsupported_formula_name,
     model_frame,
 )
-from ._surv import Surv, Surv2
+from ._surv import Surv, Surv2, _subset_surv
 from ._types import ModelFrame, TcutResult, TmergeFrame, TmergeOperation, _SurvResponseSpec
 
 _NEARDATE_TIME_UNITS = {
@@ -743,15 +743,18 @@ def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> d
     return {name: _select_rows(values, rows) for name, values in columns.items()}
 
 
-def _split_data(data: Any, rows: Sequence[int]) -> dict[str, list[Any]]:
+def _split_data(data: Any, rows: Sequence[int]) -> dict[str, Any]:
     """``data[rows, ]`` column by column; plain numeric arrays, and pandas columns of a
     numpy numeric dtype or with categorical codes, are indexed directly."""
 
     sources = _data_column_sources(data, "data")
     index = np.asarray(rows, dtype=np.intp)
     top = index.max() if len(index) else -1
-    frame: dict[str, list[Any]] = {}
+    frame: dict[str, Any] = {}
     for column, source in sources.items():
+        if isinstance(source, Surv | Surv2):
+            frame[column] = _subset_surv(source, list(rows))
+            continue
         array = source if type(source) is np.ndarray else None
         if type(source).__name__ == "Series" and isinstance(source.dtype, np.dtype):
             # Only a numpy dtype: a nullable column's to_numpy() would turn its NA into NaN.
@@ -792,11 +795,13 @@ def _data_column_sources(data: Any, name: str) -> dict[str, Any]:
     return {column: _column_source(data, column) for column in names}
 
 
-def _data_columns(data: Any, name: str) -> dict[str, list[Any]]:
+def _data_columns(data: Any, name: str) -> dict[str, Any]:
     """Every retained column as a list, in data order."""
 
     columns = {
-        column: _rows_of(source, _materialize_1d(source, column))
+        column: source
+        if isinstance(source, Surv | Surv2)
+        else _rows_of(source, _materialize_1d(source, column))
         for column, source in _data_column_sources(data, name).items()
     }
     if len({len(values) for values in columns.values()}) > 1:
@@ -889,7 +894,7 @@ def survSplit(
     timefix: bool = True,
     response: Any | None = None,
     **kwargs: Any,
-) -> dict[str, list[Any]]:
+) -> dict[str, Any]:
     """R's ``survSplit``: split survival records at the ``cut`` times.
 
     ``formula`` is ``Surv(...) ~ terms`` or, for timeline data, ``Surv2(...) ~ terms``,
@@ -933,8 +938,13 @@ def survSplit(
     names = _data_column_names(data) or []
     added_id = False
     if idname is not None and idname not in names:
-        spec = _response_spec(formula)
-        if spec is not None and spec.surv and not spec.timeline and len(spec.arguments) == 2:
+        spec = _data_response_spec(formula, data)
+        if (
+            spec is not None
+            and spec.surv
+            and not spec.timeline
+            and (spec.stored or len(spec.arguments) == 2)
+        ):
             n = _data_row_count(data, formula)
             data = {str(name): _column_source(data, str(name)) for name in names}
             data[idname] = list(range(1, n + 1))
@@ -967,6 +977,13 @@ def survSplit(
                 raise ValueError("id column is missing from the model frame")
             newdata[idname] = [mf.id[row] for row in rows]
     states = () if mf.response is None else mf.response.states
+    if mf.spec is not None and mf.spec.stored and mf.response is not None:
+        # R stores the split response under the response's name; it stops for any other
+        # left-hand side that is not a Surv() call, (y) among them.
+        if mf.spec.arguments[0].startswith("("):
+            raise ValueError("trouble making new names, left hand side not recognized")
+        newdata[mf.spec.name] = _split_response(mf.response, split)
+        return _split_extras(newdata, split, episode, added)
     time_name, time2_name, event_name = _surv_argument_names(mf)
     if isinstance(mf.response, Surv2):
         start = time_name or start or "tstart"
@@ -986,6 +1003,32 @@ def survSplit(
     return _split_extras(newdata, split, episode, added)
 
 
+def _split_response(response: Surv | Surv2, split: Any) -> Surv | Surv2:
+    """The split response a stored ``Surv`` column becomes: ``Surv(tstart, tstop, status)``,
+    or a ``Surv2`` of the new start times.  (R's ``cbind(zero, Y)`` drops the ``Surv`` class
+    of ``(time, status)`` data and stores ``Surv2(tstart, status)``; see the R compatibility
+    notes.)"""
+
+    codes = [None if code is None or code != code else int(code) for code in split.status]
+    if isinstance(response, Surv2):
+        return Surv2._from_normalized(
+            time=list(split.start),
+            status=codes,
+            states=response.states,
+            repeated=response.repeated,
+            clabel=response.clabel,
+        )
+    return Surv._from_normalized(
+        time=list(split.end),
+        event=codes,
+        start=list(split.start),
+        time2=None,
+        surv_type="mcounting" if response.states else "counting",
+        states=response.states,
+        clabel=response.clabel,
+    )
+
+
 def _survsplit_object(
     response: Any,
     data: Any | None,
@@ -998,7 +1041,7 @@ def _survsplit_object(
     event: str | None,
     episode: str | None,
     added: str | None,
-) -> dict[str, list[Any]]:
+) -> dict[str, Any]:
     """``survSplit`` for a ``Surv``/``Surv2`` object plus a frame of covariates."""
 
     split = _split_kernel(response, cut, zero, timefix, id)
@@ -1018,8 +1061,8 @@ def _survsplit_object(
 
 
 def _split_extras(
-    newdata: dict[str, list[Any]], split: Any, episode: str | None, added: str | None
-) -> dict[str, list[Any]]:
+    newdata: dict[str, Any], split: Any, episode: str | None, added: str | None
+) -> dict[str, Any]:
     """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns."""
 
     if episode is not None:
@@ -1054,9 +1097,13 @@ def fromtimeline(
         raise ValueError("the data argument is required")
     if id is None:
         raise ValueError("the id argument is required")
-    spec = _response_spec(formula)
+    spec = _data_response_spec(formula, data)
     if spec is None or not spec.surv:
         raise ValueError("response must be a survival object")
+    if spec.stored and yname is None:
+        # R's default names come from the Surv2() call's arguments, which a stored
+        # response lacks (R: "object of type 'symbol' is not subsettable").
+        raise ValueError("yname is required when the response is a stored Surv2 object")
     counting_formula, rows, arguments = _timeline_counting(
         formula,
         data,
@@ -1135,7 +1182,7 @@ def survcondense(
     end: str | None = None,
     event: str | None = None,
     **kwargs: Any,
-) -> dict[str, list[Any]]:
+) -> dict[str, Any]:
     """R's ``survcondense``: merge adjacent ``(start, stop]`` rows with equal covariates."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
@@ -1173,7 +1220,7 @@ def survcondense(
     )
     keep = list(condensed.keep)
     new_start = condensed.start
-    output: dict[str, list[Any]] = {}
+    output: dict[str, Any] = {}
     for name, values in variables:
         output.setdefault(name, _select_rows(values, keep))
     if mf.weights is not None:
@@ -1181,6 +1228,20 @@ def survcondense(
         output.setdefault(str(weights_column), [mf.weights[row] for row in keep])
     id_column = id if isinstance(id, str) else "id"
     output.setdefault(str(id_column), [mf.id[row] for row in keep])
+    if mf.spec is not None and mf.spec.stored:
+        # R stores the condensed response under the response's name (newdata[temp] <- Y).
+        if mf.spec.arguments[0].startswith("("):
+            raise ValueError("left hand side not recognized")
+        output[mf.spec.name] = Surv._from_normalized(
+            time=[response.time[row] for row in keep],
+            event=[response.event[row] for row in keep],
+            start=[new_start[row] for row in keep],
+            time2=None,
+            surv_type=response.type,
+            states=response.states,
+            clabel=response.clabel,
+        )
+        return output
     time_name, time2_name, event_name = _surv_argument_names(mf)
     output[_output_name(start or time_name or "tstart", "start")] = [new_start[row] for row in keep]
     output[_output_name(end or time2_name or "tstop", "end")] = [response.time[row] for row in keep]

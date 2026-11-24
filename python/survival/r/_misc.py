@@ -563,7 +563,7 @@ def survcheck(
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
     extras = {"id": id, "istate": istate}
-    if _timeline_response(formula):
+    if _timeline_response(formula, data):
         formula, data, extras = _timeline_counting(formula, data, subset, extras)
         subset = None
     frame = _model_frame(formula, data, subset, na_action, **extras)

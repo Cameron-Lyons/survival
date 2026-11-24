@@ -23,9 +23,8 @@
 
 ### Performance
 
-- Replaced O(n²) Gönen–Heller concordance in `royston` with an exact O(n log n)
-  parallel block-Taylor + exponential-suffix algorithm, with NumPy/GIL-detached
-  Python bindings.
+- Switched `royston` Python bindings to zero-copy NumPy extraction and GIL
+  release.
 - Rewrote `strata` with O(n) zero-heap flat-table paths, NumPy integer-array
   extraction, GIL release, and lazy `StrataFactor.labels` / contiguous NumPy
   codes for single-column numeric strata in `survfit` and `survdiff`.
@@ -62,6 +61,13 @@ Numerical corrections are described under Fixed below.
 
 ### Added
 
+- A response may be a `Surv` or `Surv2` object stored in the data, R's `y ~ x`
+  idiom (`d$y <- Surv(time, status); coxph(y ~ age, d)`). It works in Python and in
+  the R bridge, with survival's `Surv` matrices or survivalr's `Surv` as columns. Every
+  formula fitter and data-preparation function reads it as R's model frame does;
+  `survSplit` and `survcondense` store their result under the response's name.
+  A survival-object column of `newdata` is kept whole through Cox curves, their
+  subsets and `summary(data.frame = TRUE)`, as one `Surv` or `Surv2` column.
 - Typed Rust multistate Cox fitting and curve APIs, available without Python,
   with named results and validation of mutable input fields.
 - Spline and polynomial formula terms accept composed numeric inputs, including
@@ -72,6 +78,12 @@ Numerical corrections are described under Fixed below.
   `survival::tt(...)`, `survival::ridge(...)` and the `survival::frailty*` terms as
   the specials, as R's `removeDoubleColonSurv()` does: the fit is the unprefixed
   formula's, and stores that formula.
+- Penalty terms evaluate expression arguments as R's model frame does:
+  `pspline(log(age))`, `ridge(age, I(age^2))` and `frailty(factor(inst))` fit as
+  the same terms on precomputed columns, before row selection and with their
+  missing values, in fits, predictions and model matrices. Coefficients carry R's
+  deparsed names (`ps(log(age))3`, `ridge(I(age^2))`), and ridge's matrix columns
+  follow `cbind()`'s names. Backquoted column names still read the column.
 - `summary_survfit(..., data_frame=True)` supports ordinary and multi-state Cox
   curves, with requested-time selection and new-data columns.
 - `survival.datasets.load_uspop2()` provides R's complete US population
@@ -237,9 +249,23 @@ Numerical corrections are described under Fixed below.
   order, so results are bitwise identical. Survival predictions for 10,000 rows
   take 2.4 s instead of 12.5 s, and risk predictions for 100,000 rows take
   0.31 s instead of 0.91 s.
+- `royston()` computes Gönen and Heller's concordance in O(n log n) work instead of
+  summing all n²/2 pairs: pairs across sorted halves use separated Chebyshev
+  expansions of the logistic kernel, saturated pairs count as one and small blocks
+  are summed directly, with compensated sums throughout. The result is within a few
+  ulps of the exact pair sum and no longer depends on the thread count. 100,000
+  rows take 38 ms instead of 1.7 s.
 
 ### Fixed
 
+- The R bridge's `yates`:
+  - runs on Cox fits with `pspline()` or `ridge()` terms, aligning their basis
+    columns with the coefficients by position as R does, and on fits with ordered
+    factors, which keep their polynomial contrasts. All three refused with
+    "population design does not match fitted coefficients".
+  - runs with `predict = "survival"` for survivalr Cox fits, which failed assigning
+    into the immutable Python curve.
+  - has R's `print.yates` layout, through the port's report.
 - R bridge arguments are matched as R matches them:
   - `coxph` and `survreg` take partial names of their formals and of their control
     options passed through `...`. Examples are `coxph(..., meth = "breslow")`,
@@ -253,6 +279,12 @@ Numerical corrections are described under Fixed below.
   - `cox.zph(transform = sqrt)` takes any R function, primitives included. It is
     labelled `deparse(substitute(transform))` as in R, also in Python's `cox_zph`
     for callables other than lambdas.
+- `ridge()` reads a factor argument's level codes, as R's `cbind()` does, and
+  `pspline()` rejects a factor with R's "'range' not meaningful for factors";
+  before, both read the factor's labels.
+- `strata(x, na.group = TRUE)` keeps its missing-x stratum when the formula also
+  has a transformed variable such as `log(ph.karno)`; the transformed variable's
+  evaluation had returned x to the missing-value scan.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
