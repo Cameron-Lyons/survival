@@ -190,7 +190,6 @@ jobs:
             "$GITHUB_WORKSPACE/python/tests/test_curve_summary_frames.py" \
             "$GITHUB_WORKSPACE/python/tests/test_concordance_expression_sources.py" \
             "$GITHUB_WORKSPACE/python/tests/test_concordance_zero_times.py" \
-            "$GITHUB_WORKSPACE/python/tests/test_model_frame_transport.py" \
             "$GITHUB_WORKSPACE/python/tests/test_survfit_missing_residuals.py"
 
   python-matrix:

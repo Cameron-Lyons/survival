@@ -1,6 +1,8 @@
 use crate::core::time_order::total_order_key;
+#[cfg(not(miri))]
 use rayon::prelude::*;
 
+#[cfg(not(miri))]
 const PARALLEL_SORT_THRESHOLD: usize = 16_384;
 
 fn sort_pairs(
@@ -14,9 +16,17 @@ fn sort_pairs(
     } else {
         rows.map(|i| (total_order_key(values[i]), i)).collect()
     };
+    #[cfg(not(miri))]
     if parallel && pairs.len() > PARALLEL_SORT_THRESHOLD {
         pairs.par_sort_unstable();
     } else {
+        pairs.sort_unstable();
+    }
+    #[cfg(miri)]
+    {
+        // Rayon's crossbeam-epoch work-stealing triggers an upstream Stacked Borrows
+        // violation under Miri; test the serial path under Miri instead.
+        let _ = parallel;
         pairs.sort_unstable();
     }
     pairs.into_iter().map(|(_, i)| i).collect()
@@ -75,6 +85,9 @@ mod tests {
 
     #[test]
     fn parallel_and_serial_paths_agree() {
+        #[cfg(miri)]
+        let n = 257;
+        #[cfg(not(miri))]
         let n = PARALLEL_SORT_THRESHOLD * 2 + 7;
         let values: Vec<f64> = (0..n).map(|i| ((i * 7919) % 97) as f64).collect();
         let parallel = sorted_indices_by(&values);
