@@ -54,6 +54,13 @@ alongside the corrected oracle.
 
 ### Formulas and model matrices
 
+- **Integer literals in penalty terms**: R's `coxph` and `survreg` stop with
+  "missing value where TRUE/FALSE needed" for any penalty term whose call holds an
+  integer literal, such as `pspline(age^2L)`, `pspline(age, df = 2L)` or
+  `frailty(inst + 0L)`. Model-frame names keep the `L` while term labels drop it,
+  so `match()` against the term labels returns NA. The port fits them; the
+  coefficients take the names R's constructors give (`ps(age^2L)3`,
+  `ridge(I(age^2))`).
 - **Strata interactions after a multi-column factor**: R's `predict.coxph` can
   remove the wrong columns when a strata interaction follows a multi-column
   factor, so linear prediction errors and term predictions can silently use

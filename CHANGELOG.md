@@ -23,6 +23,12 @@ Numerical corrections are described under Fixed below.
   `survival::tt(...)`, `survival::ridge(...)` and the `survival::frailty*` terms as
   the specials, as R's `removeDoubleColonSurv()` does: the fit is the unprefixed
   formula's, and stores that formula.
+- Penalty terms evaluate expression arguments as R's model frame does:
+  `pspline(log(age))`, `ridge(age, I(age^2))` and `frailty(factor(inst))` fit as
+  the same terms on precomputed columns, before row selection and with their
+  missing values, in fits, predictions and model matrices. Coefficients carry R's
+  deparsed names (`ps(log(age))3`, `ridge(I(age^2))`), and ridge's matrix columns
+  follow `cbind()`'s names. Backquoted column names still read the column.
 - `summary_survfit(..., data_frame=True)` supports ordinary and multi-state Cox
   curves, with requested-time selection and new-data columns.
 - `survival.datasets.load_uspop2()` provides R's complete US population
@@ -210,6 +216,12 @@ Numerical corrections are described under Fixed below.
   - `cox.zph(transform = sqrt)` takes any R function, primitives included. It is
     labelled `deparse(substitute(transform))` as in R, also in Python's `cox_zph`
     for callables other than lambdas.
+- `ridge()` reads a factor argument's level codes, as R's `cbind()` does, and
+  `pspline()` rejects a factor with R's "'range' not meaningful for factors";
+  before, both read the factor's labels.
+- `strata(x, na.group = TRUE)` keeps its missing-x stratum when the formula also
+  has a transformed variable such as `log(ph.karno)`; the transformed variable's
+  evaluation had returned x to the missing-value scan.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
