@@ -4,10 +4,9 @@ use crate::internal::validation::{validate_binary_i32, validate_finite, validate
 use crate::regression::coxph::{CoxPHFit, CoxphData, CoxphOptions};
 use ndarray::Array2;
 use pyo3::prelude::*;
-use rayon::prelude::*;
 use std::f64::consts::PI;
 
-const PARALLEL_THRESHOLD: usize = 2_000;
+mod pair_sum;
 
 #[derive(Debug, Clone)]
 pub struct RoystonInput<'a> {
@@ -63,22 +62,13 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
     scores
 }
 
+/// Gönen and Heller's concordance probability, the mean over pairs of
+/// `1 / (1 + exp(-|eta_i - eta_j|))`.
 fn gonen_heller(eta: &[f64]) -> f64 {
     let n = eta.len();
     let mut sorted = eta.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let row_sum = |i: usize| -> f64 {
-        sorted[i + 1..]
-            .iter()
-            .map(|&later| 1.0 / (1.0 + (sorted[i] - later).exp()))
-            .sum()
-    };
-    let total: f64 = if n >= PARALLEL_THRESHOLD {
-        (0..n - 1).into_par_iter().map(row_sum).sum()
-    } else {
-        (0..n - 1).map(row_sum).sum()
-    };
-    total * 2.0 / (n as f64 * (n - 1) as f64)
+    pair_sum::logistic_pair_sum(&sorted) * 2.0 / (n as f64 * (n - 1) as f64)
 }
 
 fn validate(input: &RoystonInput<'_>) -> SurvivalResult<()> {
