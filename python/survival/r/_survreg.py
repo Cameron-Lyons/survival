@@ -58,7 +58,6 @@ from ._fit import (
     _excluded_rows,
     _fitted_xlevels,
     _model_matrix_contrasts,
-    _model_matrix_evaluated,
     _model_matrix_names_and_assign,
     _NewData,
     _newdata_frame,
@@ -78,7 +77,6 @@ from ._formula import (
     _design_array_from_spec,
     _design_term_name,
     _design_term_output_names,
-    _EvaluatedModelFrame,
     _fit_formula_design,
     _formula_cluster_values,
     _formula_model_frame,
@@ -103,7 +101,6 @@ from ._types import (
     _FormulaDesign,
     _ModelCovariateTerm,
     _ModelStrataTerm,
-    _renamed_classes,
     _StrataSpec,
 )
 
@@ -678,25 +675,16 @@ def _design_output_names(design: _FormulaDesign) -> list[str]:
     return names
 
 
-@dataclass
-class _RDesignMatrix:
-    """A positional R design matrix with its dimnames retained across reticulate."""
-
-    values: np.ndarray
-    row_names: tuple[str, ...] | None
-    column_names: tuple[str, ...] | None
-
-
 def _matrix_frame(
     response: Surv, x: Any, *, weights: Any | None, offset: Any | None, cluster: Any | None
 ) -> _SurvregFrame:
     """``survreg(<Surv>, x=<matrix or data frame>)``: the design is used as given."""
 
-    rows = _as_rows(x.values if isinstance(x, _RDesignMatrix) else x, "x")
+    rows = _as_rows(x, "x")
     n = len(response)
     if len(rows) != n:
         raise ValueError("x must have the same number of rows as the Surv response")
-    names = x.column_names if isinstance(x, _RDesignMatrix) else _matrix_input_column_names(x)
+    names = _matrix_input_column_names(x)
     if names is None or len(names) != len(rows[0]):
         names = tuple(f"x{idx + 1}" for idx in range(len(rows[0])))
     return _SurvregFrame(
@@ -1001,8 +989,6 @@ def survreg_summary(fit: SurvregModel) -> dict[str, Any]:
 
 def _matrix_newdata(newdata: Any, names: Sequence[str]) -> np.ndarray:
     """Numeric design supplied without a formula, in fitted column order."""
-    if isinstance(newdata, _RDesignMatrix):
-        newdata = newdata.values
     values: np.ndarray | list[list[float]]
     if isinstance(newdata, Mapping) or hasattr(newdata, "columns"):
         columns = []
@@ -1552,7 +1538,7 @@ def _dpqr_parms(parms: Any) -> tuple[list[float], bool]:
         return [], True
 
 
-def _dpqr_distribution(distribution: Any, parms: Any | None, *, _parms_null: bool = False) -> Any:
+def _dpqr_distribution(distribution: Any, parms: Any | None) -> Any:
     """Exact named query lookup, preserving its separate parameter contract."""
 
     if isinstance(distribution, str):
@@ -1564,11 +1550,9 @@ def _dpqr_distribution(distribution: Any, parms: Any | None, *, _parms_null: boo
             if key != "t":
                 return _core.SurvregDistribution.for_query(key)
             values, nonnumeric = (None, False) if parms is None else _dpqr_parms(parms)
-            return _core.SurvregDistribution.for_query(
-                key, values, _parms_null=_parms_null or nonnumeric
-            )
+            return _core.SurvregDistribution.for_query(key, values, _parms_null=nonnumeric)
     resolved = _resolve_distribution(distribution, None, probe=False)
-    if parms is None and not _parms_null:
+    if parms is None:
         return resolved
     if isinstance(parms, Mapping) and resolved.parm_names:
         names = resolved.parm_names
@@ -1577,8 +1561,8 @@ def _dpqr_distribution(distribution: Any, parms: Any | None, *, _parms_null: boo
         parameters = dict(zip(names, resolved.parms, strict=True))
         parameters.update(parms)
         parms = [parameters[name] for name in names]
-    values, nonnumeric = ([], False) if parms is None else _dpqr_parms(parms)
-    return resolved.with_query_parms(values, _parms_null=_parms_null or nonnumeric)
+    values, nonnumeric = _dpqr_parms(parms)
+    return resolved.with_query_parms(values, _parms_null=nonnumeric)
 
 
 def _dpqr_vector(values: Any, name: str) -> list[float]:
@@ -1596,12 +1580,10 @@ def dsurvreg(
     scale: Any = 1,
     distribution: Any = "weibull",
     parms: Any | None = None,
-    *,
-    _parms_null: bool = False,
 ) -> list[float]:
     """Density of the ``survreg`` location-scale distributions (R's ``dsurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).pdf_values(
+    return _dpqr_distribution(distribution, parms).pdf_values(
         _floats_or_nan(_scalar_or_vector(x, "x")),
         _dpqr_vector(mean, "mean"),
         _dpqr_vector(scale, "scale"),
@@ -1614,12 +1596,10 @@ def psurvreg(
     scale: Any = 1,
     distribution: Any = "weibull",
     parms: Any | None = None,
-    *,
-    _parms_null: bool = False,
 ) -> list[float]:
     """Distribution function of the ``survreg`` distributions (R's ``psurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).cdf_values(
+    return _dpqr_distribution(distribution, parms).cdf_values(
         _floats_or_nan(_scalar_or_vector(q, "q")),
         _dpqr_vector(mean, "mean"),
         _dpqr_vector(scale, "scale"),
@@ -1632,12 +1612,10 @@ def qsurvreg(
     scale: Any = 1,
     distribution: Any = "weibull",
     parms: Any | None = None,
-    *,
-    _parms_null: bool = False,
 ) -> list[float]:
     """Quantiles of the ``survreg`` distributions (R's ``qsurvreg``)."""
 
-    return _dpqr_distribution(distribution, parms, _parms_null=_parms_null).quantile_values(
+    return _dpqr_distribution(distribution, parms).quantile_values(
         _floats_or_nan(_scalar_or_vector(p, "p")),
         _dpqr_vector(mean, "mean"),
         _dpqr_vector(scale, "scale"),
@@ -1707,8 +1685,6 @@ def rsurvreg(
     distribution: Any = "weibull",
     parms: Any | None = None,
     seed: int | None = None,
-    *,
-    _parms_null: bool = False,
 ) -> list[float]:
     """Random draws from the ``survreg`` distributions (R's ``rsurvreg``,
     ``qsurvreg(runif(n), ...)``).
@@ -1723,7 +1699,7 @@ def rsurvreg(
     """
 
     count = _random_sample_count(n)
-    resolved = _dpqr_distribution(distribution, parms, _parms_null=_parms_null)
+    resolved = _dpqr_distribution(distribution, parms)
     means = _dpqr_vector(mean, "mean")
     scales = _dpqr_vector(scale, "scale")
     return resolved.sample(
@@ -1800,19 +1776,6 @@ def model_matrix_survreg(
 
     strata_names = {spec.call for spec in fit.strata_terms}
     removed = [i for i, label in enumerate(fit.term_labels, start=1) if label in strata_names]
-    if isinstance(data, _EvaluatedModelFrame) and fit.design is not None:
-        result = _model_matrix_evaluated(
-            fit.design,
-            data,
-            covered_strata=tuple(spec for spec in fit.strata_terms if spec.call in fit.term_labels),
-        )
-        result["assign"] = [
-            code - sum(index < code for index in removed) for code in result["assign"]
-        ]
-        if not _with_metadata:
-            for key in ("row_names", "contrasts"):
-                result.pop(key, None)
-        return result
     new = None
     if data is not None:
         action = _normalize_na_action(na_action)
@@ -1929,11 +1892,3 @@ def model_summary_survreg(fit: SurvregModel, correlation: Any = False) -> Summar
         correlation=correl,
         distribution_parameters=pieces.get("distribution_parameters"),
     )
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "SurvregModelResult": "SurvregModel",
-    },
-)

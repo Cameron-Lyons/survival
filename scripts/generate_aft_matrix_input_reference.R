@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 suppressPackageStartupMessages(library(survival))
-source("r/survivalr/tests/testthat/helper-logical-matrices.R")
-source("r/survivalr/tests/testthat/helper-aft-matrix-inputs.R")
+source("scripts/r_helpers/helper-logical-matrices.R")
+source("scripts/r_helpers/helper-aft-matrix-inputs.R")
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/aft_matrix_input_reference.json"
 setup <- .aft_matrix_input_setup()

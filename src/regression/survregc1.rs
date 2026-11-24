@@ -4,8 +4,11 @@ use crate::regression::survreg_density::{SurvregDensitySource, check_density_bat
 use crate::regression::survreg_distributions::SurvregDistribution;
 use crate::regression::survreg_kernels::{BuiltinKernel, with_builtin_kernel};
 use ndarray::{Array2, ArrayView2};
+use rayon::prelude::*;
 
 const SMALL: f64 = -200.0;
+const PARALLEL_SWEEP_THRESHOLD: usize = 8_192;
+const PARALLEL_SWEEP_CHUNK: usize = 4_096;
 
 pub(crate) struct SurvregKernel<'a> {
     pub y1: &'a [f64],
@@ -363,7 +366,7 @@ impl SurvregKernel<'_> {
     /// `terms.terms(person, stratum, x)` giving each observation's terms.
     /// With [`GRAM_MIN_VARIABLES`] or more covariates the covariate block of
     /// the information comes from matrix products ([`Self::finish_gram`]).
-    fn likelihood_sweep<T: ObservationTerms>(
+    fn likelihood_sweep<T: ObservationTerms + Sync>(
         &self,
         design: &[f64],
         with_jj: bool,
@@ -377,9 +380,66 @@ impl SurvregKernel<'_> {
         self.likelihood_sweep_scalar(design, with_jj, terms)
     }
 
+    fn sweep_chunk_scalar<T: ObservationTerms>(
+        &self,
+        design: &[f64],
+        range: std::ops::Range<usize>,
+        with_jj: bool,
+        terms: &T,
+    ) -> SweepSums {
+        let nvar = self.nvar();
+        let nvar2 = self.nvar2();
+        let mut loglik = 0.0;
+        let mut u = vec![0.0; nvar2];
+        let mut imat = vec![0.0; nvar2 * nvar2];
+        let mut jj = with_jj.then(|| vec![0.0; nvar2 * nvar2]);
+        for person in range {
+            let stratum = self.stratum(person);
+            let x = &design[person * nvar..(person + 1) * nvar];
+            let contribution = terms.terms(person, stratum, x);
+            let w = self.weights[person];
+            loglik += contribution.g * w;
+            let scale = (self.nstrat != 0).then_some(nvar + stratum);
+            contribution.accumulate(x, scale, w, &mut u, &mut imat, jj.as_deref_mut());
+        }
+        SweepSums {
+            loglik,
+            u,
+            imat,
+            jj,
+        }
+    }
+
+    fn reduce_sweep_chunks(chunks: Vec<SweepSums>, nvar2: usize, with_jj: bool) -> SweepSums {
+        let mut loglik = 0.0;
+        let mut u = vec![0.0; nvar2];
+        let mut imat = vec![0.0; nvar2 * nvar2];
+        let mut jj = with_jj.then(|| vec![0.0; nvar2 * nvar2]);
+        for chunk in chunks {
+            loglik += chunk.loglik;
+            for (dst, src) in u.iter_mut().zip(chunk.u) {
+                *dst += src;
+            }
+            for (dst, src) in imat.iter_mut().zip(chunk.imat) {
+                *dst += src;
+            }
+            if let (Some(dst_jj), Some(src_jj)) = (jj.as_deref_mut(), chunk.jj) {
+                for (dst, src) in dst_jj.iter_mut().zip(src_jj) {
+                    *dst += src;
+                }
+            }
+        }
+        SweepSums {
+            loglik,
+            u,
+            imat,
+            jj,
+        }
+    }
+
     /// The sweep of [`Self::likelihood_sweep`] that leaves the covariate blocks to
     /// [`Self::finish_gram`], or `None` when that declines.
-    fn likelihood_sweep_gram<T: ObservationTerms>(
+    fn likelihood_sweep_gram<T: ObservationTerms + Sync>(
         &self,
         design: &[f64],
         with_jj: bool,
@@ -388,6 +448,87 @@ impl SurvregKernel<'_> {
         let nvar = self.nvar();
         let nvar2 = self.nvar2();
         let n = self.n();
+        if n >= PARALLEL_SWEEP_THRESHOLD {
+            let n_chunks = n.div_ceil(PARALLEL_SWEEP_CHUNK);
+            let mut information_weights = vec![0.0; n];
+            let mut score_weights = vec![0.0; if with_jj { n } else { 0 }];
+            let chunks: Vec<SweepSums> = if with_jj {
+                information_weights
+                    .par_chunks_mut(PARALLEL_SWEEP_CHUNK)
+                    .zip(score_weights.par_chunks_mut(PARALLEL_SWEEP_CHUNK))
+                    .enumerate()
+                    .map(|(chunk_idx, (info_slice, score_slice))| {
+                        let start = chunk_idx * PARALLEL_SWEEP_CHUNK;
+                        let mut loglik = 0.0;
+                        let mut u = vec![0.0; nvar2];
+                        let mut imat = vec![0.0; nvar2 * nvar2];
+                        let mut jj = vec![0.0; nvar2 * nvar2];
+                        for (offset, (iw, sw)) in info_slice
+                            .iter_mut()
+                            .zip(score_slice.iter_mut())
+                            .enumerate()
+                        {
+                            let person = start + offset;
+                            let stratum = self.stratum(person);
+                            let x = &design[person * nvar..(person + 1) * nvar];
+                            let contribution = terms.terms(person, stratum, x);
+                            let w = self.weights[person];
+                            loglik += contribution.g * w;
+                            let scale = (self.nstrat != 0).then_some(nvar + stratum);
+                            contribution.accumulate_outside_block(
+                                x,
+                                scale,
+                                w,
+                                &mut u,
+                                &mut imat,
+                                Some(&mut jj),
+                            );
+                            *iw = contribution.ddg * w;
+                            *sw = contribution.dg * contribution.dg * w;
+                        }
+                        SweepSums {
+                            loglik,
+                            u,
+                            imat,
+                            jj: Some(jj),
+                        }
+                    })
+                    .collect()
+            } else {
+                information_weights
+                    .par_chunks_mut(PARALLEL_SWEEP_CHUNK)
+                    .enumerate()
+                    .map(|(chunk_idx, info_slice)| {
+                        let start = chunk_idx * PARALLEL_SWEEP_CHUNK;
+                        let mut loglik = 0.0;
+                        let mut u = vec![0.0; nvar2];
+                        let mut imat = vec![0.0; nvar2 * nvar2];
+                        for (offset, iw) in info_slice.iter_mut().enumerate() {
+                            let person = start + offset;
+                            let stratum = self.stratum(person);
+                            let x = &design[person * nvar..(person + 1) * nvar];
+                            let contribution = terms.terms(person, stratum, x);
+                            let w = self.weights[person];
+                            loglik += contribution.g * w;
+                            let scale = (self.nstrat != 0).then_some(nvar + stratum);
+                            contribution
+                                .accumulate_outside_block(x, scale, w, &mut u, &mut imat, None);
+                            *iw = contribution.ddg * w;
+                        }
+                        SweepSums {
+                            loglik,
+                            u,
+                            imat,
+                            jj: None,
+                        }
+                    })
+                    .collect()
+            };
+            debug_assert_eq!(chunks.len(), n_chunks);
+            let sums = Self::reduce_sweep_chunks(chunks, nvar2, with_jj);
+            return self.finish_gram(design, sums, &information_weights, &score_weights);
+        }
+
         let mut loglik = 0.0;
         let mut u = vec![0.0; nvar2];
         let mut imat = vec![0.0; nvar2 * nvar2];
@@ -427,35 +568,36 @@ impl SurvregKernel<'_> {
         )
     }
 
-    /// R's sweep, adding each observation's terms to running sums.
-    fn likelihood_sweep_scalar<T: ObservationTerms>(
+    /// R's sweep, adding each observation's terms to running sums (chunked in
+    /// parallel on large inputs and folded in chunk order for determinism).
+    fn likelihood_sweep_scalar<T: ObservationTerms + Sync>(
         &self,
         design: &[f64],
         with_jj: bool,
         terms: &T,
     ) -> SurvregLikelihood {
-        let nvar = self.nvar();
+        let n = self.n();
         let nvar2 = self.nvar2();
-        let mut loglik = 0.0;
-        let mut u = vec![0.0; nvar2];
-        let mut imat = vec![0.0; nvar2 * nvar2];
-        let mut jj = with_jj.then(|| vec![0.0; nvar2 * nvar2]);
-
-        for person in 0..self.n() {
-            let stratum = self.stratum(person);
-            let x = &design[person * nvar..(person + 1) * nvar];
-            let contribution = terms.terms(person, stratum, x);
-            let w = self.weights[person];
-            loglik += contribution.g * w;
-            let scale = (self.nstrat != 0).then_some(nvar + stratum);
-            contribution.accumulate(x, scale, w, &mut u, &mut imat, jj.as_deref_mut());
-        }
+        let sums = if n >= PARALLEL_SWEEP_THRESHOLD {
+            let n_chunks = n.div_ceil(PARALLEL_SWEEP_CHUNK);
+            let chunks: Vec<SweepSums> = (0..n_chunks)
+                .into_par_iter()
+                .map(|chunk_idx| {
+                    let start = chunk_idx * PARALLEL_SWEEP_CHUNK;
+                    let end = (start + PARALLEL_SWEEP_CHUNK).min(n);
+                    self.sweep_chunk_scalar(design, start..end, with_jj, terms)
+                })
+                .collect();
+            Self::reduce_sweep_chunks(chunks, nvar2, with_jj)
+        } else {
+            self.sweep_chunk_scalar(design, 0..n, with_jj, terms)
+        };
 
         SurvregLikelihood {
-            loglik,
-            u,
-            imat: symmetric_from_lower(nvar2, imat),
-            jj: jj.map(|jj| symmetric_from_lower(nvar2, jj)),
+            loglik: sums.loglik,
+            u: sums.u,
+            imat: symmetric_from_lower(nvar2, sums.imat),
+            jj: sums.jj.map(|jj| symmetric_from_lower(nvar2, jj)),
         }
     }
 
@@ -775,11 +917,30 @@ impl SurvregKernel<'_> {
     fn loglik_sweep(
         &self,
         design: &[f64],
-        contribution: impl Fn(usize, usize, &[f64]) -> Contribution,
+        contribution: impl Fn(usize, usize, &[f64]) -> Contribution + Sync,
     ) -> f64 {
+        let n = self.n();
         let nvar = self.nvar();
+        if n >= PARALLEL_SWEEP_THRESHOLD {
+            let n_chunks = n.div_ceil(PARALLEL_SWEEP_CHUNK);
+            let partials: Vec<f64> = (0..n_chunks)
+                .into_par_iter()
+                .map(|chunk_idx| {
+                    let start = chunk_idx * PARALLEL_SWEEP_CHUNK;
+                    let end = (start + PARALLEL_SWEEP_CHUNK).min(n);
+                    let mut total = 0.0;
+                    for person in start..end {
+                        let x = &design[person * nvar..(person + 1) * nvar];
+                        total +=
+                            contribution(person, self.stratum(person), x).g * self.weights[person];
+                    }
+                    total
+                })
+                .collect();
+            return partials.into_iter().sum();
+        }
         let mut loglik = 0.0;
-        for person in 0..self.n() {
+        for person in 0..n {
             let x = &design[person * nvar..(person + 1) * nvar];
             loglik += contribution(person, self.stratum(person), x).g * self.weights[person];
         }

@@ -68,7 +68,12 @@ def _imports(body: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-RETURN_OVERRIDES: dict[str, str] = {}
+RETURN_OVERRIDES: dict[str, str] = {
+    "CoxPHFit.martingale_residuals": "list[float]",
+    "FineGrayOutput._build_lists": (
+        "tuple[list[list[Any]], list[float], list[float], list[int], list[float], list[int] | None]"
+    ),
+}
 
 PARAM_OVERRIDES: dict[str, dict[str, str]] = {
     "CovariateMatrix.__init__": {"values": "ArrayLike"},
@@ -85,6 +90,7 @@ PARAM_OVERRIDES: dict[str, dict[str, str]] = {
         "id1": "ArrayLike | Sequence[int | float | str]",
         "id2": "ArrayLike | Sequence[int | float | str]",
     },
+    "strata": {"codes": "Sequence[Sequence[int | None] | ArrayLike]"},
     **{
         name: {"normal_draws": "ArrayLike | Callable[[int, int], ArrayLike] | None"}
         for name in ("yates_risk", "yates_survival", "yates_response", "yates_predict")

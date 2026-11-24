@@ -121,6 +121,8 @@ pub(crate) use parametric_survival::survreg_fit_py;
 pub use parametric_survival::{
     SurvregControl, SurvregData, SurvregFit, survreg_fit, survreg_fit_with_nstrata,
 };
+#[cfg(feature = "python")]
+pub(crate) use penalized::python_callback::cox_callback;
 pub use penalized::{PenaltyControl, PenaltyControlInput, PenaltyControlState, PenaltyController};
 pub use recurrent_events::{
     AndersonGillResult, NegativeBinomialFrailtyConfig, NegativeBinomialFrailtyResult, PWPConfig,

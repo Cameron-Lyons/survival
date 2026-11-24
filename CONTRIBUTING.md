@@ -130,10 +130,11 @@ CI also installs the built wheel outside the checkout on macOS and Windows,
 then checks frozen stock-R numerical references, ndarray conversions, formula
 types, omitted survival rows, and callback serialization. Linux runs the full
 Python suite across every supported Python version and a separate source-tree
-installation. The R bridge job regenerates the formula-expression, exact-risk and missing-row
-references with pinned R 4.5.3 and survival 3.8-12 and compares every field, allowing
-numerical differences within relative tolerance `1e-9` and absolute tolerance
-`1e-12`. Other values must match exactly.
+installation. The `r-fixtures-current` job regenerates the formula-expression,
+exact-risk and missing-row references with pinned R 4.5.3 and survival 3.8-12
+and compares every field, allowing numerical differences within relative
+tolerance `1e-9` and absolute tolerance `1e-12`. Other values must match
+exactly.
 
 Benchmark or performance-sensitive change:
 
@@ -168,7 +169,7 @@ cargo test --lib --all-features
 cargo bench -- --test
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/core.pyi python/survival/data_prep.pyi python/survival/interval.pyi python/survival/population.pyi python/survival/regression.pyi python/survival/surv_analysis.pyi python/survival/validation.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 PYTHONPATH=.:python uv run --no-sync pytest python/tests -q
 python3 scripts/generate_binding_manifest.py --check
 ```

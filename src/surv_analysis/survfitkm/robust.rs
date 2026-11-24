@@ -78,7 +78,7 @@ pub(super) fn independent_variance(
             squares *= risk_ratio(later_risk, nrisk).powi(2);
             while later > 0 && data.time2[order[later - 1]] > time {
                 later -= 1;
-                squares += (data.wt[order[later]] / nrisk).powi(2);
+                squares += (data.weight(order[later]) / nrisk).powi(2);
             }
             risk_squares[i] = squares;
             later_risk = nrisk;
@@ -94,7 +94,7 @@ pub(super) fn independent_variance(
     let mut km = 1.0;
     for (i, &time) in times.iter().enumerate() {
         while person < order.len() && left_before(data, options.reverse, order[person], time) {
-            let weight = data.wt[order[person]] / previous_risk;
+            let weight = data.weight(order[person]) / previous_risk;
             departed_surv += (weight * a_surv).powi(2);
             departed_chaz += (weight * a_chaz).powi(2);
             person += 1;
@@ -113,7 +113,7 @@ pub(super) fn independent_variance(
 
             while person < order.len() && data.time2[order[person]] <= time {
                 let row = order[person];
-                let weight = data.wt[row] / nrisk;
+                let weight = data.weight(row) / nrisk;
                 let event = has_event(data, options.reverse, row);
                 let surv = a_surv - if event { km } else { 0.0 };
                 let chaz = a_chaz + if event { event_derivative } else { 0.0 };
@@ -217,7 +217,7 @@ pub(super) fn cluster_variance(
     let order = &rows.sort2;
     let scale = order
         .iter()
-        .map(|&row| data.wt[row])
+        .map(|&row| data.weight(row))
         .fold(0.0_f64, f64::max);
     if scale == 0.0 {
         std_surv.fill(0.0);
@@ -233,7 +233,7 @@ pub(super) fn cluster_variance(
     for (i, &time) in times.iter().enumerate() {
         while person < order.len() && left_before(data, options.reverse, order[person], time) {
             let row = order[person];
-            sums.depart(cluster[row], data.wt[row], [a_surv, a_chaz], [0.0, 0.0]);
+            sums.depart(cluster[row], data.weight(row), [a_surv, a_chaz], [0.0, 0.0]);
             person += 1;
         }
         let (d0, d1, nrisk) = event_terms(i);
@@ -253,11 +253,12 @@ pub(super) fn cluster_variance(
                 let row = order[person];
                 let g = cluster[row];
                 let event = has_event(data, options.reverse, row);
+                let row_weight = data.weight(row);
                 if event && let Some(dense) = &mut dense_surv {
-                    dense[g] -= km * data.wt[row] / nrisk;
+                    dense[g] -= km * row_weight / nrisk;
                 }
                 let leaving = if event { event_influence } else { [0.0, 0.0] };
-                sums.depart(g, data.wt[row], [a_surv, a_chaz], leaving);
+                sums.depart(g, row_weight, [a_surv, a_chaz], leaving);
                 person += 1;
             }
             km *= factor;
@@ -324,7 +325,7 @@ impl ClusterSums {
         let mut weight = vec![0.0; nid];
         for &row in order {
             count[cluster[row]] += 1;
-            weight[cluster[row]] += data.wt[row];
+            weight[cluster[row]] += data.weight(row);
         }
         let mut sums = Self {
             scale,

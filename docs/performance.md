@@ -1,6 +1,6 @@
 # Performance
 
-The numerical work runs in Rust. Python and R entry points prepare inputs, call a
+The numerical work runs in Rust. Python entry points prepare inputs, call a
 native kernel and assemble results. This page summarizes the current performance
 characteristics and how each main kernel scales; timings depend on the data,
 machine and build, so measure the workload you care about.
@@ -85,13 +85,14 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   copied into the design. List columns, as the bundled datasets and the
   `survSplit`, `finegray` and `tmerge` results hold them, are classified as logical,
   character or numeric and as integer or double storage from their distinct value
-  types, so inference costs one C-level pass per column. The R bridge adds
-  reticulate conversion, which is done in bulk for numeric columns and native results.
-- Row expansions build their columns with NumPy: the `tt()` risk-set rows
-  (one per subject at risk at each event time), the `finegray` weighted rows and the
-  backward-interval check of counting-process `Surv` objects. Their output sizes
+  types, so inference costs one C-level pass per column.
+- Row expansions build their columns in bulk: `finegray` constructs its
+  expanded Python lists directly in Rust from its sorted interval output (sharing
+  immutable `PyFloat` objects for repeated cutpoints and weights and gathering
+  covariates without NumPy intermediate copies), `tt()` risk-set rows and
+  counting-process backward-interval checks use NumPy. Their output sizes
   are those of R; for `tt()` and `finegray` they grow with the number of event
-  times times the number at risk.
+  times times the number of subjects at risk.
 - Formula interactions fit each distinct component once. An interaction can
   reuse a main effect's design columns when both use the same coding.
   Interaction terms that need full factor indicators build those columns
@@ -463,5 +464,27 @@ diagnostic benchmarks include tied Breslow events with ordinary and extreme risk
   the single-pass reference index, avoiding extra hashing and string copies.
   `strata` materializes and factor-codes each shared input source once per call,
   including one-shot iterators.
+- Royston's D and Gönen–Heller concordance evaluate the pairwise logistic sum in
+  O(n log n) via block-Taylor near-field expansions and shifted exponential-suffix
+  far-field recurrences (matching the direct O(n²) sum to ~1e-13 across scales
+  and ties), parallelized across blocks with Rayon.
+- `survreg` built-in likelihood, score, and Gram-matrix sweeps parallelize across
+  4,096-row chunks with Rayon above 8,192 rows, folded in ascending chunk order
+  for thread-count determinism; `pyears` tabulations parallelize similarly.
+- `strata` uses a zero-heap flat-table path for up to 65,536 level combinations,
+  accepts 1-D integer NumPy code arrays directly, and single-column numeric
+  formula strata stay as contiguous NumPy arrays with lazy `StrataFactor.labels`.
+- `survfitkm` sorts via branchless packed integer total-order keys (`u64`), skips
+  unnecessary copies via copy-on-write `aeqSurv`, avoids unit-weight and default
+  position buffers on unweighted right-censored curves, and moves single-curve
+  outputs without copying.
+- `concordancefit` borrows unmodified survival responses and single-stratum
+  slices without copying, builds `timewt = "n"` in one O(n) pass over the sorted
+  sweep order, computes single-predictor unclustered variance without allocating
+  influence matrices, and parallelizes across strata or predictors above 4,096
+  rows.
+- `cox_zph` collapses Efron tie steps in O(d + p²) and uses flattened residual
+  storage; `aareg_fit` parallelizes retained event-time moment solves; `summary_aareg`
+  uses vectorized NumPy matrix products.
 - P-spline penalties fill the three nonzero entries of each second-difference row
   directly instead of a cubic dense product.

@@ -707,12 +707,60 @@ class PredictResult:
         return self.se_fit
 
 
-@dataclass(frozen=True)
 class StrataFactor:
     codes: list[int | None]
     levels: list[str]
     labels: list[str | None]
     counts: list[int]
+    _codes_array: NDArray[np.int64] | None
+
+    def __init__(
+        self,
+        codes: list[int | None] | None,
+        levels: list[str],
+        labels: list[str | None] | None,
+        counts: list[int],
+        *,
+        _codes_array: NDArray[np.int64] | None = None,
+    ) -> None:
+        if codes is None and _codes_array is None:
+            raise ValueError("StrataFactor requires codes or _codes_array")
+        if codes is not None:
+            object.__setattr__(self, "codes", codes)
+        object.__setattr__(self, "levels", levels)
+        if labels is not None:
+            object.__setattr__(self, "labels", labels)
+        object.__setattr__(self, "counts", counts)
+        if _codes_array is not None:
+            object.__setattr__(self, "_codes_array", _codes_array)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"cannot delete field {name!r}")
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_codes_array":
+            return None
+        if name == "codes":
+            arr = self.__dict__.get("_codes_array")
+            if arr is None:
+                return []
+            if (arr < 0).any():
+                codes: list[int | None] = [None if c < 0 else c for c in arr.tolist()]
+            else:
+                codes = arr.tolist()
+            object.__setattr__(self, "codes", codes)
+            return codes
+        if name == "labels":
+            levels = self.levels
+            labels: list[str | None] = [
+                None if code is None else levels[code] for code in self.codes
+            ]
+            object.__setattr__(self, "labels", labels)
+            return labels
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     @property
     def categories(self) -> tuple[str, ...]:
@@ -720,25 +768,45 @@ class StrataFactor:
 
         return tuple(self.levels)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str | None]:
         return iter(self.labels)
 
     def __len__(self) -> int:
-        return len(self.codes)
+        codes = self.__dict__.get("codes")
+        if codes is not None:
+            return len(codes)
+        arr = self.__dict__.get("_codes_array")
+        return 0 if arr is None else int(len(arr))
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StrataFactor):
+            return NotImplemented
+        return (
+            self.levels == other.levels
+            and self.counts == other.counts
+            and self.codes == other.codes
+            and self.labels == other.labels
+        )
 
-@dataclass(frozen=True)
-class _Timeline:
-    """Timeline rows built from counting-process data (R's ``totimeline``).
+    def __repr__(self) -> str:
+        return (
+            f"StrataFactor(codes={self.codes!r}, levels={self.levels!r}, "
+            f"labels={self.labels!r}, counts={self.counts!r})"
+        )
 
-    ``status`` codes index ``state_levels`` (0 is the censoring level) and
-    ``data_row`` is the zero-based input row that supplies the covariates.
-    """
+    def __getstate__(self) -> dict[str, Any]:
+        return {
+            "codes": self.codes,
+            "levels": self.levels,
+            "labels": self.labels,
+            "counts": self.counts,
+        }
 
-    time: list[float]
-    status: list[int]
-    data_row: list[int]
-    state_levels: list[str]
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        object.__setattr__(self, "codes", state["codes"])
+        object.__setattr__(self, "levels", state["levels"])
+        object.__setattr__(self, "labels", state["labels"])
+        object.__setattr__(self, "counts", state["counts"])
 
 
 @dataclass(frozen=True)
@@ -1241,31 +1309,6 @@ class CoxSurvfitResult:
         from ._survfit import _subset_cox_survfit
 
         return _subset_cox_survfit(self, strata=strata, data=data, drop=drop)
-
-
-def _cox_curve_arrays(fit: CoxSurvfitResult) -> dict[str, NDArray[np.float64]]:
-    """The R bridge's reader of a Cox curve: :meth:`CoxSurvfitResult.to_arrays`, which
-    reticulate hands over as vectors and matrices without any nested lists."""
-
-    return fit.to_arrays()
-
-
-def _cox_curve_array(fit: CoxSurvfitResult, name: str) -> NDArray[np.float64] | None:
-    """One curve field of a Cox curve for the R bridge, as a float64 array (``None``
-    when absent), read without building the field's lists."""
-
-    import numpy as np
-
-    values = fit._curve_values(name)
-    return None if values is None else np.array(values, dtype=np.float64)
-
-
-def _cox_curve_present(fit: CoxSurvfitResult, name: str, nonempty: bool = False) -> bool:
-    """Whether a Cox curve has field ``name`` (non-empty with ``nonempty``), for the R
-    bridge's checks, without building the field's lists."""
-
-    values = fit._curve_values(name)
-    return values is not None and (not nonempty or len(values) > 0)
 
 
 def _install_curve_fields(cls: type) -> None:
@@ -1829,22 +1872,6 @@ class SurvcheckResult:
 
 
 @dataclass(frozen=True)
-class SurvCheckCodes:
-    """The kernel's answer for a response given as integer codes: the code of the current
-    state of every row, the 0-based rows of each kind of problem and the number of
-    transitions.  This is the form the R bridge uses, which evaluates the model frame and
-    assembles R's ``survcheck`` object itself.
-    """
-
-    current_states: list[int]
-    overlap_rows: list[int]
-    gap_rows: list[int]
-    jump_rows: list[int]
-    teleport_rows: list[int]
-    n_transitions: int
-
-
-@dataclass(frozen=True)
 class BrierResult:
     """R's ``brier`` list; ``p0``, ``phat`` and ``eff_n`` are filled in with ``detail=True``.
 
@@ -1932,40 +1959,3 @@ class PsplineResult:
     @property
     def n_cols(self) -> int:
         return len(self.basis[0]) if self.basis else 0
-
-
-def _renamed_classes(namespace: dict[str, Any], renamed: dict[str, str]) -> Any:
-    """A module ``__getattr__`` that serves classes renamed in survival 2.1 under their
-    2.x names, so that pickles made by survival 2.x still load."""
-
-    def module_getattr(name: str) -> Any:
-        if name in renamed:
-            return namespace[renamed[name]]
-        raise AttributeError(f"module {namespace['__name__']!r} has no attribute {name!r}")
-
-    return module_getattr
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "AaregModelResult": "AaregModel",
-        "CchModelResult": "CchModel",
-        "CoxPHDetailResult": "CoxphDetailResult",
-        "CoxPHWTestResult": "CoxphWtestResult",
-        "CoxZPHResult": "CoxZphResult",
-        "CoxBaseHazardResult": "BasehazResult",
-        "SurvDiffResult": "SurvdiffResult",
-        "SurvExpResult": "SurvexpResult",
-        "SurvExpSummary": "SummarySurvexpResult",
-        "RateTablePrint": "RatetablePrint",
-        "SurvCheckResult": "SurvcheckResult",
-        "SurvCheckProblem": "SurvcheckProblem",
-        "StateFigResult": "StatefigResult",
-        "TMergeFrame": "TmergeFrame",
-        "TMergeOperation": "TmergeOperation",
-        "FineGrayFrame": "FinegrayFrame",
-        "SurvfitQuantileResult": "QuantileSurvfitResult",
-        "SurvfitResidualsResult": "ResidualsSurvfitResult",
-    },
-)

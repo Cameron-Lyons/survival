@@ -30,7 +30,7 @@ from ._formula import (
     _term_values,
     _without_survival_namespace,
 )
-from ._surv import Surv, _apply_surv_na_action, _complete_codes, _subset_surv
+from ._surv import Surv, _apply_surv_na_action, _complete_codes_fast, _subset_surv
 from ._survfit import _curve_factor
 from ._types import (
     _MISSING,
@@ -106,7 +106,7 @@ def _one_sample(y: Surv, offset: list[float], rho: float) -> SurvdiffResult:
 
 def _k_sample(
     y: Surv,
-    group_codes: list[int],
+    group_codes: Any,
     group_levels: list[str],
     strata: StrataFactor | None,
     rho: float,
@@ -115,7 +115,7 @@ def _k_sample(
     strata_codes = (
         None
         if strata is None
-        else _complete_codes(strata, "missing values in the grouping variables")
+        else _complete_codes_fast(strata, "missing values in the grouping variables")
     )
     fit = _core.survdiff(
         y.time,

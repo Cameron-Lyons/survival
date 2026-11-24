@@ -13,7 +13,6 @@ from survival import r
 
 coerce = importlib.import_module("survival.r._coerce")
 contrasts = importlib.import_module("survival.r._contrasts")
-bridge = importlib.import_module("survival.pybridge")
 expression = importlib.import_module("survival.r._expression")
 POLYNOMIAL_REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures" / "ordered_factor_reference.json").read_text()
@@ -199,52 +198,6 @@ def test_explicit_factor_contrasts_override_ordered_default_and_survive_pickle(k
     assert r.model_matrix(fresh, _with_metadata=True)["contrasts"] == {"factor(g)": "contr.poly"}
 
 
-@pytest.mark.parametrize("kind", ["coxph", "survreg"])
-def test_evaluated_matrix_uses_fitted_poly_override_and_explicit_metadata(kind):
-    data = data_for(["z", "m", "a"], "pandas")
-    fit = getattr(r, kind)("Surv(time, status) ~ g", data)
-    source = coerce._r_factor(["a", "z", None], ["z", "m", "a"])
-    frame = bridge._r_model_frame({"g": source}, 3)
-    matrix = r.model_matrix(fit, frame, _with_metadata=True)
-    expected = np.vstack([independent_basis(3)[2], independent_basis(3)[0], [np.nan, np.nan]])
-    np.testing.assert_allclose(
-        np.asarray(matrix["data"])[:, -2:], expected, atol=2e-15, equal_nan=True
-    )
-    assert matrix["contrasts"] == {"g": "contr.poly"}
-
-
-@pytest.mark.parametrize("kind", ["coxph", "survreg"])
-def test_evaluated_matrix_retains_named_fitted_contrast_when_metadata_is_absent(kind):
-    data = data_for(["z", "m", "a"], "r_bridge")
-    supplied = {
-        "data": [[1.0, 0.0], [0.0, 1.0], [-1.0, -1.0]],
-        "columns": ["1", "2"],
-        "label": "contr.sum",
-    }
-    data["g"] = coerce._r_factor(data["g"], ["z", "m", "a"], ordered=True, contrast=supplied)
-    fit = getattr(r, kind)("Surv(time, status) ~ g", data)
-    restored = pickle.loads(pickle.dumps(fit))
-    for model in (fit, restored):
-        for levels in (["z", "m", "a"], ["a", "m", "z"]):
-            frame = bridge._r_model_frame(
-                {"g": coerce._r_factor(["a", "z", "m"], levels, ordered=True)}, 3
-            )
-            actual = r.model_matrix(model, frame, _with_metadata=True)
-            assert actual["columns"][-2:] == ["g1", "g2"]
-            assert actual["contrasts"] == {"g": "contr.sum"}
-            basis = np.asarray(supplied["data"])
-            expected = basis[[levels.index(value) for value in ["a", "z", "m"]]]
-            np.testing.assert_array_equal(np.asarray(actual["data"])[:, -2:], expected)
-        frame = bridge._r_model_frame(
-            {"g": coerce._r_factor(["a", "z"], ["z", "m", "a", "unused"])}, 2
-        )
-        actual = r.model_matrix(model, frame)
-        assert actual["columns"][-3:] == ["g1", "g2", "g3"]
-        np.testing.assert_array_equal(
-            np.asarray(actual["data"])[:, -3:], [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
-        )
-
-
 def test_polynomial_default_validates_rs_level_limit():
     with pytest.raises(ValueError, match="orthogonal polynomials.*95 degrees of freedom"):
         r.coxph("Surv(time, status) ~ g", data_for(list(range(96)), "pandas"))
@@ -303,39 +256,6 @@ def test_factor_constructor_rebuilds_configured_default_after_dropping_unused_le
     )
     expected = basis[[["z", "m", "a"].index(value) for value in data["g"]]]
     np.testing.assert_array_equal(np.asarray(matrix["data"])[:, -2:], expected)
-
-
-@pytest.mark.parametrize("kind", ["coxph", "survreg"])
-@pytest.mark.parametrize(
-    ("name", "basis", "column_names"),
-    [
-        ("contr.sum", [[1, 0], [0, 1], [-1, -1]], ["1", "2"]),
-        ("contr.helmert", [[-1, -1], [1, -1], [0, 2]], ["1", "2"]),
-        ("contr.SAS", [[1, 0], [0, 1], [0, 0]], ["z", "m"]),
-    ],
-)
-def test_named_fitted_contrasts_override_conflicting_prepared_frame_basis(
-    kind, name, basis, column_names
-):
-    data = data_for(["z", "m", "a"], "r_bridge")
-    data["g"] = coerce._r_factor(
-        data["g"],
-        ["z", "m", "a"],
-        ordered=True,
-        contrast={"data": basis, "columns": column_names, "label": name},
-    )
-    fit = getattr(r, kind)("Surv(time, status) ~ g", data)
-    source = coerce._r_factor(
-        ["a", "z", "m"],
-        ["z", "m", "a"],
-        ordered=True,
-        contrast={"data": independent_basis(3), "columns": [".L", ".Q"], "label": "contr.poly"},
-    )
-    frame = bridge._r_model_frame({"g": source}, 3)
-    actual = r.model_matrix(fit, frame, _with_metadata=True)
-    assert actual["columns"][-2:] == ["g" + column for column in column_names]
-    assert actual["contrasts"] == {"g": name}
-    np.testing.assert_array_equal(np.asarray(actual["data"])[:, -2:], np.asarray(basis)[[2, 0, 1]])
 
 
 @pytest.mark.parametrize("kind", ["coxph", "survreg"])

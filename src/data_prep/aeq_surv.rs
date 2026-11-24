@@ -1,8 +1,12 @@
+use crate::data_types::FloatVec;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::validate_length;
 use pyo3::prelude::*;
+use rayon::prelude::*;
+use std::borrow::Cow;
 
 pub const DEFAULT_TOLERANCE: f64 = 1.4901161193847656e-8;
+const PARALLEL_SORT_THRESHOLD: usize = 16_384;
 
 #[doc = " The time columns of a `Surv` object after `aeqSurv`."]
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +26,11 @@ fn tie_cuts(columns: &[&[f64]], tolerance: f64) -> Option<Vec<f64>> {
         .flat_map(|c| c.iter().copied())
         .filter(|v| v.is_finite())
         .collect();
-    y.sort_unstable_by(f64::total_cmp);
+    if y.len() >= PARALLEL_SORT_THRESHOLD {
+        y.par_sort_unstable_by(f64::total_cmp);
+    } else {
+        y.sort_unstable_by(f64::total_cmp);
+    }
     y.dedup();
     if y.len() < 2 {
         return None;
@@ -104,6 +112,49 @@ pub fn aeq_surv(
     })
 }
 
+pub(crate) type CowCountingTimes<'a> = (Option<Cow<'a, [f64]>>, Cow<'a, [f64]>);
+
+pub(crate) fn aeq_counting_cow<'a>(
+    start: Option<&'a [f64]>,
+    stop: &'a [f64],
+) -> SurvivalResult<CowCountingTimes<'a>> {
+    if let Some(s) = start {
+        validate_length(stop.len(), s.len(), "time2")?;
+    }
+    let columns: [&[f64]; 2];
+    let slice: &[&[f64]] = match start {
+        Some(s) => {
+            columns = [s, stop];
+            &columns
+        }
+        None => {
+            columns = [stop, &[]];
+            &columns[..1]
+        }
+    };
+    let Some(cuts) = tie_cuts(slice, DEFAULT_TOLERANCE) else {
+        return Ok((start.map(Cow::Borrowed), Cow::Borrowed(stop)));
+    };
+    match start {
+        Some(s) => {
+            let new_start: Vec<f64> = s.iter().map(|&t| snap(t, &cuts)).collect();
+            let new_stop: Vec<f64> = stop.iter().map(|&t| snap(t, &cuts)).collect();
+            for i in 0..stop.len() {
+                if new_start[i] == new_stop[i] && s[i] != stop[i] {
+                    return Err(SurvivalError::invalid_input(
+                        "aeqSurv exception, an interval has effective length 0",
+                    ));
+                }
+            }
+            Ok((Some(Cow::Owned(new_start)), Cow::Owned(new_stop)))
+        }
+        None => Ok((
+            None,
+            Cow::Owned(stop.iter().map(|&t| snap(t, &cuts)).collect()),
+        )),
+    }
+}
+
 pub fn aeq_counting(
     start: Option<&[f64]>,
     stop: &[f64],
@@ -128,11 +179,12 @@ pub fn aeq_times(time: &[f64]) -> Vec<f64> {
 #[pyfunction(name = "aeq_surv")]
 #[pyo3(signature = (time, time2=None, tolerance=None))]
 pub(crate) fn aeq_surv_py(
-    time: Vec<f64>,
-    time2: Option<Vec<f64>>,
+    py: Python<'_>,
+    time: FloatVec,
+    time2: Option<FloatVec>,
     tolerance: Option<f64>,
 ) -> PyResult<AeqSurvResult> {
-    Ok(aeq_surv(&time, time2.as_deref(), tolerance)?)
+    Ok(py.detach(|| aeq_surv(&time, time2.as_deref(), tolerance))?)
 }
 
 #[cfg(test)]

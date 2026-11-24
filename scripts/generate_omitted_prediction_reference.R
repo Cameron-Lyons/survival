@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 suppressPackageStartupMessages(library(survival))
-source("r/survivalr/tests/testthat/helper-omitted-predictions.R")
+source("scripts/r_helpers/helper-omitted-predictions.R")
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/omitted_prediction_reference.json"
 setup <- .omitted_prediction_setup()

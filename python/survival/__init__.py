@@ -33,7 +33,6 @@ _PUBLIC_MODULES = {
     "monitoring": ".monitoring",
     "plotting": ".plotting",
     "population": ".population",
-    "pybridge": ".pybridge",
     "qol": ".qol",
     "r": ".r",
     "recurrent": ".recurrent",

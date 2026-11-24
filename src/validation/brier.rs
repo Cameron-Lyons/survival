@@ -336,6 +336,42 @@ where
     Ok(scoring.into_result(outcomes.times, rows, Vec::new()))
 }
 
+#[cfg(feature = "python")]
+#[doc = " `brier(time, status, times, phat, weights=None, ties=True, efron=False,"]
+#[doc = " timefix=True, start=None)`: R's `brier(fit, times, ties, efron)` for a"]
+#[doc = " Cox model, `phat[i][j]` being the model's predicted probability that"]
+#[doc = " subject `j` has had the event by `times[i]`; `start` holds the entry"]
+#[doc = " times of (start, stop] data."]
+#[pyfunction(name = "brier")]
+#[pyo3(signature = (time, status, times, phat, weights=None, ties=true, efron=false, timefix=true, start=None))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn brier_py(
+    py: Python<'_>,
+    time: crate::data_types::FloatVec,
+    status: crate::data_types::IntVec,
+    times: crate::data_types::FloatVec,
+    phat: crate::data_types::FloatMatrix,
+    weights: Option<crate::data_types::FloatVec>,
+    ties: bool,
+    efron: bool,
+    timefix: bool,
+    start: Option<crate::data_types::FloatVec>,
+) -> PyResult<BrierResult> {
+    Ok(py.detach(|| {
+        brier(BrierInput {
+            start: start.as_deref(),
+            time: &time,
+            status: &status,
+            weights: weights.as_deref(),
+            times: &times,
+            phat: phat.outer_iter().map(|row| row.to_vec()).collect(),
+            ties,
+            efron,
+            timefix,
+        })
+    })?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

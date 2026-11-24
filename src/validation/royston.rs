@@ -1,3 +1,4 @@
+use crate::data_types::{FloatVec, IntVec};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -7,7 +8,13 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 
-const PARALLEL_THRESHOLD: usize = 2_000;
+const DIRECT_THRESHOLD: usize = 256;
+const PARALLEL_BLOCK_THRESHOLD: usize = 4_096;
+const BLOCK_WIDTH: f64 = 0.5;
+const FAR_GAP: f64 = 2.0;
+const SAME_ORDER: usize = 16;
+const PAIR_ORDER: usize = 22;
+const EXP_TERMS: usize = 18;
 
 #[derive(Debug, Clone)]
 pub struct RoystonInput<'a> {
@@ -63,22 +70,243 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
     scores
 }
 
+/// Taylor coefficients `a[r] = g^(r)(z) / r!` of `g(z) = 1 / (1 + exp(z))`
+/// via the logistic ODE recurrence `g'(z) = g(z)^2 - g(z)`.
+#[inline]
+fn logistic_taylor<const N: usize>(z: f64) -> [f64; N] {
+    let a0 = if z >= 0.0 {
+        let e = (-z).exp();
+        e / (1.0 + e)
+    } else {
+        1.0 / (1.0 + z.exp())
+    };
+    let mut a = [0.0; N];
+    a[0] = a0;
+    for r in 0..N - 1 {
+        let mut conv = 0.0;
+        for k in 0..=r {
+            conv += a[k] * a[r - k];
+        }
+        a[r + 1] = (conv - a[r]) / (r + 1) as f64;
+    }
+    a
+}
+
+const fn binomial_table<const N: usize>() -> [[f64; N]; N] {
+    let mut table = [[0.0; N]; N];
+    let mut n = 0;
+    while n < N {
+        table[n][0] = 1.0;
+        let mut k = 1;
+        while k <= n {
+            table[n][k] = table[n - 1][k - 1] + table[n - 1][k];
+            k += 1;
+        }
+        n += 1;
+    }
+    table
+}
+
+const PAIR_BINOM: [[f64; PAIR_ORDER]; PAIR_ORDER] = binomial_table::<PAIR_ORDER>();
+
+struct GhBlock {
+    start: usize,
+    end: usize,
+    center: f64,
+    moments: [f64; PAIR_ORDER],
+    exp_plus: [f64; EXP_TERMS],
+    exp_minus: [f64; EXP_TERMS],
+    same_sum: f64,
+}
+
+fn build_gh_block(sorted: &[f64], start: usize, end: usize) -> GhBlock {
+    let min_x = sorted[start];
+    let max_x = sorted[end - 1];
+    let center = 0.5 * (min_x + max_x);
+    let len = end - start;
+    let mut moments = [0.0; PAIR_ORDER];
+    let mut exp_plus = [0.0; EXP_TERMS];
+    let mut exp_minus = [0.0; EXP_TERMS];
+
+    if min_x == max_x {
+        moments[0] = len as f64;
+        exp_plus.fill(len as f64);
+        exp_minus.fill(len as f64);
+        let same_sum = 0.5 * (len as f64) * ((len - 1) as f64) * 0.5;
+        return GhBlock {
+            start,
+            end,
+            center,
+            moments,
+            exp_plus,
+            exp_minus,
+            same_sum,
+        };
+    }
+
+    let mut suffix_m = [0.0; SAME_ORDER];
+    let mut same_sum = 0.0;
+    for &x in sorted[start..end].iter().rev() {
+        let u = x - center;
+        let a = logistic_taylor::<SAME_ORDER>(-u);
+        let mut dot = 0.0;
+        for r in 0..SAME_ORDER {
+            dot += a[r] * suffix_m[r];
+        }
+        same_sum += dot;
+
+        let mut pow = 1.0;
+        for r in 0..SAME_ORDER {
+            suffix_m[r] += pow;
+            moments[r] += pow;
+            pow *= u;
+        }
+        for m in moments.iter_mut().take(PAIR_ORDER).skip(SAME_ORDER) {
+            *m += pow;
+            pow *= u;
+        }
+
+        let ep = u.exp();
+        let em = 1.0 / ep;
+        let mut p = ep;
+        let mut q = em;
+        for k in 0..EXP_TERMS {
+            exp_plus[k] += p;
+            exp_minus[k] += q;
+            p *= ep;
+            q *= em;
+        }
+    }
+
+    GhBlock {
+        start,
+        end,
+        center,
+        moments,
+        exp_plus,
+        exp_minus,
+        same_sum,
+    }
+}
+
+fn gonen_heller_direct(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    let total: f64 = (0..n - 1)
+        .map(|i| {
+            let xi = sorted[i];
+            sorted[i + 1..]
+                .iter()
+                .map(|&later| 1.0 / (1.0 + (xi - later).exp()))
+                .sum::<f64>()
+        })
+        .sum();
+    total * 2.0 / (n as f64 * (n - 1) as f64)
+}
+
 fn gonen_heller(eta: &[f64]) -> f64 {
     let n = eta.len();
     let mut sorted = eta.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let row_sum = |i: usize| -> f64 {
-        sorted[i + 1..]
-            .iter()
-            .map(|&later| 1.0 / (1.0 + (sorted[i] - later).exp()))
-            .sum()
-    };
-    let total: f64 = if n >= PARALLEL_THRESHOLD {
-        (0..n - 1).into_par_iter().map(row_sum).sum()
+    sorted.sort_unstable_by(f64::total_cmp);
+    if n <= DIRECT_THRESHOLD {
+        return gonen_heller_direct(&sorted);
+    }
+
+    // Partition sorted predictors into contiguous blocks of width <= 0.5.
+    // Within each block |x - center| <= 0.25, so the Taylor expansion of
+    // g(d) = 1 / (1 + exp(d)) converges geometrically with ratio <= 0.5 / pi.
+    // For pairs separated by >= 2.0, g(d) = sum_{m>=1} (-1)^{m-1} exp(-m d)
+    // converges to < 1e-16 in 18 terms without overflow.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    while start < n {
+        let limit = sorted[start] + BLOCK_WIDTH;
+        let mut end = start + 1;
+        while end < n && sorted[end] <= limit {
+            end += 1;
+        }
+        ranges.push((start, end));
+        start = end;
+    }
+
+    let blocks: Vec<GhBlock> = if n >= PARALLEL_BLOCK_THRESHOLD && ranges.len() > 1 {
+        ranges
+            .par_iter()
+            .map(|&(s, e)| build_gh_block(&sorted, s, e))
+            .collect()
     } else {
-        (0..n - 1).map(row_sum).sum()
+        ranges
+            .iter()
+            .map(|&(s, e)| build_gh_block(&sorted, s, e))
+            .collect()
     };
-    total * 2.0 / (n as f64 * (n - 1) as f64)
+
+    let mut sum_g: f64 = blocks.iter().map(|b| b.same_sum).sum();
+    let n_blocks = blocks.len();
+    let mut far_suffix = [0.0; EXP_TERMS];
+    let mut far_start = n_blocks;
+    let mut ref_center = blocks[n_blocks - 1].center;
+
+    for a_idx in (0..n_blocks).rev() {
+        let a = &blocks[a_idx];
+        let max_a = sorted[a.end - 1];
+
+        let shift = ref_center - a.center;
+        if shift > 0.0 && far_start < n_blocks {
+            let e = (-shift).exp();
+            let mut em = e;
+            for slot in &mut far_suffix {
+                *slot *= em;
+                em *= e;
+            }
+        }
+        ref_center = a.center;
+
+        while far_start > a_idx + 1 && sorted[blocks[far_start - 1].start] - max_a >= FAR_GAP {
+            far_start -= 1;
+            let b = &blocks[far_start];
+            let delta = b.center - a.center;
+            let e = (-delta).exp();
+            let mut em = e;
+            for (slot, &exp_minus) in far_suffix.iter_mut().zip(&b.exp_minus) {
+                *slot += exp_minus * em;
+                em *= e;
+            }
+        }
+
+        if far_start < n_blocks {
+            let mut far_contrib = 0.0;
+            for (k, (&exp_plus, &suffix)) in a.exp_plus.iter().zip(&far_suffix).enumerate() {
+                let term = exp_plus * suffix;
+                if k % 2 == 0 {
+                    far_contrib += term;
+                } else {
+                    far_contrib -= term;
+                }
+            }
+            sum_g += far_contrib;
+        }
+
+        for b in &blocks[a_idx + 1..far_start] {
+            let coeffs = logistic_taylor::<PAIR_ORDER>(b.center - a.center);
+            let mut pair_sum = 0.0;
+            for (m, (&coeff, binom_row)) in coeffs.iter().zip(&PAIR_BINOM).enumerate() {
+                let mut inner = 0.0;
+                for (p, &binom) in binom_row[..=m].iter().enumerate() {
+                    let term = binom * a.moments[p] * b.moments[m - p];
+                    if p % 2 == 0 {
+                        inner += term;
+                    } else {
+                        inner -= term;
+                    }
+                }
+                pair_sum += coeff * inner;
+            }
+            sum_g += pair_sum;
+        }
+    }
+
+    let pairs = (n as f64) * ((n - 1) as f64) * 0.5;
+    (pairs - sum_g) / pairs
 }
 
 fn validate(input: &RoystonInput<'_>) -> SurvivalResult<()> {
@@ -162,26 +390,29 @@ pub fn royston(input: &RoystonInput<'_>) -> SurvivalResult<RoystonResult> {
 #[pyo3(signature = (eta, time, status, loglik, n_event, n_coef, entry_times=None, ties=true, adjust=false))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn royston_py(
-    eta: Vec<f64>,
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    eta: FloatVec,
+    time: FloatVec,
+    status: IntVec,
     loglik: [f64; 2],
     n_event: usize,
     n_coef: usize,
-    entry_times: Option<Vec<f64>>,
+    entry_times: Option<FloatVec>,
     ties: bool,
     adjust: bool,
 ) -> PyResult<RoystonResult> {
-    Ok(royston(&RoystonInput {
-        eta: &eta,
-        time: &time,
-        status: &status,
-        entry_times: entry_times.as_deref(),
-        loglik,
-        n_event,
-        n_coef,
-        ties,
-        adjust,
+    Ok(py.detach(|| {
+        royston(&RoystonInput {
+            eta: &eta,
+            time: &time,
+            status: &status,
+            entry_times: entry_times.as_deref(),
+            loglik,
+            n_event,
+            n_coef,
+            ties,
+            adjust,
+        })
     })?)
 }
 
@@ -206,6 +437,44 @@ mod tests {
     fn gonen_heller_is_half_for_a_constant_predictor() {
         assert!((gonen_heller(&[0.2; 5]) - 0.5).abs() < 1e-12);
         assert!(gonen_heller(&[-1.0, 0.0, 1.0, 2.0]) > 0.5);
+    }
+
+    #[test]
+    fn gonen_heller_fast_matches_direct_across_scales_and_ties() {
+        let mut state: u64 = 0x5EED_CAFE_1234_5678;
+        let mut next_f64 = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        let cases: Vec<Vec<f64>> = vec![
+            (0..600).map(|_| (next_f64() - 0.5) * 6.0).collect(),
+            (0..600).map(|_| (next_f64() - 0.5) * 0.2).collect(),
+            (0..600)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        -50.0
+                    } else {
+                        (next_f64() - 0.5) * 20.0
+                    }
+                })
+                .collect(),
+            (0..600).map(|i| (i % 7) as f64 * 0.35 - 1.0).collect(),
+            vec![42.0; 400],
+            (0..400).map(|i| (i as f64 - 200.0) * 1e5).collect(),
+        ];
+        for eta in cases {
+            let mut sorted = eta.clone();
+            sorted.sort_unstable_by(f64::total_cmp);
+            let direct = gonen_heller_direct(&sorted);
+            let fast = gonen_heller(&eta);
+            assert!(
+                (fast - direct).abs() < 1e-13,
+                "fast {fast} != direct {direct} (diff={})",
+                (fast - direct).abs()
+            );
+        }
     }
 
     #[test]

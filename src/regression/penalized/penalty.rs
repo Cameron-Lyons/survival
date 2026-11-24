@@ -567,11 +567,7 @@ impl PenaltyTerm {
             #[cfg(feature = "python")]
             Self::Callback(term) => {
                 let terms = Python::attach(|py| {
-                    crate::pybridge::cox_py_callback::evaluate_penalty(
-                        term.fexpr.bind(py),
-                        which,
-                        coef,
-                    )
+                    super::python_callback::evaluate_penalty(term.fexpr.bind(py), which, coef)
                 })
                 .map_err(|err| SurvivalError::computation(err.to_string()))?;
                 let flag = terms.flag.iter().any(|f| *f);

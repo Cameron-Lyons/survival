@@ -20,7 +20,6 @@ from ._coerce import (
 )
 from ._coxph import _cox_fit_diagnostic_messages, coxph_control
 from ._surv import Surv
-from ._types import _renamed_classes
 
 
 @dataclass(frozen=True)
@@ -301,11 +300,3 @@ def agexact_fit(
         nocenter,
         column_names,
     )
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "CoxFitResult": "CoxphFitResult",
-    },
-)

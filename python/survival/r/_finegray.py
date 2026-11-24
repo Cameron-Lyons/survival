@@ -7,26 +7,28 @@ times) and the per-stratum split (the ``finegray`` kernel).
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 
 from .. import _survival as _core
+from .._factor import Factor
 from ._coerce import (
+    _categories,
     _finite_float,
     _int_vector,
     _is_missing_value,
     _materialize_1d,
     _normalize_bool_option,
+    _numeric_ndarray,
     _pop_dotted_keyword,
-    _select_rows,
+    _RFactorVector,
     _warn_outside_package,
 )
 from ._formula import _model_variables, _strata_keep, _strata_specs, model_frame
 from ._names import _make_names
-from ._surv import Surv, _complete_codes
+from ._surv import Surv, _complete_codes_fast
 from ._types import FinegrayFrame, ModelFrame
 
 
@@ -46,7 +48,7 @@ def _etype_index(states: Sequence[str], etype: Any) -> int:
     return int(index[0] or 1)
 
 
-def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, list[int], list[float] | None]:
+def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, Any, Any]:
     """The checked response, the stratum of each row and the user weights."""
 
     response = mf.response
@@ -56,18 +58,29 @@ def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, list[int], list[float] | Non
         raise ValueError("Fine-Gray model requires a multi-state survival")
     if len(response.states) < 2:
         raise ValueError("survival time has only a single state")
-    if any(value is None for value in response.event) or any(
-        math.isnan(value) for value in (*response.time, *(response.start or ()))
+    if (
+        None in response.event
+        or np.isnan(response.time).any()
+        or (response.start is not None and np.isnan(response.start).any())
     ):
         raise ValueError("missing values in the response")
     if mf.terms.clusters:
         raise ValueError("a cluster() term is not valid")
     if mf.terms.strata:
         factor = _strata_keep(mf.data, _strata_specs(mf.terms))
-        istrat = _complete_codes(factor, "strata must not contain missing values")
+        istrat = _complete_codes_fast(factor, "strata must not contain missing values")
     else:
-        istrat = [0] * mf.n
-    weights = None if mf.weights is None else [_finite_float(v, "weights") for v in mf.weights]
+        istrat = np.zeros(mf.n, dtype=np.int32)
+    weights: Any = None
+    if mf.weights is not None:
+        w_arr = _numeric_ndarray(mf.weights)
+        if w_arr is not None:
+            w_f64 = w_arr.astype(np.float64, copy=False)
+            if not np.isfinite(w_f64).all():
+                raise ValueError("weights must be finite")
+            weights = w_f64
+        else:
+            weights = [_finite_float(v, "weights") for v in mf.weights]
     return response, istrat, weights
 
 
@@ -125,26 +138,47 @@ def finegray(
         weights=user_weights,
         timefix=fix_time,
     )
-    # The expansion is quadratic in the input size; build its columns in bulk.
-    expanded = split.to_arrays()
-    source_rows = expanded["row"] - 1
-    source = source_rows.tolist()
+    # Build all expanded list columns directly in Rust without intermediate NumPy arrays.
     variables = [
         (name, values) for name, values in _model_variables(mf) if not name.startswith("strata(")
     ]
     if mf.weights is not None:
         variables.append(("(weights)", list(mf.weights)))
-    columns: dict[str, list[Any]] = {
-        name: _select_rows(values, source) for name, values in variables
-    }
-    columns[output_names[0]] = expanded["start"].tolist()
-    columns[output_names[1]] = expanded["end"].tolist()
-    columns[output_names[2]] = (
-        (np.asarray(status, dtype=np.int64)[source_rows] == enum).astype(np.int64).tolist()
+    raw_columns: list[Any] = []
+    factor_meta: list[tuple[Any, bool] | None] = []
+    for name, values in variables:
+        categories = _categories(values)
+        if categories is not None:
+            ordered = bool(
+                getattr(
+                    values, "ordered", getattr(getattr(values, "dtype", None), "ordered", False)
+                )
+            )
+            factor_meta.append((categories, ordered))
+            if type(values) is _RFactorVector:
+                raw_columns.append(values._values)
+            elif isinstance(values, list | tuple):
+                raw_columns.append(values)
+            else:
+                raw_columns.append(_materialize_1d(values, name))
+        else:
+            factor_meta.append(None)
+            if isinstance(values, list | tuple):
+                raw_columns.append(values)
+            else:
+                raw_columns.append(_materialize_1d(values, name))
+    expanded_vars, fgstart, fgstop, fgstatus, fgwt, fgadd = split._build_lists(
+        status, enum, count_name is not None, raw_columns
     )
-    columns[output_names[3]] = expanded["wt"].tolist()
-    if count_name is not None:
-        columns[count_name] = expanded["add"].tolist()
+    columns: dict[str, list[Any]] = {}
+    for (name, _values), selected, meta in zip(variables, expanded_vars, factor_meta, strict=True):
+        columns[name] = Factor(selected, meta[0], meta[1]) if meta is not None else selected
+    columns[output_names[0]] = fgstart
+    columns[output_names[1]] = fgstop
+    columns[output_names[2]] = fgstatus
+    columns[output_names[3]] = fgwt
+    if count_name is not None and fgadd is not None:
+        columns[count_name] = fgadd
     return FinegrayFrame(columns, event=response.states[enum - 1])
 
 

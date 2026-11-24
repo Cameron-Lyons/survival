@@ -1,38 +1,37 @@
-use crate::constants::PARALLEL_THRESHOLD_LARGE;
+use crate::core::time_order::total_order_key;
 use rayon::prelude::*;
-use std::cmp::Ordering;
+
+const PARALLEL_SORT_THRESHOLD: usize = 16_384;
 
 fn sort_pairs(
     rows: impl Iterator<Item = usize>,
     values: &[f64],
     parallel: bool,
-    compare: impl Fn(&(f64, usize), &(f64, usize)) -> Ordering + Sync,
+    descending: bool,
 ) -> Vec<usize> {
-    let mut pairs: Vec<(f64, usize)> = rows.map(|i| (values[i], i)).collect();
-    if parallel && pairs.len() > PARALLEL_THRESHOLD_LARGE {
-        pairs.par_sort_unstable_by(compare);
+    let mut pairs: Vec<(u64, usize)> = if descending {
+        rows.map(|i| (!total_order_key(values[i]), i)).collect()
     } else {
-        pairs.sort_unstable_by(compare);
+        rows.map(|i| (total_order_key(values[i]), i)).collect()
+    };
+    if parallel && pairs.len() > PARALLEL_SORT_THRESHOLD {
+        pairs.par_sort_unstable();
+    } else {
+        pairs.sort_unstable();
     }
     pairs.into_iter().map(|(_, i)| i).collect()
 }
 
-fn ascending(a: &(f64, usize), b: &(f64, usize)) -> Ordering {
-    a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1))
-}
-
 pub(crate) fn ordered_subset(keep: &[usize], values: &[f64], parallel: bool) -> Vec<usize> {
-    sort_pairs(keep.iter().copied(), values, parallel, ascending)
+    sort_pairs(keep.iter().copied(), values, parallel, false)
 }
 
 pub(crate) fn sorted_indices_by(values: &[f64]) -> Vec<usize> {
-    sort_pairs(0..values.len(), values, true, ascending)
+    sort_pairs(0..values.len(), values, true, false)
 }
 
 pub(crate) fn descending_time_indices(time: &[f64]) -> Vec<usize> {
-    sort_pairs(0..time.len(), time, true, |a, b| {
-        b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1))
-    })
+    sort_pairs(0..time.len(), time, true, true)
 }
 
 #[cfg(test)]
@@ -76,7 +75,7 @@ mod tests {
 
     #[test]
     fn parallel_and_serial_paths_agree() {
-        let n = PARALLEL_THRESHOLD_LARGE * 2 + 7;
+        let n = PARALLEL_SORT_THRESHOLD * 2 + 7;
         let values: Vec<f64> = (0..n).map(|i| ((i * 7919) % 97) as f64).collect();
         let parallel = sorted_indices_by(&values);
         let mut serial: Vec<usize> = (0..n).collect();

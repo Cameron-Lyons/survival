@@ -113,47 +113,6 @@ def test_recycling_warning_stops_at_its_arithmetic_stage(method):
     assert calls == ([] if method == "pdf_values" else ["quantile"])
 
 
-@pytest.mark.parametrize("error_type", [RuntimeWarning, KeyboardInterrupt, SystemExit])
-@pytest.mark.parametrize("category", [RuntimeWarning, UserWarning])
-def test_r_warning_hook_propagates_sink_error_and_restores_python_hook(error_type, category):
-    from survival.pybridge import _call_dpqr_with_warnings
-
-    events = []
-    error = error_type("R warning sink sentinel")
-    previous = warnings.showwarning
-
-    def operation():
-        events.append("before")
-        warnings.warn("arithmetic warning", category, stacklevel=2)
-        events.append("after")
-
-    def sink(message):
-        events.append(message)
-        raise error
-
-    with pytest.raises(error_type) as caught:
-        _call_dpqr_with_warnings(operation, {}, warning=sink)
-    assert caught.value is error
-    assert events == ["before", "arithmetic warning"]
-    assert warnings.showwarning is previous
-
-
-def test_r_warning_hook_retains_previous_hook_for_other_categories():
-    from survival.pybridge import _call_dpqr_with_warnings
-
-    forwarded = []
-
-    def operation():
-        warnings.warn("deprecation sentinel", DeprecationWarning, stacklevel=2)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", DeprecationWarning)
-        _call_dpqr_with_warnings(operation, {}, warning=forwarded.append)
-    assert forwarded == []
-    assert [str(issue.message) for issue in caught] == ["deprecation sentinel"]
-    assert caught[0].category is DeprecationWarning
-
-
 @pytest.mark.parametrize("marker", ["missing", "null"])
 @pytest.mark.parametrize(
     "roundtrip",

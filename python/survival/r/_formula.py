@@ -776,30 +776,14 @@ class _FormulaRows(dict[str, Any]):
     __slots__ = ("nrow", "strata_cache", "response_cache", "variable_cache", "row_names")
 
     def __init__(
-        self, columns: dict[str, Any], nrow: int, row_names: tuple[str, ...] | None = None
+        self, columns: dict[str, Any], nrow: int, row_names: Sequence[str] | None = None
     ) -> None:
         super().__init__(columns)
         self.nrow = nrow
         self.strata_cache: dict[_StrataSpec, StrataFactor] = {}
         self.response_cache: tuple[_SurvResponseSpec, Surv] | None = None
         self.variable_cache: dict[_CovariateTerm, list[Any]] = {}
-        self.row_names = row_names
-
-
-class _EvaluatedModelFrame(_FormulaRows):
-    """Columns from an R model frame, whose expressions have already run."""
-
-    __slots__ = ("column_metadata",)
-
-    def __init__(
-        self,
-        columns: dict[str, Any],
-        nrow: int,
-        row_names: tuple[str, ...] | None = None,
-        column_metadata: Mapping[str, Any] | None = None,
-    ) -> None:
-        super().__init__(columns, nrow, row_names)
-        self.column_metadata = dict(column_metadata or {})
+        self.row_names: tuple[str, ...] | None = None if row_names is None else tuple(row_names)
 
 
 def _prepare_formula_inputs(data: Any, **row_aligned: Any) -> tuple[Any, dict[str, Any]]:
@@ -829,11 +813,7 @@ def _prepare_formula_inputs(data: Any, **row_aligned: Any) -> tuple[Any, dict[st
         columns = dict(sources)
         columns.update(replacements)
         prepared: Any
-        if isinstance(data, _EvaluatedModelFrame):
-            prepared = _EvaluatedModelFrame(
-                columns, data.nrow, data.row_names, data.column_metadata
-            )
-        elif isinstance(data, _FormulaRows):
+        if isinstance(data, _FormulaRows):
             prepared = _FormulaRows(columns, data.nrow, data.row_names)
         else:
             prepared = columns
@@ -3432,7 +3412,28 @@ def _with_strata_cache(data: Any, specs: Sequence[_StrataSpec], n: int) -> Any:
 def _strata_rows(factor: StrataFactor, rows: Sequence[int]) -> StrataFactor:
     """Subset evaluated strata, retaining the model frame's original factor levels."""
 
-    codes = [None if row < 0 else factor.codes[row] for row in rows]
+    if factor._codes_array is not None:
+        idx = np.asarray(rows, dtype=np.intp)
+        if len(idx) == 0:
+            sub = np.empty(0, dtype=np.int64)
+            counts = [0] * len(factor.levels)
+        elif (idx >= 0).all():
+            sub = factor._codes_array[idx]
+            valid = sub[sub >= 0]
+            counts = np.bincount(valid, minlength=len(factor.levels)).tolist()
+        else:
+            sub = np.where(idx < 0, -1, factor._codes_array[np.maximum(idx, 0)])
+            valid = sub[sub >= 0]
+            counts = np.bincount(valid, minlength=len(factor.levels)).tolist()
+        return StrataFactor(
+            codes=None,
+            levels=factor.levels,
+            labels=None,
+            counts=counts,
+            _codes_array=sub,
+        )
+    factor_codes = factor.codes
+    codes = [None if row < 0 else factor_codes[row] for row in rows]
     counts = [0] * len(factor.levels)
     for code in codes:
         if code is not None:
@@ -3440,7 +3441,7 @@ def _strata_rows(factor: StrataFactor, rows: Sequence[int]) -> StrataFactor:
     return StrataFactor(
         codes=codes,
         levels=factor.levels,
-        labels=[None if row < 0 else factor.labels[row] for row in rows],
+        labels=None,
         counts=counts,
     )
 
@@ -3452,11 +3453,25 @@ def _drop_empty_strata(factor: StrataFactor) -> StrataFactor:
     if all(counts):
         return factor
     kept = [code for code, count in enumerate(counts) if count]
+    existing_labels = factor.__dict__.get("labels")
+    if factor._codes_array is not None:
+        remap_arr = np.full(len(counts), -1, dtype=np.int64)
+        for new_code, old_code in enumerate(kept):
+            remap_arr[old_code] = new_code
+        arr = factor._codes_array
+        remapped = np.where(arr < 0, -1, remap_arr[np.maximum(arr, 0)])
+        return StrataFactor(
+            codes=None,
+            levels=[factor.levels[code] for code in kept],
+            labels=existing_labels,
+            counts=[counts[code] for code in kept],
+            _codes_array=remapped,
+        )
     remap = {code: i for i, code in enumerate(kept)}
     return StrataFactor(
         codes=[None if code is None else remap[code] for code in factor.codes],
         levels=[factor.levels[code] for code in kept],
-        labels=factor.labels,
+        labels=existing_labels,
         counts=[counts[code] for code in kept],
     )
 

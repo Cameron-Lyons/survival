@@ -25,11 +25,13 @@ import numpy as np
 from .. import _survival as _core
 from .._factor import Factor
 from ._coerce import (
+    _DEFAULT_NA_ACTION,
+    _EXACT_INTEGER,
+    _PLAIN_REALS_BOOL_OR_NONE,
+    _PLAIN_SCALARS,
     _as_character,
     _categories,
     _category_codes,
-    _DEFAULT_NA_ACTION,
-    _EXACT_INTEGER,
     _factor,
     _factor_levels,
     _finite_float,
@@ -43,8 +45,6 @@ from ._coerce import (
     _missing_flags,
     _normalize_bool_option,
     _numeric_ndarray,
-    _PLAIN_REALS_BOOL_OR_NONE,
-    _PLAIN_SCALARS,
     _pop_dotted_keyword,
     _rows_of,
     _scalar_or_vector,
@@ -67,7 +67,6 @@ from ._formula import (
 )
 from ._surv import Surv, Surv2
 from ._types import ModelFrame, TcutResult, TmergeFrame, TmergeOperation, _SurvResponseSpec
-
 
 _NEARDATE_TIME_UNITS = {
     "D": 86_400 * 10**18,
@@ -1140,8 +1139,6 @@ def survcondense(
     """R's ``survcondense``: merge adjacent ``(start, stop]`` rows with equal covariates."""
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, "na.pass")
-    id_name = kwargs.pop("_id_name", None)
-    weights_name = kwargs.pop("_weights_name", None)
     if kwargs:
         raise TypeError(
             f"survcondense got unexpected keyword argument(s): {', '.join(sorted(kwargs))}"
@@ -1180,9 +1177,9 @@ def survcondense(
     for name, values in variables:
         output.setdefault(name, _select_rows(values, keep))
     if mf.weights is not None:
-        weights_column = weights_name or (weights if isinstance(weights, str) else "(weights)")
+        weights_column = weights if isinstance(weights, str) else "(weights)"
         output.setdefault(str(weights_column), [mf.weights[row] for row in keep])
-    id_column = id_name or (id if isinstance(id, str) else "id")
+    id_column = id if isinstance(id, str) else "id"
     output.setdefault(str(id_column), [mf.id[row] for row in keep])
     time_name, time2_name, event_name = _surv_argument_names(mf)
     output[_output_name(start or time_name or "tstart", "start")] = [new_start[row] for row in keep]
@@ -1231,7 +1228,6 @@ def rttright(
 
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     response = kwargs.pop("response", None)
-    warn_offset = kwargs.pop("_warn_offset", True)
     if kwargs:
         raise TypeError(f"rttright got unexpected keyword argument(s): {', '.join(sorted(kwargs))}")
     if response is not None:
@@ -1261,7 +1257,7 @@ def rttright(
             if weight < 0.0:
                 raise ValueError("weights must be non-negative")
             casewt.append(weight)
-    if mf.terms.offsets and warn_offset:
+    if mf.terms.offsets:
         _warn_outside_package("Offset term ignored", RuntimeWarning)
     groups = _model_strata(mf)
     strata_codes = None

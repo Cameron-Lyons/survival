@@ -13,7 +13,6 @@ from typing import Any
 import numpy as np
 
 from ._coerce import (
-    _warn_outside_package,
     _DEFAULT_NA_ACTION,
     _NA_REAL,
     _categories,
@@ -25,14 +24,13 @@ from ._coerce import (
     _missing_row_indices,
     _mstate_categories,
     _normalize_na_action,
-    _numeric_ndarray,
     _optional_float_vector,
     _rows_of,
     _strata_level_sort_key,
     _strata_value_label,
+    _warn_outside_package,
 )
-from ._contrasts import _contr_poly, _named_factor_contrast
-from ._expression import _expression_source
+from ._contrasts import _contr_poly
 from ._formula import (
     _apply_formula_na_action,
     _column,
@@ -44,10 +42,8 @@ from ._formula import (
     _data_row_labels,
     _data_rows,
     _design_array_from_spec,
-    _design_contrasts,
     _design_rows_from_spec,
     _design_term_name,
-    _EvaluatedModelFrame,
     _fit_formula_design,
     _formula_cluster_values,
     _formula_data_rows,
@@ -383,219 +379,6 @@ def _model_matrix_newdata_design(design: _FormulaDesign, data: Any) -> _FormulaD
             fresh = replace(fresh, levels=term.levels, names=term.names)
         covariates.append(fresh)
     return replace(design, covariates=tuple(covariates))
-
-
-def _model_matrix_evaluated(
-    design: _FormulaDesign,
-    data: _EvaluatedModelFrame,
-    *,
-    strata_terms: Sequence[_StrataSpec] = (),
-    covered_strata: Sequence[_StrataSpec] = (),
-    cox: bool = False,
-) -> dict[str, Any]:
-    """Build from supplied model-frame columns without evaluation or NA removal."""
-    n = data.nrow
-    evaluated: dict[_CovariateTerm, Any] = {}
-    factor_values: dict[_CovariateTerm, list[Any]] = {}
-    fitted_contrasts = _model_matrix_contrasts(design) or {}
-    frame_contrasts = (
-        cox
-        and bool(covered_strata)
-        and not any(
-            isinstance(term, _InteractionDesignTerm)
-            and any(part.term.strata is not None for part in term.factors)
-            for term in design.covariates
-        )
-    )
-    used = {
-        _covariate_term_name(part.term, frame=True)
-        for term in design.covariates
-        for part in (term.factors if isinstance(term, _InteractionDesignTerm) else (term,))
-    }
-    offsets = {f"offset({_covariate_term_name(term, frame=True)})" for term in design.offsets}
-    required = used | offsets
-    if not (frame_contrasts or (not cox and covered_strata)):
-        labels = design.variable_labels or tuple(
-            f"offset({_covariate_term_name(term, frame=True)})"
-            if term in design.offsets
-            else _covariate_term_name(term, frame=True)
-            for term in design.variables
-        )
-        required.update(labels)
-    if not required <= data.keys():
-        raise ValueError("model frame and formula mismatch in model.matrix()")
-    logical_offsets = []
-    for name in offsets:
-        metadata = data.column_metadata.get(name, {})
-        offset_values = _expression_source(_column_source(data, name), name)
-        logical = metadata.get("kind", offset_values.kind) == "logical"
-        if name in design.logical_offsets and not logical:
-            if offset_values.declared or any(
-                not _is_missing_value(value) for value in offset_values
-            ):
-                raise ValueError("contrasts apply only to factors")
-            logical = True
-        if logical:
-            logical_offsets.append(name)
-    factors: dict[_CovariateTerm, _SingleDesignTerm] = {}
-
-    def factor(original: _SingleDesignTerm) -> _SingleDesignTerm:
-        if original.term in factors:
-            return factors[original.term]
-        name = _covariate_term_name(original.term, frame=True)
-        matrix_name = _covariate_term_name(original.term)
-        term = _CovariateTerm(name, arithmetic=name if name != matrix_name else None)
-        source = _column_source(data, name)
-        metadata = data.column_metadata.get(name, {})
-        matrix = _numeric_ndarray(source, ndim=2)
-        if matrix is not None:
-            if len(matrix) != n:
-                raise ValueError("model-frame columns must have the same number of rows")
-            width = matrix.shape[1]
-            suffixes = metadata.get("matrix_names")
-            names = (
-                (matrix_name,)
-                if width == 1
-                else tuple(matrix_name + str(label) for label in suffixes)
-                if suffixes
-                else tuple(matrix_name + str(i + 1) for i in range(width))
-            )
-            if len(names) != width:
-                raise ValueError("matrix column names must match its width")
-            evaluated[term] = matrix
-            result: _SingleDesignTerm = _MatrixDesignTerm(term, names)
-        else:
-            values = _column(data, name)
-            if len(values) != n:
-                raise ValueError("model-frame columns must have the same number of rows")
-            levels = _mstate_categories(source)
-            array = _numeric_ndarray(source)
-            numeric = levels is None and array is not None and array.dtype.kind in "iuf"
-            logical = metadata.get("kind") == "logical" or (
-                not numeric
-                and levels is None
-                and _expression_source(source, name).kind == "logical"
-            )
-            character = metadata.get("kind") == "character" or (
-                not numeric and any(isinstance(value, str) for value in values)
-            )
-            if levels is not None or logical or character:
-                factor_values[term] = values
-                levels = (
-                    (False, True)
-                    if logical
-                    else _model_frame_levels(
-                        source,
-                        tuple(
-                            dict.fromkeys(value for value in values if not _is_missing_value(value))
-                        ),
-                    )
-                )
-                if len(levels) < 2:
-                    raise ValueError(
-                        "contrasts can be applied only to factors with 2 or more levels"
-                    )
-                categorical = _CategoricalDesignTerm(term, tuple(levels))
-                contrast = metadata.get("contrast", getattr(source, "contrast", None))
-                override = None if frame_contrasts else fitted_contrasts.get(name)
-                if isinstance(override, str) and override == "contr.treatment":
-                    contrast = None
-                elif override == "contr.poly" or (
-                    override is None
-                    and contrast is None
-                    and _expression_source(source, name).ordered
-                ):
-                    rows, labels = _contr_poly(len(levels))
-                    contrast = {"data": rows, "columns": labels, "label": "contr.poly"}
-                elif isinstance(override, dict):
-                    contrast = override
-                elif isinstance(override, str):
-                    generated = _named_factor_contrast(override, tuple(levels))
-                    if generated is not None:
-                        contrast = generated
-                    elif contrast and contrast.get("label") != override:
-                        raise ValueError(
-                            f"model frame does not supply {override} contrasts for {name}"
-                        )
-                    elif contrast is None:
-                        if (
-                            not isinstance(original, _CategoricalDesignTerm)
-                            or not original.contrasts
-                            or tuple(levels) != original.levels
-                        ):
-                            raise ValueError(
-                                f"model frame does not supply {override} contrasts for {name}"
-                            )
-                        contrast = {
-                            "data": original.contrasts,
-                            "columns": original.contrast_names,
-                            "label": override,
-                        }
-                if contrast:
-                    categorical = _with_factor_contrasts(categorical, contrast)
-                result = categorical
-            else:
-                if not frame_contrasts and name in fitted_contrasts:
-                    raise ValueError("contrasts apply only to factors")
-                evaluated[term] = _floats_or_nan(values)
-                result = _NumericDesignTerm(term)
-        factors[original.term] = result
-        return result
-
-    fresh = [
-        _InteractionDesignTerm(tuple(factor(part) for part in term.factors))
-        if isinstance(term, _InteractionDesignTerm)
-        else factor(term)
-        for term in design.covariates
-    ]
-    rebuilt = replace(
-        design,
-        covariates=tuple(
-            _design_contrasts(
-                fresh,
-                cox or design.intercept,
-                (_CovariateTerm(spec.call) for spec in covered_strata) if cox else (),
-            )
-        ),
-        offsets=(),
-        logical_offsets=tuple(logical_offsets),
-        strata=(),
-        variables=tuple(
-            _CovariateTerm(_covariate_term_name(term, frame=True)) for term in design.variables
-        ),
-    )
-    rows = _design_rows_from_spec(
-        data, rebuilt, n, evaluated=evaluated, factor_values=factor_values, allow_missing=True
-    )
-    names, assign = _model_matrix_names_and_assign(rebuilt)
-    result: dict[str, Any] = {
-        "data": rows,
-        "columns": names,
-        "assign": assign,
-        "row_names": list(_data_row_labels(data, n) or (str(i + 1) for i in range(n))),
-        "contrasts": _model_matrix_contrasts(rebuilt),
-    }
-    if cox:
-        result["strata"] = None
-        if len(strata_terms) > 1 and any(spec.call not in data for spec in strata_terms):
-            raise ValueError("undefined columns selected")
-        if strata_terms and n and all(spec.call in data for spec in strata_terms):
-            sources = [(spec.call, _column_source(data, spec.call)) for spec in strata_terms]
-            if len(sources) == 1:
-                source = sources[0][1]
-                values = _column(data, sources[0][0])
-                levels = _model_frame_levels(
-                    source,
-                    tuple(dict.fromkeys(value for value in values if not _is_missing_value(value))),
-                )
-                result["strata"] = values
-                result["strata_levels"] = list(levels)
-                result["strata_column"] = sources[0][0]
-            else:
-                groups = _strata(sources, shortlabel=True)
-                result["strata"] = groups.labels
-                result["strata_levels"] = groups.levels
-    return result
 
 
 def _fitted_xlevels(
@@ -966,7 +749,7 @@ def _newdata_frame(
     """
 
     newdata, _ = _prepare_formula_inputs(newdata)
-    if isinstance(newdata, _FormulaRows) and not isinstance(newdata, _EvaluatedModelFrame):
+    if isinstance(newdata, _FormulaRows):
         newdata = _FormulaRows(dict(newdata), newdata.nrow, newdata.row_names)
     present = set(_newdata_columns(newdata))
     strata_columns = [column for term in strata_terms for column in term.columns]
@@ -1028,9 +811,6 @@ def _newdata_frame(
                 or any(not _is_missing_value(value) for value in values)
             ):
                 raise ValueError("contrasts apply only to factors")
-    missing = _formula_missing_rows(
-        newdata, columns, [*variables, *design.offsets], n, required=response_columns
-    )
     keep_missing = pass_missing and allow_missing_predictors
     response = None
     if keep_missing:
@@ -1051,6 +831,10 @@ def _newdata_frame(
             missing.update(i for i, value in enumerate(response.time) if math.isnan(value))
             if response.start is not None:
                 missing.update(i for i, value in enumerate(response.start) if math.isnan(value))
+    else:
+        missing = _formula_missing_rows(
+            newdata, columns, [*variables, *design.offsets], n, required=response_columns
+        )
     missing.update(extra_missing)
     if missing and _normalize_na_action(na_action) == "fail":
         raise ValueError("missing values in newdata")

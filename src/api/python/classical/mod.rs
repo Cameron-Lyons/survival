@@ -19,7 +19,6 @@ fn kernel_ties(ties: &str) -> PyResult<crate::regression::TieMethod> {
 mod core;
 mod data_prep;
 mod datasets;
-mod diagnostics;
 mod evaluation;
 mod monitoring;
 mod population;
@@ -28,7 +27,6 @@ mod survival_models;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     core::register(m)?;
-    diagnostics::register(m)?;
     survival_models::register(m)?;
     evaluation::register(m)?;
     data_prep::register(m)?;

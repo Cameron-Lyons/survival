@@ -467,11 +467,16 @@ fn prepare_retained_moments(
                 && (nvar != 1 || moment.covariance.first().is_some_and(|value| *value > 0.0))
         })
         .count();
+    let mut last_inverse = None;
     if nvar > 1 {
-        while retained > 0
-            && pseudo_inverse(&moments[retained - 1].covariance, nvar, qrtol)
-                .is_none_or(|(_, rank)| rank != nvar)
-        {
+        while retained > 0 {
+            if let Some((inv, rank)) =
+                pseudo_inverse(&moments[retained - 1].covariance, nvar, qrtol)
+                && rank == nvar
+            {
+                last_inverse = Some(inv);
+                break;
+            }
             retained -= 1;
         }
     }
@@ -480,15 +485,23 @@ fn prepare_retained_moments(
             "the nmin threshold is too high; no Aalen model can be fit",
         ));
     }
-    for (time_idx, moment) in moments.iter_mut().take(retained).enumerate() {
-        moment.inverse = pseudo_inverse(&moment.covariance, nvar, qrtol)
-            .ok_or_else(|| {
-                SurvivalError::invalid_input(format!(
-                    "risk covariance is not finite at event time {} (index {time_idx})",
-                    moment.time
-                ))
-            })?
-            .0;
+    let finish_moment = |time_idx: usize,
+                         moment: &mut RiskMoment,
+                         precomputed: Option<Vec<f64>>|
+     -> SurvivalResult<()> {
+        moment.inverse = match precomputed {
+            Some(inv) => inv,
+            None => {
+                pseudo_inverse(&moment.covariance, nvar, qrtol)
+                    .ok_or_else(|| {
+                        SurvivalError::invalid_input(format!(
+                            "risk covariance is not finite at event time {} (index {time_idx})",
+                            moment.time
+                        ))
+                    })?
+                    .0
+            }
+        };
         moment.time_weight = if nvar == 0 {
             vec![moment.risk]
         } else {
@@ -505,6 +518,24 @@ fn prepare_retained_moments(
             }
             weights
         };
+        Ok(())
+    };
+    if retained >= 64 && nvar >= 2 {
+        use rayon::prelude::*;
+        let (head, tail) = moments[..retained].split_at_mut(retained - 1);
+        head.par_iter_mut()
+            .enumerate()
+            .try_for_each(|(time_idx, moment)| finish_moment(time_idx, moment, None))?;
+        finish_moment(retained - 1, &mut tail[0], last_inverse)?;
+    } else {
+        for (time_idx, moment) in moments.iter_mut().take(retained).enumerate() {
+            let precomputed = if time_idx + 1 == retained {
+                last_inverse.take()
+            } else {
+                None
+            };
+            finish_moment(time_idx, moment, precomputed)?;
+        }
     }
     Ok(retained)
 }

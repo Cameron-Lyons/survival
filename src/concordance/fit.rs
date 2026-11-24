@@ -1,13 +1,15 @@
 use crate::concordance::kernels::{FastKm, SweepInput, SweepOutput, concordance_sweep, fastkm};
 use crate::concordance::order::{PredictorRanks, resort_ties, sweep_order};
 use crate::core::strata_order::{SurvResponse, rowsum, stratum_groups, validate_intervals};
-use crate::data_prep::aeq_counting;
+use crate::core::time_order::total_order_key;
+use crate::data_prep::aeq_counting_cow;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_non_negative,
 };
 use ndarray::{Array2, ArrayView2};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ops::Range;
@@ -154,10 +156,24 @@ pub struct ConcordanceFit {
 
 crate::internal::pickle::picklable!(ConcordanceCounts, ConcordanceRanks, ConcordanceFit);
 
-struct SurvTimes {
-    start: Option<Vec<f64>>,
-    stop: Vec<f64>,
-    status: Vec<i32>,
+struct SurvTimes<'a> {
+    start: Option<Cow<'a, [f64]>>,
+    stop: Cow<'a, [f64]>,
+    status: &'a [i32],
+}
+
+enum StratumRows {
+    All(usize),
+    Subset(Vec<usize>),
+}
+
+impl StratumRows {
+    fn len(&self) -> usize {
+        match self {
+            Self::All(n) => *n,
+            Self::Subset(rows) => rows.len(),
+        }
+    }
 }
 
 pub fn concordancefit(
@@ -195,8 +211,8 @@ pub fn concordancefit(
     let mut times = match response {
         SurvResponse::Right(data) => SurvTimes {
             start: None,
-            stop: data.time.clone(),
-            status: data.status.clone(),
+            stop: Cow::Borrowed(&data.time),
+            status: &data.status,
         },
         SurvResponse::Counting(data) => {
             if matches!(options.timewt, TimeWeight::SOverG | TimeWeight::NOverG2) {
@@ -205,13 +221,13 @@ pub fn concordancefit(
                 ));
             }
             SurvTimes {
-                start: Some(data.start.clone()),
-                stop: data.stop.clone(),
-                status: data.event.clone(),
+                start: Some(Cow::Borrowed(&data.start)),
+                stop: Cow::Borrowed(&data.stop),
+                status: &data.event,
             }
         }
     };
-    let unit = vec![1.0; n];
+    let unit;
     let weights = match weights {
         Some(weights) => {
             validate_length(n, weights.len(), "weights")?;
@@ -219,24 +235,48 @@ pub fn concordancefit(
             validate_non_negative(weights, "weights")?;
             weights
         }
-        None => &unit,
+        None => {
+            unit = vec![1.0; n];
+            &unit
+        }
     };
-    let ones = vec![1; n];
-    let strata = match strata {
+    let groups: Vec<(i32, StratumRows)> = match strata {
         Some(strata) => {
             validate_length(n, strata.len(), "strata")?;
-            strata
+            stratum_groups(strata)
+                .into_iter()
+                .map(|(label, rows)| (label, StratumRows::Subset(rows)))
+                .collect()
         }
-        None => &ones,
+        None => vec![(1, StratumRows::All(n))],
     };
     if let Some(cluster) = cluster {
         validate_length(n, cluster.len(), "cluster")?;
     }
     if options.timefix {
-        timefix(&mut times)?;
+        let (owned_start, owned_stop) = {
+            let (start, stop) = aeq_counting_cow(times.start.as_deref(), &times.stop)?;
+            let owned_start = start.and_then(|c| match c {
+                Cow::Owned(v) => Some(v),
+                Cow::Borrowed(_) => None,
+            });
+            let owned_stop = match stop {
+                Cow::Owned(v) => Some(v),
+                Cow::Borrowed(_) => None,
+            };
+            (owned_start, owned_stop)
+        };
+        if let Some(v) = owned_start {
+            times.start = Some(Cow::Owned(v));
+        }
+        if let Some(v) = owned_stop {
+            times.stop = Cow::Owned(v);
+        }
     }
-    if let Some(ymin) = options.ymin {
-        for stop in &mut times.stop {
+    if let Some(ymin) = options.ymin
+        && times.stop.iter().any(|&stop| stop < ymin)
+    {
+        for stop in times.stop.to_mut() {
             *stop = stop.max(ymin);
         }
     }
@@ -244,31 +284,87 @@ pub fn concordancefit(
     let ranks = options.ranks && std_err;
     let influence = if std_err { options.influence } else { 0 };
 
-    let groups = stratum_groups(strata);
     let nstrat = groups.len();
     let keepstrata = nstrat <= options.keepstrata && nvar == 1 && nstrat > 1;
     let merged =
         matches!(options.timewt, TimeWeight::N | TimeWeight::I) && nstrat > 10 && !keepstrata;
     let merged_events = merged.then(|| times.status.iter().filter(|&&s| s == 1).count());
 
+    let extract_column = |rows: &StratumRows, col: usize| -> Cow<'_, [f64]> {
+        match rows {
+            StratumRows::All(_) => {
+                if nvar == 1
+                    && let Some(slice) = x.as_slice()
+                {
+                    return Cow::Borrowed(slice);
+                }
+                Cow::Owned((0..n).map(|i| x[[i, col]]).collect())
+            }
+            StratumRows::Subset(rows) => Cow::Owned(rows.iter().map(|&i| x[[i, col]]).collect()),
+        }
+    };
+    let run_stratum =
+        |(_, rows): &(i32, StratumRows)| -> SurvivalResult<(Vec<f64>, Vec<SweepOutput>)> {
+            let risk0 = extract_column(rows, 0);
+            let prepared =
+                prepare_stratum(&times, rows, &risk0, weights, options, merged_events, ranks)?;
+            let per_x: Vec<SweepOutput> = if nstrat == 1 && nvar > 1 && n >= 4_096 {
+                (0..nvar)
+                    .into_par_iter()
+                    .map(|column| {
+                        if column == 0 {
+                            docount(&prepared, &risk0, true, std_err, ranks)
+                        } else {
+                            let risk = extract_column(rows, column);
+                            docount(&prepared, &risk, false, std_err, ranks)
+                        }
+                    })
+                    .collect()
+            } else {
+                let mut per_x = Vec::with_capacity(nvar);
+                per_x.push(docount(&prepared, &risk0, true, std_err, ranks));
+                if nvar > 1 {
+                    let mut risk = vec![0.0; rows.len()];
+                    for column in 1..nvar {
+                        match rows {
+                            StratumRows::All(_) => {
+                                for (i, value) in risk.iter_mut().enumerate() {
+                                    *value = x[[i, column]];
+                                }
+                            }
+                            StratumRows::Subset(rows) => {
+                                for (value, &row) in risk.iter_mut().zip(rows) {
+                                    *value = x[[row, column]];
+                                }
+                            }
+                        }
+                        per_x.push(docount(&prepared, &risk, false, std_err, ranks));
+                    }
+                }
+                per_x
+            };
+            Ok((prepared.death_times, per_x))
+        };
+
+    let stratum_results: Vec<(Vec<f64>, Vec<SweepOutput>)> = if nstrat > 1 && n >= 4_096 {
+        groups
+            .par_iter()
+            .map(run_stratum)
+            .collect::<SurvivalResult<Vec<_>>>()?
+    } else {
+        groups
+            .iter()
+            .map(run_stratum)
+            .collect::<SurvivalResult<Vec<_>>>()?
+    };
+
     let mut per_stratum: Vec<Vec<SweepOutput>> = Vec::with_capacity(nstrat);
     let mut rank_tables: Vec<ConcordanceRanks> = (0..nvar).map(|_| empty_ranks()).collect();
-    for (_, rows) in &groups {
-        let mut risk: Vec<f64> = rows.iter().map(|&i| x[[i, 0]]).collect();
-        let prepared =
-            prepare_stratum(&times, rows, &risk, weights, options, merged_events, ranks)?;
-        let mut per_x = Vec::with_capacity(nvar);
-        for column in 0..nvar {
-            if column > 0 {
-                for (value, &row) in risk.iter_mut().zip(rows) {
-                    *value = x[[row, column]];
-                }
+    for (death_times, per_x) in stratum_results {
+        if ranks {
+            for (column, sweep) in per_x.iter().enumerate() {
+                append_ranks(&mut rank_tables[column], &death_times, sweep);
             }
-            let sweep = docount(&prepared, &risk, column == 0, std_err, ranks);
-            if ranks {
-                append_ranks(&mut rank_tables[column], &prepared.death_times, &sweep);
-            }
-            per_x.push(sweep);
         }
         per_stratum.push(per_x);
     }
@@ -313,43 +409,87 @@ pub fn concordancefit(
                 .map(|(c, npair)| c[5] / (4.0 * npair * npair))
                 .collect(),
         );
-        let mut infl: Vec<Vec<[f64; 5]>> = vec![vec![[0.0; 5]; n]; nvar];
-        for ((_, rows), per_x) in groups.iter().zip(&per_stratum) {
-            for (column, sweep) in per_x.iter().enumerate() {
-                for (k, &row) in rows.iter().enumerate() {
-                    infl[column][row] = sweep.influence[k];
+        if nvar == 1 && cluster.is_none() && influence == 0 {
+            let s = somer[0];
+            let denom = 2.0 * npair[0];
+            let mut v = 0.0;
+            for ((_, rows), per_x) in groups.iter().zip(&per_stratum) {
+                let sweep_inf = &per_x[0].influence;
+                match rows {
+                    StratumRows::All(_) => {
+                        for (row, &inf) in sweep_inf.iter().enumerate() {
+                            let d = ((inf[0] - inf[1]) - (inf[0] + inf[1] + inf[2]) * s)
+                                * weights[row]
+                                / denom;
+                            v += d * d;
+                        }
+                    }
+                    StratumRows::Subset(rows) => {
+                        for (&row, &inf) in rows.iter().zip(sweep_inf) {
+                            let d = ((inf[0] - inf[1]) - (inf[0] + inf[1] + inf[2]) * s)
+                                * weights[row]
+                                / denom;
+                            v += d * d;
+                        }
+                    }
                 }
             }
-        }
-        let mut df = Array2::zeros((n, nvar));
-        for column in 0..nvar {
-            for row in 0..n {
-                let inf = infl[column][row];
-                df[[row, column]] =
-                    ((inf[0] - inf[1]) - (inf[0] + inf[1] + inf[2]) * somer[column]) * weights[row]
-                        / (2.0 * npair[column]);
+            var = Some(vec![vec![v]]);
+        } else {
+            let mut df = Array2::zeros((n, nvar));
+            let mut infl: Option<Vec<Vec<[f64; 5]>>> =
+                (influence >= 2).then(|| vec![vec![[0.0; 5]; n]; nvar]);
+            for ((_, rows), per_x) in groups.iter().zip(&per_stratum) {
+                for (column, sweep) in per_x.iter().enumerate() {
+                    let s = somer[column];
+                    let denom = 2.0 * npair[column];
+                    match rows {
+                        StratumRows::All(_) => {
+                            for (row, &inf) in sweep.influence.iter().enumerate() {
+                                if let Some(infl_buf) = &mut infl {
+                                    infl_buf[column][row] = inf;
+                                }
+                                df[[row, column]] = ((inf[0] - inf[1])
+                                    - (inf[0] + inf[1] + inf[2]) * s)
+                                    * weights[row]
+                                    / denom;
+                            }
+                        }
+                        StratumRows::Subset(rows) => {
+                            for (&row, &inf) in rows.iter().zip(&sweep.influence) {
+                                if let Some(infl_buf) = &mut infl {
+                                    infl_buf[column][row] = inf;
+                                }
+                                df[[row, column]] = ((inf[0] - inf[1])
+                                    - (inf[0] + inf[1] + inf[2]) * s)
+                                    * weights[row]
+                                    / denom;
+                            }
+                        }
+                    }
+                }
             }
-        }
-        let df = match cluster {
-            Some(cluster) => rowsum(df.view(), cluster),
-            None => df,
-        };
-        var = Some(
-            df.t()
-                .dot(&df)
-                .outer_iter()
-                .map(|row| row.to_vec())
-                .collect(),
-        );
-        if influence == 1 || influence == 3 {
-            dfbeta = Some(df.outer_iter().map(|row| row.to_vec()).collect());
-        }
-        if influence >= 2 {
-            influence_out = Some(
-                infl.iter()
-                    .map(|rows| rows.iter().map(|row| row.to_vec()).collect())
+            let df = match cluster {
+                Some(cluster) => rowsum(df.view(), cluster),
+                None => df,
+            };
+            var = Some(
+                df.t()
+                    .dot(&df)
+                    .outer_iter()
+                    .map(|row| row.to_vec())
                     .collect(),
             );
+            if influence == 1 || influence == 3 {
+                dfbeta = Some(df.outer_iter().map(|row| row.to_vec()).collect());
+            }
+            if let Some(infl) = infl {
+                influence_out = Some(
+                    infl.iter()
+                        .map(|rows| rows.iter().map(|row| row.to_vec()).collect())
+                        .collect(),
+                );
+            }
         }
     }
 
@@ -394,16 +534,11 @@ pub fn concordancefit(
     })
 }
 
-fn timefix(times: &mut SurvTimes) -> SurvivalResult<()> {
-    (times.start, times.stop) = aeq_counting(times.start.as_deref(), &times.stop)?;
-    Ok(())
-}
-
-struct PreparedStratum {
-    start: Option<Vec<f64>>,
-    stop: Vec<f64>,
-    status: Vec<i32>,
-    weight: Vec<f64>,
+struct PreparedStratum<'a> {
+    start: Option<Cow<'a, [f64]>>,
+    stop: Cow<'a, [f64]>,
+    status: Cow<'a, [i32]>,
+    weight: Cow<'a, [f64]>,
     timewt: Vec<f64>,
     sort_start: Option<Vec<usize>>,
     sort_stop: Vec<usize>,
@@ -413,23 +548,32 @@ struct PreparedStratum {
     first_ranks: PredictorRanks,
 }
 
-fn prepare_stratum(
-    times: &SurvTimes,
-    rows: &[usize],
+fn prepare_stratum<'a>(
+    times: &'a SurvTimes<'a>,
+    rows: &StratumRows,
     risk: &[f64],
-    weights: &[f64],
+    weights: &'a [f64],
     options: &ConcordanceOptions,
     merged_events: Option<usize>,
     ranks: bool,
-) -> SurvivalResult<PreparedStratum> {
-    let n = rows.len();
-    let stop: Vec<f64> = rows.iter().map(|&i| times.stop[i]).collect();
-    let status: Vec<i32> = rows.iter().map(|&i| times.status[i]).collect();
-    let start: Option<Vec<f64>> = times
-        .start
-        .as_ref()
-        .map(|start| rows.iter().map(|&i| start[i]).collect());
-    let wts: Vec<f64> = rows.iter().map(|&i| weights[i]).collect();
+) -> SurvivalResult<PreparedStratum<'a>> {
+    let (start, stop, status, wts) = match rows {
+        StratumRows::All(_) => (
+            times.start.as_deref().map(Cow::Borrowed),
+            Cow::Borrowed(times.stop.as_ref()),
+            Cow::Borrowed(times.status),
+            Cow::Borrowed(weights),
+        ),
+        StratumRows::Subset(rows) => (
+            times
+                .start
+                .as_deref()
+                .map(|start| Cow::Owned(rows.iter().map(|&i| start[i]).collect())),
+            Cow::Owned(rows.iter().map(|&i| times.stop[i]).collect()),
+            Cow::Owned(rows.iter().map(|&i| times.status[i]).collect()),
+            Cow::Owned(rows.iter().map(|&i| weights[i]).collect()),
+        ),
+    };
     let nevent = status.iter().filter(|&&s| s == 1).count();
     if nevent == 0 {
         return Ok(PreparedStratum {
@@ -457,10 +601,18 @@ fn prepare_stratum(
     // input tie order.
     let first_ranks = PredictorRanks::new(risk);
     let (sort_stop, predictor_ties) = sweep_order(&stop, &status, &first_ranks.rank);
-    let sort_start: Option<Vec<usize>> = start.as_ref().map(|start| {
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| start[b].partial_cmp(&start[a]).unwrap());
-        order
+    let sort_start: Option<Vec<usize>> = start.as_deref().map(|start| {
+        let mut pairs: Vec<(u64, usize)> = start
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (!total_order_key(t), i))
+            .collect();
+        if pairs.len() >= 16_384 {
+            pairs.par_sort_unstable();
+        } else {
+            pairs.sort_unstable();
+        }
+        pairs.into_iter().map(|(_, i)| i).collect()
     });
     let death_times = if ranks {
         sort_stop
@@ -473,15 +625,25 @@ fn prepare_stratum(
         Vec::new()
     };
 
-    let (etime, timewt): (Vec<f64>, Vec<f64>) = if timeopt == TimeWeight::N {
-        let mut etime: Vec<f64> = (0..n)
-            .filter(|&i| status[i] == 1)
-            .map(|i| stop[i])
-            .collect();
-        etime.sort_by(f64::total_cmp);
-        etime.dedup();
-        let weights = vec![1.0; etime.len()];
-        (etime, weights)
+    let timewt: Vec<f64> = if timeopt == TimeWeight::N {
+        // `sort_stop` is already in descending stop-time order, so one pass builds
+        // `timewt` directly in the descending order the sweep expects.
+        let mut timewt = Vec::new();
+        let mut last: Option<f64> = None;
+        for &row in &sort_stop {
+            if status[row] == 1 {
+                let t = stop[row];
+                if last != Some(t) {
+                    last = Some(t);
+                    timewt.push(if options.ymax.is_some_and(|ym| t > ym) {
+                        0.0
+                    } else {
+                        1.0
+                    });
+                }
+            }
+        }
+        timewt
     } else {
         let FastKm {
             etime,
@@ -497,7 +659,7 @@ fn prepare_stratum(
             &sort_stop,
         );
         let total: f64 = wts.iter().sum();
-        let timewt: Vec<f64> = (0..etime.len())
+        let mut timewt: Vec<f64> = (0..etime.len())
             .map(|k| match timeopt {
                 _ if nrisk[k] <= 0.0 => 0.0,
                 TimeWeight::S => total * surv[k] / nrisk[k],
@@ -507,22 +669,21 @@ fn prepare_stratum(
                 TimeWeight::N => 1.0,
             })
             .collect();
-        (etime, timewt)
-    };
-    if timewt.iter().any(|w| !w.is_finite()) {
-        return Err(SurvivalError::computation(
-            "concordance: non-finite time weight (program error, notify author)",
-        ));
-    }
-    let mut timewt = timewt;
-    if let Some(ymax) = options.ymax {
-        for (weight, &time) in timewt.iter_mut().zip(&etime) {
-            if time > ymax {
-                *weight = 0.0;
+        if timewt.iter().any(|w| !w.is_finite()) {
+            return Err(SurvivalError::computation(
+                "concordance: non-finite time weight (program error, notify author)",
+            ));
+        }
+        if let Some(ymax) = options.ymax {
+            for (weight, &time) in timewt.iter_mut().zip(&etime) {
+                if time > ymax {
+                    *weight = 0.0;
+                }
             }
         }
-    }
-    timewt.reverse();
+        timewt.reverse();
+        timewt
+    };
 
     Ok(PreparedStratum {
         start,
@@ -539,7 +700,7 @@ fn prepare_stratum(
 }
 
 fn docount(
-    prepared: &PreparedStratum,
+    prepared: &PreparedStratum<'_>,
     risk: &[f64],
     first_predictor: bool,
     std_err: bool,

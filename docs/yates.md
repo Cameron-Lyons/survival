@@ -133,28 +133,7 @@ Rust callers use `validation::YatesPrediction::new(YatesPredictor)` and
 the default curve, following R. When all observations share one censored time, the
 baseline keeps its training sample count.
 
-## R interface and caller-owned draws
-
-`survivalr::yates` builds formulas and population designs in R and computes the
-results with the shared kernels for R linear models, GLMs and Cox models and for
-Python-backed Cox and AFT fits (AFT covariance excludes the scale parameters). It
-keeps fitted factor levels, contrasts, transformation metadata, case weights,
-subject ids, result names and the original call; no model is refitted. Nonlinear
-simulations consume R's global random stream through `rnorm`, so `set.seed` and
-`RNGkind` behave as in R; linear analyses consume no random values and
-`options$seed` is unused. The wrapper accepts a levels matrix for joint settings,
-reordered variables, empty adjustment sets, matrix-valued SAS adjusters and
-explicit populations with custom contrasts. `trend`, stratified survival
-prediction, multi-state Cox models and functions passed as `predict` are not
-supported; type III tests need linear predictions, the SAS population and
-treatment or SAS contrasts.
-
-Custom S3 `yates_setup` methods may return a prediction function or a list with
-`predict` and `summary`. The first prediction receives the linear predictor and
-stacked population design, later calls the linear predictor alone. Vector
-predictions supply means and tests; matrix predictions also supply simulation
-means and sample variances of all columns to the summary, or return them as `pmm`
-and `mvar2`. Column counts must stay constant.
+## Caller-owned draws
 
 The native `validation.yates_risk`, `yates_response`, `yates_survival` and
 `yates_predict` accept `normal_draws`: an `nsim` by coefficient-count matrix of

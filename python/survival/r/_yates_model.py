@@ -9,7 +9,7 @@ from typing import Any
 from ._coerce import _float_vector
 from ._fit import _r_factor_design
 from ._formula import _design_term_output_names, _fit_formula_design, model_frame
-from ._types import _FormulaDesign, _renamed_classes
+from ._types import _FormulaDesign
 
 
 @dataclass(frozen=True)
@@ -77,11 +77,3 @@ class YatesFitAdapter:
             if len(values) != frame.n or any(not math.isfinite(value) for value in values):
                 raise ValueError("linear_predictors must be finite and match the model rows")
             object.__setattr__(self, "linear_predictors", values)
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "YatesModel": "YatesFitAdapter",
-    },
-)

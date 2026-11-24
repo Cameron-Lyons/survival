@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 suppressPackageStartupMessages(library(survival))
-source("r/survivalr/tests/testthat/helper-logical-matrices.R")
+source("scripts/r_helpers/helper-logical-matrices.R")
 args <- commandArgs(trailingOnly = TRUE)
 output <- if (length(args)) args[[1L]] else "python/tests/fixtures/logical_matrix_reference.json"
 setup <- .logical_matrix_setup()

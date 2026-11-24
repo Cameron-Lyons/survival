@@ -19,10 +19,4 @@ Cargo.lock
 *.swo
 *~
 python/survival/*.so
-r/survivalr/src/*.o
-r/survivalr/src/*.so
-r/survivalr/src/*.dll
-
-# R package build logs
-*.install.log
 .uv-cache/

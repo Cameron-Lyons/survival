@@ -1,4 +1,4 @@
-"""R-style survival API split into cohesive modules; ``survival.r_api`` re-exports it.
+"""R-style survival API split into cohesive modules.
 
 ``__all__`` lists R's exported functions under Python spellings (``survreg.control`` is
 ``survreg_control``, ``cox.zph`` is ``cox_zph``) and the R-level fit and result classes, so

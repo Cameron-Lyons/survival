@@ -34,6 +34,8 @@ pub use auc_time::{
     cumulative_dynamic_auc_core, time_dependent_auc, time_dependent_auc_core,
 };
 pub use bootstrap::{BootstrapResult, bootstrap_cox_ci, bootstrap_survreg_ci};
+#[cfg(feature = "python")]
+pub(crate) use brier::brier_py;
 pub use brier::{BrierInput, BrierResult, brier};
 pub use calibration_curves::{
     AdvancedCalibrationResult, CalibrationResult, PredictionResult, RiskStratificationResult,
