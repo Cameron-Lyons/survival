@@ -189,7 +189,33 @@ if (getRversion() >= "2.15.1") {
   .as_python_vector(value)
 }
 
+# A Surv2 response matrix as the Python Surv2 object.
+.as_python_surv2 <- function(value) {
+  repeated <- attr(value, "repeated")
+  .python_attr("Surv2")$`_from_normalized`(
+    time = as.list(as.numeric(value[, 1L])),
+    status = as.list(.as_python_vector(as.integer(value[, 2L]))),
+    states = as.list(as.character(attr(value, "states"))),
+    repeated = if (is.null(repeated)) FALSE else repeated,
+    clabel = attr(value, "clabel")
+  )
+}
+
+.is_response_column <- function(column) {
+  inherits(column, c("Surv", "Surv2", "survival_py_surv"))
+}
+
+# A Surv, Surv2 or bridge Surv column, as a response stored in the data (y ~ x), is
+# the Python object; as a vector it would lose its rows.
+.as_python_response_column <- function(column) {
+  if (inherits(column, "Surv2")) return(.as_python_surv2(column))
+  .restore_python(.as_python_surv(column))
+}
+
 .as_python_data_column <- function(column) {
+  if (.is_response_column(column)) {
+    return(.as_python_response_column(column))
+  }
   if (is.logical(column) && is.null(dim(column))) {
     return(.pybridge_attr("_r_logical")(as.list(.as_python_vector(column))))
   }
@@ -224,6 +250,7 @@ if (getRversion() >= "2.15.1") {
   if (is.list(data)) {
     if (!length(data)) return(reticulate::dict())
     return(lapply(data, function(column) {
+      if (.is_response_column(column)) return(.as_python_response_column(column))
       if (is.null(column) || !is.atomic(column) || !is.null(dim(column))) return(column)
       .as_python_data_column(column)
     }))
@@ -448,20 +475,16 @@ attrassign <- function(object, tt) {
     )
     return(.wrap_python(result, c("survival_py_surv", "survival_py_object")))
   }
+  column <- function(k) array(as.numeric(value[, k]))
   if (ncol(value) == 2L) {
     return(.wrap_python(
-      .python_attr("Surv")(as.numeric(value[, 1L]), as.numeric(value[, 2L]), type = surv_type),
+      .python_attr("Surv")(column(1L), column(2L), type = surv_type),
       c("survival_py_surv", "survival_py_object")
     ))
   }
   if (ncol(value) == 3L) {
     return(.wrap_python(
-      .python_attr("Surv")(
-        as.numeric(value[, 1L]),
-        as.numeric(value[, 2L]),
-        as.numeric(value[, 3L]),
-        type = surv_type
-      ),
+      .python_attr("Surv")(column(1L), column(2L), column(3L), type = surv_type),
       c("survival_py_surv", "survival_py_object")
     ))
   }
@@ -828,9 +851,20 @@ attrassign <- function(object, tt) {
   values
 }
 
+.is_python_response <- function(value) {
+  inherits(value, c("survival.r._surv.Surv", "survival.r._surv.Surv2"))
+}
+
+# A data frame of Python columns; a Surv or Surv2 column becomes survival's matrix,
+# which as.data.frame keeps as one column, as in R.
+.as_r_frame <- function(columns, ...) {
+  response <- vapply(columns, .is_python_response, logical(1))
+  if (any(response)) columns[response] <- lapply(columns[response], .as_native_response)
+  as.data.frame(columns, ...)
+}
+
 .as_r_data_frame <- function(x, row.names = NULL, optional = FALSE, ...) {
-  columns <- .call_r_api("as_data_frame", x)
-  as.data.frame(columns, row.names = row.names, optional = optional, ...)
+  .as_r_frame(.call_r_api("as_data_frame", x), row.names = row.names, optional = optional, ...)
 }
 
 .as_summary_data_frame <- function(x, class_name, ...) {
@@ -6556,6 +6590,24 @@ model.frame.formula <- function(formula, ...) {
   values
 }
 
+# survival's Surv or Surv2 matrix for a Python response object.
+.as_native_response <- function(x) {
+  if (!inherits(x, "survival.r._surv.Surv2")) {
+    return(.as_native_surv(.wrap_python(x, c("survival_py_surv", "survival_py_object"))))
+  }
+  out <- cbind(
+    time = .surv_na_times(.as_numeric_vector(.result_field(x, "time"))),
+    status = as.integer(.as_nullable_numeric_vector(.result_field(x, "status")))
+  )
+  states <- as.character(.result_field(x, "states"))
+  if (length(states)) attr(out, "states") <- states
+  clabel <- .result_field(x, "clabel")
+  if (!is.null(clabel)) attr(out, "clabel") <- clabel
+  attr(out, "repeated") <- .result_field(x, "repeated")
+  class(out) <- "Surv2"
+  out
+}
+
 .as_native_surv <- function(x) {
   if (inherits(x, "Surv")) {
     return(x)
@@ -8091,6 +8143,13 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     `_id_name` = id_name,
     `_weights_name` = weight_name
   )
+  # A response stored in the data (yc ~ x) comes back condensed under its name.
+  stored <- NULL
+  if (is.name(response_call) && !is.null(result[[as.character(response_call)]])) {
+    stored <- as.character(response_call)
+    stored_value <- result[[stored]]
+    result[[stored]] <- NULL
+  }
   frame <- as.data.frame(result, stringsAsFactors = FALSE, optional = TRUE)
   strata_columns <- grep("^strata\\(", names(frame), value = TRUE)
   for (column in strata_columns) {
@@ -8102,6 +8161,11 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
     frame[[event]] <- factor(
       as.character(event_values),
       levels = c("censor", levels(event_source)[-1L])
+    )
+  }
+  if (!is.null(stored)) {
+    frame[[stored]] <- .as_native_surv(
+      .wrap_python(stored_value, c("survival_py_surv", "survival_py_object"))
     )
   }
   frame
@@ -9431,8 +9495,10 @@ summary.survival_py_survfit <- function(object, times, censored = FALSE, scale =
       dosum = if (missing(dosum)) NULL else dosum,
       data_frame = TRUE
     )
-    frame <- as.data.frame(lapply(columns, function(value) {
-      if (length(value)) unlist(value, use.names = FALSE) else numeric()
+    # A Surv or Surv2 column of newdata comes back whole.
+    frame <- .as_r_frame(lapply(columns, function(value) {
+      if (.is_python_response(value)) value
+      else if (length(value)) unlist(value, use.names = FALSE) else numeric()
     }), stringsAsFactors = FALSE, check.names = FALSE)
     curve <- .restore_python(object)
     present <- function(name, nonempty = FALSE) {

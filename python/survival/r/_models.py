@@ -38,6 +38,7 @@ from ._coerce import (
     _normalize_bool_option_with_default,
     _normalize_conf_level,
     _normalize_na_action,
+    _select_rows,
 )
 from ._coxph import (
     CoxphModel,
@@ -1089,7 +1090,12 @@ def _subset_coxms_curves(
         ),
         newdata=None
         if result.newdata is None
-        else {name: [values[i] for i in kept_data] for name, values in result.newdata.items()},
+        else {
+            name: _select_rows(values, kept_data)
+            if isinstance(values, Surv | Surv2)
+            else [values[i] for i in kept_data]
+            for name, values in result.newdata.items()
+        },
         engine=engine,
     )
 
@@ -1625,14 +1631,16 @@ def _anova_frame(result: AnovaResult) -> dict[str, list[Any]]:
 
 
 @as_data_frame.register(Mapping)
-def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:
+def _mapping_frame(result: Mapping[Any, Any]) -> dict[str, Any]:
     if result and all(isinstance(curve, _SurvfitCurves) for curve in result.values()):
         return _grouped_survfit_frame(result)
-    columns: dict[str, list[Any]] = {}
+    columns: dict[str, Any] = {}
     for name, values in result.items():
         if isinstance(values, str | bytes | Mapping | _SurvfitCurves) or not hasattr(
             values, "__iter__"
         ):
             raise TypeError("as_data_frame requires a survival result object")
-        columns[str(name)] = list(values)
+        # A survival object column (survSplit or survcondense of a stored response)
+        # stays whole, as R's data frame keeps it.
+        columns[str(name)] = values if isinstance(values, Surv | Surv2) else list(values)
     return columns

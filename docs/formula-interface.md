@@ -281,6 +281,19 @@ kept in their declared order, including unused levels: for values
 response create a categorical status; `as.factor` keeps unused levels and
 `factor` drops them.
 
+A response may also be a `Surv` or `Surv2` object already, as R's `y ~ x` reads a
+variable: `coxph("y ~ age", {"y": r.Surv(time, status), "age": age})`. The
+left-hand side is then a bare name (backquoted names and `(y)` too). The fit
+equals the one to the `Surv(...)` call, and the model frame names the response
+`y`. `subset`, `na.action` and `newdata` treat the object as one column, missing
+where `is.na(y)` is. A bare name that is not a survival object is still a numeric
+response where one is allowed (`pyears("time ~ sex", ...)`, `concordance`), and
+elsewhere raises "response must be a survival object". `survSplit` and
+`survcondense` store their result under the response's name, as R does. The
+pandas `DataFrame` cannot hold such a column, so pass the data as a mapping. In
+the R bridge, a `Surv` column of a data frame works the same way, whether it is
+survival's matrix or survivalr's own `Surv`.
+
 `Surv` and `Surv2` keep the censoring factor's first level in `clabel` and format
 it as `:label`; objects without `clabel` keep the `+` marker. A one-shot event
 input is consumed once, and the input values and categories are never modified.

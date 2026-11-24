@@ -1294,7 +1294,7 @@ def coxph(
     data, arguments = _prepare_formula_inputs(data, subset=subset, **arguments)
     subset = arguments.pop("subset")
     fit_formula = formula
-    timeline = _timeline_response(formula)
+    timeline = _timeline_response(formula, data)
     if timeline:
         weights_column = weights_column or (weights if isinstance(weights, str) else None)
         id_column = id_column or (id if isinstance(id, str) else None)
