@@ -72,7 +72,10 @@ yates_setup.glm <- function(fit, predict = c("link", "response", "terms", "linea
   }
   if (type == "survival") {
     suppressWarnings(baseline <- if (inherits(fit, "survival_py_coxph")) {
-      survfit(fit, censor = FALSE)
+      # yates fills in the baseline curve's fields, so it is R's survfit list, not the
+      # immutable Python curve.
+      structure(.as_survival_py_survfit_list(survfit(fit, censor = FALSE)),
+        class = c("survfitcox", "survfit"))
     } else {
       .cox_yates_baseline(fit)
     })

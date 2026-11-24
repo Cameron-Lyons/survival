@@ -707,6 +707,17 @@ counts. Parallel fits preserve the sequential addition order.
 
 ### Marginal means
 
+- `yates` over an ordered factor: R builds the population rows with treatment
+  columns but multiplies them by the fit's polynomial (`contr.poly`)
+  coefficients, so its means are wrong. For `lm(age ~ oe + sex, lung)` R gives
+  64.49 70.85 65.82 62.97, where the means of the predictions at each level are
+  61.23 61.39 66.27 69.08. The port codes the population with the fit's contrasts
+  and gives the latter, for `lm` and for Cox fits.
+- `yates` on a Cox fit with a `frailty()` term: R's Cmat gains a `frailty(inst)`
+  column and drops a factor column, so it is misaligned with the coefficients. For
+  `coxph(Surv(time, status) ~ ecog + age + frailty(inst), lung)` R gives
+  133.73 133.73 134.10 134.63. The port gives 0 0.367 0.898 2.152, the fit's
+  coefficient differences.
 - `yates` on a Cox fit with `strata()`: R builds its population rows with
   `model.matrix(Terms)`, which includes the strata column that the fit's design
   leaves out, so Cmat is misaligned with the coefficients (with an aliased
