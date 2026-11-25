@@ -684,6 +684,10 @@ counts. Parallel fits preserve the sequential addition order.
   survival 3.8-11 gives the event infinite weight. For `c(1e308, 1e308)`, it
   gives both rows zero weight. The port recovers `[0, 1]` to within `1e-12`
   in both cases.
+- `brier` on a Cox fit with a `cluster()` variable that has missing values scores
+  the fitted rows. R's `model.frame(fit)` rebuilds the frame without the cluster
+  term, so it keeps the rows the fit dropped and pairs the predictions with the
+  wrong subjects. The port equals R's result on the complete cases.
 - `finegray` raises "censoring probability is zero before a selected event"
   where R's weights become Inf/NaN (delayed entry can drive G to 0 before a
   later event).

@@ -110,3 +110,19 @@ def test_finegray_argument_checks_follow_r():
         "Surv(time, ev) ~ x", data, subset=[True, True, True, True, False, False, False, False]
     )
     assert max(subset["fgstop"]) == 3
+
+
+def test_finegray_missing_case_weight_is_missing_in_its_rows_only():
+    # finegray(Surv(t, s) ~ a, data, weights = w) with w[3] = NA (survival 3.8-12):
+    # fgwt 1 2 NA NA 1 1 2 1 1.
+    data = {
+        "t": [1, 2, 3, 4, 5, 6, 7, 8],
+        "s": r_coerce._RFactorVector(["x", "c", "y", "x", "c", "y", "x", "c"], ["c", "x", "y"]),
+        "a": [1, 2, 3, 4, 5, 6, 7, 8],
+        "w": [1.0, 2.0, float("nan"), 1.0, 1.0, 2.0, 1.0, 1.0],
+    }
+    frame = r.finegray("Surv(t, s) ~ a", data, weights="w")
+    weights = frame["fgwt"]
+    assert [index for index, value in enumerate(weights) if value != value] == [2, 3]
+    assert [value for value in weights if value == value] == [1.0, 2.0, 1.0, 1.0, 2.0, 1.0, 1.0]
+    assert frame["fgstop"] == [1.0, 2.0, 5.0, 8.0, 4.0, 5.0, 8.0, 7.0, 8.0]

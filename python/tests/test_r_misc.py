@@ -650,3 +650,15 @@ def test_cch_borgan_strata_follow_the_factor_levels():
         method="I.Borgan",
     )
     assert fit.stratum_names == ("b", "a")
+
+
+def test_royston_of_a_null_model_has_missing_values():
+    # royston(coxph(Surv(time, status) ~ 1, lung)): D NA, se(D) 0, R.D NA, R.KO 0,
+    # R.N NA (a one-value loglik), C.GH 0.5.
+    result = r.royston(r.coxph("Surv(time, status) ~ 1", survival.datasets.load_lung()))
+    assert math.isnan(result["D"])
+    assert math.isnan(result["R.D"])
+    assert math.isnan(result["R.N"])
+    assert result["se(D)"] == 0.0
+    assert result["R.KO"] == 0.0
+    assert result["C.GH"] == 0.5
