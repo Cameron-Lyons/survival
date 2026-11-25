@@ -55,3 +55,13 @@ def test_robust_and_penalized_summaries_take_scale_vectors(lung):
 def test_the_wald_test_compares_coef_with_init(lung, kwargs, expected):
     fit = r.coxph("Surv(time, status) ~ age + sex", lung, **kwargs)
     assert r.summary_coxph(fit).waldtest["test"] == pytest.approx(expected, abs=1e-12)
+
+
+def test_scale_validation_errors(lung):
+    fit = r.coxph("Surv(time, status) ~ age + sex", lung)
+    # String scale is rejected.
+    with pytest.raises(TypeError, match="scale must be numeric"):
+        r.summary_coxph(fit, scale="invalid")
+    # Empty scale is rejected.
+    with pytest.raises(ValueError, match="scale must have at least one value"):
+        r.summary_coxph(fit, scale=[])
