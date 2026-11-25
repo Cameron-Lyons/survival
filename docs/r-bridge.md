@@ -48,8 +48,10 @@ filters.
 
 ## Model persistence
 
-Fitted models, curves and responses support `saveRDS`/`readRDS`, `save`/`load`
-and `serialize`/`unserialize`. Coefficients, prediction, residuals, diagnostics,
+Fitted models and curves support `saveRDS`/`readRDS`, `save`/`load` and
+`serialize`/`unserialize`. `Surv()` responses, a fit's `$y` and `aeqSurv()` are
+survival's own R matrices, so they save as ordinary R objects; response proxies
+saved by earlier builds still load, convert and print. Coefficients, prediction, residuals, diagnostics,
 model frames and curve methods work on a loaded object, including in a separate R
 process.
 

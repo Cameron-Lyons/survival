@@ -1201,8 +1201,11 @@ counts. Parallel fits preserve the sequential addition order.
   factor censor labels survive construction. `Surv` conversion preserves
   coded status columns and censor labels directly, without reconstructing
   per-row factor strings. Legacy responses lacking a censor label retain
-  their `+` formatting when converted. Arbitrary R input attributes are not
-  retained by Python response objects.
+  their `+` formatting when converted. `Surv()` and `aeqSurv()` return survival's
+  own `Surv` matrix, `identical()` to its `Surv()` and `aeqSurv()`. A fit's `$y`,
+  its `$model` response and `cch$y` are `Surv` matrices with the same type,
+  states and values, but without R's row names or `inputAttributes`, which the
+  Python response does not keep.
 - A penalized survreg fit keeps the bridge's `survival_py_survreg` class rather
   than R's `c("survreg.penal", "survreg")`, so survival's own methods do not
   dispatch on it.

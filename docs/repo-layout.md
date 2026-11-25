@@ -294,7 +294,7 @@ familiar R-style entry points:
 - S3 methods for `coef`, `vcov`, `confint`, `logLik`, `nobs`, `df.residual`,
   `extractAIC`, `formula`, `terms`, `model.matrix`, `model.frame`, `summary`,
   `fitted`, `predict`, `residuals`, `weights`, and `anova` on bridged model objects
-- `as.data.frame` methods for bridged `Surv` responses and common result objects backed by
+- `as.data.frame` methods for `Surv` responses and common result objects, the latter backed by
   `survival.r.as_data_frame`
 - `summary` and `print` methods for common tabular result objects
 

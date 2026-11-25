@@ -117,6 +117,8 @@ if (getRversion() >= "2.15.1") {
 .as_formula_string <- function(value) {
   if (inherits(value, "formula")) {
     paste(deparse(value, width.cutoff = 500L), collapse = " ")
+  } else if (inherits(value, "Surv")) {
+    .as_python_surv(value)
   } else if (is.list(value)) {
     lapply(unname(value), .as_formula_string)
   } else if (is.character(value)) {
@@ -498,7 +500,7 @@ attrassign <- function(object, tt) {
 }
 
 .as_python_surv <- function(value) {
-  if (inherits(value, "survival_py_surv")) {
+  if (inherits(value, "survival.r._surv.Surv")) {
     return(.restore_python(value))
   }
   if (!inherits(value, "Surv") || !is.matrix(value)) {
@@ -662,9 +664,8 @@ attrassign <- function(object, tt) {
       args <- c(args, list(event))
     }
   }
-  factor_response <- .surv_factor_response(args, type = type, origin = origin)
-  if (!is.null(factor_response)) {
-    return(factor_response)
+  if (identical(type, "mstate") || is.factor(args[[length(args)]])) {
+    return(.surv_response_from_args(args, type, origin))
   }
   args <- c(args, .compact_null(list(type = type, origin = origin)))
   .survsplit_minimal_surv(args)
@@ -1684,7 +1685,9 @@ attrassign <- function(object, tt) {
       arguments[[key]] <- .as_na_action(arguments[[key]])
     }
   }
-  arguments <- lapply(.compact_null(arguments), .unwrap_grouped_survfit)
+  arguments <- lapply(.compact_null(arguments), function(value) {
+    .unwrap_grouped_survfit(.as_python_surv(value))
+  })
   if (name %in% c("dsurvreg", "psurvreg", "qsurvreg")) {
     argument_names <- names(arguments)
     if (is.null(argument_names)) argument_names <- rep("", length(arguments))
@@ -2591,7 +2594,8 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   values
 }
 
-.surv_response_from_args <- function(args, type, origin) {
+# The Python Surv for the user's arguments; Python validates, recodes and warns.
+.surv_python_response <- function(args, type, origin) {
   if (is.null(names(args))) names(args) <- c("time", "time2", "event")[seq_along(args)]
   args <- lapply(args, function(value) if (inherits(value, "difftime")) as.numeric(value) else value)
   if (!is.numeric(args$time)) stop("Time variable is not numeric", call. = FALSE)
@@ -2608,32 +2612,96 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
     }
   })
   args <- c(args, .compact_null(list(type = type, origin = origin)))
-  result <- .call_python_with_warnings("Surv", args)
-  .wrap_python(result, c("survival_py_surv", "survival_py_object"))
+  .call_python_with_warnings("Surv", args)
 }
 
-.surv_factor_response <- function(args, type = NULL, origin = 0) {
-  if (!(length(args) %in% c(2L, 3L)) || !is.factor(args[[length(args)]])) {
-    return(NULL)
+# The roles survival's Surv() gives the user's arguments: a two-argument call is
+# (time, event) unless it is interval2, or names its time= and event= arguments.
+.surv_arg_roles <- function(args, kind) {
+  if (length(args) == 1L) return("time")
+  if (length(args) == 3L) return(c("time", "time2", "event"))
+  given <- names(args)
+  if (!is.null(given) && all(nzchar(given)) && !identical(given, c("time", "time2"))) {
+    return(given)
   }
-  matched_type <- if (is.null(type)) {
-    NULL
-  } else if (identical(type, "mstate")) {
-    "mstate"
-  } else {
-    match.arg(type, c("right", "left", "interval", "counting", "interval2"))
-  }
-  if (length(args) == 2L && identical(matched_type, "interval2")) {
-    return(NULL)
-  }
-  if (length(args) == 3L && identical(matched_type, "interval")) {
-    return(NULL)
-  }
+  if (identical(kind, "interval2")) c("time", "time2") else c("time", "event")
+}
 
-  out <- .as_native_surv(.surv_response_from_args(args, type, origin))
-  class(out) <- NULL
-  attr(out, "inputAttributes") <- list(event = attributes(args[[length(args)]]))
-  class(out) <- "Surv"
+.surv_role_value <- function(args, roles, role) {
+  index <- match(role, roles)
+  if (is.na(index)) NULL else args[[index]]
+}
+
+# survival keeps NaN in the columns that are plain `x - origin`; Python reads it as NA.
+.surv_restore_nan <- function(out, args, roles, kind) {
+  if (identical(kind, "interval2")) return(out)
+  is_nan <- function(value) if (is.double(value)) is.nan(unclass(value)) else logical(length(value))
+  time <- .surv_role_value(args, roles, "time")
+  time2 <- .surv_role_value(args, roles, "time2")
+  nan_time <- is_nan(time)
+  if (any(nan_time)) out[nan_time, 1L] <- NaN
+  if (ncol(out) == 3L && !is.null(time2)) {
+    nan_time2 <- is_nan(time2)
+    if (!any(nan_time2)) return(out)
+    if (kind %in% c("counting", "mcounting")) {
+      out[nan_time2, 2L] <- NaN
+    } else if (identical(kind, "interval")) {
+      status <- out[, 3L]
+      out[nan_time2 & !is.na(status) & status == 3, 2L] <- NaN
+    }
+  }
+  out
+}
+
+# The inputAttributes survival's Surv() records, after the same transformations.
+.surv_input_attributes <- function(args, roles, kind) {
+  time <- .surv_role_value(args, roles, "time")
+  time2 <- .surv_role_value(args, roles, "time2")
+  event <- .surv_role_value(args, roles, "event")
+  if (inherits(time, "difftime")) time <- unclass(time)
+  if (inherits(time2, "difftime")) time2 <- as.numeric(time2)
+  # A positional (time, time2) call moves time2, already as.numeric()ed, into event.
+  if (length(args) == 2L && identical(roles[[2L]], "event") && is.null(names(args)) &&
+      inherits(event, "difftime")) {
+    event <- as.numeric(event)
+  }
+  if (identical(kind, "interval2")) {
+    time <- is.finite(time)
+    time2 <- is.finite(time2)
+  } else if (identical(kind, "interval") && is.numeric(event) && !any(event == 3, na.rm = TRUE)) {
+    time2 <- NULL
+  }
+  .compact_null(list(time = attributes(time), time2 = attributes(time2), event = attributes(event)))
+}
+
+# Python reports interval2 data as "interval"; only the full name, trimmed and
+# lowercased as Python matches it, selects interval2.
+.surv_kind <- function(type, columns) {
+  if ((is.character(type) || is.factor(type)) && length(type) == 1L &&
+      identical(tolower(trimws(as.character(type), whitespace = "[\\h\\v\\x1c-\\x1f]")), "interval2")) {
+    return("interval2")
+  }
+  columns$type
+}
+
+.surv_response_from_args <- function(args, type, origin) {
+  columns <- .pybridge_attr("_surv_columns")(.surv_python_response(args, type, origin))
+  out <- .surv_columns_native(columns)
+  kind <- .surv_kind(type, columns)
+  roles <- .surv_arg_roles(args, kind)
+  event <- .surv_role_value(args, roles, "event")
+  if (kind %in% c("right", "left", "counting") && (is.numeric(event) || inherits(event, "difftime")) &&
+      all(is.na(event))) {
+    # survival's status check runs max() over the non-missing codes.
+    warning("no non-missing arguments to max; returning -Inf", call. = FALSE)
+  }
+  out <- .surv_restore_nan(out, args, roles, kind)
+  input_attributes <- .surv_input_attributes(args, roles, kind)
+  if (length(input_attributes)) {
+    class(out) <- NULL
+    attr(out, "inputAttributes") <- input_attributes
+    class(out) <- "Surv"
+  }
   out
 }
 
@@ -2686,10 +2754,6 @@ Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop
     if (!missing(event)) {
       args <- c(args, list(event))
     }
-  }
-  factor_response <- .surv_factor_response(args, type = type, origin = origin)
-  if (!is.null(factor_response)) {
-    return(factor_response)
   }
   .surv_response_from_args(args, type, origin)
 }
@@ -2753,10 +2817,7 @@ Surv2 <- function(time, event, repeated = FALSE) {
 }
 
 is.Surv <- function(x) {
-  if (inherits(x, "Surv")) {
-    return(TRUE)
-  }
-  .call_r_api("is_surv", x)
+  inherits(x, "Surv") || inherits(x, "survival.r._surv.Surv")
 }
 
 is.ratetable <- function(x, verbose = FALSE) {
@@ -5424,7 +5485,7 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
   assignments <- lapply(assign, function(columns) as.list(columns - 1L))
   names(assignments) <- paste0("term", seq_along(assignments))
   fit <- .call_r_api(
-    "survpenal_fit", x = x, y = y,
+    "survpenal_fit", x = x, y = .fitter_response(y),
     weights = if (missing(weights) || is.null(weights)) NULL else as.list(weights),
     offset = if (missing(offset) || is.null(offset)) NULL else as.list(offset),
     init = if (missing(init) || is.null(init)) NULL else as.list(unname(init)),
@@ -5472,6 +5533,12 @@ survpenal.fit <- function(x, y, weights, offset, init, controlvals, dist,
                  score = .as_numeric_vector(.result_field(fit, "score"))))
 }
 
+# survreg.fit's response holds the fitter's status codes (2 = left, 3 = interval),
+# used as given, so a Surv-classed one must not go back through Surv().
+.fitter_response <- function(y) {
+  if (inherits(y, "Surv")) unclass(y) else y
+}
+
 .survreg_fit_distribution <- function(dist, parms) {
   if (is.character(dist)) {
     return(list(dist = dist, parms = if (length(parms)) as.list(parms) else NULL))
@@ -5510,7 +5577,7 @@ survreg.fit <- function(x, y, weights, offset, init, controlvals, dist,
   }
   distribution <- .survreg_fit_distribution(dist, parms)
   fit <- .call_r_api(
-    "survreg_fit", x = x, y = y,
+    "survreg_fit", x = x, y = .fitter_response(y),
     weights = if (missing(weights) || is.null(weights)) NULL else as.list(weights),
     offset = if (missing(offset) || is.null(offset)) NULL else as.list(offset),
     init = if (missing(init) || is.null(init)) NULL else as.list(unname(init)),
@@ -6665,11 +6732,14 @@ model.frame.formula <- function(formula, ...) {
   if (inherits(x, "Surv")) {
     return(x)
   }
-  if (!inherits(x, "survival_py_surv")) {
+  if (!inherits(x, "survival.r._surv.Surv")) {
     stop("argument is not a Surv object", call. = FALSE)
   }
+  .surv_columns_native(.pybridge_attr("_surv_columns")(.restore_python(x)))
+}
 
-  columns <- .pybridge_attr("_surv_columns")(.restore_python(x))
+# survival's Surv matrix for the columns of a Python Surv.
+.surv_columns_native <- function(columns) {
   surv_type <- columns$type
   time <- .surv_na_times(.as_numeric_vector(columns$time))
   status <- as.integer(columns$event)
@@ -6940,20 +7010,31 @@ is.na.Surv2 <- function(x) {
   out
 }
 
+# survival's aeqSurv returns its input untouched, NaN included, when no times are tied.
+.surv_has_near_ties <- function(x, tolerance) {
+  times <- sort(unique(c(unclass(x)[, -ncol(x)])))
+  times <- times[is.finite(times)]
+  gaps <- diff(times)
+  any(gaps <= tolerance | gaps / mean(abs(times)) <= tolerance)
+}
+
 aeqSurv <- function(x, tolerance = sqrt(.Machine$double.eps)) {
   if (!is.numeric(tolerance) || length(tolerance) != 1L || !is.finite(tolerance)) {
     stop("invalid value for tolerance", call. = FALSE)
+  }
+  if (inherits(x, "Surv") && is.matrix(x) && !.surv_has_near_ties(x, tolerance)) {
+    return(x)
   }
   native_multistate <- .aeq_native_multistate_surv(x, tolerance)
   if (!is.null(native_multistate)) {
     return(native_multistate)
   }
-  .call_r_api(
-    "aeqSurv",
-    .as_python_surv(x),
-    tolerance = tolerance,
-    .wrap = c("survival_py_surv", "survival_py_object")
-  )
+  z <- .as_native_surv(.call_r_api("aeqSurv", .as_python_surv(x), tolerance = tolerance))
+  if (inherits(x, "Surv")) {
+    z <- unclass(z)
+    attributes(z) <- attributes(x)
+  }
+  z
 }
 
 coxph.control <- function(eps = 1e-09, toler.chol = .Machine$double.eps^0.75,
@@ -8615,7 +8696,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
     vector_args = c("weights", "offset", "cluster")
   )
   evaluated_dots <- .normalize_survreg_distribution_dots(evaluated_dots)
-  if (inherits(formula, "survival_py_surv") && is.matrix(evaluated_dots$x)) {
+  if (inherits(formula, c("Surv", "survival_py_surv")) && is.matrix(evaluated_dots$x)) {
     evaluated_dots$x <- .as_python_aft_matrix(evaluated_dots$x)
   }
   # R's fit records its call, which update(), drop1() and step() refit from.
@@ -10679,6 +10760,10 @@ print.survival_py_model <- function(x, digits = NULL, signif.stars = FALSE, ...)
 print.survival_py_object <- function(x, ...) {
   if (!inherits(x, "python.builtin.object")) {
     return(NextMethod())
+  }
+  if (inherits(x, "survival.r._surv.Surv")) {
+    print(.as_native_surv(x), ...)
+    return(invisible(x))
   }
   cat(as.character(reticulate::py_str(.restore_python(x))), "\n")
   invisible(x)
