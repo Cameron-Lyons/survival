@@ -65,6 +65,7 @@ from ._formula import (
     _unsupported_formula_name,
     model_frame,
 )
+from ._names import _make_names
 from ._surv import Surv, Surv2, _subset_surv
 from ._types import ModelFrame, TcutResult, TmergeFrame, TmergeOperation, _SurvResponseSpec
 
@@ -826,41 +827,61 @@ def _old_style_formula(data: Any, start: Any, end: Any, event: Any) -> str:
     return f"Surv({', '.join(f'`{name}`' for name in columns)}) ~ ."
 
 
+def _zero_value(value: Any) -> float:
+    """One ``zero`` start time: R's ``cbind(zero, Y)`` takes any number but NA, so ``-Inf``
+    is allowed; ``Inf`` fails the check that zero precedes every time."""
+
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("zero must be numeric") from exc
+    if math.isnan(result):
+        raise ValueError("zero must not be missing")
+    return result
+
+
 def _zero_values(zero: Any) -> float | list[float]:
     if isinstance(zero, str) or not hasattr(zero, "__iter__"):
-        return _finite_float(zero, "zero")
-    values = [_finite_float(value, "zero") for value in _materialize_1d(zero, "zero")]
+        return _zero_value(zero)
+    values = [_zero_value(value) for value in _materialize_1d(zero, "zero")]
     return values[0] if len(values) == 1 else values
 
 
-def _split_kernel(
-    response: Any, cut: list[float], zero: float | list[float], timefix: bool, id: Any
-) -> Any:
-    """Run the ``survsplit`` kernel on a ``Surv``/``Surv2`` response; a ``zero`` vector
-    gives each row of a response without start times its own start, as R's
-    ``cbind(zero, Y)`` does."""
+def _split_kernel(response: Any, cut: list[float], zero: Any, timefix: bool, id: Any) -> Any:
+    """Run the ``survsplit`` kernel on a ``Surv``/``Surv2`` response.
 
+    ``zero`` is read only for a response without start times, as in R; a ``zero`` vector
+    gives each row its own start, as R's ``cbind(zero, Y)`` does, after ``timefix`` has
+    run on the cut and event times alone.
+    """
+
+    if isinstance(response, Surv2) or (isinstance(response, Surv) and response.start is not None):
+        zero = 0.0
+    else:
+        zero = _zero_values(zero)
     if isinstance(zero, list):
-        if isinstance(response, Surv2) or response.start is not None:
-            zero = zero[0]
-        else:
-            if len(zero) != len(response):
-                raise ValueError("zero must have length 1 or one value per observation")
-            if any(
-                not math.isnan(time) and time <= origin
-                for time, origin in zip(response.time, zero, strict=True)
-            ):
-                raise ValueError("'zero' parameter must be less than any observed times")
-            response = Surv._from_normalized(
-                time=response.time,
-                event=response.event,
-                start=zero,
-                time2=None,
-                surv_type="mcounting" if response.type == "mright" else "counting",
-                states=response.states,
-                clabel=response.clabel,
-            )
-            zero = 0.0
+        if len(zero) != len(response):
+            raise ValueError("zero must have length 1 or one value per observation")
+        times = list(response.time)
+        if timefix:
+            fixed = _core.aeq_surv([*cut, *times], None, None).time
+            cut, times = list(fixed[: len(cut)]), list(fixed[len(cut) :])
+            timefix = False
+        if any(
+            not math.isnan(time) and time <= origin
+            for time, origin in zip(times, zero, strict=True)
+        ):
+            raise ValueError("'zero' parameter must be less than any observed times")
+        response = Surv._from_normalized(
+            time=times,
+            event=response.event,
+            start=zero,
+            time2=None,
+            surv_type="mcounting" if response.type == "mright" else "counting",
+            states=response.states,
+            clabel=response.clabel,
+        )
+        zero = 0.0
     if isinstance(response, Surv2):
         if id is None:
             raise ValueError("an id statement is required")
@@ -915,12 +936,11 @@ def survSplit(
     if not isinstance(timefix, bool):
         raise ValueError("invalid value for timefix option")
     cut_values = _cut_points(cut)
-    zero_value = _zero_values(zero)
     if isinstance(formula, Surv | Surv2) and response is None:
         response, formula = formula, None
     if response is not None:
         return _survsplit_object(
-            response, data, cut_values, zero_value, timefix, id, start, end, event, episode, added
+            response, data, cut_values, zero, timefix, id, start, end, event, episode, added
         )
     if formula is None or _data_column_names(formula) is not None:
         if data is None:
@@ -962,7 +982,7 @@ def survSplit(
         data = {name: values for name, values in data.items() if name != idname}
         added_id = False
     timeline = isinstance(mf.response, Surv2)
-    split = _split_kernel(mf.response, cut_values, zero_value, timefix, mf.id if timeline else None)
+    split = _split_kernel(mf.response, cut_values, zero, timefix, mf.id if timeline else None)
     rows = split.row
     if formula.partition("~")[2].strip() == "." and mf.n == _data_row_count(data):
         newdata = _split_data(data, rows)
@@ -972,7 +992,9 @@ def survSplit(
             if mf.id is None:
                 raise ValueError("id is required for timeline data")
             newdata["(id)"] = [mf.id[row] for row in rows]
-        elif idname is not None and (added_id or idname in names):
+        elif added_id and idname is not None:
+            # R adds only the id it creates; a data column named by id is kept only as a
+            # model variable.
             if mf.id is None:
                 raise ValueError("id column is missing from the model frame")
             newdata[idname] = [mf.id[row] for row in rows]
@@ -1033,7 +1055,7 @@ def _survsplit_object(
     response: Any,
     data: Any | None,
     cut: list[float],
-    zero: float | list[float],
+    zero: Any,
     timefix: bool,
     id: Any | None,
     start: str | None,
@@ -1061,15 +1083,22 @@ def _survsplit_object(
 
 
 def _split_extras(
-    newdata: dict[str, Any], split: Any, episode: str | None, added: str | None
-) -> dict[str, Any]:
-    """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns."""
+    newdata: dict[str, list[Any]], split: Any, episode: str | None, added: str | None
+) -> dict[str, list[Any]]:
+    """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns,
+    named by ``make.names`` as R names them."""
 
     if episode is not None:
-        newdata[_output_name(episode, "episode")] = [value + 1 for value in split.interval]
+        newdata[_extra_name(episode, "episode")] = [value + 1 for value in split.interval]
     if added is not None:
-        newdata[_output_name(added, "added")] = split.censor
+        newdata[_extra_name(added, "added")] = split.censor
     return newdata
+
+
+def _extra_name(value: Any, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a character string")
+    return _make_names(value)
 
 
 def fromtimeline(

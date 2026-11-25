@@ -382,6 +382,28 @@ Numerical corrections are described under Fixed below.
 - Cox risk-set fallbacks preserve small late risk sets and avoid overflowing
   exponentials. Kalbfleisch–Prentice curves keep survival increments in log
   scale, and event-free curves avoid evaluating irrelevant extreme risks.
+- `survSplit` names, keeps and orders its columns as R's code does. The R bridge
+  read `Surv()`'s arguments by position, so `Surv(event = status, time = time)`
+  swapped the two names, and named expression arguments after their inner variables
+  where R keeps `tstart`, `tstop` and `event`. It refused R's
+  `survSplit(data, cut, end =, event =)` form and `Surv2` timelines. A `.`
+  right-hand side now keeps the data's own columns (the unsplit response among
+  them) when no rows are dropped, and the model frame's columns when `subset` or
+  `na.action` drops some. A multi-state status has R's `"censor"` first level.
+  `episode` and `added` names pass through `make.names` in Python and R. Python's
+  `survSplit(id=)` adds only an id column it creates, as R does; a data column of
+  that name stays only when the formula uses it. The bridge splits:
+  - a single row
+  - `Surv2` subjects with missing or character ids
+  - a multi-state status with a state named `"censor"` (merged as R's
+    `factor(labels =)` merges it)
+  - a one-level factor status
+
+  It checks `cut`, `zero` and `timefix` as R does, and reads `zero` only for
+  `(time, status)` data. It is also faster than before, on par with stock R.
+  In Python, `timefix` now runs before a `zero` vector becomes the start times,
+  `zero = -Inf` is allowed, and `make.names` keeps names that start with a
+  non-ASCII letter or number.
 - Penalized Cox fits use consistent extreme risks for fitting and post-fit
   calculations; sparse frailty corrections avoid repeated work across tied deaths.
 - Dense frailty formulas reject a single observed group consistently with the

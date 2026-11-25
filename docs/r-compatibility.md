@@ -677,6 +677,13 @@ counts. Parallel fits preserve the sequential addition order.
 - `fromtimeline(y2 ~ x)` with a stored `Surv2` response needs `yname`; without it
   the port raises "yname is required", where R fails while building the default
   names ("object of type 'symbol' is not subsettable").
+- `survSplit(y ~ x)` with a `Surv` column `y` of `(time, status)` data stores
+  the split response as `Surv(tstart, tstop, status)`, as R does for
+  `(start, stop]` data. R's `cbind(zero, Y)` drops the `Surv` class, so R stores
+  `Surv2(tstart, status)` there and loses the stop times.
+- `survSplit(survival::Surv(time, status) ~ x)` names its columns as
+  `Surv(time, status) ~ x` does; R stops with "trouble making new names, left
+  hand side not recognized".
 - `survcondense` on data not sorted by id and time: R's two special-case
   branches (a single merged block) index `Y` by sorted position without
   `index[]` and move the wrong start time. For `data.frame(id = c(2, 1, 1),
