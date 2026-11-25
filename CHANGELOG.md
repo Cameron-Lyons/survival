@@ -284,6 +284,11 @@ Numerical corrections are described under Fixed below.
 - Concordance formulas retain source columns used by logical or factor responses
   for explicit predictors, weights and clusters, while keeping R's `.` expansion.
 - Release wheel smoke tests import the current `survival.r` interface.
+- The R bridge reads formula variables that the data lacks from the formula's
+  environment, as R's `model.frame` does, so `survfit(Surv(time, status) ~ sex)`
+  without `data`, a vector beside a data frame, or variables local to a calling
+  function work in `survfit`, `coxph`, `survreg`, `survdiff`, `concordance`,
+  `rttright` and `survcondense`.
 - Concordance treats positive and negative zero as tied times and predictions,
   preserving event/censor ordering and preventing a panic when ranks are requested.
 - Spline formulas accept quoted column names containing spaces.

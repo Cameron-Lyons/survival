@@ -65,6 +65,55 @@ if (getRversion() >= "2.15.1") {
   values[!vapply(values, is.null, logical(1))]
 }
 
+# The variable names a formula reads, as model.frame looks them up: symbols, but not
+# the field of x$name or x@name, and not a namespaced function.
+.formula_free_names <- function(expr) {
+  if (is.name(expr)) return(as.character(expr))
+  if (!is.call(expr)) return(character())
+  head <- expr[[1L]]
+  if (identical(head, as.name("$")) || identical(head, as.name("@"))) {
+    return(.formula_free_names(expr[[2L]]))
+  }
+  if (identical(head, as.name("::")) || identical(head, as.name(":::"))) return(character())
+  unique(unlist(lapply(as.list(expr)[-1L], .formula_free_names), use.names = FALSE))
+}
+
+# model.frame reads a formula's variables from data and then from the formula's
+# environment. Add the vectors data lacks, taken from that environment, so that the
+# Python formula finds them: survfit(Surv(time, status) ~ sex) without data, or a
+# grouping vector beside a data frame.
+.formula_frame_data <- function(formula, data, env) {
+  if (is.character(formula)) {
+    formula <- tryCatch(stats::as.formula(paste(formula, collapse = " "), env = env),
+      error = function(e) NULL)
+  }
+  if (!inherits(formula, "formula")) return(data)
+  formula_env <- environment(formula)
+  if (is.null(formula_env)) formula_env <- env
+  known <- if (is.null(data) || is.environment(data)) character() else names(data)
+  extra <- list()
+  for (name in setdiff(.formula_free_names(formula), c(".", known))) {
+    if (!exists(name, envir = formula_env)) next
+    value <- get(name, envir = formula_env)
+    if ((is.atomic(value) || is.factor(value)) && is.null(dim(value)) && !inherits(value, "Surv")) {
+      extra[[name]] <- value
+    }
+  }
+  if (!length(extra) || is.environment(data)) return(data)
+  # Only a variable's length (or a scalar's) can be a model-frame column. A vector of
+  # another length, such as cut(age, breaks = br), is a function argument, which
+  # data cannot carry.
+  lengths <- vapply(extra, length, integer(1))
+  n <- if (is.null(data)) max(lengths) else nrow(data)
+  extra <- extra[lengths == n | lengths == 1L]
+  if (!length(extra)) return(data)
+  if (is.null(data)) {
+    return(as.data.frame(extra, optional = TRUE, stringsAsFactors = FALSE))
+  }
+  for (name in names(extra)) data[[name]] <- extra[[name]]
+  data
+}
+
 .as_formula_string <- function(value) {
   if (inherits(value, "formula")) {
     paste(deparse(value, width.cutoff = 500L), collapse = " ")
@@ -7313,7 +7362,7 @@ survfit.formula <- function(formula, data = NULL, ..., subset = NULL, na.action 
       list(
         "survfit",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
+        data = .as_python_data(.formula_frame_data(formula, data, parent.frame())),
         subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
@@ -7341,7 +7390,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
       list(
         "survfit",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
+        data = .as_python_data(.formula_frame_data(formula, data, parent.frame())),
         subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
@@ -7638,7 +7687,7 @@ survdiff <- function(formula, data = NULL, subset = NULL, na.action = NULL,
   .with_object_call(.call_r_api(
     "survdiff",
     response = if (inherits(formula, "Surv")) .as_python_surv(formula) else .as_formula_string(formula),
-    data = .as_python_data(data),
+    data = .as_python_data(.formula_frame_data(formula, data, env)),
     group = group_values,
     subset = subset_values,
     `na.action` = .as_na_action(na.action),
@@ -7937,7 +7986,7 @@ rttright <- function(formula, data, weights, subset, na.action,
   result <- .call_r_api(
     "rttright",
     response = .as_formula_string(formula),
-    data = .as_python_data(data),
+    data = .as_python_data(.formula_frame_data(formula, if (missing(data)) NULL else data, env)),
     weights = weight_values,
     subset = subset_values,
     `na.action` = if (missing(na.action)) NULL else .as_na_action(na.action),
@@ -8145,7 +8194,7 @@ survcondense <- function(formula, data, subset, weights, na.action = na.pass,
   result <- .call_r_api(
     "survcondense",
     formula = .as_formula_string(formula),
-    data = .as_python_data(data),
+    data = .as_python_data(.formula_frame_data(formula, if (missing(data)) NULL else data, env)),
     subset = subset_values,
     weights = weight_values,
     `na.action` = .as_na_action(na.action),
@@ -8212,7 +8261,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
       list(
         "coxph",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
+        data = .as_python_data(.formula_frame_data(formula, data, parent.frame())),
         subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
@@ -8576,7 +8625,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
       list(
         "survreg",
         response = .as_formula_string(formula),
-        data = .as_python_data(data),
+        data = .as_python_data(.formula_frame_data(formula, data, parent.frame())),
         subset = .eval_formula_subset(substitute(subset), missing(subset), formula, data, parent.frame()),
         `na.action` = .as_na_action(na.action)
       ),
@@ -8676,7 +8725,7 @@ concordance.default <- function(object, data = NULL, ..., scores = NULL, risk.sc
     list(
       "concordance",
       .as_formula_string(formula),
-      data = .as_python_data(data),
+      data = .as_python_data(.formula_frame_data(formula, data, env)),
       scores = score_values,
       risk_scores = risk_score_values,
       weights = weight_values,
