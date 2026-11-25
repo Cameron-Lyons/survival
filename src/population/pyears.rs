@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use super::match_ratetable::align_us_year_axis_validated;
 use super::pystep::{PystepTable, pystep};
 use super::ratetable::RateTable;
@@ -207,40 +205,56 @@ struct PyearsCells {
     offtable: f64,
 }
 
-fn pyears1(
+impl PyearsCells {
+    fn zeros(n_cells: usize) -> Self {
+        Self {
+            pyears: vec![0.0; n_cells],
+            pn: vec![0.0; n_cells],
+            pcount: vec![0.0; n_cells],
+            pexpect: vec![0.0; n_cells],
+            offtable: 0.0,
+        }
+    }
+
+    fn add_assign(&mut self, other: &Self) {
+        for (a, &b) in self.pyears.iter_mut().zip(&other.pyears) {
+            *a += b;
+        }
+        for (a, &b) in self.pn.iter_mut().zip(&other.pn) {
+            *a += b;
+        }
+        for (a, &b) in self.pcount.iter_mut().zip(&other.pcount) {
+            *a += b;
+        }
+        for (a, &b) in self.pexpect.iter_mut().zip(&other.pexpect) {
+            *a += b;
+        }
+        self.offtable += other.offtable;
+    }
+}
+
+const PY_PARALLEL_THRESHOLD: usize = 8_192;
+const PY_PARALLEL_CHUNK: usize = 4_096;
+
+#[allow(clippy::too_many_arguments)]
+fn pyears1_range(
+    range: std::ops::Range<usize>,
     followup: &PyearsFollowup,
-    weights: &[f64],
+    weights: Option<&[f64]>,
     categories: &PyearsCategories,
+    observed: &PystepTable<'_>,
     expected: Option<(&PystepTable<'_>, &[f64], &Array2<f64>)>,
     method: PyearsExpect,
     n_cells: usize,
+    eps: f64,
 ) -> PyearsCells {
-    let n = followup.stop.len();
     let start = followup.start.as_deref();
     let timeleft_of = |i: usize| start.map_or(followup.stop[i], |s| followup.stop[i] - s[i]);
+    let weight_of = |i: usize| weights.map_or(1.0, |w| w[i]);
     let odim = categories.factors.len();
-    let ocut_slices: Vec<&[f64]> = categories.cuts.iter().map(Vec::as_slice).collect();
-    let observed = PystepTable {
-        factors: &categories.factors,
-        dims: &categories.dims,
-        cuts: &ocut_slices,
-        edge: false,
-    };
     let edim = expected.map_or(0, |(table, _, _)| table.factors.len());
+    let mut cells = PyearsCells::zeros(n_cells);
 
-    let eps = (0..n)
-        .map(timeleft_of)
-        .filter(|&t| t > 0.0)
-        .fold(0.0, |acc: f64, t| if acc == 0.0 { t } else { acc.min(t) })
-        * EPS_FRACTION;
-
-    let mut cells = PyearsCells {
-        pyears: vec![0.0; n_cells],
-        pn: vec![0.0; n_cells],
-        pcount: vec![0.0; n_cells],
-        pexpect: vec![0.0; n_cells],
-        offtable: 0.0,
-    };
     if expected.is_none() && categories.factors.iter().all(|&factor| factor == 1) {
         let mut strides = Vec::with_capacity(odim);
         let mut stride = 1;
@@ -248,27 +262,30 @@ fn pyears1(
             strides.push(stride);
             stride *= dim;
         }
-        for i in 0..n {
+        for i in range {
             let cell: usize = strides
                 .iter()
                 .enumerate()
                 .map(|(j, &stride)| (categories.data[[i, j]] as usize - 1) * stride)
                 .sum();
             let elapsed = timeleft_of(i);
+            let w = weight_of(i);
             if elapsed > eps {
-                cells.pyears[cell] += elapsed * weights[i];
+                cells.pyears[cell] += elapsed * w;
                 cells.pn[cell] += 1.0;
             }
             if let Some(event) = &followup.event {
-                cells.pcount[cell] += event[i] * weights[i];
+                cells.pcount[cell] += event[i] * w;
             }
         }
         return cells;
     }
+
     let mut data = vec![0.0; odim];
     let mut data2 = vec![0.0; edim];
-    for i in 0..n {
+    for i in range {
         let entry = start.map_or(0.0, |s| s[i]);
+        let w = weight_of(i);
         for (j, value) in data.iter_mut().enumerate() {
             *value = categories.data[[i, j]];
             if categories.factors[j] != 1 {
@@ -288,15 +305,15 @@ fn pyears1(
         let mut index = None;
 
         if timeleft <= eps && followup.event.is_some() {
-            index = pystep(&observed, &data, 1.0).index;
+            index = pystep(observed, &data, 1.0).index;
         }
 
         while timeleft > eps {
-            let step = pystep(&observed, &data, timeleft);
+            let step = pystep(observed, &data, timeleft);
             let thiscell = step.time;
             index = step.index;
             if let Some(cell) = step.index {
-                cells.pyears[cell] += thiscell * weights[i];
+                cells.pyears[cell] += thiscell * w;
                 cells.pn[cell] += 1.0;
 
                 if let Some((table, rates, _)) = expected {
@@ -320,13 +337,13 @@ fn pyears1(
                         etime -= et2;
                     }
                     cells.pexpect[cell] += match method {
-                        PyearsExpect::Event => hazard * weights[i],
-                        PyearsExpect::Pyears => (-cumhaz).exp() * temp * weights[i],
+                        PyearsExpect::Event => hazard * w,
+                        PyearsExpect::Pyears => (-cumhaz).exp() * temp * w,
                     };
                     cumhaz += hazard;
                 }
             } else {
-                cells.offtable += thiscell * weights[i];
+                cells.offtable += thiscell * w;
                 if let Some((table, _, _)) = expected {
                     advance(&mut data2, table.factors, thiscell);
                 }
@@ -335,10 +352,76 @@ fn pyears1(
             timeleft -= thiscell;
         }
         if let (Some(cell), Some(event)) = (index, &followup.event) {
-            cells.pcount[cell] += event[i] * weights[i];
+            cells.pcount[cell] += event[i] * w;
         }
     }
     cells
+}
+
+fn pyears1(
+    followup: &PyearsFollowup,
+    weights: Option<&[f64]>,
+    categories: &PyearsCategories,
+    expected: Option<(&PystepTable<'_>, &[f64], &Array2<f64>)>,
+    method: PyearsExpect,
+    n_cells: usize,
+) -> PyearsCells {
+    let n = followup.stop.len();
+    let start = followup.start.as_deref();
+    let timeleft_of = |i: usize| start.map_or(followup.stop[i], |s| followup.stop[i] - s[i]);
+    let ocut_slices: Vec<&[f64]> = categories.cuts.iter().map(Vec::as_slice).collect();
+    let observed = PystepTable {
+        factors: &categories.factors,
+        dims: &categories.dims,
+        cuts: &ocut_slices,
+        edge: false,
+    };
+
+    let eps = (0..n)
+        .map(timeleft_of)
+        .filter(|&t| t > 0.0)
+        .fold(0.0, |acc: f64, t| if acc == 0.0 { t } else { acc.min(t) })
+        * EPS_FRACTION;
+
+    if n >= PY_PARALLEL_THRESHOLD && n_cells <= 65_536 {
+        use rayon::prelude::*;
+        let n_chunks = n.div_ceil(PY_PARALLEL_CHUNK);
+        let chunks: Vec<PyearsCells> = (0..n_chunks)
+            .into_par_iter()
+            .map(|chunk_idx| {
+                let first = chunk_idx * PY_PARALLEL_CHUNK;
+                let last = (first + PY_PARALLEL_CHUNK).min(n);
+                pyears1_range(
+                    first..last,
+                    followup,
+                    weights,
+                    categories,
+                    &observed,
+                    expected,
+                    method,
+                    n_cells,
+                    eps,
+                )
+            })
+            .collect();
+        let mut total = PyearsCells::zeros(n_cells);
+        for chunk in &chunks {
+            total.add_assign(chunk);
+        }
+        return total;
+    }
+
+    pyears1_range(
+        0..n,
+        followup,
+        weights,
+        categories,
+        &observed,
+        expected,
+        method,
+        n_cells,
+        eps,
+    )
 }
 
 pub fn pyears(
@@ -356,14 +439,10 @@ pub fn pyears(
     if scale.is_nan() || scale <= 0.0 || !scale.is_finite() {
         return Err(SurvivalError::invalid_input("scale must be a value > 0"));
     }
-    let weights = match weights {
-        Some(values) => {
-            validate_length(n, values.len(), "weights")?;
-            validate_finite(values, "weights")?;
-            Cow::Borrowed(values)
-        }
-        None => Cow::Owned(vec![1.0; n]),
-    };
+    if let Some(values) = weights {
+        validate_length(n, values.len(), "weights")?;
+        validate_finite(values, "weights")?;
+    }
     let n_cells = categories.validate(n)?;
 
     let positions = match &ratetable {
@@ -392,14 +471,14 @@ pub fn pyears(
             };
             pyears1(
                 followup,
-                &weights,
+                weights,
                 categories,
                 Some((&table, &rt.table.rates, positions)),
                 expect,
                 n_cells,
             )
         }
-        _ => pyears1(followup, &weights, categories, None, expect, n_cells),
+        _ => pyears1(followup, weights, categories, None, expect, n_cells),
     };
 
     let expected = ratetable.map(|_| {

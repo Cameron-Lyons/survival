@@ -44,7 +44,7 @@ def test_current_r_curve_labels(case):
     for converted in (r.survfit0(curve), pickle.loads(pickle.dumps(curve))):
         assert converted.clabel == case["label"]
         compare_table(converted.transitions, case["curve"]["transitions"])
-    for part in survival.pybridge._survfit_strata_curves(curve).values():
+    for part in r._models._survfit_strata_curves(curve).values():
         assert part.clabel == case["label"]
         assert part.transitions.colnames[-1] == f"({case['label']})"
 
@@ -73,11 +73,11 @@ def test_grouped_counting_curves_retain_internal_events():
         ("factor(sex, levels = c(2, 1))", ["2", "1"]),
     ],
 )
-def test_bridge_curves_drop_each_term_label_once(rhs, labels):
-    # R names strata "term=value, term=value"; the bridge keys curves by the values,
-    # and a term label holding commas (strata(a, b), factor(x, levels = ...)) stays whole.
+def test_curve_strata_labels_drop_each_term_label_once(rhs, labels):
+    # R names strata "term=value, term=value"; bare curve keys strip each known
+    # term prefix once so labels holding commas (strata(a, b), factor(x, levels = ...)) stay whole.
     curve = r.survfit(f"Surv(time, status) ~ {rhs}", survival.datasets.load_lung())
-    assert list(survival.pybridge._survfit_strata_curves(curve))[:2] == labels
+    assert list(r._models._survfit_strata_curves(curve))[:2] == labels
 
 
 def test_bare_labels_without_terms_drop_every_leading_name():

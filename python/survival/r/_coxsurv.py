@@ -24,7 +24,7 @@ from ._coerce import (
     _pop_dotted_keyword,
 )
 from ._surv import Surv
-from ._types import StrataFactor, _renamed_classes
+from ._types import StrataFactor
 
 
 @dataclass(frozen=True)
@@ -365,12 +365,3 @@ def survfitcoxph_fit(
         rownames=rownames,
         **kwargs,
     )
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "CoxSurvFitResult": "CoxsurvRawResult",
-        "CoxSurvFitList": "CoxsurvRawList",
-    },
-)

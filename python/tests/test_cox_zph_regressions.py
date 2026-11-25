@@ -14,7 +14,6 @@ from .helpers import setup_survival_import
 survival = setup_survival_import()
 r = survival.r
 datasets = survival.datasets
-pybridge = survival.pybridge
 
 
 def _complete(data, *columns):
@@ -169,8 +168,11 @@ def test_a_function_transform_is_applied_to_the_stop_times(lung):
     assert anonymous.transform == "user"
     assert anonymous.table == r.cox_zph(fit, transform="identity").table
     assert r.cox_zph(fit, transform=functools.partial(sqrt_times)).transform == "user"
-    # The R bridge names an R function as R does, by deparse(substitute(transform)).
-    labelled = pybridge._named_transform(sqrt_times, "function(t) sqrt(t)")
+
+    def labelled(times):
+        return sqrt_times(times)
+
+    labelled.__name__ = "function(t) sqrt(t)"
     assert r.cox_zph(fit, transform=labelled).transform == "function(t) sqrt(t)"
     with pytest.raises(ValueError, match="one finite value per observation"):
         r.cox_zph(fit, transform=lambda times: times[1:])

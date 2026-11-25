@@ -67,6 +67,7 @@ from ._survival import CoverageSelectionResult as CoverageSelectionResult
 from ._survival import CoxCountOutput as CoxCountOutput
 from ._survival import CoxpenalFit as CoxpenalFit
 from ._survival import CoxPenalty as CoxPenalty
+from ._survival import CoxPenaltyTerms as CoxPenaltyTerms
 from ._survival import CoxphDetail as CoxphDetail
 from ._survival import CoxPHFit as CoxPHFit
 from ._survival import CoxphFitResult as CoxphFitResult

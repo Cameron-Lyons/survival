@@ -19,6 +19,7 @@ __all__ = bind_names(
         "coxph_fit_raw",
         "coxphms_fit",
         "CoxPenalty",
+        "CoxPenaltyTerms",
         "CoxpenalFit",
         "PenaltyHistory",
         "PenaltyController",

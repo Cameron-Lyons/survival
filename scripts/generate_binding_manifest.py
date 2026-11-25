@@ -12,6 +12,15 @@ REGISTRATION_ROOT = ROOT / "src/api/python"
 MANIFEST_PATH = ROOT / "python/survival/_binding_manifest.py"
 KERNEL_STUB_PATH = ROOT / "python/survival/kernels.pyi"
 DATASET_STUB_PATH = ROOT / "python/survival/datasets.pyi"
+DOMAIN_STUB_MODULES = (
+    "core",
+    "data_prep",
+    "interval",
+    "population",
+    "regression",
+    "surv_analysis",
+    "validation",
+)
 FEATURE_REGISTRATION_PATHS = {
     "ml": (
         "src/api/python/ml.rs",
@@ -246,12 +255,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    module_bindings = extract_python_module_bindings(ROOT)
     outputs = {
         MANIFEST_PATH: render_manifest(extract_rust_registrations(ROOT)),
         KERNEL_STUB_PATH: render_kernel_stub(ROOT),
-        DATASET_STUB_PATH: render_native_exports(
-            "datasets", set(extract_python_module_bindings(ROOT)["datasets"])
-        ),
+        DATASET_STUB_PATH: render_native_exports("datasets", set(module_bindings["datasets"])),
+        **{
+            ROOT / f"python/survival/{module}.pyi": render_native_exports(
+                module, set(module_bindings[module])
+            )
+            for module in DOMAIN_STUB_MODULES
+        },
     }
 
     stale = False

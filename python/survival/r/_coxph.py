@@ -308,15 +308,15 @@ class CoxphModel:
 
     @property
     def linear_predictors(self) -> list[float]:
-        return list(self.fit.linear_predictors)
+        return self.fit.linear_predictors
 
     @property
     def residuals(self) -> list[float]:
-        return list(self.fit.residuals)
+        return self.fit.residuals
 
     @property
     def means(self) -> list[float]:
-        return list(self.fit.means)
+        return self.fit.means
 
     @property
     def method(self) -> str:
@@ -340,12 +340,12 @@ class CoxphModel:
     def weights(self) -> list[float] | None:
         """``fit$weights``: the case weights, present only when some differ from 1."""
 
-        values = list(self.fit.weights)
+        values = self.fit.weights
         return values if any(value != 1.0 for value in values) else None
 
     @property
     def offset(self) -> list[float] | None:
-        values = list(self.fit.offset)
+        values = self.fit.offset
         return values if any(value != 0.0 for value in values) else None
 
     @property
@@ -668,11 +668,7 @@ def _tt_expand(frame: _ModelFrame, tt: Any, tt_terms: list[_CovariateTerm]) -> _
         source = _column_source(data, term.column)
         values = source if _categories(source) is not None else _column(data, term.column)
         args = (values, list(new_y.time), (riskset_codes + 1).tolist(), weights)
-        result = (
-            function(*args, status=new_y._event_codes())
-            if getattr(function, "_survival_tt_r_callback", False)
-            else function(*args)
-        )
+        result = function(*args)
         replacement, result = _time_transform_design(term, result, len(tindex))
         replacements[term] = replacement
         if isinstance(replacement, _CategoricalDesignTerm):
@@ -1245,8 +1241,6 @@ def coxph(
     formula = _without_survival_namespace(formula)
     na_action = _pop_dotted_keyword(kwargs, "na.action", "na_action", na_action, _DEFAULT_NA_ACTION)
     singular_ok = _pop_dotted_keyword(kwargs, "singular.ok", "singular_ok", singular_ok, True)
-    weights_column = kwargs.pop("_weights_column", None)
-    id_column = kwargs.pop("_id_column", None)
     control_args = {
         name: value
         for name, value in (
@@ -1297,14 +1291,17 @@ def coxph(
     fit_formula = formula
     timeline = _timeline_response(formula, data)
     if timeline:
-        weights_column = weights_column or (weights if isinstance(weights, str) else None)
-        id_column = id_column or (id if isinstance(id, str) else None)
+        weights_column = weights if isinstance(weights, str) else None
+        id_column = id if isinstance(id, str) else None
         fit_formula, data, arguments = _timeline_counting(
             formula, data, subset, arguments, carry_clusters=False
         )
         subset = None
-    elif subset is not None and data is not None:
-        subset = _subset_indices(subset, _data_row_count(data, fit_formula))
+    else:
+        weights_column = None
+        id_column = None
+        if subset is not None and data is not None:
+            subset = _subset_indices(subset, _data_row_count(data, fit_formula))
     frame = _model_frame(
         fit_formula,
         data,

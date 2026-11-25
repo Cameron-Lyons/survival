@@ -1,3 +1,4 @@
+use crate::data_types::{FloatVec, IntVec};
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::dist::qnorm;
 use crate::internal::validation::{validate_binary_i32, validate_finite, validate_length};
@@ -67,7 +68,7 @@ fn normal_scores(eta: &[f64], ties: bool) -> Vec<f64> {
 fn gonen_heller(eta: &[f64]) -> f64 {
     let n = eta.len();
     let mut sorted = eta.to_vec();
-    sorted.sort_by(f64::total_cmp);
+    sorted.sort_unstable_by(f64::total_cmp);
     pair_sum::logistic_pair_sum(&sorted) * 2.0 / (n as f64 * (n - 1) as f64)
 }
 
@@ -152,26 +153,29 @@ pub fn royston(input: &RoystonInput<'_>) -> SurvivalResult<RoystonResult> {
 #[pyo3(signature = (eta, time, status, loglik, n_event, n_coef, entry_times=None, ties=true, adjust=false))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn royston_py(
-    eta: Vec<f64>,
-    time: Vec<f64>,
-    status: Vec<i32>,
+    py: Python<'_>,
+    eta: FloatVec,
+    time: FloatVec,
+    status: IntVec,
     loglik: [f64; 2],
     n_event: usize,
     n_coef: usize,
-    entry_times: Option<Vec<f64>>,
+    entry_times: Option<FloatVec>,
     ties: bool,
     adjust: bool,
 ) -> PyResult<RoystonResult> {
-    Ok(royston(&RoystonInput {
-        eta: &eta,
-        time: &time,
-        status: &status,
-        entry_times: entry_times.as_deref(),
-        loglik,
-        n_event,
-        n_coef,
-        ties,
-        adjust,
+    Ok(py.detach(|| {
+        royston(&RoystonInput {
+            eta: &eta,
+            time: &time,
+            status: &status,
+            entry_times: entry_times.as_deref(),
+            loglik,
+            n_event,
+            n_coef,
+            ties,
+            adjust,
+        })
     })?)
 }
 

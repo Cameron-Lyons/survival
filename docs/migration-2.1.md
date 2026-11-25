@@ -92,7 +92,7 @@ capitalized, then `Result`, or `Model` for a fitted model. `CoxSurvFitResult`
 only in case; the first is now `CoxsurvRawResult`. The classes retain private
 aliases for the old names, so saved Python class references still resolve.
 This does not guarantee compatibility of embedded native fitted state across
-package versions; see the [serialization requirements](r-bridge.md#model-persistence).
+package versions.
 
 | 2.0 | 2.1 |
 | --- | --- |

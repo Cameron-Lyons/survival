@@ -13,23 +13,35 @@ pub(crate) fn standardize_row_major_matrix(
     let mut means = vec![0.0; n_cols];
     let mut scales = vec![1.0; n_cols];
     let mut standardized = vec![0.0; n_rows * n_cols];
+    if n_rows == 0 || n_cols == 0 {
+        return (standardized, means, scales);
+    }
 
-    for col in 0..n_cols {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-        for row in 0..n_rows {
-            let value = x[row * n_cols + col];
-            sum += value;
-            sum_sq += value * value;
+    let mut sums = vec![0.0; n_cols];
+    let mut sum_sqs = vec![0.0; n_cols];
+    for row in x.chunks_exact(n_cols) {
+        for col in 0..n_cols {
+            let value = row[col];
+            sums[col] += value;
+            sum_sqs[col] += value * value;
         }
+    }
 
-        means[col] = sum / n_rows as f64;
-        let variance = sum_sq / n_rows as f64 - means[col] * means[col];
+    let mut inv_scales = vec![1.0; n_cols];
+    let inv_n = 1.0 / n_rows as f64;
+    for col in 0..n_cols {
+        means[col] = sums[col] * inv_n;
+        let variance = sum_sqs[col] * inv_n - means[col] * means[col];
         scales[col] = variance.sqrt().max(crate::constants::DIVISION_FLOOR);
-        let inv_scale = 1.0 / scales[col];
+        inv_scales[col] = 1.0 / scales[col];
+    }
 
-        for row in 0..n_rows {
-            standardized[row * n_cols + col] = (x[row * n_cols + col] - means[col]) * inv_scale;
+    for (src, dst) in x
+        .chunks_exact(n_cols)
+        .zip(standardized.chunks_exact_mut(n_cols))
+    {
+        for col in 0..n_cols {
+            dst[col] = (src[col] - means[col]) * inv_scales[col];
         }
     }
 
@@ -99,6 +111,44 @@ pub(crate) fn cholesky2(matrix: &mut Array2<f64>, toler: f64) -> i32 {
     let n = matrix.nrows();
     assert_eq!(n, matrix.ncols(), "cholesky2 requires a square matrix");
 
+    if let Some(buf) = matrix.as_slice_mut() {
+        let mut eps = 0.0_f64;
+        for i in 0..n {
+            let diag = buf[i * n + i];
+            if diag > eps {
+                eps = diag;
+            }
+            for j in (i + 1)..n {
+                buf[j * n + i] = buf[i * n + j];
+            }
+        }
+        eps = if eps == 0.0 { toler } else { eps * toler };
+
+        let mut rank = 0_i32;
+        let mut nonneg = 1_i32;
+        for i in 0..n {
+            let pivot = buf[i * n + i];
+            if !pivot.is_finite() || pivot < eps {
+                buf[i * n + i] = 0.0;
+                if pivot < -8.0 * eps {
+                    nonneg = -1;
+                }
+            } else {
+                rank += 1;
+                for j in (i + 1)..n {
+                    let temp = buf[j * n + i] / pivot;
+                    buf[j * n + i] = temp;
+                    buf[j * n + j] -= temp * temp * pivot;
+                    for k in (j + 1)..n {
+                        let kn = k * n;
+                        buf[kn + j] -= temp * buf[kn + i];
+                    }
+                }
+            }
+        }
+        return rank * nonneg;
+    }
+
     let mut eps = 0.0_f64;
     for i in 0..n {
         if matrix[[i, i]] > eps {
@@ -139,6 +189,30 @@ pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
     assert_eq!(n, chol.ncols(), "chsolve2 requires a square matrix");
     assert_eq!(y.len(), n, "chsolve2 right-hand side length must match");
 
+    if let Some(buf) = chol.as_slice() {
+        for i in 0..n {
+            let row = &buf[i * n..i * n + i];
+            let mut temp = y[i];
+            for (&known, &c) in y[..i].iter().zip(row) {
+                temp -= known * c;
+            }
+            y[i] = temp;
+        }
+        for i in (0..n).rev() {
+            let diag = buf[i * n + i];
+            if diag == 0.0 {
+                y[i] = 0.0;
+            } else {
+                let mut temp = y[i] / diag;
+                for (j, &known) in y.iter().enumerate().skip(i + 1) {
+                    temp -= known * buf[j * n + i];
+                }
+                y[i] = temp;
+            }
+        }
+        return;
+    }
+
     for i in 0..n {
         let mut temp = y[i];
         for (j, &known) in y.iter().enumerate().take(i) {
@@ -163,6 +237,43 @@ pub(crate) fn chsolve2(chol: &Array2<f64>, y: &mut [f64]) {
 pub(crate) fn chinv2(matrix: &mut Array2<f64>) {
     let n = matrix.nrows();
     assert_eq!(n, matrix.ncols(), "chinv2 requires a square matrix");
+
+    if let Some(buf) = matrix.as_slice_mut() {
+        for i in 0..n {
+            let diag = buf[i * n + i];
+            if diag > 0.0 {
+                buf[i * n + i] = 1.0 / diag;
+                for j in (i + 1)..n {
+                    let jn = j * n;
+                    let factor = -buf[jn + i];
+                    buf[jn + i] = factor;
+                    let in_ = i * n;
+                    for k in 0..i {
+                        buf[jn + k] += factor * buf[in_ + k];
+                    }
+                }
+            }
+        }
+        for i in 0..n {
+            let in_ = i * n;
+            if buf[in_ + i] == 0.0 {
+                for j in 0..i {
+                    buf[j * n + i] = 0.0;
+                }
+                buf[in_ + i..in_ + n].fill(0.0);
+            } else {
+                for j in (i + 1)..n {
+                    let jn = j * n;
+                    let temp = buf[jn + i] * buf[jn + j];
+                    buf[in_ + j] = temp;
+                    for k in i..j {
+                        buf[in_ + k] += temp * buf[jn + k];
+                    }
+                }
+            }
+        }
+        return;
+    }
 
     for i in 0..n {
         if matrix[[i, i]] > 0.0 {

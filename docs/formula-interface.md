@@ -1,7 +1,6 @@
 # Formula interface
 
-`survival.r` is the R-style interface to the package, and the R bridge package
-`survivalr` drives it through reticulate. Formula
+`survival.r` is the R-style interface to the package. Formula
 strings are parsed by a restricted parser: formula options are read as literals,
 and Python or R code is never evaluated. This page describes formulas, survival
 responses, model frames and model matrices. Predictions are described in
@@ -290,9 +289,7 @@ where `is.na(y)` is. A bare name that is not a survival object is still a numeri
 response where one is allowed (`pyears("time ~ sex", ...)`, `concordance`), and
 elsewhere raises "response must be a survival object". `survSplit` and
 `survcondense` store their result under the response's name, as R does. The
-pandas `DataFrame` cannot hold such a column, so pass the data as a mapping. In
-the R bridge, a `Surv` column of a data frame works the same way, whether it is
-survival's matrix or survivalr's own `Surv`.
+pandas `DataFrame` cannot hold such a column, so pass the data as a mapping.
 
 `Surv` and `Surv2` keep the censoring factor's first level in `clabel` and format
 it as `:label`; objects without `clabel` keep the `+` marker. A one-shot event
@@ -563,20 +560,15 @@ splines are labeled from the variable name, such as `ps(x)3`. Boolean bases use
 zero and one; a sparse penalty requires one numeric group column; penalty
 interactions and multiple sparse penalties raise errors, and nonnumeric bases fail
 before any penalty callback runs. Sparse callbacks without a custom formatter get
-a group Wald summary. R callbacks may return
-`survival::frailty()`, `survivalr::frailty()`, splines, ridge terms or custom
-penalty objects; sparse formatting callbacks receive the frailties and their
-variance diagonal with the third argument missing, as in R, and dense formatting
-callbacks receive coefficient and covariance blocks. Controller histories and
-formatter closures survive model serialization, and R frailty constructors keep
-R's numeric and logical group labels.
+a group Wald summary. Controller histories and formatter closures survive model
+serialization.
 
 ## Multi-state Cox models
 
 `coxph` on a factor-status `Surv` with `id=`, formula lists, `istate=` and
 `statedata=` returns a `CoxphmsModel` with R's `cmap`, `smap`, `states` and
 `transitions`. It supports `coef`, `vcov(matrix=True)` (a dict of `NamedMatrix`
-keyed by transition; the R bridge returns R's three-dimensional array),
+keyed by transition),
 `predict`, `residuals`, `cox_zph`, `coxph_detail` and `survfit` (R's
 `survfit.coxphms`). `survcheckallow` must name survcheck flags (overlap, gap, jump,
 teleport); an empty value keeps them all. Offsets in formula lists raise an error

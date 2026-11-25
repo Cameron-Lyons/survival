@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- Removed the experimental `r/survivalr` R bridge package and the Python/Rust
+  `survival.pybridge` / `src/pybridge/` bridge layer; stock CRAN R differential
+  fixtures (`test/r/`) and reference generators (`scripts/generate_*_reference.R`)
+  remain for verification against R `survival`.
+- Removed legacy 2.x pickle class-rename shims (`_renamed_classes`) and
+  bridge-only private hooks (`_EvaluatedModelFrame`, `_RSubset`, `_RDesignMatrix`,
+  `_Timeline`, `_totimeline`, `_frailty_encoding`, `_survcheck_codes`,
+  `_penalty_control`, `_parms_null` on Python d/p/q/rsurvreg).
+
+### Added
+
+- Generated `.pyi` type stubs for all seven core Python domain modules
+  (`core.pyi`, `data_prep.pyi`, `interval.pyi`, `population.pyi`,
+  `regression.pyi`, `surv_analysis.pyi`, `validation.pyi`) via
+  `scripts/generate_binding_manifest.py`, and removed the catch-all
+  `__getattr__` fallback from `python/survival/__init__.pyi`.
+
+### Performance
+
+- Switched `royston` Python bindings to zero-copy NumPy extraction and GIL
+  release.
+- Rewrote `strata` with O(n) zero-heap flat-table paths, NumPy integer-array
+  extraction, GIL release, and lazy `StrataFactor.labels` / contiguous NumPy
+  codes for single-column numeric strata in `survfit` and `survdiff`.
+- Optimized `survfitkm` and internal sorting with branchless packed `u64`
+  total-order keys (raising the parallel sort threshold to 16,384), copy-on-write
+  `aeqSurv`, zero-allocation unweighted right-censored sweeps, single-curve move
+  assembly, and elimination of redundant validation.
+- Optimized `concordancefit` with zero-copy response/stratum borrowing, O(n)
+  `timewt="n"` extraction from the sweep order, zero-allocation single-predictor
+  variance, and Rayon parallelization across strata and predictors.
+- Parallelized `survreg` built-in likelihood/Gram sweeps, `pyears1` tabulations,
+  `aareg_fit` retained-time moments, and `aeq_surv` / concordance tie sorts with
+  deterministic chunk reduction; collapsed Efron tie steps in `cox_zph` to
+  O(d + p²) and vectorized `summary_aareg`.
+- Added direct Rust Python-list assembly (`FineGrayOutput._build_lists`) with
+  bit-exact `PyFloat` sharing and covariate gathering, eliminating intermediate
+  NumPy copies and Python row loops in `finegray`.
+- Made `internal::simd::variance` zero-allocation, improved row-major cache
+  locality in `standardize_row_major_matrix` and Cholesky solvers, eliminated
+  redundant copies in `CoxphModel` / `martingale_residuals`, skipped unused NA
+  scans in `predict(..., na_action="na.pass")`, and streamlined `Surv` status
+  and origin handling.
+
 ## 2.1.0
 
 ### Breaking changes

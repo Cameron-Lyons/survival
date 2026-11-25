@@ -59,8 +59,22 @@ pub fn variance(values: &[f64]) -> f64 {
     if values.len() < 2 {
         return 0.0;
     }
-    let centered = subtract_scalar(values, mean(values));
-    sum_of_squares(&centered) / (values.len() - 1) as f64
+    let avg = mean(values);
+    let mut accumulators = [0.0; LANES];
+    let chunks = values.chunks_exact(LANES);
+    let remainder = chunks.remainder();
+    for chunk in chunks {
+        for lane in 0..LANES {
+            let diff = chunk[lane] - avg;
+            accumulators[lane] += diff * diff;
+        }
+    }
+    let mut total = combine(accumulators);
+    for &value in remainder {
+        let diff = value - avg;
+        total += diff * diff;
+    }
+    total / (values.len() - 1) as f64
 }
 
 #[cfg(test)]

@@ -3,6 +3,8 @@ pub(crate) mod callbacks;
 pub(crate) mod cholesky3;
 pub(crate) mod control;
 mod controller;
+#[cfg(feature = "python")]
+pub(crate) mod python_callback;
 
 pub use control::{PenaltyControl, PenaltyControlInput, PenaltyControlState};
 pub use controller::PenaltyController;

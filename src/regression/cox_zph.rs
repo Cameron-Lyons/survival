@@ -8,6 +8,7 @@ use crate::internal::step::rank_average;
 use crate::regression::cox_optimizer::TieMethod;
 use crate::regression::coxpenal::CoxpenalFit;
 use crate::regression::coxph::{CoxPHFit, default_assign, validate_assign};
+use crate::regression::efron_steps::{EfronStepSums, scaled_first};
 use crate::regression::log_risk_sweep::{LogRiskSweep, needs_log_risk};
 use ndarray::{Array2, Axis, s};
 #[cfg(feature = "python")]
@@ -194,7 +195,14 @@ fn zph_kernel(
     }
     let mut u = vec![0.0; 2 * nvar];
     let mut imat = Array2::zeros((2 * nvar, 2 * nvar));
-    let mut schoen_rows: Vec<(usize, Vec<f64>)> = Vec::new();
+    let total_deaths: usize = fit.status.iter().filter(|&&s| s == 1).count();
+    let mut death_rows: Vec<usize> = Vec::with_capacity(total_deaths);
+    let mut schoen_flat: Vec<f64> = Vec::with_capacity(total_deaths * nvar);
+    let mut mean = vec![0.0; nvar];
+    let mut xbar = vec![0.0; nvar];
+    let mut covariance = Array2::zeros((nvar, nvar));
+    let mut stratum_death_rows: Vec<usize> = Vec::new();
+    let mut stratum_schoen: Vec<f64> = Vec::new();
     for stratum in 0..nstrata {
         let (start, end) = fit.sorted.bounds[stratum];
         let rows = &fit.sorted.order[start..end];
@@ -223,9 +231,7 @@ fn zph_kernel(
                 }
                 let steps = if efron { d } else { 1 };
                 let wtave = event.death_weight / steps as f64;
-                let mut mean = vec![0.; nvar];
-                let mut xbar = vec![0.; nvar];
-                let mut covariance = Array2::zeros((nvar, nvar));
+                mean.fill(0.0);
                 for step in 0..steps {
                     event.efron_mean(step, &mut xbar);
                     event.efron_covariance(step, &mut covariance);
@@ -241,12 +247,20 @@ fn zph_kernel(
                         }
                     }
                 }
-                let residual =
-                    |row: usize| (row, (0..nvar).map(|i| x[(row, i)] - mean[i]).collect());
                 if fit.entry.is_some() {
-                    schoen_rows.extend(event.deaths.iter().rev().map(|&row| residual(row)));
+                    for &row in event.deaths.iter().rev() {
+                        death_rows.push(row);
+                        for i in 0..nvar {
+                            schoen_flat.push(x[(row, i)] - mean[i]);
+                        }
+                    }
                 } else {
-                    schoen_rows.extend(event.deaths.iter().map(|&row| residual(row)));
+                    for &row in event.deaths {
+                        death_rows.push(row);
+                        for i in 0..nvar {
+                            schoen_flat.push(x[(row, i)] - mean[i]);
+                        }
+                    }
                 }
                 Ok(())
             };
@@ -267,10 +281,12 @@ fn zph_kernel(
             rows,
             second_moments: true,
         };
-        let mut per_stratum: Vec<(usize, Vec<f64>)> = Vec::new();
+        stratum_death_rows.clear();
+        stratum_schoen.clear();
         sweep.for_each_death_time(|death| {
             let d = death.ndead();
             let timewt = gtime[death.deaths[0]];
+            let timewt2 = timewt * timewt;
             let deadwt = death.tied.weight;
             for &row in death.deaths {
                 for i in 0..nvar {
@@ -281,34 +297,102 @@ fn zph_kernel(
             }
             let steps = if efron && d > 1 { d } else { 1 };
             let wtave = deadwt / steps as f64;
-            let mut mean = vec![0.0; nvar];
-            for k in 0..steps {
-                let step = if steps == 1 { 0 } else { k };
-                let denom = death.efron_denom(step);
+            let inv_steps = 1.0 / steps as f64;
+            mean.fill(0.0);
+            if steps > 1 {
+                let mut step_sums = EfronStepSums::default();
+                let total_denom = death.risk_set.denom;
+                for k in 0..steps {
+                    let denom = death.efron_denom(k);
+                    let share = 1.0 - (k as f64) / (d as f64);
+                    step_sums.add(share, denom, total_denom);
+                    for i in 0..nvar {
+                        let temp2 = death.efron_a(k, i) / denom;
+                        mean[i] += temp2 * inv_steps;
+                        u[i] -= wtave * temp2;
+                        u[i + nvar] -= timewt * wtave * temp2;
+                    }
+                }
+                if step_sums.is_usable()
+                    && death
+                        .risk_set
+                        .a
+                        .iter()
+                        .chain(&death.tied.a)
+                        .all(|v| v.is_finite())
+                {
+                    let scale = 1.0 / total_denom;
+                    for i in 0..nvar {
+                        let mi = scaled_first(death.risk_set.a[i], death.tied.a[i], scale);
+                        for j in 0..=i {
+                            let mj = scaled_first(death.risk_set.a[j], death.tied.a[j], scale);
+                            let temp = wtave
+                                * step_sums.entry(
+                                    mi,
+                                    mj,
+                                    death.risk_set.cmat[i * nvar + j],
+                                    death.tied.cmat[i * nvar + j],
+                                    scale,
+                                );
+                            imat[(j, i)] += temp;
+                            imat[(j, i + nvar)] += temp * timewt;
+                            imat[(j + nvar, i + nvar)] += temp * timewt2;
+                        }
+                    }
+                } else {
+                    for k in 0..steps {
+                        let denom = death.efron_denom(k);
+                        for i in 0..nvar {
+                            let temp2 = death.efron_a(k, i) / denom;
+                            for j in 0..=i {
+                                let temp = wtave
+                                    * (death.efron_cmat(k, i, j) - temp2 * death.efron_a(k, j))
+                                    / denom;
+                                imat[(j, i)] += temp;
+                                imat[(j, i + nvar)] += temp * timewt;
+                                imat[(j + nvar, i + nvar)] += temp * timewt2;
+                            }
+                        }
+                    }
+                }
+            } else {
+                let denom = death.efron_denom(0);
                 for i in 0..nvar {
-                    let temp2 = death.efron_a(step, i) / denom;
-                    mean[i] += temp2 / steps as f64;
+                    let temp2 = death.efron_a(0, i) / denom;
+                    mean[i] = temp2;
                     u[i] -= wtave * temp2;
                     u[i + nvar] -= timewt * wtave * temp2;
                     for j in 0..=i {
                         let temp = wtave
-                            * (death.efron_cmat(step, i, j) - temp2 * death.efron_a(step, j))
+                            * (death.efron_cmat(0, i, j) - temp2 * death.efron_a(0, j))
                             / denom;
                         imat[(j, i)] += temp;
                         imat[(j, i + nvar)] += temp * timewt;
-                        imat[(j + nvar, i + nvar)] += temp * timewt * timewt;
+                        imat[(j + nvar, i + nvar)] += temp * timewt2;
                     }
                 }
             }
-            let residual = |row: usize| (row, (0..nvar).map(|i| x[(row, i)] - mean[i]).collect());
             if fit.entry.is_some() {
-                per_stratum.extend(death.deaths.iter().map(|&row| residual(row)));
+                for &row in death.deaths {
+                    stratum_death_rows.push(row);
+                    for i in 0..nvar {
+                        stratum_schoen.push(x[(row, i)] - mean[i]);
+                    }
+                }
             } else {
-                per_stratum.extend(death.deaths.iter().rev().map(|&row| residual(row)));
+                for &row in death.deaths.iter().rev() {
+                    stratum_death_rows.push(row);
+                    for i in 0..nvar {
+                        stratum_schoen.push(x[(row, i)] - mean[i]);
+                    }
+                }
             }
         });
-        per_stratum.reverse();
-        schoen_rows.extend(per_stratum);
+        for idx in (0..stratum_death_rows.len()).rev() {
+            death_rows.push(stratum_death_rows[idx]);
+            let base = idx * nvar;
+            schoen_flat.extend_from_slice(&stratum_schoen[base..base + nvar]);
+        }
     }
     for i in 0..nvar {
         for j in 0..i {
@@ -322,15 +406,8 @@ fn zph_kernel(
             imat[(i + nvar, j)] = imat[(j, i + nvar)];
         }
     }
-    let death_rows: Vec<usize> = schoen_rows.iter().map(|(row, _)| *row).collect();
-    let schoen = Array2::from_shape_vec(
-        (schoen_rows.len(), nvar),
-        schoen_rows
-            .into_iter()
-            .flat_map(|(_, values)| values)
-            .collect(),
-    )
-    .expect("one row per death");
+    let schoen =
+        Array2::from_shape_vec((death_rows.len(), nvar), schoen_flat).expect("one row per death");
     if stable
         && u.iter()
             .chain(imat.iter())

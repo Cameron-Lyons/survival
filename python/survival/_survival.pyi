@@ -2225,7 +2225,7 @@ class CoxPHFit:
         self,
         weighted: bool = False,
         collapse: ArrayLike | None = None,
-    ) -> list[float]: ...
+    ) -> list[Any]: ...
     def partial_residuals(
         self,
         assign: Sequence[Sequence[int]] | None = None,
@@ -4321,6 +4321,13 @@ class FederatedSurvivalResult:
     def round_metrics(self) -> list[float]: ...
 
 class FineGrayOutput:
+    def _build_lists(
+        self,
+        status: ArrayLike,
+        enum_code: int,
+        include_add: bool,
+        columns: Sequence[Any],
+    ) -> Any: ...
     def to_arrays(self) -> dict[str, Any]: ...
     @property
     def add(self) -> list[int]: ...
@@ -11351,8 +11358,8 @@ def adversarial_training_survival(
     attack_config: AdversarialAttackConfig | None = None,
 ) -> RobustSurvivalModel: ...
 def aeq_surv(
-    time: Sequence[float],
-    time2: Sequence[float] | None = None,
+    time: ArrayLike,
+    time2: ArrayLike | None = None,
     tolerance: float | None = None,
 ) -> AeqSurvResult: ...
 def aggregate_survfit(
@@ -13573,13 +13580,13 @@ def robustness_analysis(
 ) -> RobustnessAnalysis: ...
 def roc_plot_data(scores: Sequence[float], labels: Sequence[int]) -> ROCPlotData: ...
 def royston(
-    eta: Sequence[float],
-    time: Sequence[float],
-    status: Sequence[int],
+    eta: ArrayLike,
+    time: ArrayLike,
+    status: ArrayLike,
     loglik: list[float],
     n_event: int,
     n_coef: int,
-    entry_times: Sequence[float] | None = None,
+    entry_times: ArrayLike | None = None,
     ties: bool = True,
     adjust: bool = False,
 ) -> RoystonResult: ...
@@ -13745,7 +13752,7 @@ def step_values_at(
 def strata(
     names: Sequence[str],
     levels: Sequence[Sequence[str]],
-    codes: Sequence[Sequence[int | None]],
+    codes: Sequence[Sequence[int | None] | ArrayLike],
     na_group: bool = False,
     shortlabel: bool = False,
     sep: str = ", ",

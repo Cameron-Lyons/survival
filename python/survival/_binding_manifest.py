@@ -1504,11 +1504,6 @@ MODULE_BINDINGS = {
         "MatchRatetableResult",
         "survexp_cox_prepared",
     ),
-    "pybridge": (
-        "CoxPenaltyTerms",
-        "_survpenal_fit_from_state",
-        "_unpickle",
-    ),
     "qol": (
         "QALYResult",
         "incremental_cost_effectiveness",
@@ -1545,6 +1540,7 @@ MODULE_BINDINGS = {
         "coxph_fit_raw",
         "coxphms_fit",
         "CoxPenalty",
+        "CoxPenaltyTerms",
         "CoxpenalFit",
         "PenaltyHistory",
         "PenaltyController",

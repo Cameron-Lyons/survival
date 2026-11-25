@@ -30,7 +30,7 @@ The interfaces themselves are described in the topic guides:
 [printing and graphics](printing-and-graphics.md),
 [population calculations](population.md), [data preparation](data-preparation.md),
 [concordance](concordance.md), [marginal means](yates.md),
-[R bridge](r-bridge.md) and [performance](performance.md).
+and [performance](performance.md).
 
 ## API coverage
 
@@ -1208,50 +1208,6 @@ counts. Parallel fits preserve the sequential addition order.
   leaves a registered special; R errors.
 - `match_ratetable` on empty input returns empty positions without R's warnings
   about extrema of empty vectors.
-
-### R bridge (`r/survivalr`)
-
-- Residual and pseudo-value arrays preserve character dimension labels, but
-  names attached to the dimension-label vectors themselves are dropped during
-  id conversion.
-- The bridge follows 3.8-12 response semantics. `Surv2` requires logical,
-  numeric or factor statuses; missing binary statuses remain missing, and
-  factor censor labels survive construction. `Surv` conversion preserves
-  coded status columns and censor labels directly, without reconstructing
-  per-row factor strings. Legacy responses lacking a censor label retain
-  their `+` formatting when converted. `Surv()` and `aeqSurv()` return survival's
-  own `Surv` matrix, `identical()` to its `Surv()` and `aeqSurv()`. A fit's `$y`,
-  its `$model` response and `cch$y` are `Surv` matrices with the same type,
-  states and values, but without R's row names or `inputAttributes`, which the
-  Python response does not keep.
-- A penalized survreg fit keeps the bridge's `survival_py_survreg` class rather
-  than R's `c("survreg.penal", "survreg")`, so survival's own methods do not
-  dispatch on it.
-- The `summary.survfitms` list of `survfit.coxphms` curves carries time, the
-  counts, pstate, cumhaz, states, table, rmean.endtime, strata and newdata, not
-  R's n, n.id, p0, transitions or call.
-- `model.matrix` term assignments are integers; R's strata term-number
-  adjustment sometimes promotes this attribute to double.
-- Grouped Kaplan–Meier curves use bare group labels (`a`, `b`) where R uses
-  `g=a`, `g=b`, including in curve quantiles.
-- The R `coxsurv.fit` list form keeps R's quirk of naming individual
-  trajectories by the training stratum labels.
-- AFT distribution queries forward Python `RuntimeWarning` and `UserWarning` as
-  R warnings; other callback warning categories go to Python's warning hook.
-- Mixed `NA`/`NaN` arithmetic in AFT distribution queries and predictions can
-  return either missing kind across platforms. In particular, R's matrix
-  multiplication backend can change the result when a numeric `NaN` predictor
-  enters a product with an aliased coefficient. R's `help("NA", package = "base")` states
-  "either might result (which may depend on the R platform)";
-  `help("is.finite", package = "base")` also identifies compiler reordering
-  as a cause. Differential checks retain exact missing kinds for unambiguous
-  positions and compare `is.na`, values, warnings and errors at every position.
-- `survivalr::yates` consumes R's global random stream and ignores
-  `options$seed`, while Python's `r.yates` uses a per-call seed. The R wrapper
-  does not support `trend`, stratified survival prediction, multi-state Cox
-  models or functions passed as `predict`.
-- Saved models embed Python pickle state tied to the installed package; they are
-  not a portable archival format, and R's serialization version 2 is refused.
 
 ## R behavior reproduced deliberately
 

@@ -36,8 +36,8 @@ AFT models, multi-state Cox models and their curves, multistate summaries and
 expected survival from Cox models. [R compatibility](docs/r-compatibility.md)
 lists every known difference from R, the validation coverage and the
 [limitations of R itself](docs/r-compatibility.md#reference-limitations).
-**Upgrading from 2.0.0?** Version 2.1.0 includes breaking changes in the Python,
-Rust, and R bridge APIs. See the
+**Upgrading from 2.0.0?** Version 2.1.0 includes breaking changes in the Python and
+Rust APIs. See the
 [migration guide](https://github.com/Cameron-Lyons/survival/blob/v2.1.0/docs/migration-2.1.md)
 for replacements and the [changelog](CHANGELOG.md) for the full release notes.
 
@@ -59,8 +59,6 @@ for replacements and the [changelog](CHANGELOG.md) for the full release notes.
   `finegray` and `survobrien`
 - [Concordance](docs/concordance.md) and
   [population marginal means](docs/yates.md)
-- [R bridge](docs/r-bridge.md): data conversion and model persistence in
-  `r/survivalr`
 - [R compatibility](docs/r-compatibility.md): every known difference from R
 - [Performance](docs/performance.md) and
   [repository layout](docs/repo-layout.md)
@@ -361,18 +359,16 @@ expansion supports numeric, factor, and interaction terms, and `robust=True`
 selects Lin--Ying's robust variance. The risk-set, residual, and phase-two
 covariance sweeps stay in Rust; Python performs only formula preparation and
 result labeling.
-R-style `coxph.control(...)` and `survreg.control(...)` helpers are available
-in the bridge and pass named control lists through to the Python API.
-Native R Cox control objects are accepted, including `survcheckallow`, which
+`coxph_control(...)` and `survreg_control(...)` return named control objects
+matching R's `coxph.control()` and `survreg.control()`, including `survcheckallow`, which
 selects the survcheck flags a multi-state fit tolerates. Starting coefficients supplied through `init=` can
 be a single number for a one-parameter model or a vector matching all fitted
-parameters, including estimated log scales for AFT models. Explicit R `NULL`
-values retain the default initialization regardless of argument order.
+parameters, including estimated log scales for AFT models.
 Cox and AFT fits warn when iterations are exhausted. Cox coefficient warnings
 use `control={"toler.inf": ...}` and the fitted score and covariance, with R's
 distinct criteria for right-censored, counting-process, and exact fits.
 Zero- and one-iteration requests suppress these diagnostics. Python exposes
-them as `RuntimeWarning`; the bridge raises R warning conditions.
+them as `RuntimeWarning`.
 AFT's default relative convergence tolerance is `1e-9` in both Rust and
 Python, matching `survival::survreg.control()`; callers can set `eps` explicitly.
 Time-dependent start/stop data can be built with the R-compatible `tmerge`
@@ -460,8 +456,8 @@ the information matrix, the score outer-product matrix `JJ` when the
 information is not positive definite, and a step that backs off two thirds of
 the way to the last good point when the likelihood does not improve. Case
 weights must be positive, as in R's `survreg.fit` ("Invalid weights, must be
->0"). The R bridge also routes built-in `survreg.fit` matrix calls through this
-kernel, including fixed or stratified scales and interval-censored responses.
+>0"). Fixed or stratified scales and interval-censored responses share the same
+kernel.
 Model helpers include `model_formula`, `model_weights`, `df_residual`,
 `loglik`, `aic`, `bic`, `extract_aic`, coefficient, variance-covariance,
 confidence-interval, model-matrix/model-frame, and summary accessors for fitted
@@ -483,8 +479,7 @@ probability. As in R, raw-response medians include confidence bounds by
 default, while fitted-curve medians return point estimates.
 
 Common result objects can be converted to column-oriented tables with
-`as_data_frame(...)`; the experimental R bridge exposes the same path through
-`as.data.frame(...)`, `summary(...)`, and `print(...)` methods.
+`as_data_frame(...)`.
 `Surv` responses also support table conversion for quick data inspection.
 `model_summary` also accepts expected-survival curves, rate tables, and
 `tmerge` results. Expected-curve summaries use Rust to select requested
@@ -1008,8 +1003,7 @@ validation and the Rust interface.
 ## Survival curve reports
 
 Ordinary Cox curves support `curves.subset(strata=..., data=..., drop=False)`
-with zero-based positions or row labels. The R bridge supports both selection
-margins; see [selecting curves](docs/curves.md#selecting-curves).
+with zero-based positions or row labels; see [selecting curves](docs/curves.md#selecting-curves).
 
 `r.aggregate_survfit(curves, by=groups, FUN="sum")` summarises prediction
 rows within each group. `FUN` also accepts a Python callback returning one
@@ -1205,15 +1199,15 @@ Format and lint:
 cargo fmt
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/r python/survival/pybridge.py python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/core.pyi python/survival/data_prep.pyi python/survival/interval.pyi python/survival/population.pyi python/survival/regression.pyi python/survival/surv_analysis.pyi python/survival/validation.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
 ```
 
 The codebase is organized with:
 - Domain-oriented Rust modules in `src/`
 - Matching Python domain modules in `python/survival/`
-- Experimental R bridge package in `r/survivalr/`
 - Package/type stubs in `python/survival/__init__.pyi`,
-  `python/survival/_survival.pyi`, and `python/survival/sklearn_compat.pyi`
+  `python/survival/_survival.pyi`, the generated domain stubs, and
+  `python/survival/sklearn_compat.pyi`
 - Runnable examples in `examples/`
 - Topic guides and developer layout notes in `docs/`
 - Rust unit/integration tests in `src/tests/`
@@ -1226,15 +1220,11 @@ Primary dependencies are defined in [`Cargo.toml`](Cargo.toml) and
 [`pyproject.toml`](pyproject.toml), including:
 
 - [PyO3](https://github.com/PyO3/pyo3) and [maturin](https://github.com/PyO3/maturin) for Python bindings
-- [reticulate](https://rstudio.github.io/reticulate/) for the experimental R bridge package
 - [numpy](https://numpy.org/) and [ndarray](https://github.com/rust-ndarray/ndarray) for array interop
 - [rayon](https://github.com/rayon-rs/rayon) and [burn](https://github.com/tracel-ai/burn) for numerical compute
 
 ## Compatibility
 
-- Native extendr bindings are currently disabled. The experimental
-  `r/survivalr` package provides an R facade through reticulate and the Python
-  `survival.r` module.
 - Python 3.11+ and Rust 1.95+ are required.
 - macOS users: Ensure you are using the correct Python version and have Homebrew-installed Python if using Apple Silicon.
 

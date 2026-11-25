@@ -107,30 +107,7 @@ def test_survcheck_reports_problem_rows_of_the_original_data():
         r.survcheck(r.Surv([1, 2], [1, 0]), id=[1, None], na_action="na.fail")
 
 
-def test_survcheck_codes_accepts_the_coded_response_the_r_bridge_builds():
-    codes = r._misc._survcheck_codes(
-        id=[1, 1, 2, 2, 3],
-        time1=[0, 1, 0, 2, 0],
-        time2=[1, 2, 1, 3, 4],
-        status=[2, 3, 2, 3, 0],
-        istate=[1, 2, 1, 1, 1],
-    )
-    assert codes.current_states == [1, 2, 1, 2, 1]
-    assert codes.jump_rows == [3]
-    assert (codes.overlap_rows, codes.gap_rows, codes.teleport_rows) == ([], [], [])
-    assert codes.n_transitions == 4
-
-    no_istate = r._misc._survcheck_codes(
-        id=[1, 1, 2, 2, 3],
-        time1=[0, 1, 0, 2, 0],
-        time2=[1, 2, 1, 3, 4],
-        status=[1, 2, 1, 2, 0],
-    )
-    assert no_istate.current_states == [0, 1, 0, 1, 0]
-    assert no_istate.n_transitions == 4
-    overlap = r._misc._survcheck_codes(id=[1, 1], time1=[0, 0.5], time2=[1, 2], status=[0, 1])
-    assert overlap.overlap_rows == [1]
-
+def test_survcheck_requires_formula_argument():
     with pytest.raises(ValueError, match="a formula argument is required"):
         r.survcheck(id=[1, 2])
 
@@ -614,16 +591,6 @@ def test_pspline_carries_r_attributes():
         r.pspline(x, df=4, nterm=3)
     with pytest.raises(ValueError, match="Invalid values for Boundary.knots"):
         r.pspline(x, df=3, Boundary_knots=[5.0, 1.0])
-
-
-def test_frailty_encoding_normalizes_levels_and_sparse_default():
-    from survival.r._misc import _frailty_encoding
-
-    encoded = _frailty_encoding(["b", "a", None, "b"], levels=["a", "b"])
-    assert encoded == {"codes": [2, 1, None, 2], "levels": ["a", "b"], "nclass": 2, "sparse": False}
-    assert _frailty_encoding(list("abcdef"))["sparse"] is True
-    with pytest.raises(ValueError, match="outside supplied levels"):
-        _frailty_encoding(["c"], levels=["a", "b"])
 
 
 def test_cch_borgan_strata_follow_the_factor_levels():

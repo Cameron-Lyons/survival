@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any, cast, overload
+from typing import Any, overload
 
 import numpy as np
 
@@ -58,7 +58,6 @@ from ._data_prep import aeqSurv, summary_tmerge
 from ._finegray import _finegray_frame
 from ._fit import (
     _model_matrix_contrasts,
-    _model_matrix_evaluated,
     _model_matrix_names_and_assign,
     _model_matrix_newdata_design,
     _newdata_frame,
@@ -67,7 +66,6 @@ from ._fit import (
 from ._formula import _column as _formula_column
 from ._formula import (
     _data_row_labels,
-    _EvaluatedModelFrame,
     _formula_columns,
     _formula_model_term_degree,
     _prepare_formula_inputs,
@@ -524,20 +522,6 @@ def _model_matrix_cox(
     position = _sparse_term(fit)
     design = _fit_frame(fit).design if position is not None else fit.design
     fitted_design = design
-    if isinstance(data, _EvaluatedModelFrame):
-        result = _model_matrix_evaluated(
-            design,
-            data,
-            cox=True,
-            strata_terms=_strata_specs(fit.terms),
-            covered_strata=tuple(
-                item.spec for item in fit.terms.model_terms if isinstance(item, _ModelStrataTerm)
-            ),
-        )
-        if not _with_metadata:
-            for key in ("row_names", "contrasts", "strata_levels", "strata_column"):
-                result.pop(key, None)
-        return result
     if data is None:
         strata = fit.strata
         rows = fit.x
@@ -1221,116 +1205,6 @@ def _subset_survfit_multistate(
         n_id=subset.n_id if keep_n_id else None,
         oldstate=None if every_state else tuple(result.states),
     )
-
-
-def _survfit_multistate_structure(
-    result: SurvfitMultiStateResult | Mapping[Any, Any],
-) -> dict[str, Any]:
-    """R's ``survfitms`` list for the bridge: one result, or the bridge's grouped curves."""
-
-    if isinstance(result, SurvfitMultiStateResult):
-        curves: list[tuple[Any, SurvfitMultiStateResult]] = [(None, result)]
-    elif (
-        isinstance(result, Mapping)
-        and result
-        and all(isinstance(curve, SurvfitMultiStateResult) for curve in result.values())
-    ):
-        curves = list(result.items())
-    else:
-        raise TypeError("survfit structure requires a multi-state result")
-    grouped = curves[0][0] is not None
-    first = curves[0][1]
-    for _label, curve in curves:
-        if curve.states != first.states:
-            raise ValueError("grouped multi-state results must share state columns")
-        if curve.hazard_names != first.hazard_names:
-            raise ValueError("grouped multi-state results must share transition columns")
-
-    def combined_matrix(name: str) -> list[list[float]] | None:
-        matrices = [getattr(curve, name) for _label, curve in curves]
-        if all(matrix is None for matrix in matrices):
-            return None
-        if any(matrix is None for matrix in matrices):
-            raise ValueError(f"grouped multi-state results must share {name} output")
-        return [[float(value) for value in row] for matrix in matrices for row in matrix]
-
-    def flat(name: str) -> list[Any]:
-        return [value for _label, curve in curves for value in getattr(curve, name)]
-
-    structure: dict[str, Any] = {
-        "n": flat("n"),
-        "time": [float(value) for value in flat("time")],
-        "n.risk": combined_matrix("n_risk"),
-        "n.event": combined_matrix("n_event"),
-        "n.censor": combined_matrix("n_censor"),
-        "pstate": combined_matrix("pstate"),
-    }
-    if first.hazard_names:
-        structure["n.transition"] = combined_matrix("n_transition")
-    if first.n_id is not None:
-        structure["n.id"] = flat("n_id")
-    if first.hazard_names:
-        structure["cumhaz"] = combined_matrix("cumhaz")
-    n_enter = combined_matrix("n_enter")
-    if n_enter is not None:
-        structure["n.enter"] = n_enter
-    p0_rows = []
-    for _label, curve in curves:
-        initial = (
-            curve.p0[0]
-            if curve.p0 and isinstance(curve.p0[0], list | tuple)
-            else cast(list[float], curve.p0)
-        )
-        p0_rows.append([float(value) for value in initial])
-    structure["p0"] = p0_rows if grouped else p0_rows[0]
-    if grouped:
-        structure["strata"] = {str(label): len(curve.time) for label, curve in curves}
-    elif first.strata:
-        structure["strata"] = dict(first.strata)
-        structure["p0"] = [[float(value) for value in row] for row in first.p0]
-    for field_name, attribute in (
-        ("std.err", "std_err"),
-        ("std.chaz", "std_chaz"),
-        ("std.auc", "std_auc"),
-    ):
-        values = combined_matrix(attribute)
-        if values is not None and (field_name != "std.chaz" or first.hazard_names):
-            structure[field_name] = values
-    structure["logse"] = bool(first.logse)
-    if first.transitions is not None:
-        transition_names = first.transitions.rownames
-        if transition_names is None:
-            raise ValueError("multi-state transition counts require row names")
-        totals = [[0.0] * len(first.transitions.colnames) for _row in transition_names]
-        for _label, curve in curves:
-            if curve.transitions is None:
-                continue
-            transition_rows: Sequence[Sequence[float]] = curve.transitions.values
-            for row_index, row in enumerate(transition_rows):
-                for col_index, value in enumerate(row):
-                    totals[row_index][col_index] += float(value)
-        structure["transitions"] = {
-            "values": totals,
-            "rows": list(transition_names),
-            "columns": list(first.transitions.colnames),
-        }
-    for field_name, attribute in (("lower", "lower"), ("upper", "upper")):
-        values = combined_matrix(attribute)
-        if values is not None:
-            structure[field_name] = values
-    structure.update(
-        {
-            "conf.type": first.conf_type,
-            "conf.int": first.conf_int,
-            "states": list(first.states),
-            "type": first.type,
-            "t0": first.t0,
-            "_transition_names": list(first.hazard_names),
-        }
-    )
-    if first.oldstate is not None:
-        structure["oldstate"] = list(first.oldstate)
-    return structure
 
 
 def _grouped_survfit_frame(result: Mapping[Any, Any]) -> dict[str, list[Any]]:

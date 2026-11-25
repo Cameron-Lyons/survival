@@ -16,7 +16,7 @@ from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
-frame = importlib.import_module("survival.pybridge")._r_data_frame
+frame = importlib.import_module("survival.r._formula")._FormulaRows
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/omitted_prediction_reference.json").read_text()
 )

@@ -42,7 +42,7 @@ from ._formula import (
     _data_response_spec,
     _data_row_count,
     _data_row_labels,
-    _design_rows_from_spec,
+    _design_array_from_spec,
     _formula_name,
     _formula_response_spec,
     _FormulaRows,
@@ -517,7 +517,7 @@ def _external_fit_data(
     if newdata is None and fit.linear_predictors is not None:
         predictor = list(fit.linear_predictors)
     else:
-        x = np.asarray(_design_rows_from_spec(frame.data, fit.design, frame.n), dtype=float)
+        x = _design_array_from_spec(frame.data, fit.design, frame.n)
         beta = np.asarray(fit.coefficients, dtype=float)
         values = x @ np.where(np.isnan(beta), 0.0, beta)
         if frame.offset is not None:

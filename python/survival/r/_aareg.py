@@ -202,24 +202,30 @@ def summary_aareg(
         raise ValueError("maxtime must include at least one event")
     times = fit.times[:ntime]
     nvar = len(fit.coefficient_names)
+    times_arr = np.asarray(times, dtype=np.float64)
+    coef_arr = np.asarray(fit.coefficient[:ntime], dtype=np.float64)
     if test_name == "aalen":
-        twt = [list(row) for row in fit.time_weights[:ntime]]
-        scales = [sum(row[k] for row in twt) / scale_value for k in range(nvar)]
+        twt_arr = np.asarray(fit.time_weights[:ntime], dtype=np.float64)
+        scales = (twt_arr.sum(axis=0) / scale_value).tolist()
     else:
-        twt = [[fit.n_risk[i]] * nvar for i in range(ntime)]
+        twt_arr = np.broadcast_to(
+            np.asarray(fit.n_risk[:ntime], dtype=np.float64)[:, None], (ntime, nvar)
+        )
         scales = [ntime / scale_value] * nvar
-    tx = [[twt[i][k] * fit.coefficient[i][k] for k in range(nvar)] for i in range(ntime)]
-    slope: list[float] = []
-    for k in range(nvar):
-        ctx = _cumsum([row[k] for row in tx])
-        tempwt = sum(twt[i][k] * times[i] ** 2 for i in range(ntime))
-        numerator = sum(c * t for c, t in zip(ctx, times, strict=True))
-        with np.errstate(all="ignore"):
-            slope.append(float(np.divide(numerator, tempwt)))
+    tx_arr = twt_arr * coef_arr
+    ctx_arr = np.cumsum(tx_arr, axis=0)
+    tempwt = np.sum(twt_arr * (times_arr[:, None] ** 2), axis=0)
+    numerator = np.sum(ctx_arr * times_arr[:, None], axis=0)
+    with np.errstate(all="ignore"):
+        slope = np.divide(numerator, tempwt).tolist()
     if maxtime is not None or fit.test != test_name:
-        test_stat = [sum(row[k] for row in tx) for k in range(nvar)]
-        test_var = [[sum(row[j] * row[k] for row in tx) for k in range(nvar)] for j in range(nvar)]
-        test_var2 = None if fit.dfbeta is None else _summary_influence_covariance(fit, times, twt)
+        test_stat = tx_arr.sum(axis=0).tolist()
+        test_var = (tx_arr.T @ tx_arr).tolist()
+        test_var2 = (
+            None
+            if fit.dfbeta is None
+            else _summary_influence_covariance(fit, times, twt_arr.tolist())
+        )
     else:
         test_stat = list(fit.test_statistic)
         test_var = fit.test_variance

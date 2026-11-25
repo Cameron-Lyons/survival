@@ -23,6 +23,16 @@ pub struct FineGrayOutput {
 }
 
 #[cfg(feature = "python")]
+type FineGrayLists<'py> = (
+    Vec<Bound<'py, pyo3::types::PyList>>,
+    Bound<'py, pyo3::types::PyList>,
+    Bound<'py, pyo3::types::PyList>,
+    Bound<'py, pyo3::types::PyList>,
+    Bound<'py, pyo3::types::PyList>,
+    Option<Bound<'py, pyo3::types::PyList>>,
+);
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl FineGrayOutput {
     #[doc = " Independent writable NumPy snapshots for bulk conversion."]
@@ -43,6 +53,94 @@ impl FineGrayOutput {
             result.set_item(name, values.clone().into_pyarray(py))?;
         }
         Ok(result)
+    }
+
+    #[doc = " Build expanded Python list columns directly from Rust buffers."]
+    #[pyo3(name = "_build_lists")]
+    fn build_lists<'py>(
+        &self,
+        py: Python<'py>,
+        status: crate::internal::numpy_utils::IntVec,
+        enum_code: i32,
+        include_add: bool,
+        columns: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<FineGrayLists<'py>> {
+        use pyo3::types::{PyFloat, PyList, PySequence};
+
+        let mut max_row = 0usize;
+        for &r in &self.row {
+            if r == 0 {
+                return Err(
+                    SurvivalError::invalid_input("expanded row index must be 1-based").into(),
+                );
+            }
+            max_row = max_row.max(r);
+        }
+        if max_row > status.len() {
+            return Err(SurvivalError::invalid_input(
+                "status length is smaller than expanded row index",
+            )
+            .into());
+        }
+
+        let mut out_cols = Vec::with_capacity(columns.len());
+        for col in &columns {
+            let seq = col.cast::<PySequence>()?;
+            let len = seq.len()?;
+            if max_row > len {
+                return Err(SurvivalError::invalid_input(
+                    "column length is smaller than expanded row index",
+                )
+                .into());
+            }
+            let items: Vec<Py<PyAny>> = (0..len)
+                .map(|i| seq.get_item(i).map(|v| v.unbind()))
+                .collect::<PyResult<_>>()?;
+            let expanded = PyList::new(py, self.row.iter().map(|&r| items[r - 1].bind(py)))?;
+            out_cols.push(expanded);
+        }
+
+        const CACHE_SIZE: usize = 4096;
+        let mut float_cache: Vec<Option<(u64, Bound<'py, PyFloat>)>> = vec![None; CACHE_SIZE];
+        let mut to_pyfloat_list = |values: &[f64]| -> PyResult<Bound<'py, PyList>> {
+            PyList::new(
+                py,
+                values.iter().map(|&v| {
+                    let bits = v.to_bits();
+                    let slot = (((bits >> 36) ^ (bits >> 48) ^ bits) as usize) & (CACHE_SIZE - 1);
+                    match &float_cache[slot] {
+                        Some((cached_bits, cached_obj)) if *cached_bits == bits => {
+                            cached_obj.clone()
+                        }
+                        _ => {
+                            let fresh = PyFloat::new(py, v);
+                            float_cache[slot] = Some((bits, fresh.clone()));
+                            fresh
+                        }
+                    }
+                }),
+            )
+        };
+
+        let start = to_pyfloat_list(&self.start)?;
+        let end = to_pyfloat_list(&self.end)?;
+        let wt = to_pyfloat_list(&self.wt)?;
+
+        let zero = 0i64.into_pyobject(py)?;
+        let one = 1i64.into_pyobject(py)?;
+        let is_event: Vec<bool> = status.iter().map(|&s| s == enum_code).collect();
+        let fgstatus = PyList::new(
+            py,
+            self.row
+                .iter()
+                .map(|&r| if is_event[r - 1] { &one } else { &zero }),
+        )?;
+        let add = if include_add {
+            Some(PyList::new(py, self.add.iter().map(|&v| v as i64))?)
+        } else {
+            None
+        };
+        Ok((out_cols, start, end, fgstatus, wt, add))
     }
 }
 

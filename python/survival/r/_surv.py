@@ -20,13 +20,14 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
-    _first_argument,
     _SURV_RESPONSE_TYPES,
     _SURV_TYPES,
+    _as_character,
     _categories,
     _factor,
-    _factor_levels,
+    _factor_codes,
     _finite_float,
+    _first_argument,
     _is_bool_like,
     _is_missing_value,
     _keep_rows_after_na_action,
@@ -35,6 +36,7 @@ from ._coerce import (
     _materialize_labels,
     _missing_row_indices,
     _normalize_na_action,
+    _numeric_factor_array,
     _numeric_ndarray,
     _r_factor,
     _r_format_numbers,
@@ -42,7 +44,7 @@ from ._coerce import (
     _warn_outside_package,
 )
 from ._surv_ops import _index_rows, _SurvivalOperations
-from ._types import _MISSING, StrataFactor, _Timeline
+from ._types import _MISSING, StrataFactor
 
 
 def _normalize_surv_type(value: Any) -> str:
@@ -126,7 +128,28 @@ def _binary_status(values: Any, name: str) -> list[int | None]:
     if array is not None:
         if array.dtype.kind == "b":
             return array.astype(np.int64).tolist()
-        coded = array.astype(np.float64)
+        if array.dtype.kind in "iu":
+            if array.size == 0:
+                return []
+            lo = int(array.min())
+            hi = int(array.max())
+            if lo >= 0 and hi <= 1:
+                return array.tolist()
+            if lo >= 1 and hi == 2:
+                return (array - 1).tolist()
+        coded = array.astype(np.float64, copy=False)
+        has_nan = bool(np.isnan(coded).any()) if coded.size else False
+        if not has_nan:
+            if coded.size and float(coded.max()) == 2.0:
+                coded = coded - 1.0
+            valid = (coded == 0.0) | (coded == 1.0)
+            if valid.all():
+                return coded.astype(np.int64).tolist()
+            out_codes: list[int | None] = np.where(valid, coded, 0.0).astype(np.int64).tolist()
+            for row in np.flatnonzero(~valid).tolist():
+                out_codes[row] = None
+            _warn_outside_package("Invalid status value, converted to NA")
+            return out_codes
         present = ~np.isnan(coded)
         if present.any() and coded[present].max() == 2.0:
             coded = coded - 1.0
@@ -320,18 +343,28 @@ class Surv(_SurvivalOperations):
             if len(status) != nn:
                 raise ValueError("Time and status are different lengths")
             time2 = _interval_time2(time, args[1], status)
-        shifts = origin if isinstance(origin, list) else [origin] * nn
-        if len(shifts) != nn:
-            raise ValueError("origin must have length 1 or the length of time")
-        if any(shifts):
-            if start is not None:
-                start = [value - shift for value, shift in zip(start, shifts, strict=True)]
-            time = [value - shift for value, shift in zip(time, shifts, strict=True)]
-        if time2 is not None:
-            time2 = [
-                value - shift if code == 3 else 1.0
-                for value, code, shift in zip(time2, status, shifts, strict=True)
-            ]
+        if isinstance(origin, list):
+            if len(origin) != nn:
+                raise ValueError("origin must have length 1 or the length of time")
+            if any(origin):
+                if start is not None:
+                    start = [value - shift for value, shift in zip(start, origin, strict=True)]
+                time = [value - shift for value, shift in zip(time, origin, strict=True)]
+            if time2 is not None:
+                time2 = [
+                    value - shift if code == 3 else 1.0
+                    for value, code, shift in zip(time2, status, origin, strict=True)
+                ]
+        else:
+            if origin != 0.0:
+                if start is not None:
+                    start = [value - origin for value in start]
+                time = [value - origin for value in time]
+            if time2 is not None:
+                time2 = [
+                    value - origin if code == 3 else 1.0
+                    for value, code in zip(time2, status, strict=True)
+                ]
         return {
             "time": tuple(time),
             "event": tuple(status),
@@ -756,7 +789,11 @@ def strata(
     if names is None:
         names = [f"v{idx + 1}" for idx in range(nterms)]
     return _strata(
-        list(zip(names, columns, strict=True)), shortlabel=shortlabel, na_group=na_group, sep=sep
+        list(zip(names, columns, strict=True)),
+        shortlabel=shortlabel,
+        na_group=na_group,
+        sep=sep,
+        _lazy=False,
     )
 
 
@@ -779,6 +816,7 @@ def _strata(
     shortlabel: bool | None = None,
     na_group: bool = False,
     sep: str = ", ",
+    _lazy: bool = True,
 ) -> StrataFactor:
     """R's ``strata()`` (R/strata.R) of the named *columns*, each coded as ``factor()``
     codes it (a factor keeps its declared levels, unused ones included, which the
@@ -789,18 +827,28 @@ def _strata(
     """
 
     names = [name for name, _values in columns]
-    prepared: dict[int, tuple[list[int | None], list[str], bool]] = {}
+    prepared: dict[int, tuple[np.ndarray | list[int | None], list[str], bool]] = {}
     coded = []
     character_columns = []
+    single_complete_codes: np.ndarray | None = None
     for _name, source in columns:
         # One source may supply several named columns, including a shared iterator.
         # Keep this cache local so later calls see mutations to reusable inputs.
         key = id(source)
         if key not in prepared:
-            values = _strata_iterator(source)
-            codes, levels = _factor(values, "strata")
-            character = _is_character(values) if shortlabel is None else False
-            prepared[key] = codes, levels, character
+            if len(columns) == 1 and _categories(source) is None:
+                array = _numeric_ndarray(source)
+                if array is not None:
+                    codes_arr, num_levels, counts_arr = _numeric_factor_array(array)
+                    levels = [_as_character(level) for level in num_levels.tolist()]
+                    if counts_arr is not None:
+                        single_complete_codes = codes_arr
+                    prepared[key] = codes_arr, levels, False
+            if key not in prepared:
+                values = _strata_iterator(source)
+                codes, levels = _factor_codes(values, "strata")
+                character = _is_character(values) if shortlabel is None else False
+                prepared[key] = codes, levels, character
         codes, levels, character = prepared[key]
         coded.append((codes, levels))
         character_columns.append(character)
@@ -816,12 +864,23 @@ def _strata(
         shortlabel,
         sep,
     )
-    codes = result.codes
-    levels = result.levels
+    if _lazy and single_complete_codes is not None:
+        return StrataFactor(
+            codes=None,
+            levels=result.levels,
+            labels=None,
+            counts=result.counts,
+            _codes_array=single_complete_codes,
+        )
+    codes_out = result.codes
+    levels_out = result.levels
+    labels_out = (
+        None if _lazy else [None if code is None else levels_out[code] for code in codes_out]
+    )
     return StrataFactor(
-        codes=codes,
-        levels=levels,
-        labels=[None if code is None else levels[code] for code in codes],
+        codes=codes_out,
+        levels=levels_out,
+        labels=labels_out,
         counts=result.counts,
     )
 
@@ -829,9 +888,25 @@ def _strata(
 def _complete_codes(factor: StrataFactor, message: str) -> list[int]:
     """The codes of *factor*, which a model needs without ``NA`` (*message* otherwise)."""
 
+    arr = factor.__dict__.get("_codes_array")
+    if arr is not None and "codes" not in factor.__dict__:
+        if (arr < 0).any():
+            raise ValueError(message)
+        return cast(list[int], factor.codes)
     if None in factor.codes:
         raise ValueError(message)
     return cast(list[int], factor.codes)
+
+
+def _complete_codes_fast(factor: StrataFactor, message: str) -> Any:
+    """The complete codes of *factor*, returning a contiguous ``int64`` ndarray when available."""
+
+    arr = factor.__dict__.get("_codes_array")
+    if arr is not None:
+        if (arr < 0).any():
+            raise ValueError(message)
+        return arr
+    return _complete_codes(factor, message)
 
 
 _T = TypeVar("_T")
@@ -938,68 +1013,3 @@ def _repeated_option(repeated: Any) -> str:
     if _is_bool_like(repeated):
         return "true" if repeated else "false"
     raise ValueError("invalid value for repeated option")
-
-
-def _totimeline(
-    start: Any,
-    stop: Any,
-    status: Any,
-    *,
-    states: Any,
-    id: Any,
-    istate: Any | None = None,
-    istate_levels: Any | None = None,
-) -> _Timeline:
-    """R's unexported ``totimeline`` draft, for the R bridge: counting-process rows
-    to timeline rows.
-
-    Rows of a subject must be consecutive and in time order.  ``status`` holds the
-    ``Surv`` codes, ``states`` the response states, and ``istate`` (with its
-    ``istate_levels``) the state each subject starts in, ``(s0)`` by default.
-    """
-
-    start_values = _time_column(start, "start", "Start time is not numeric")
-    stop_values = _time_column(stop, "stop", "Stop time is not numeric")
-    status_values = [int(value) for value in _materialize_1d(status, "status")]
-    id_values = _materialize_labels(id, "id")
-    n = len(start_values)
-    if len(stop_values) != n or len(status_values) != n or len(id_values) != n:
-        raise ValueError("start, stop, status, and id must have the same length")
-    event_states = [str(value) for value in _materialize_1d(states, "states")]
-    if not event_states:
-        raise ValueError("states must contain at least one event state")
-    if istate is None:
-        istate_labels = ["(s0)"] * n
-        levels = ["(s0)"]
-    else:
-        istate_labels = [str(value) for value in _materialize_1d(istate, "istate")]
-        if len(istate_labels) != n:
-            raise ValueError("istate must have the same length as the Surv response")
-        levels = (
-            [str(level) for level in _factor_levels(istate_labels, "istate")]
-            if istate_levels is None
-            else [str(value) for value in _materialize_1d(istate_levels, "istate_levels")]
-        )
-    check_states = [level for level in levels if level not in event_states] + event_states
-    code_of = {state: idx + 1 for idx, state in enumerate(check_states)}
-    try:
-        istate_codes = [code_of[label] for label in istate_labels]
-    except KeyError as exc:
-        raise ValueError(f"istate level {exc.args[0]!r} is not a recognized state") from exc
-    if any(value < 0 or value > len(event_states) for value in status_values):
-        raise ValueError("status code is outside the event state range")
-    state_codes = [0, *(code_of[state] for state in event_states)]
-    result = _core.totimeline(
-        id_values,
-        start_values,
-        stop_values,
-        [state_codes[value] for value in status_values],
-        istate_codes,
-    )
-    censor = "(censor)" if "censor" in check_states else "censor"
-    return _Timeline(
-        time=list(result.time),
-        status=list(result.state),
-        data_row=list(result.covariate_row),
-        state_levels=[censor, *check_states],
-    )

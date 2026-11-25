@@ -179,16 +179,6 @@ endpoints must be finite and at least the lower endpoint only for status 3.
 Stratum counts whose dense covariance cannot be indexed are refused. Native
 strata are zero-based; cluster codes are opaque labels.
 
-The R bridge's `survivalr::survreg.fit` uses this interface for every density and
-passes the design as a matrix. Named built-ins run entirely in Rust. An explicit
-distribution list uses its R density and initialization functions, which receive
-vector batches with the original `parms` (the initializer receives `y`, `weights`
-and `parms`, possibly `NULL`, and parameter names are kept); transforms,
-quantiles, deviance functions and fixed scales are unused, and complete
-intercept-only starting values need no initializer. Callback errors keep their
-messages, convergence warnings are R conditions, and there is no call to R's
-reference fitter.
-
 ### Parametric regression from censoring bounds
 
 `survival.interval.interval_censored_regression` fits the same accelerated
@@ -269,11 +259,6 @@ even when R omits names for an empty fixed-gamma history. As in R, exhausted inn
 iterations do not warn: inspect `inner_failures` and `converged`. The result is
 immutable and pickles. `regression.survpenal_fit_raw` borrows prepared
 `SurvregData`, releases the GIL around the solver and refuses clustered inputs.
-
-The R bridge's `survivalr::survpenal.fit` uses the same fitter. It adapts R
-`pfun`, `cfun`, `cargs`, `cparm` and `pparm` to the shared controller protocol and
-keeps R's controller histories, `printfun` closures, column names, `varname`
-replacements and one-based assignments in the returned list.
 
 ## Custom penalty searches
 
@@ -427,8 +412,7 @@ detected by Rust as `ValueError`. Pickle, `copy` and `deepcopy` keep custom
 distributions in fitted models when their callables are picklable. Generic serde
 serialization rejects runtime callbacks. Cloned native objects share their
 callback handles, so callbacks should not change distribution semantics after
-fitting. The R facade's serialization saves the
-original R functions with their environments; see [R bridge](r-bridge.md).
+fitting.
 
 For direct bindings, use `SurvregDistribution.from_callbacks(...)` with
 `with_transform(...)`, `with_parms(...)` or `derived(...)`; `family` and

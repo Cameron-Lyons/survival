@@ -106,12 +106,12 @@ def test_numeric_fits_and_public_methods_match_row_lists(
 
 @pytest.mark.parametrize("action", ["na.omit", "na.exclude"])
 def test_array_fits_preserve_missing_rows_labels_and_repeated_subset(monkeypatch, action):
-    from survival.pybridge import _r_data_frame
+    from survival.r._formula import _FormulaRows
 
     data = _data()
     n = len(data["futime"])
     data["age"][4] = None
-    frame = _r_data_frame(data, n, [f"row {row}" for row in range(n)])
+    frame = _FormulaRows(data, n, tuple(f"row {row}" for row in range(n)))
     options = {"na_action": action, "subset": [5, 4, 3, 2, 1, 0, 5], "iter_max": 0}
     actual, actual_warnings = _fit("Surv(futime, fustat) ~ age + rx", frame, **options)
     with monkeypatch.context() as patch:

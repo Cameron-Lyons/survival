@@ -15,7 +15,6 @@ from .r_fixture_support import RFactor
 
 formula = importlib.import_module("survival.r._formula")
 expression = importlib.import_module("survival.r._expression")
-bridge = importlib.import_module("survival.pybridge")
 coerce = importlib.import_module("survival.r._coerce")
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/typed_formula_expression_reference.json").read_text(
@@ -108,15 +107,15 @@ def training_data(case, storage):
         n = len(REFERENCE["row_names"])
         columns["a"] = [i % 2 == 0 for i in range(n)]
         columns["b"] = [i % 4 < 2 for i in range(n)]
-    return bridge._r_data_frame(columns, len(REFERENCE["row_names"]), REFERENCE["row_names"])
+    return formula._FormulaRows(columns, len(REFERENCE["row_names"]), tuple(REFERENCE["row_names"]))
 
 
 def new_data(name, storage):
     source = REFERENCE["newdata"][name]
-    return bridge._r_data_frame(
+    return formula._FormulaRows(
         raw_columns(source["data"], REFERENCE["levels"], storage),
         len(source["row_names"]),
-        source["row_names"],
+        tuple(source["row_names"]),
     )
 
 
@@ -256,7 +255,9 @@ def test_cached_expression_syntax_reads_current_values_and_never_attributes():
 
 
 @pytest.mark.parametrize(
-    "case", REFERENCE.get("offset_overrides", []), ids=lambda case: case["name"]
+    "case",
+    [c for c in REFERENCE.get("offset_overrides", []) if not c["evaluated"]],
+    ids=lambda case: case["name"],
 )
 def test_logical_offsets_preserve_contrasts_and_validate_declared_override_type(case):
     data = training_data({"variant": "complete"}, "lists")
@@ -265,15 +266,7 @@ def test_logical_offsets_preserve_contrasts_and_validate_declared_override_type(
     source = new["a"]
     if case["numeric"]:
         source = expression._ExpressionVector([float(value) for value in source], "numeric")
-    if case["evaluated"]:
-        new = bridge._r_model_frame(
-            {"x": new["x"], "offset(a)": source},
-            len(source),
-            REFERENCE["newdata"]["complete"]["row_names"],
-            {"x": {"kind": "numeric"}, "offset(a)": {"kind": source.kind}},
-        )
-    else:
-        new["a"] = source
+    new["a"] = source
     expected = case["expected"]["value"]
     if "error" in expected:
         assert expected["error"] == "contrasts apply only to factors"

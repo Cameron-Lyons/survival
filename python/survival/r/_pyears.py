@@ -25,6 +25,7 @@ import numpy as np
 
 from .. import _survival as _core
 from ._coerce import (
+    _PLAIN_REALS_OR_BOOL,
     _as_character,
     _categories,
     _coerce_array_like,
@@ -40,7 +41,6 @@ from ._coerce import (
     _materialize_labels,
     _normalize_bool_option,
     _normalize_positive_scale,
-    _PLAIN_REALS_OR_BOOL,
     _pop_dotted_keyword,
     _r_factor,
     _r_format_number,
@@ -73,30 +73,28 @@ from ._formula import (
     _numeric_vector,
     _prepare_formula_inputs,
     _r_literal,
-    _split_top_level,
     _response_spec,
     _seq_length,
+    _split_top_level,
     _term_values,
     _unsupported_formula_name,
     model_frame,
 )
 from ._surv import Surv
 from ._types import (
-    _renamed_classes,
     ModelFrame,
     NaAction,
     PyearsResult,
     RateTable,
     StrataFactor,
-    SurvexpResult,
     SummarySurvexpResult,
+    SurvexpResult,
     TcutResult,
     _CovariateTerm,
     _InteractionTerm,
     _ModelCovariateTerm,
     _ModelStrataTerm,
 )
-
 
 _RATETABLE_ATTRIBUTES = ("dims", "dimid", "dimnames", "cutpoints", "types")
 
@@ -1984,13 +1982,3 @@ def survexp(
         response,
         max(requested) if requested else None,
     )
-
-
-__getattr__ = _renamed_classes(
-    globals(),
-    {
-        "PyearsSummary": "SummaryPyearsResult",
-        "RateTableSummary": "SummaryRatetableResult",
-        "RateTableMatch": "RatetableMatch",
-    },
-)

@@ -316,14 +316,20 @@ impl CoxPHFit {
         })?)
     }
 
+    #[cfg(feature = "python")]
     #[doc = " `residuals(fit, type = \"martingale\", weighted, collapse)`."]
     #[pyo3(name = "martingale_residuals", signature = (weighted = false, collapse = None))]
-    fn martingale_residuals_py(
+    fn martingale_residuals_py<'py>(
         &self,
+        py: Python<'py>,
         weighted: bool,
         collapse: Option<IntVec>,
-    ) -> PyResult<Vec<f64>> {
-        Ok(self.martingale_residuals(weighted, collapse.as_deref())?)
+    ) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+        if !weighted && collapse.is_none() {
+            return pyo3::types::PyList::new(py, &self.residuals);
+        }
+        let values = self.martingale_residuals(weighted, collapse.as_deref())?;
+        pyo3::types::PyList::new(py, values)
     }
 
     #[doc = " `residuals(fit, type = \"deviance\", weighted, collapse)`."]

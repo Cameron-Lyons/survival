@@ -14,7 +14,7 @@ from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
-_r_data_frame = importlib.import_module("survival.pybridge")._r_data_frame
+_r_data_frame = importlib.import_module("survival.r._formula")._FormulaRows
 
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/prediction_row_reference.json").read_text()

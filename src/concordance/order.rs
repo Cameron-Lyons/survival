@@ -9,7 +9,10 @@
 
 use crate::concordance::rank_tree::btree;
 use crate::core::time_order::total_order_key;
+use rayon::prelude::*;
 use std::ops::Range;
+
+const PARALLEL_ORDER_THRESHOLD: usize = 16_384;
 
 /// Maps a non-NaN value to an integer of the same order, with `-0.0` and
 /// `0.0` equal as they are under `==`.
@@ -31,7 +34,11 @@ impl PredictorRanks {
     pub(crate) fn new(values: &[f64]) -> Self {
         let mut keyed: Vec<(u64, usize)> =
             values.iter().map(|&v| ordered_bits(v)).zip(0..).collect();
-        keyed.sort_unstable_by_key(|&(key, _)| key);
+        if keyed.len() >= PARALLEL_ORDER_THRESHOLD {
+            keyed.par_sort_unstable();
+        } else {
+            keyed.sort_unstable_by_key(|&(key, _)| key);
+        }
         let mut rank = vec![0; values.len()];
         let mut levels = 0;
         let mut previous = None;
@@ -88,7 +95,11 @@ fn packed_sweep_order(
                 | row as u128
         })
         .collect();
-    keys.sort_unstable();
+    if keys.len() >= PARALLEL_ORDER_THRESHOLD {
+        keys.par_sort_unstable();
+    } else {
+        keys.sort_unstable();
+    }
     let ties = runs(keys.len(), |a, b| keys[a] >> 63 == keys[b] >> 63);
     (keys.iter().map(|&key| key as u32 as usize).collect(), ties)
 }

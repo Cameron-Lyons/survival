@@ -1,13 +1,13 @@
 use super::survfit_confint::{ConfLower, ConfType, survfit_confint, validate_conf_int};
 use crate::constants::PARALLEL_THRESHOLD_LARGE;
 use crate::core::strata_order::validate_intervals;
-use crate::data_prep::{SubsetRenumbering, aeq_counting, first_appearance_codes};
+use crate::data_prep::{SubsetRenumbering, aeq_counting_cow, first_appearance_codes};
 use crate::error::{SurvivalError, SurvivalResult};
 #[cfg(feature = "python")]
 use crate::internal::numpy_utils::readonly_view;
 use crate::internal::numpy_utils::{FloatMatrix, FloatVec, IntVec};
 use crate::internal::risk_weight;
-use crate::internal::sorting::ordered_subset;
+use crate::internal::sorting::{ordered_subset, sorted_indices_by};
 use crate::internal::validation::{
     validate_binary_i32, validate_finite, validate_length, validate_no_nan, validate_non_empty,
     validate_non_negative,
@@ -790,9 +790,21 @@ struct KernelData<'a> {
     time1: Option<&'a [f64]>,
     time2: &'a [f64],
     status: &'a [i32],
-    wt: &'a [f64],
-    position: &'a [u8],
+    wt: Option<&'a [f64]>,
+    position: Option<&'a [u8]>,
     cluster: Option<(&'a [usize], usize)>,
+}
+
+impl KernelData<'_> {
+    #[inline]
+    pub(super) fn weight(&self, row: usize) -> f64 {
+        self.wt.map_or(1.0, |w| w[row])
+    }
+
+    #[inline]
+    fn pos(&self, row: usize) -> u8 {
+        self.position.map_or(3, |p| p[row])
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -833,21 +845,29 @@ fn kernel_unique_times(data: &KernelData<'_>, rows: &CurveRows, entry: bool) -> 
             for &i2 in sort2 {
                 while j < sort1.len() && time1[sort1[j]] < data.time2[i2] {
                     let i1 = sort1[j];
-                    if time1[i1] != temp && data.position[i1] & 1 == 1 {
+                    if time1[i1] != temp && data.pos(i1) & 1 == 1 {
                         temp = time1[i1];
                         dtime.push(temp);
                     }
                     j += 1;
                 }
-                if data.time2[i2] != temp && (data.position[i2] > 1 || data.status[i2] > 0) {
+                if data.time2[i2] != temp && (data.pos(i2) > 1 || data.status[i2] > 0) {
                     temp = data.time2[i2];
                     dtime.push(temp);
                 }
             }
         }
+        _ if data.position.is_none() => {
+            for &i2 in sort2 {
+                let t = data.time2[i2];
+                if dtime.last() != Some(&t) {
+                    dtime.push(t);
+                }
+            }
+        }
         _ => {
             for &i2 in sort2 {
-                if (data.position[i2] > 1 || data.status[i2] > 0)
+                if (data.pos(i2) > 1 || data.status[i2] > 0)
                     && dtime.last() != Some(&data.time2[i2])
                 {
                     dtime.push(data.time2[i2]);
@@ -864,20 +884,34 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
     let dtime = kernel_unique_times(data, rows, options.entry);
     let ntime = dtime.len();
     let counting = data.time1.is_some();
+    let weighted = data.wt.is_some();
     let subtracts_weights = counting || data.cluster.is_some_and(|(_, nid)| nid < nused);
-    let exact_weights =
-        subtracts_weights && risk_weight::needs_exact_updates(sort2, data.wt, counting);
+    let exact_weights = data.wt.is_some_and(|wt| {
+        subtracts_weights && risk_weight::needs_exact_updates(sort2, wt, counting)
+    });
 
-    let mut n_risk = vec![0.0; ntime];
-    let mut n_event = vec![0.0; ntime];
-    let mut n_censor = vec![0.0; ntime];
+    let mut n_risk = if weighted {
+        vec![0.0; ntime]
+    } else {
+        Vec::new()
+    };
+    let mut n_event = if weighted {
+        vec![0.0; ntime]
+    } else {
+        Vec::new()
+    };
+    let mut n_censor = if weighted {
+        vec![0.0; ntime]
+    } else {
+        Vec::new()
+    };
     let mut wt_risk = vec![0.0; ntime];
     let mut reverse_risk = options.reverse.then(|| vec![0.0; ntime]);
     let mut wt_event = vec![0.0; ntime];
     let mut wt_censor = vec![0.0; ntime];
-    let mut n_enter = (options.entry && counting).then(|| vec![0.0; ntime]);
+    let mut n_enter = (weighted && options.entry && counting).then(|| vec![0.0; ntime]);
     let mut wt_enter = (options.entry && counting).then(|| vec![0.0; ntime]);
-    {
+    if let Some(wt) = data.wt {
         let mut person1 = nused;
         let mut person2 = nused;
         let mut n1 = 0.0;
@@ -894,19 +928,20 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 if data.time2[i2] < dtime[k] {
                     break;
                 }
+                let w = wt[i2];
                 n1 += 1.0;
-                wt1 += data.wt[i2];
+                wt1 += w;
                 if let Some(sum) = &mut active_weight {
-                    sum.add(data.wt[i2]);
+                    sum.add(w);
                 }
                 if data.status[i2] == 1 {
                     n2 += 1.0;
-                    wt2 += data.wt[i2];
+                    wt2 += w;
                 } else {
-                    censor_risk += data.wt[i2];
-                    if data.position[i2] & 2 != 0 {
+                    censor_risk += w;
+                    if data.pos(i2) & 2 != 0 {
                         n3 += 1.0;
-                        wt3 += data.wt[i2];
+                        wt3 += w;
                     }
                 }
                 person2 -= 1;
@@ -918,15 +953,16 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     if time1[i1] < dtime[k] {
                         break;
                     }
+                    let w = wt[i1];
                     n1 -= 1.0;
-                    wt1 -= data.wt[i1];
-                    censor_risk -= data.wt[i1];
+                    wt1 -= w;
+                    censor_risk -= w;
                     if let Some(sum) = &mut active_weight {
-                        sum.add(-data.wt[i1]);
+                        sum.add(-w);
                     }
-                    if options.entry && data.position[i1] & 1 != 0 && time1[i1] == dtime[k] {
+                    if options.entry && data.pos(i1) & 1 != 0 && time1[i1] == dtime[k] {
                         n4 += 1.0;
-                        wt4 += data.wt[i1];
+                        wt4 += w;
                     }
                     person1 -= 1;
                 }
@@ -943,9 +979,9 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                 let mut censors = risk_weight::RiskWeight::default();
                 for &row in &sort2[person2..end2] {
                     if data.status[row] == 1 {
-                        events.add(data.wt[row]);
-                    } else if data.position[row] & 2 != 0 {
-                        censors.add(data.wt[row]);
+                        events.add(wt[row]);
+                    } else if data.pos(row) & 2 != 0 {
+                        censors.add(wt[row]);
                     }
                 }
                 wt2 = events.total();
@@ -958,11 +994,11 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                         .iter()
                         .take_while(|&&row| data.time2[row] == dtime[k] && data.status[row] == 1);
                     for &row in tied.clone() {
-                        sum.add(-data.wt[row]);
+                        sum.add(-wt[row]);
                     }
                     censor_risk = sum.total();
                     for &row in tied {
-                        sum.add(data.wt[row]);
+                        sum.add(wt[row]);
                     }
                 }
             }
@@ -976,13 +1012,65 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
             wt_event[k] = wt2;
             wt_censor[k] = wt3;
         }
+    } else {
+        let mut person1 = nused;
+        let mut person2 = nused;
+        let mut n1 = 0.0;
+        let pos = data.position;
+        for k in (0..ntime).rev() {
+            let (mut n2, mut n3) = (0.0, 0.0);
+            let mut censor_risk = n1;
+            let tk = dtime[k];
+            while person2 > 0 {
+                let i2 = sort2[person2 - 1];
+                if data.time2[i2] < tk {
+                    break;
+                }
+                n1 += 1.0;
+                if data.status[i2] == 1 {
+                    n2 += 1.0;
+                } else {
+                    censor_risk += 1.0;
+                    if pos.is_none_or(|p| p[i2] & 2 != 0) {
+                        n3 += 1.0;
+                    }
+                }
+                person2 -= 1;
+            }
+            if let (Some(time1), Some(sort1)) = (data.time1, &rows.sort1) {
+                let mut n4 = 0.0;
+                while person1 > 0 {
+                    let i1 = sort1[person1 - 1];
+                    if time1[i1] < tk {
+                        break;
+                    }
+                    n1 -= 1.0;
+                    censor_risk -= 1.0;
+                    if options.entry && pos.is_none_or(|p| p[i1] & 1 != 0) && time1[i1] == tk {
+                        n4 += 1.0;
+                    }
+                    person1 -= 1;
+                }
+                if let Some(wt_enter) = &mut wt_enter {
+                    wt_enter[k] = n4;
+                }
+            }
+            wt_risk[k] = n1;
+            if let Some(risk) = &mut reverse_risk {
+                risk[k] = censor_risk;
+            }
+            wt_event[k] = n2;
+            wt_censor[k] = n3;
+        }
     }
 
     let event_terms = |i: usize| -> (f64, f64, f64) {
         if let Some(risk) = &reverse_risk {
-            (n_censor[i], wt_censor[i], risk[i])
+            let d0 = if weighted { n_censor[i] } else { wt_censor[i] };
+            (d0, wt_censor[i], risk[i])
         } else {
-            (n_event[i], wt_event[i], wt_risk[i])
+            let d0 = if weighted { n_event[i] } else { wt_event[i] };
+            (d0, wt_event[i], wt_risk[i])
         }
     };
 
@@ -1050,7 +1138,10 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         && !exact_weights
         && data.cluster.is_some_and(|(cluster, nid)| {
             robust::use_cluster_sums(nid, ntime, nused, || {
-                let rows = rows.sort2.iter().map(|&row| (cluster[row], data.wt[row]));
+                let rows = rows
+                    .sort2
+                    .iter()
+                    .map(|&row| (cluster[row], data.weight(row)));
                 robust::cluster_concentration(rows, nid)
             })
         })
@@ -1073,22 +1164,30 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
         let mut imat2 = want_chaz_matrix.then(|| Vec::with_capacity(nid * ntime));
         let mut gcount = vec![0i64; nid];
         let mut gwt = vec![0.0; nid];
-        let mut cluster_weights = exact_weights
-            .then(|| risk_weight::cluster_weights(sort2, data.wt, cluster, nid, counting));
+        let mut cluster_weights = exact_weights.then(|| {
+            risk_weight::cluster_weights(
+                sort2,
+                data.wt.expect("exact_weights requires weights"),
+                cluster,
+                nid,
+                counting,
+            )
+        });
         let mut inf1 = vec![0.0; nid];
         let mut inf2 = vec![0.0; nid];
         let mut person1 = 0;
         let mut person2 = 0;
         let is_event = |i2: usize| -> bool {
             if options.reverse {
-                data.status[i2] == 0 && data.position[i2] & 2 != 0
+                data.status[i2] == 0 && data.pos(i2) & 2 != 0
             } else {
                 data.status[i2] == 1
             }
         };
         let mut change_risk = |i2: usize, enter: bool, gcount: &mut [i64], gwt: &mut [f64]| {
             let g = cluster[i2];
-            let change = if enter { data.wt[i2] } else { -data.wt[i2] };
+            let w = data.weight(i2);
+            let change = if enter { w } else { -w };
             gcount[g] += if enter { 1 } else { -1 };
             if let Some(sum) = cluster_weights.as_mut().and_then(|sums| sums[g].as_mut()) {
                 sum.add(change);
@@ -1158,10 +1257,11 @@ fn kernel(data: &KernelData<'_>, rows: &CurveRows, options: KernelOptions) -> Cu
                     }
                     if is_event(i2) {
                         let g = cluster[i2];
+                        let w = data.weight(i2);
                         if options.stype == SurvType::KaplanMeier {
-                            inf1[g] -= km * data.wt[i2] / nrisk;
+                            inf1[g] -= km * w / nrisk;
                         }
-                        inf2[g] += data.wt[i2] * dn_term;
+                        inf2[g] += w * dn_term;
                     }
                     change_risk(i2, false, &mut gcount, &mut gwt);
                     person2 += 1;
@@ -1285,18 +1385,38 @@ pub(crate) fn rows_by_curve(x: &[usize], n_curves: usize) -> Vec<Vec<usize>> {
 }
 
 struct CurveInput {
-    keep: Vec<usize>,
+    keep: Option<Vec<usize>>,
     rows: CurveRows,
 }
 
 fn curve_inputs(
-    x: &[usize],
+    x: Option<&[usize]>,
+    n: usize,
     n_curves: usize,
     start: Option<&[f64]>,
     time: &[f64],
     status: &[i32],
     reverse: bool,
 ) -> Vec<CurveInput> {
+    let Some(x) = x else {
+        let sort1 = start.map(sorted_indices_by);
+        let sort2 = if reverse {
+            let mut sort2: Vec<usize> = (0..n).collect();
+            sort2.sort_by(|&a, &b| {
+                time[a]
+                    .partial_cmp(&time[b])
+                    .expect("validated times contain no NaNs")
+                    .then_with(|| status[b].cmp(&status[a]))
+            });
+            sort2
+        } else {
+            sorted_indices_by(time)
+        };
+        return vec![CurveInput {
+            keep: None,
+            rows: CurveRows { sort1, sort2 },
+        }];
+    };
     let buckets = rows_by_curve(x, n_curves);
     let single = n_curves == 1;
     let prepare = |keep: Vec<usize>| {
@@ -1314,7 +1434,7 @@ fn curve_inputs(
             ordered_subset(&keep, time, single)
         };
         CurveInput {
-            keep,
+            keep: Some(keep),
             rows: CurveRows { sort1, sort2 },
         }
     };
@@ -1362,20 +1482,33 @@ fn has_nonunit_weights(weights: &[f64]) -> bool {
 /// A common power of two preserves the relative weights exactly. Keep the
 /// original units for broadly spread weights if scaling would underflow their
 /// squared risk totals after larger subjects leave.
-fn curve_weight_scale(rows: &[usize], weights: &[f64]) -> f64 {
-    let n = rows.len() as f64;
-    let largest = rows.iter().map(|&row| weights[row]).fold(0.0, f64::max);
+fn curve_weight_scale(rows: Option<&[usize]>, weights: &[f64]) -> f64 {
+    let (count, largest) = match rows {
+        Some(rows) => (
+            rows.len(),
+            rows.iter().map(|&row| weights[row]).fold(0.0, f64::max),
+        ),
+        None => (weights.len(), weights.iter().copied().fold(0.0, f64::max)),
+    };
+    let n = count as f64;
     // A tied hazard variance can multiply a squared risk total by n.
     let largest_safe = (f64::MAX / n).sqrt() / n;
     let smallest_safe = f64::MIN_POSITIVE.sqrt();
     if largest == 0.0 || (smallest_safe..=largest_safe).contains(&largest) {
         return 1.0;
     }
-    let smallest = rows
-        .iter()
-        .map(|&row| weights[row])
-        .filter(|&weight| weight > 0.0)
-        .fold(f64::INFINITY, f64::min);
+    let smallest = match rows {
+        Some(rows) => rows
+            .iter()
+            .map(|&row| weights[row])
+            .filter(|&weight| weight > 0.0)
+            .fold(f64::INFINITY, f64::min),
+        None => weights
+            .iter()
+            .copied()
+            .filter(|&weight| weight > 0.0)
+            .fold(f64::INFINITY, f64::min),
+    };
     // Pick the largest power of two that keeps the smallest squared risk normal.
     // Dividing subnormal inputs by MIN_POSITIVE yields at least 2^-52.
     let limit = largest.max(f64::MIN_POSITIVE).min(smallest / smallest_safe);
@@ -1402,16 +1535,27 @@ pub(super) fn fit_with_counts(
     require_counts: bool,
 ) -> SurvivalResult<SurvfitKMResult> {
     data.validate()?;
+    fit_with_counts_validated(data, options, require_counts)
+}
+
+fn fit_with_counts_validated(
+    data: &SurvfitKMData,
+    options: &SurvfitKMOptions,
+    require_counts: bool,
+) -> SurvivalResult<SurvfitKMResult> {
     validate_conf_int(options.conf_int)?;
     let n_all = data.n();
     let counting = data.start.is_some();
-    let corrected;
-    let (start, time) = if options.timefix {
-        corrected = aeq_counting(data.start.as_deref(), &data.time)?;
-        (corrected.0.as_deref(), corrected.1.as_slice())
+    let (start_cow, time_cow) = if options.timefix {
+        aeq_counting_cow(data.start.as_deref(), &data.time)?
     } else {
-        (data.start.as_deref(), data.time.as_slice())
+        (
+            data.start.as_deref().map(Cow::Borrowed),
+            Cow::Borrowed(data.time.as_slice()),
+        )
     };
+    let start = start_cow.as_deref();
+    let time = time_cow.as_ref();
 
     let t0 = match options.start_time {
         Some(start_time) => {
@@ -1442,12 +1586,18 @@ pub(super) fn fit_with_counts(
     let time = retained_rows(time, rows);
     let start = start.map(|s| retained_rows(s, rows));
     let status = retained_rows(&data.status, rows);
-    let mut weights = data
-        .weights
-        .as_deref()
-        .map_or_else(|| Cow::Owned(vec![1.0; n]), |w| retained_rows(w, rows));
-    let (strata_levels, curve_of) = strata_index(data.strata.as_deref(), n_all);
-    let x = retained_rows(&curve_of, rows);
+    let mut weights: Option<Cow<'_, [f64]>> =
+        data.weights.as_deref().map(|w| retained_rows(w, rows));
+    let (strata_levels, curve_of_buf);
+    let x: Option<Cow<'_, [usize]>> = if data.strata.is_some() {
+        let (levels, curve_of) = strata_index(data.strata.as_deref(), n_all);
+        strata_levels = levels;
+        curve_of_buf = curve_of;
+        Some(retained_rows(&curve_of_buf, rows))
+    } else {
+        strata_levels = vec![0];
+        None
+    };
 
     let ids = data
         .id
@@ -1464,7 +1614,9 @@ pub(super) fn fit_with_counts(
         && options.robust.unwrap_or_else(|| {
             influence != InfluenceRequest::None
                 || data.cluster.is_some()
-                || weights.iter().any(|w| *w != w.floor())
+                || weights
+                    .as_deref()
+                    .is_some_and(|w| w.iter().any(|w| *w != w.floor()))
                 || ids.as_ref().is_some_and(|(codes, labels)| {
                     let mut seen = vec![false; labels.len()];
                     codes
@@ -1486,9 +1638,19 @@ pub(super) fn fit_with_counts(
         cluster_data = ((0..n).collect(), (1..=n as i64).collect());
         Some(&cluster_data)
     };
-    let position: Vec<u8> = match (&start, &ids) {
-        (Some(start), Some((codes, _))) => survflag(start, &time, codes, &x),
-        _ => vec![3; n],
+    let position: Option<Vec<u8>> = match (&start, &ids) {
+        (Some(start), Some((codes, _))) => {
+            let default_group;
+            let group = match &x {
+                Some(x) => x.as_ref(),
+                None => {
+                    default_group = vec![0usize; n];
+                    &default_group
+                }
+            };
+            Some(survflag(start, &time, codes, group))
+        }
+        _ => None,
     };
 
     let kernel_options = KernelOptions {
@@ -1500,14 +1662,18 @@ pub(super) fn fit_with_counts(
     };
     let n_curves = strata_levels.len();
     let inputs = curve_inputs(
-        &x,
+        x.as_deref(),
+        n,
         n_curves,
         start.as_deref(),
         &time,
         &status,
         options.reverse,
     );
-    let n_used: Vec<usize> = inputs.iter().map(|input| input.keep.len()).collect();
+    let n_used: Vec<usize> = inputs
+        .iter()
+        .map(|input| input.keep.as_ref().map_or(n, Vec::len))
+        .collect();
     let mut n_id = ids.as_ref().map(|_| vec![0usize; n_curves]);
     let mut ctemp: Cow<'_, [usize]> = match cluster {
         Some((codes, _)) if n_curves == 1 => Cow::Borrowed(codes),
@@ -1517,26 +1683,37 @@ pub(super) fn fit_with_counts(
     let mut renumbering = cluster
         .filter(|_| n_curves > 1)
         .map(|(_, labels)| SubsetRenumbering::new(labels.len()));
-    let addcounts = data.weights.is_some()
-        && if require_counts {
-            weights.iter().any(|&weight| weight != 1.0)
+    let addcounts = weights.as_deref().is_some_and(|w| {
+        if require_counts {
+            w.iter().any(|&weight| weight != 1.0)
         } else {
-            has_nonunit_weights(&weights)
-        };
+            has_nonunit_weights(w)
+        }
+    });
     let mut weight_scales = Vec::new();
     let mut curves = Vec::with_capacity(n_curves);
     for (curve, CurveInput { keep, rows }) in inputs.into_iter().enumerate() {
-        if keep.is_empty() {
+        let curve_n = keep.as_ref().map_or(n, Vec::len);
+        if curve_n == 0 {
             continue;
         }
-        if data.weights.is_some() {
-            let scale = curve_weight_scale(&keep, &weights);
+        if let Some(weights) = &mut weights {
+            let scale = curve_weight_scale(keep.as_deref(), weights);
             if scale != 1.0 {
                 weight_scales.resize(n_curves, 1.0);
                 weight_scales[curve] = scale;
                 let weights = weights.to_mut();
-                for &row in &keep {
-                    weights[row] /= scale;
+                match &keep {
+                    Some(keep) => {
+                        for &row in keep {
+                            weights[row] /= scale;
+                        }
+                    }
+                    None => {
+                        for weight in weights.iter_mut() {
+                            *weight /= scale;
+                        }
+                    }
                 }
             }
         }
@@ -1544,11 +1721,13 @@ pub(super) fn fit_with_counts(
             n_id[curve] = if n_curves == 1 {
                 labels.len()
             } else {
+                let keep = keep.as_deref().expect("multi-curve input has row indices");
                 count_unique(keep.iter().map(|&i| codes[i]))
             };
         }
         let curve_clusters = match (cluster, &mut renumbering) {
             (Some((codes, labels)), Some(renumbering)) => {
+                let keep = keep.as_deref().expect("multi-curve input has row indices");
                 let (renumbered, unique) = renumbering.renumber(keep.iter().map(|&i| codes[i]));
                 let ctemp = ctemp.to_mut();
                 for (&i, code) in keep.iter().zip(renumbered) {
@@ -1569,8 +1748,8 @@ pub(super) fn fit_with_counts(
             time1: start.as_deref(),
             time2: &time,
             status: &status,
-            wt: &weights,
-            position: &position,
+            wt: weights.as_deref(),
+            position: position.as_deref(),
             cluster: curve_clusters
                 .as_ref()
                 .map(|names| (ctemp.as_ref(), names.len())),
@@ -1592,48 +1771,12 @@ pub(super) fn fit_with_counts(
         curves.into_iter().map(fit_curve).collect()
     };
 
-    let total: usize = fits.iter().map(|(_, fit, _)| fit.time.len()).sum();
-    let mut result = SurvfitKMResult {
-        n: n_used,
-        time: Vec::with_capacity(total),
-        n_risk: Vec::with_capacity(total),
-        n_event: Vec::with_capacity(total),
-        n_censor: Vec::with_capacity(total),
-        n_enter: entry.then(|| Vec::with_capacity(total)),
-        counts: None,
-        surv: Vec::with_capacity(total),
-        std_err: options.se_fit.then(|| Vec::with_capacity(total)),
-        cumhaz: Vec::with_capacity(total),
-        std_chaz: options.se_fit.then(|| Vec::with_capacity(total)),
-        lower: None,
-        upper: None,
-        strata: None,
-        strata_codes: None,
-        n_id,
-        logse: cluster.is_none() || options.ctype == HazardType::FlemingHarrington,
-        conf_int: options.conf_int,
-        conf_type: options.conf_type.as_str().to_string(),
-        conf_lower: options.conf_lower.as_str().to_string(),
-        type_: if counting { "counting" } else { "right" }.to_string(),
-        t0,
-        influence_surv: None,
-        influence_chaz: None,
-    };
-    let mut counts = addcounts.then(|| SurvfitCounts {
-        n_risk: Vec::with_capacity(total),
-        n_event: Vec::with_capacity(total),
-        n_censor: Vec::with_capacity(total),
-        n_enter: entry.then(|| Vec::with_capacity(total)),
-    });
-    let mut strata_rows = Vec::with_capacity(fits.len());
-    let mut strata_codes = Vec::with_capacity(fits.len());
-    let mut influence_surv = influence.survival().then(Vec::new);
-    let mut influence_chaz = influence.cumhaz().then(Vec::new);
-    let mut std_low = (options.se_fit
-        && options.conf_type != ConfType::None
-        && options.conf_lower != ConfLower::Usual)
-        .then(|| Vec::with_capacity(total));
-    for (curve, mut fit, curve_clusters) in fits {
+    let adjust_fit = |curve: usize,
+                      fit: &mut CurveFit,
+                      curve_clusters: Vec<i64>,
+                      std_low: &mut Option<Vec<f64>>,
+                      influence_surv: &mut Option<Vec<SurvfitInfluence>>,
+                      influence_chaz: &mut Option<Vec<SurvfitInfluence>>| {
         let scale = weight_scales.get(curve).copied().unwrap_or(1.0);
         if scale != 1.0 && !robust {
             // Model variances are inversely proportional to case weight.
@@ -1642,7 +1785,7 @@ pub(super) fn fit_with_counts(
                 *se /= root_scale;
             }
         }
-        if let Some(lower) = &mut std_low {
+        if let Some(lower) = std_low {
             match options.conf_lower {
                 ConfLower::Peto => {
                     let root_scale = scale.sqrt();
@@ -1676,31 +1819,6 @@ pub(super) fn fit_with_counts(
                 *count *= scale;
             }
         }
-        strata_rows.push(fit.time.len());
-        strata_codes.push(strata_levels[curve]);
-        result.time.extend_from_slice(&fit.time);
-        result.n_risk.extend_from_slice(&fit.wt_risk);
-        result.n_event.extend_from_slice(&fit.wt_event);
-        result.n_censor.extend_from_slice(&fit.wt_censor);
-        if let (Some(n_enter), Some(wt_enter)) = (&mut result.n_enter, &fit.wt_enter) {
-            n_enter.extend_from_slice(wt_enter);
-        }
-        if let Some(counts) = &mut counts {
-            counts.n_risk.extend_from_slice(&fit.n_risk);
-            counts.n_event.extend_from_slice(&fit.n_event);
-            counts.n_censor.extend_from_slice(&fit.n_censor);
-            if let (Some(n_enter), Some(fit_enter)) = (&mut counts.n_enter, &fit.n_enter) {
-                n_enter.extend_from_slice(fit_enter);
-            }
-        }
-        result.surv.extend_from_slice(&fit.surv);
-        result.cumhaz.extend_from_slice(&fit.cumhaz);
-        if let Some(std_err) = &mut result.std_err {
-            std_err.extend_from_slice(&fit.std_surv);
-        }
-        if let Some(std_chaz) = &mut result.std_chaz {
-            std_chaz.extend_from_slice(&fit.std_chaz);
-        }
         let (surv_matrix, chaz_matrix) =
             match (fit.influence_surv.take(), fit.influence_chaz.take()) {
                 (None, Some(chaz)) if influence.survival() => {
@@ -1716,10 +1834,7 @@ pub(super) fn fit_with_counts(
                 }
                 matrices => matrices,
             };
-        for (list, matrix) in [
-            (&mut influence_surv, surv_matrix),
-            (&mut influence_chaz, chaz_matrix),
-        ] {
+        for (list, matrix) in [(influence_surv, surv_matrix), (influence_chaz, chaz_matrix)] {
             if let (Some(list), Some(matrix)) = (list, matrix) {
                 list.push(SurvfitInfluence {
                     cluster: curve_clusters.clone(),
@@ -1727,14 +1842,138 @@ pub(super) fn fit_with_counts(
                 });
             }
         }
-    }
-    result.counts = counts;
-    if n_curves > 1 {
-        result.strata = Some(strata_rows);
-        result.strata_codes = Some(strata_codes);
-    }
-    result.influence_surv = influence_surv;
-    result.influence_chaz = influence_chaz;
+    };
+
+    let total: usize = fits.iter().map(|(_, fit, _)| fit.time.len()).sum();
+    let mut influence_surv = influence.survival().then(Vec::new);
+    let mut influence_chaz = influence.cumhaz().then(Vec::new);
+    let mut std_low = (options.se_fit
+        && options.conf_type != ConfType::None
+        && options.conf_lower != ConfLower::Usual)
+        .then(|| Vec::with_capacity(total));
+    let logse = cluster.is_none() || options.ctype == HazardType::FlemingHarrington;
+    let mut result = if fits.len() == 1 {
+        let (curve, mut fit, curve_clusters) = fits.into_iter().next().unwrap();
+        adjust_fit(
+            curve,
+            &mut fit,
+            curve_clusters,
+            &mut std_low,
+            &mut influence_surv,
+            &mut influence_chaz,
+        );
+        let fit_len = fit.time.len();
+        let counts = addcounts.then_some(SurvfitCounts {
+            n_risk: fit.n_risk,
+            n_event: fit.n_event,
+            n_censor: fit.n_censor,
+            n_enter: if entry { fit.n_enter } else { None },
+        });
+        SurvfitKMResult {
+            n: n_used,
+            time: fit.time,
+            n_risk: fit.wt_risk,
+            n_event: fit.wt_event,
+            n_censor: fit.wt_censor,
+            n_enter: if entry { fit.wt_enter } else { None },
+            counts,
+            surv: fit.surv,
+            std_err: options.se_fit.then_some(fit.std_surv),
+            cumhaz: fit.cumhaz,
+            std_chaz: options.se_fit.then_some(fit.std_chaz),
+            lower: None,
+            upper: None,
+            strata: (n_curves > 1).then(|| vec![fit_len]),
+            strata_codes: (n_curves > 1).then(|| vec![strata_levels[curve]]),
+            n_id,
+            logse,
+            conf_int: options.conf_int,
+            conf_type: options.conf_type.as_str().to_string(),
+            conf_lower: options.conf_lower.as_str().to_string(),
+            type_: if counting { "counting" } else { "right" }.to_string(),
+            t0,
+            influence_surv,
+            influence_chaz,
+        }
+    } else {
+        let mut result = SurvfitKMResult {
+            n: n_used,
+            time: Vec::with_capacity(total),
+            n_risk: Vec::with_capacity(total),
+            n_event: Vec::with_capacity(total),
+            n_censor: Vec::with_capacity(total),
+            n_enter: entry.then(|| Vec::with_capacity(total)),
+            counts: None,
+            surv: Vec::with_capacity(total),
+            std_err: options.se_fit.then(|| Vec::with_capacity(total)),
+            cumhaz: Vec::with_capacity(total),
+            std_chaz: options.se_fit.then(|| Vec::with_capacity(total)),
+            lower: None,
+            upper: None,
+            strata: None,
+            strata_codes: None,
+            n_id,
+            logse,
+            conf_int: options.conf_int,
+            conf_type: options.conf_type.as_str().to_string(),
+            conf_lower: options.conf_lower.as_str().to_string(),
+            type_: if counting { "counting" } else { "right" }.to_string(),
+            t0,
+            influence_surv: None,
+            influence_chaz: None,
+        };
+        let mut counts = addcounts.then(|| SurvfitCounts {
+            n_risk: Vec::with_capacity(total),
+            n_event: Vec::with_capacity(total),
+            n_censor: Vec::with_capacity(total),
+            n_enter: entry.then(|| Vec::with_capacity(total)),
+        });
+        let mut strata_rows = Vec::with_capacity(fits.len());
+        let mut strata_codes = Vec::with_capacity(fits.len());
+        for (curve, mut fit, curve_clusters) in fits {
+            adjust_fit(
+                curve,
+                &mut fit,
+                curve_clusters,
+                &mut std_low,
+                &mut influence_surv,
+                &mut influence_chaz,
+            );
+            strata_rows.push(fit.time.len());
+            strata_codes.push(strata_levels[curve]);
+            result.time.extend_from_slice(&fit.time);
+            result.n_risk.extend_from_slice(&fit.wt_risk);
+            result.n_event.extend_from_slice(&fit.wt_event);
+            result.n_censor.extend_from_slice(&fit.wt_censor);
+            if let (Some(n_enter), Some(wt_enter)) = (&mut result.n_enter, &fit.wt_enter) {
+                n_enter.extend_from_slice(wt_enter);
+            }
+            if let Some(counts) = &mut counts {
+                counts.n_risk.extend_from_slice(&fit.n_risk);
+                counts.n_event.extend_from_slice(&fit.n_event);
+                counts.n_censor.extend_from_slice(&fit.n_censor);
+                if let (Some(n_enter), Some(fit_enter)) = (&mut counts.n_enter, &fit.n_enter) {
+                    n_enter.extend_from_slice(fit_enter);
+                }
+            }
+            result.surv.extend_from_slice(&fit.surv);
+            result.cumhaz.extend_from_slice(&fit.cumhaz);
+            if let Some(std_err) = &mut result.std_err {
+                std_err.extend_from_slice(&fit.std_surv);
+            }
+            if let Some(std_chaz) = &mut result.std_chaz {
+                std_chaz.extend_from_slice(&fit.std_chaz);
+            }
+        }
+        result.counts = counts;
+        if n_curves > 1 {
+            result.strata = Some(strata_rows);
+            result.strata_codes = Some(strata_codes);
+        }
+        result.influence_surv = influence_surv;
+        result.influence_chaz = influence_chaz;
+        result
+    };
 
     if options.se_fit && options.conf_type != ConfType::None {
         let std_err = result.std_err.as_deref().expect("se.fit keeps std.err");
@@ -1803,7 +2042,7 @@ pub(crate) fn survfitkm_py(
         timefix,
         reverse,
     };
-    Ok(py.detach(|| survfitkm(&data, &options))?)
+    Ok(py.detach(|| fit_with_counts_validated(&data, &options, false))?)
 }
 
 #[cfg(test)]

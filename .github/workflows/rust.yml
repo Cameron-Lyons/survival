@@ -190,7 +190,6 @@ jobs:
             "$GITHUB_WORKSPACE/python/tests/test_curve_summary_frames.py" \
             "$GITHUB_WORKSPACE/python/tests/test_concordance_expression_sources.py" \
             "$GITHUB_WORKSPACE/python/tests/test_concordance_zero_times.py" \
-            "$GITHUB_WORKSPACE/python/tests/test_model_frame_transport.py" \
             "$GITHUB_WORKSPACE/python/tests/test_survfit_missing_residuals.py"
 
   python-matrix:
@@ -365,8 +364,8 @@ jobs:
           path: test/r/fixtures
           retention-days: 7
 
-  r-bridge:
-    name: R Bridge Package
+  r-fixtures-current:
+    name: R Current-Stock Fixtures
     # This job regenerates stock-R references and compares them with the
     # committed ones, which were recorded on Ubuntu 24.04. The same R and
     # survival versions on Ubuntu 26.04 give NA instead of 0 for some
@@ -382,40 +381,16 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install Rust
-        run: rustup toolchain install 1.95.0 --profile minimal --no-self-update
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-r-bridge-py3.14-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-r-bridge-py3.14-
-
       - name: Install R
         uses: r-lib/actions/setup-r@v2
         with:
           r-version: '4.5.3'
 
-      - name: Create Python environment
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install maturin numpy pandas polars pytest
-
-      - name: Install Python extension
-        run: .venv/bin/maturin develop --release --features extension-module,ml
-
-      - name: Install R bridge dependencies
+      - name: Install R fixture dependencies
         run: |
           rspm <- Sys.getenv("RSPM", unset = "")
           repos <- if (nzchar(rspm)) c(CRAN = rspm) else c(CRAN = "https://cloud.r-project.org")
-          install.packages(c("reticulate", "testthat", "remotes", "jsonlite"), repos = repos)
+          install.packages(c("remotes", "jsonlite"), repos = repos)
           wanted <- Sys.getenv("R_SURVIVAL_VERSION")
           remotes::install_version(
             "survival", version = wanted, repos = c(CRAN = "https://cloud.r-project.org"),
@@ -569,26 +544,6 @@ jobs:
         with:
           name: current-stock-r-fixtures
           path: ${{ runner.temp }}/current-stock-fixtures
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Check R bridge package
-        run: |
-          check_dir="$RUNNER_TEMP/r-bridge-check"
-          mkdir -p "$check_dir"
-          cd "$check_dir"
-          R CMD build --no-manual --no-build-vignettes "$GITHUB_WORKSPACE/r/survivalr"
-          R CMD check --no-manual --no-build-vignettes survivalr_*.tar.gz
-          grep -q '^Status: OK$' survivalr.Rcheck/00check.log
-        env:
-          RETICULATE_PYTHON: ${{ github.workspace }}/.venv/bin/python
-
-      - name: Upload R bridge check logs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: r-bridge-check
-          path: ${{ runner.temp }}/r-bridge-check/survivalr.Rcheck
           if-no-files-found: ignore
           retention-days: 7
 

@@ -27,19 +27,18 @@ from ._coerce import (
     _finite_float,
     _float_vector,
     _floats_or_nan,
-    _int_vector,
     _integer_scalar,
     _is_bool_like,
     _is_missing_value,
     _match_string_arg,
     _materialize_1d,
-    _rows_of,
-    _select_rows,
     _materialize_labels,
     _normalize_bool_option,
     _pop_dotted_keyword,
     _r_factor_levels,
+    _rows_of,
     _scalar_or_vector,
+    _select_rows,
     _subset_indices,
     _subset_sequence,
 )
@@ -80,7 +79,6 @@ from ._types import (
     BrierResult,
     PsplineResult,
     StatefigResult,
-    SurvCheckCodes,
     SurvcheckProblem,
     SurvcheckResult,
     _InteractionTerm,
@@ -471,41 +469,6 @@ def _predict_pspline(
     return predict_pspline(object, newx, **kwargs)
 
 
-def _frailty_encoding(
-    x: Any,
-    *,
-    levels: Any | None = None,
-    sparse: Any | None = None,
-) -> dict[str, Any]:
-    """The ``as.factor`` step of R's ``frailty`` terms: 1-based codes, levels and the sparse
-    default ``nclass > 5`` (used by the R bridge)."""
-
-    values = _materialize_labels(x, "x")
-    level_values = (
-        [str(v) for v in _materialize_1d(levels, "levels")]
-        if levels is not None
-        else sorted({str(v) for v in values if not _is_missing_value(v)})
-    )
-    level_index = {level: idx + 1 for idx, level in enumerate(level_values)}
-    codes: list[int | None] = []
-    for value in values:
-        if _is_missing_value(value):
-            codes.append(None)
-        elif str(value) not in level_index:
-            raise ValueError(f"x contains value {str(value)!r} outside supplied levels")
-        else:
-            codes.append(level_index[str(value)])
-    sparse_value = (
-        len(level_values) > 5 if sparse is None else _normalize_bool_option(sparse, "sparse")
-    )
-    return {
-        "codes": codes,
-        "levels": level_values,
-        "nclass": len(level_values),
-        "sparse": sparse_value,
-    }
-
-
 @dataclass(frozen=True)
 class _ModelFrame:
     response: Surv
@@ -573,43 +536,6 @@ def _survcheck_problem(
     return SurvcheckProblem(
         row=[row_numbers[row] for row in problem.row],
         id=[id_levels[code - 1] for code in problem.id],
-    )
-
-
-def _survcheck_codes(
-    id: Any, time2: Any, status: Any, time1: Any | None = None, istate: Any | None = None
-) -> SurvCheckCodes:
-    """``survcheck``'s kernel for a response given as integer codes, the R bridge's entry
-    point after it evaluates the model frame in R: ``id`` as ``match(id, unique(id))``,
-    ``status`` as ``0`` (censored) or the code of the target state and ``istate`` as codes of
-    the same states.  The states are only known by their codes, so they are named after them.
-    """
-
-    status_codes = _int_vector(status, "status")
-    istate_codes = None if istate is None else _int_vector(istate, "istate")
-    n_states = max([0, *status_codes, *(istate_codes or [])])
-    states = [str(code) for code in range(1, n_states + 1)]
-    raw = _core.survcheck(
-        _int_vector(id, "id"),
-        _float_vector(time2, "time2"),
-        status_codes,
-        states,
-        time1=None if time1 is None else _float_vector(time1, "time1"),
-        istate=istate_codes,
-        istate_levels=None if istate_codes is None else states,
-        timefix=False,
-    )
-
-    def rows(problem: Any) -> list[int]:
-        return [] if problem is None else list(problem.row)
-
-    return SurvCheckCodes(
-        current_states=[0 if state == "(s0)" else int(state) for state in raw.istate],
-        overlap_rows=rows(raw.overlap),
-        gap_rows=rows(raw.gap),
-        jump_rows=rows(raw.jump),
-        teleport_rows=rows(raw.teleport),
-        n_transitions=raw.n_transitions,
     )
 
 

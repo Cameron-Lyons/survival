@@ -469,7 +469,7 @@ def test_cox_callback_roundtrip():
 
     result = survival._survival.cox_callback(2, [1.0, 2.0], callback)
 
-    assert isinstance(result, survival.pybridge.CoxPenaltyTerms)
+    assert isinstance(result, survival.regression.CoxPenaltyTerms)
     assert result.coef == pytest.approx([3.0, 4.0])
     assert result.first == pytest.approx([1.0, 2.0])
     assert result.second == pytest.approx([3.0, 4.0])

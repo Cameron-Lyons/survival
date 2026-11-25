@@ -333,6 +333,8 @@ def _float_or_nan(value: Any) -> float:
 def _floats_or_nan(values: Sequence[Any], *, _masked_warning_guard: bool = True) -> list[float]:
     """:func:`_float_or_nan` of each value, as fast as ``float`` when none is missing."""
 
+    if type(values) is np.ndarray and values.dtype.kind in "biuf":
+        return values.astype(np.float64, copy=False).tolist()
     if isinstance(values, np.ma.MaskedArray):
         values = values.tolist()
     if not _masked_warning_guard:
@@ -629,10 +631,6 @@ def _matrix_term_selection(
     ]
 
 
-class _RSubset(list[int]):
-    """R-selected rows; -1 represents an all-missing model-frame row."""
-
-
 def _subset_indices(subset: Any, n: int) -> list[int]:
     values = _materialize_1d(subset, "subset")
     if values and all(_is_bool_like(value) for value in values):
@@ -646,13 +644,13 @@ def _subset_indices(subset: Any, n: int) -> list[int]:
                 idx = index(value)
             except TypeError as exc:
                 raise TypeError("subset must contain booleans or integer row indices") from exc
-            if idx < (-1 if isinstance(subset, _RSubset) else 0) or idx >= n:
+            if idx < 0 or idx >= n:
                 raise ValueError("subset row indices must be between 0 and n - 1")
             indices.append(idx)
 
     if not indices:
         raise ValueError("subset selects no rows")
-    return _RSubset(indices) if isinstance(subset, _RSubset) else indices
+    return indices
 
 
 def _rows_of(source: Any, kept: list[Any]) -> Any:
@@ -1063,23 +1061,58 @@ def _present_values(values: Any, materialized: Sequence[Any]) -> set[Any]:
     return {value for value, missing in zip(materialized, flags, strict=True) if not missing}
 
 
+def _numeric_factor_array(array: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """``factor(x)`` of a numeric or logical array as an ``int64`` code array (``-1`` where NaN),
+    the sorted distinct values, and per-level counts when there are no missing values."""
+
+    present = ~np.isnan(array) if array.dtype.kind == "f" else None
+    if present is None or present.all():
+        levels, inverse, counts = np.unique(array, return_inverse=True, return_counts=True)
+        if levels.dtype.kind == "f":
+            levels = levels + 0.0
+        return np.asarray(inverse, dtype=np.int64), levels, np.asarray(counts, dtype=np.int64)
+    levels, inverse = np.unique(array[present], return_inverse=True)
+    if levels.dtype.kind == "f":
+        levels = levels + 0.0
+    full = np.full(len(array), -1, dtype=np.int64)
+    full[present] = inverse
+    return full, levels, None
+
+
 def _numeric_factor(array: np.ndarray) -> tuple[list[int | None], np.ndarray]:
     """``factor(x)`` of a numeric or logical array: codes (``None`` where NaN) and the
     sorted distinct values, which is R's ``sort(unique(x))`` level order."""
 
-    present = ~np.isnan(array) if array.dtype.kind == "f" else None
-    observed = array if present is None else array[present]
-    levels, inverse = np.unique(observed, return_inverse=True)
-    if levels.dtype.kind == "f":
-        levels = levels + 0.0
-    if present is None or present.all():
-        return inverse.tolist(), levels
-    full = np.zeros(len(array), dtype=np.int64)
-    full[present] = inverse
-    codes = cast(list[int | None], full.tolist())
-    for row in np.flatnonzero(~present).tolist():
+    codes_arr, levels, counts = _numeric_factor_array(array)
+    if counts is not None:
+        return codes_arr.tolist(), levels
+    codes = cast(list[int | None], codes_arr.tolist())
+    for row in np.flatnonzero(codes_arr < 0).tolist():
         codes[row] = None
     return codes, levels
+
+
+def _factor_codes(
+    values: Any, name: str = "values"
+) -> tuple[np.ndarray | list[int | None], list[str]]:
+    """Like :func:`_factor`, returning an ``int64`` ndarray (``-1`` for ``NA``) when possible
+    for direct zero-boxing transfer to native kernels."""
+
+    declared = _categories(values)
+    if declared is not None:
+        levels = [level for level in declared if not _is_missing_value(level)]
+        category_codes = _category_codes(values, declared)
+        if category_codes is not None:
+            return (
+                np.asarray(category_codes, dtype=np.int64),
+                [_as_character(level) for level in levels],
+            )
+    else:
+        array = _numeric_ndarray(values)
+        if array is not None:
+            codes_arr, numeric_levels, _counts = _numeric_factor_array(array)
+            return codes_arr, [_as_character(level) for level in numeric_levels.tolist()]
+    return _factor(values, name)
 
 
 def _factor(

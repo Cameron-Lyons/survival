@@ -68,7 +68,7 @@ from ._surv import (
     Surv,
     Surv2,
     _apply_surv_na_action,
-    _complete_codes,
+    _complete_codes_fast,
     _strata,
     _subset_surv,
     is_na_surv,
@@ -115,7 +115,7 @@ class _SurvfitData:
     """
 
     y: Surv
-    x_codes: list[int]
+    x_codes: Any
     x_levels: list[str]
     weights: list[float] | None
     id: Sequence[Any] | None
@@ -130,7 +130,7 @@ class _SurvfitData:
         return len(self.x_levels)
 
     @property
-    def strata_codes(self) -> list[int] | None:
+    def strata_codes(self) -> Any:
         return self.x_codes if self.n_curves > 1 else None
 
     def id_codes(self) -> list[int] | None:
@@ -172,15 +172,15 @@ class _SurvfitData:
 
 def _curve_factor(
     columns: dict[str, Any], n: int, *, shortlabel: bool = False
-) -> tuple[list[int], list[str]]:
+) -> tuple[Any, list[str]]:
     """``X <- strata(mf[ll])``, or ``factor(rep(1, n))`` for ``~ 1``."""
 
     if not columns:
         return [0] * n, ["1"]
     factor = _strata(list(columns.items()), shortlabel=shortlabel)
-    if len(factor.codes) != n:
+    if len(factor) != n:
         raise ValueError("formula columns must have the same length as the Surv response")
-    return _complete_codes(factor, "missing values in the grouping variables"), factor.levels
+    return _complete_codes_fast(factor, "missing values in the grouping variables"), factor.levels
 
 
 def _engine_labels(values: Sequence[Any], name: str) -> list[int]:
@@ -1013,7 +1013,7 @@ def _survfitTurnbull(
             if weights is not None:
                 weights = [weights[row] for row in rows]
             if strata_codes is not None:
-                strata_codes = [strata_codes[row] for row in rows]
+                strata_codes = [int(strata_codes[row]) for row in rows]
                 levels = [frame.x_levels[code] for code in sorted(set(strata_codes))]
     engine = _core.turnbull(
         time1,

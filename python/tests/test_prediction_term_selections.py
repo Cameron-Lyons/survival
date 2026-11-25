@@ -15,7 +15,8 @@ from .r_fixture_support import RFactor
 
 survival = setup_survival_import()
 r = survival.r
-bridge = importlib.import_module("survival.pybridge")
+coerce = importlib.import_module("survival.r._coerce")
+models = importlib.import_module("survival.r._models")
 REFERENCE = json.loads(
     (Path(__file__).parent / "fixtures/prediction_term_selection_reference.json").read_text()
 )
@@ -45,7 +46,7 @@ def test_term_prediction_selectors_values_errors_and_labels_match_r(case, as_arr
     }
     options = {"type": case.get("type", "terms"), "se_fit": case["se_fit"], "_as_arrays": as_arrays}
     if case["selection"] != "default":
-        options["terms"] = bridge._r_term_subscript(case["terms"], case["kind"], case["levels"])
+        options["terms"] = coerce._r_term_subscript(case["terms"], case["kind"], case["levels"])
     expected = case["expected"]["result"]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -63,7 +64,7 @@ def test_term_prediction_selectors_values_errors_and_labels_match_r(case, as_arr
                 compare(actual, expected, vector=vector)
                 columns = expected["columns"]
             if options["type"] == "terms":
-                assert bridge._prediction_term_names(fit, options.get("terms")) == columns
+                assert models._prediction_term_names(fit, options.get("terms")) == columns
     assert [str(w.message) for w in caught] == case["expected"]["warnings"]
 
 
@@ -85,4 +86,4 @@ def test_full_formula_labels_remain_distinct_from_prediction_columns():
     for name in ("aft_strata_first", "cox_strata_first"):
         fit = fitted(name)
         assert r.model_term_names(fit) == ["strata(cl)", "age", "rx"]
-        assert bridge._prediction_term_names(fit) == ["age", "rx"]
+        assert models._prediction_term_names(fit) == ["age", "rx"]

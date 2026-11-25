@@ -95,23 +95,6 @@ def test_omitting_every_event_keeps_censored_observations(action):
     assert check.n == {"id": 2, "observations": 2, "transitions": 0}
 
 
-def test_r_bulk_response_columns_are_independent_and_keep_missing_rows():
-    bridge = importlib.import_module("survival.pybridge")
-    response = r.Surv([0, None, 1], [1, 2, 3], [1, None, 0])
-    columns = bridge._surv_columns(response)
-    np.testing.assert_array_equal(columns["start"], [0, np.nan, 1])
-    np.testing.assert_array_equal(columns["event"], [1, np.nan, 0])
-    assert columns["time2"] is None
-    assert columns["type"] == "counting"
-    columns["time"][0] = 999
-    columns["event"][0] = 0
-    assert response.time == (1, 2, 3)
-    assert response.event == (1, None, 0)
-    assert bridge._surv_columns(response)["time"][0] == 1
-    with pytest.raises(TypeError, match="not a Surv"):
-        bridge._surv_columns([1, 2, 3])
-
-
 @pytest.mark.parametrize("kind", ["right", "left", "interval"])
 @pytest.mark.parametrize("formula_input", [True, False])
 def test_aft_na_pass_never_turns_unknown_statuses_into_censoring(kind, formula_input):

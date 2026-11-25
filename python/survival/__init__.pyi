@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from . import bayesian as bayesian
 from . import causal as causal
@@ -14,7 +14,6 @@ from . import ml as ml
 from . import monitoring as monitoring
 from . import plotting as plotting
 from . import population as population
-from . import pybridge as pybridge
 from . import qol as qol
 from . import r as r
 from . import recurrent as recurrent
@@ -487,5 +486,3 @@ from .sklearn_compat import (
 
 __version__: Final[str]
 __all__: list[str]
-
-def __getattr__(name: str) -> Any: ...

@@ -229,7 +229,7 @@ def _manual_cox_robust_variance(fit, cluster):
 
 
 def _manual_survreg_robust_variance(fit, cluster):
-    dfbeta = survival.r_api.residuals(
+    dfbeta = survival.r.residuals(
         fit,
         type="dfbeta",
         weighted=True,

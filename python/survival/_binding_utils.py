@@ -4,6 +4,8 @@ from ._binding_manifest import BINDING_NAMES, ML_BINDING_NAMES
 INTERNAL_BINDINGS = frozenset(
     {
         "CoxMartInput",
+        "_survpenal_fit_from_state",
+        "_unpickle",
         "agscore3",
         "cox_callback",
         "coxmart",
