@@ -13,7 +13,7 @@ import dataclasses
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar, overload
 
 import numpy as np
 
@@ -1763,6 +1763,20 @@ def _rmean_option(
     return repr(value)
 
 
+class _OrdinarySummaryColumns(TypedDict):
+    time: list[float]
+    n_risk: list[float]
+    n_event: list[float]
+    n_censor: list[float]
+    surv: list[float] | list[list[float]]
+    cumhaz: list[float] | list[list[float]]
+    strata: list[str] | None
+    std_err: list[float] | list[list[float]] | None
+    std_chaz: list[float] | list[list[float]] | None
+    lower: list[float] | list[list[float]] | None
+    upper: list[float] | list[list[float]] | None
+
+
 @overload
 def summary_survfit(
     object: CoxSurvfitMultiStateResult,
@@ -1815,7 +1829,7 @@ def summary_survfit(
     rmean: Any | None = None,
     dosum: Any | None = None,
     *,
-    data_frame: Any = False,
+    data_frame: Any,
 ) -> SummarySurvfitResult | SummarySurvfitCoxmsResult | dict[str, list[Any]]: ...
 
 
@@ -1957,7 +1971,7 @@ def summary_survfit(
         else bool(object.cumhaz)
     )
 
-    columns = {
+    columns: _OrdinarySummaryColumns = {
         "time": [value / scale for value in rows.time],
         "n_risk": rows.n_risk,
         "n_event": rows.n_event,
@@ -1971,10 +1985,8 @@ def summary_survfit(
         "upper": curves("upper"),
     }
     if data_frame:
-        if not has_cumhaz:
-            columns["cumhaz"] = None
         return _ordinary_summary_frame(
-            columns,
+            columns if has_cumhaz else {**columns, "cumhaz": None},
             ncurve=len(engines) if matrix else None,
             newdata=object.newdata if isinstance(object, CoxSurvfitResult) else None,
         )

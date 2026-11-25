@@ -9,7 +9,7 @@ import operator
 from collections.abc import Iterator, Sequence
 from copy import copy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -266,13 +266,16 @@ def concordancefit(
         "std_err": _normalize_bool_option(std_err, "std_err"),
     }
     matrix = _core.CovariateMatrix(values, n, nvar)
+    if None in y.event:
+        raise TypeError("'NoneType' object cannot be interpreted as an integer")
+    events = cast(tuple[int, ...], y.event)
     if y.start is None:
-        cfit = _core.concordancefit(
-            _core.SurvivalData(list(y.time), list(y.event)), matrix, **common
-        )
+        cfit = _core.concordancefit(_core.SurvivalData(list(y.time), events), matrix, **common)
     else:
         cfit = _core.concordancefit_counting(
-            _core.CountingProcessData(list(y.start), list(y.time), list(y.event)), matrix, **common
+            _core.CountingProcessData(list(y.start), list(y.time), events),
+            matrix,
+            **common,
         )
     return _result(cfit, names, levels, _formula)
 

@@ -14,7 +14,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from statistics import NormalDist
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict, cast
 
 import numpy as np
 
@@ -484,13 +484,30 @@ class _CoxData:
     design: _FormulaDesign | None = None
 
 
+class _TimeTransformMetadata(TypedDict, total=False):
+    _survival_tt_kind: str
+    values: Any
+    levels: Sequence[Any]
+    names: Sequence[str]
+    contrasts: Any
+    contrast_names: Sequence[str]
+    contrast_label: str | None
+    contrast_metadata: dict[str, Any]
+    penalty: _core.CoxPenalty | None
+    penalty_names: Sequence[str] | None
+    exact_names: bool
+    report: Callable[..., Any]
+    history: Callable[[], Any]
+
+
 def _time_transform_design(
     term: _CovariateTerm, value: Any, n: int
 ) -> tuple[_SingleDesignTerm, Any]:
     """Keep the callback's matrix columns or factor levels until model-matrix coding."""
     spline = value if isinstance(value, PsplineResult) else None
+    metadata: _TimeTransformMetadata
     if spline is not None:
-        value = {
+        metadata = {
             "_survival_tt_kind": "matrix",
             "values": spline.basis,
             "penalty": _core.CoxPenalty.pspline(
@@ -504,10 +521,10 @@ def _time_transform_design(
             if spline.penalty
             else None,
         }
-    if isinstance(value, CoxPenaltyBasis):
+    elif isinstance(value, CoxPenaltyBasis):
         if not isinstance(value.penalty, _core.CoxPenalty):
             raise TypeError("a CoxPenaltyBasis requires a native CoxPenalty")
-        value = {
+        metadata = {
             "_survival_tt_kind": "matrix",
             "values": value.basis,
             "penalty": value.penalty,
@@ -515,7 +532,12 @@ def _time_transform_design(
             "exact_names": value.column_names is not None,
             "levels": getattr(value, "levels", ()),
         }
-    metadata = value if isinstance(value, Mapping) and "_survival_tt_kind" in value else {}
+    else:
+        metadata = (
+            cast(_TimeTransformMetadata, value)
+            if isinstance(value, Mapping) and "_survival_tt_kind" in value
+            else {}
+        )
     source = metadata.get("values", value)
     values = _coerce_array_like(source, "tt result")
     if len(values) != n:
@@ -1901,7 +1923,7 @@ def _terms_selection(terms: Any | None, names: Sequence[str]) -> list[int]:
             not math.isnan(value)
             and (
                 not math.isfinite(value)
-                or not value.is_integer()
+                or not float(value).is_integer()
                 or value < 1
                 or value > len(names)
             )

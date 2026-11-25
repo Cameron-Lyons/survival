@@ -252,7 +252,7 @@ the other benchmarks.
 `survival.r` has no stub: the inline annotations of its modules are the typed
 surface (the package ships `py.typed`), so a signature is changed in one place.
 `python/tests/test_public_surface.py` checks that every export resolves and
-every public function declares its return type, and CI runs mypy on
+every public function declares its return type, and CI runs ty on
 `python/tests/typing_smoke.py`. Tests live in
 `python/tests/test_r_<module>.py` with shared builders in
 `python/tests/r_api_support.py`.
@@ -305,5 +305,4 @@ The main typed entry points are:
   the domain binding lists; explicitly re-export the native signatures and
   result types for the public kernel and domain APIs
 - `python/survival/r/`: the inline annotations of the R-style API, exercised by
-  `python/tests/typing_smoke.py` (mypy with `--follow-imports=silent`, so the
-  check covers the public types rather than the package internals)
+  `python/tests/typing_smoke.py` with ty alongside the public stubs

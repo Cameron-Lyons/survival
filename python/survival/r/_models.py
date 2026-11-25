@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import numpy as np
 
@@ -171,9 +171,9 @@ def _r_generic(function: Any) -> Any:
             raise TypeError(f"{function.__name__}() got multiple values for argument 'object'")
         return dispatcher.dispatch(args[0].__class__)(*args, **kwargs)
 
-    generic.register = dispatcher.register  # type: ignore[attr-defined]
-    generic.dispatch = dispatcher.dispatch  # type: ignore[attr-defined]
-    generic.registry = dispatcher.registry  # type: ignore[attr-defined]
+    vars(generic).update(
+        register=dispatcher.register, dispatch=dispatcher.dispatch, registry=dispatcher.registry
+    )
     return generic
 
 
@@ -1255,8 +1255,9 @@ def _cox_basehaz_frame(result: BasehazResult) -> dict[str, list[Any]]:
     hazard = result.hazard
     frame: dict[str, list[Any]] = {}
     if hazard and isinstance(hazard[0], list):
-        for col in range(len(hazard[0])):
-            frame[f"hazard.{col + 1}"] = [row[col] for row in hazard]
+        matrix = cast(list[list[float]], hazard)
+        for col in range(len(matrix[0])):
+            frame[f"hazard.{col + 1}"] = [row[col] for row in matrix]
     else:
         frame["hazard"] = list(hazard)
     frame["time"] = list(result.time)

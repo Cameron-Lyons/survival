@@ -6,10 +6,10 @@ import copy
 import math
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import MISSING, dataclass, field
+from dataclasses import MISSING, Field, dataclass, field
 from dataclasses import fields as dataclasses_fields
 from operator import index
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast
 
 from .. import _survival as _core
 
@@ -546,21 +546,18 @@ class _ModelSummary(Mapping[str, Any]):
     """
 
     __slots__ = ()
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
 
     def __getitem__(self, key: str) -> Any:
         name = key.replace(".", "_")
-        if name in self.__dataclass_fields__:  # type: ignore[attr-defined]
+        if name in self.__dataclass_fields__:
             value = getattr(self, name)
             if value is not None:
                 return value
         raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return (
-            name
-            for name in self.__dataclass_fields__  # type: ignore[attr-defined]
-            if getattr(self, name) is not None
-        )
+        return (name for name in self.__dataclass_fields__ if getattr(self, name) is not None)
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
@@ -853,7 +850,8 @@ class SurvexpResult:
             return math.inf if value == 0.0 else math.nan
 
         if self.surv and isinstance(self.surv[0], list):
-            return [[negative_log(value) for value in row] for row in self.surv]
+            matrix = cast(list[list[float]], self.surv)
+            return [[negative_log(value) for value in row] for row in matrix]
         return [negative_log(value) for value in cast(list[float], self.surv)]
 
 
@@ -1325,7 +1323,7 @@ class CoxSurvfitResult:
         return _subset_cox_survfit(self, strata=strata, data=data, drop=drop)
 
 
-def _install_curve_fields(cls: type) -> None:
+def _install_curve_fields(cls: type[CoxSurvfitResult]) -> None:
     """Route the dataclass's curve fields through :class:`_CurveField`.
 
     Installed after ``@dataclass`` so the fields keep their declared defaults and
