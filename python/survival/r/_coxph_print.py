@@ -155,7 +155,7 @@ def print_coxph(
     if not x.coefficients:
         return print_coxph_null(x, digits=digits, width=width)
     _, digits, width = print_options(1, digits, width, 4)
-    columns, rows, _ = _coefficient_table(x, 1)
+    columns, rows, _ = _coefficient_table(x, [1.0] * len(x.coefficients))
     df = sum(not math.isnan(value) for value in x.coefficients)
     statistic = 2 * (x.loglik[1] - x.loglik[0])
     summary: dict[str, Any] = {
