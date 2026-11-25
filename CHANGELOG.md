@@ -294,6 +294,13 @@ Numerical corrections are described under Fixed below.
   - `cox.zph(transform = sqrt)` takes any R function, primitives included. It is
     labelled `deparse(substitute(transform))` as in R, also in Python's `cox_zph`
     for callables other than lambdas.
+- `yates(population = "sas")` builds its population per model-frame variable, as R's
+  `yates_xmat` does: categorical adjusters take their factorial levels and
+  continuous adjusters their whole data-row values, so `I(age / 10)` adjusters no
+  longer raise a KeyError, and `cut(age) + age`, `factor(sex) + sex:age` or
+  `I(ph.ecog * sex)` beside a tested `factor(ph.ecog)` match R instead of
+  re-evaluating one variable from a column another shares. `population =
+  "factorial"` refuses a continuous adjuster with R's message.
 - `ridge()` reads a factor argument's level codes, as R's `cbind()` does, and
   `pspline()` rejects a factor with R's "'range' not meaningful for factors";
   before, both read the factor's labels.
@@ -354,6 +361,16 @@ Numerical corrections are described under Fixed below.
   collide with curve fields; the R bridge retains R's duplicate names.
 - `neardate` treats negative and positive zero dates as ties, preserving R's
   first-row (`after`) and last-row (`prior`) tie rules.
+- Three R bridge `survfit` lookups follow R:
+  - `survfit(coxfit, newdata, id = pid)` reads `pid` from `newdata`, as R's model
+    frame does. It failed with "object 'pid' not found", or silently used a
+    calling-environment `pid` instead.
+  - A selection of two or more strata of a grouped Kaplan–Meier or multi-state fit
+    (`fit[1:2]`, `fit[c(1, 3), ]`) keeps the fit that `summary(times =)`, `survfit0`
+    and the other whole-fit methods read; they failed with "function requires a
+    survfit object", and `summary()` lost the strata.
+  - Multi-state `summary(times =)` sorts and deduplicates the times and accumulates
+    the event and censoring counts, as `summary.survfitms` does.
 - `strata` accepts a shared one-shot iterator in multiple columns, including
   iterators with declared factor levels.
 

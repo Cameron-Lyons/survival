@@ -1636,6 +1636,23 @@ yates_case("lung_ph_ecog_factor_pop_data", "lung", "Surv(time, status) ~ factor(
 yates_case("veteran_celltype_lm", "veteran", "time ~ celltype + karno", "celltype", fun = lm)
 yates_case("veteran_celltype_predict_risk", "veteran", "Surv(time, status) ~ celltype + karno",
            "celltype", args = list(predict = "risk"))
+# SAS populations cross the categorical adjusters with every data row and keep each
+# continuous adjuster's whole data-row value, per model-frame variable: I() adjusters,
+# a cut() and a numeric term reading one column, and an interaction or I() term reading
+# the tested variable's column.
+for (case in list(
+  list("lung_sas_I_adjuster", "factor(sex) + factor(ph.ecog) + I(age/10)", "factor(sex)"),
+  list("lung_sas_I_ratio", "factor(sex) + factor(ph.ecog) + I(age/ph.karno)", "factor(sex)"),
+  list("lung_sas_cut_and_numeric", "factor(sex) + cut(age, c(0, 60, 100)) + age", "factor(sex)"),
+  list("lung_sas_numeric_interaction", "factor(ph.ecog) + factor(sex) + sex:age",
+       "factor(ph.ecog)"),
+  list("lung_sas_I_reads_tested", "factor(ph.ecog) + factor(sex) + I(ph.ecog * sex)",
+       "factor(ph.ecog)"),
+  list("lung_sas_log_and_numeric", "factor(sex) + factor(ph.ecog) + log(age) + ph.karno",
+       "factor(ph.ecog)"))) {
+  yates_case(case[[1]], "lung", paste("Surv(time, status) ~", case[[2]]), case[[3]],
+             rows = lung_cc, args = list(population = "sas"))
+}
 
 
 run_case("royston_brier", "lung_age_sex", function() {
