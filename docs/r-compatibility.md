@@ -72,6 +72,9 @@ alongside the corrected oracle.
 - **`model.matrix.survreg` with strata interactions**: R's method can fail while
   rebuilding the terms. `model_matrix(survreg_fit, data)` builds the prediction
   rows with the fitted contrasts and drops incomplete rows.
+- **`model.matrix` of a `tt()` Cox fit** returns the time-expanded design the fit
+  uses, with the transformed `tt()` columns. R's `model.matrix.coxph` rebuilds the
+  unexpanded frame, where `tt(x)` is just `x`, which is not the fitted design.
 - **Cox model matrices**: the strata-removal branch of `model.matrix.coxph`
   misspells `contrasts.arg`, so a rebuilt dense frailty loses its first indicator;
   the port keeps the fitted full contrasts. `makepredictcall.pspline` drops the

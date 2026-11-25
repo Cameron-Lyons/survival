@@ -274,6 +274,9 @@ Numerical corrections are described under Fixed below.
   - runs with `predict = "survival"` for survivalr Cox fits, which failed assigning
     into the immutable Python curve.
   - has R's `print.yates` layout, through the port's report.
+- R bridge results take R's shapes:
+  - `brier(detail = TRUE)` names `phat`'s columns by the rows scored.
+  - `concordancefit`'s `cvar` is a vector, and its `dfbeta` is named by cluster.
 - R bridge arguments are matched as R matches them:
   - `coxph` and `survreg` take partial names of their formals and of their control
     options passed through `...`. Examples are `coxph(..., meth = "breslow")`,
