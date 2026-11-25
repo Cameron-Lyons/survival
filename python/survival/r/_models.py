@@ -522,6 +522,7 @@ def _model_matrix_cox(
     position = _sparse_term(fit)
     design = _fit_frame(fit).design if position is not None else fit.design
     fitted_design = design
+    new = None
     if data is None:
         strata = fit.strata
         rows = fit.x
@@ -560,7 +561,7 @@ def _model_matrix_cox(
     names, assign = _model_matrix_names_and_assign(design)
     result = {"data": rows, "columns": names, "assign": assign, "strata": strata}
     if _with_metadata:
-        if data is None and fit.tt:
+        if new is None and fit.tt:
             if fit._matrix_rows is not None:
                 labels = list(fit._matrix_rows)
             else:
@@ -584,7 +585,7 @@ def _model_matrix_cox(
                 labels = _make_unique(
                     [str(row + 1) if source is None else source[row] for row in counts.index]
                 )
-        elif data is None:
+        elif new is None:
             missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
             labels = _prediction_row_labels(
                 fit._prediction_rows, len(rows) + len(missing), missing, False
