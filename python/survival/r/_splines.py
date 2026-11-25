@@ -18,6 +18,22 @@ from ._coerce import _floats_or_nan, _normalize_bool_option, _warn_outside_packa
 from ._types import _CovariateTerm, _PenaltyDesignTerm
 
 BASIS_FUNCTIONS = ("ns", "bs", "poly", "nsk")
+# The package each basis function lives in. R evaluates splines::ns(...) as ns(...) and
+# names its columns after the call as written.
+_BASIS_NAMESPACES = {"ns": "splines", "bs": "splines", "poly": "stats", "nsk": "survival"}
+
+
+def call_function(call: str) -> str:
+    """The function *call* names: a basis function without the package R finds it in
+    (``splines::ns(...)`` is ``ns``), any other name as written."""
+
+    function = call.split("(", 1)[0].strip()
+    package, sep, name = function.partition("::")
+    name = name.lstrip(":").strip()
+    if sep and _BASIS_NAMESPACES.get(name) == package.strip():
+        return name
+    return function
+
 
 _BASIS_FORMALS = {
     "ns": ("x", "df", "knots", "intercept", "Boundary.knots"),
@@ -38,7 +54,8 @@ def basis_arguments(call: str) -> tuple[str, dict[str, Any]]:
         _parse_formula_literal,
     )
 
-    function, _sep, inner = call.partition("(")
+    _function, _sep, inner = call.partition("(")
+    function = call_function(call)
     arguments = _match_arguments(
         function, _formula_response_parts(inner[:-1]), _BASIS_FORMALS[function]
     )
@@ -145,7 +162,7 @@ def fit_basis(
 
     if term.call is None:
         raise ValueError("a basis term must have a function call")
-    function = term.call.split("(", 1)[0]
+    function = call_function(term.call)
     x = np.asarray(_floats_or_nan(values), dtype=float)
     intercept = _normalize_bool_option(options.get("intercept", False), "intercept")
     knots = _vector(options.get("knots"))

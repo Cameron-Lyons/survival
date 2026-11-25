@@ -30,6 +30,10 @@ Numerical corrections are described under Fixed below.
   `survival::tt(...)`, `survival::ridge(...)` and the `survival::frailty*` terms as
   the specials, as R's `removeDoubleColonSurv()` does: the fit is the unprefixed
   formula's, and stores that formula.
+- Formulas accept namespaced calls such as `splines::ns(age, df = 2)`,
+  `stats::poly(age, 2)`, `survival::nsk(age, df = 3)` and `base::log(age)`, which
+  evaluate as the unqualified functions and keep the call as written in their
+  names (`splines::ns(age, df = 2)1`), as R's model frame does.
 - Penalty terms evaluate expression arguments as R's model frame does:
   `pspline(log(age))`, `ridge(age, I(age^2))` and `frailty(factor(inst))` fit as
   the same terms on precomputed columns, before row selection and with their

@@ -176,6 +176,7 @@ class _ExpressionNode:
     expression: str = ""
     names: tuple[str | None, ...] = ()
     parens: int = 0
+    namespace: str = ""
 
 
 _NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?L?")
@@ -232,6 +233,8 @@ _FORMALS: dict[str, tuple[tuple[str, ...], str | None]] = {
 }
 _MATRIX_CALLS = frozenset({"ns", "bs", "poly", "nsk"})
 _CALLS = frozenset(_FORMALS)
+# Packages whose functions a formula may name as pkg::fun; the call evaluates as fun.
+_NAMESPACES = frozenset({"base", "stats", "splines", "survival"})
 _BINDING = {
     "|": 10,
     "&": 20,
@@ -374,6 +377,21 @@ class _ExpressionParser:
             while self.pos < len(text) and (text[self.pos].isalnum() or text[self.pos] in "._"):
                 self.pos += 1
             value = text[start : self.pos]
+            # pkg::name and pkg:::name are one name, as R's lexer reads them.
+            rest = text[self.pos :].lstrip()
+            colons = 3 if rest.startswith(":::") else 2 if rest.startswith("::") else 0
+            if colons and value in _NAMESPACES:
+                after = len(text) - len(rest) + colons
+                tail = text[after:].lstrip()
+                if tail[:1].isalpha() or tail[:1] in "._":
+                    self.pos = len(text) - len(tail)
+                    while self.pos < len(text) and (
+                        text[self.pos].isalnum() or text[self.pos] in "._"
+                    ):
+                        self.pos += 1
+                    name = text[len(text) - len(tail) : self.pos]
+                    self.token = ("name", f"{value}{':' * colons}{name}")
+                    return
             literal = {
                 "TRUE": (True, "logical"),
                 "FALSE": (False, "logical"),
@@ -433,6 +451,9 @@ class _ExpressionParser:
         return None
 
     def call(self, function: str) -> _ExpressionNode:
+        namespace, sep, name = function.rpartition("::")
+        if sep:
+            namespace, function = function[: len(function) - len(name)], name
         if function not in _CALLS:
             raise self.error()
         self.advance()
@@ -455,6 +476,7 @@ class _ExpressionParser:
             tuple(children),
             columns,
             names=tuple(names) if any(names) else (),
+            namespace=namespace,
         )
 
     def parse(self, minimum: int = 0) -> _ExpressionNode:
@@ -571,7 +593,7 @@ def _deparse(node: _ExpressionNode, keep_integer: bool = False) -> str:
             ("" if name is None else f"{_deparse_name(name)} = ") + _deparse(child, keep_integer)
             for name, child in zip(names, node.children, strict=True)
         )
-        text = f"{node.value}({', '.join(arguments)})"
+        text = f"{node.namespace}{node.value}({', '.join(arguments)})"
     elif node.kind == "unary":
         text = node.value + _deparse(node.children[0], keep_integer)
     else:
