@@ -5040,7 +5040,7 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
     tstart = tstart_values,
     tstop = tstop_values,
     options = option_values,
-    operations = python_operations,
+    operations = unname(Map(list, operation_names, unname(python_operations))),
     metadata = metadata
   )
 
@@ -5131,10 +5131,13 @@ tmerge <- function(data1, data2, id, ..., tstart, tstop, options) {
     ncol = length(count_names),
     dimnames = list(operation_names, count_names)
   )
-  count_values <- .result_field(result, "tcount")
-  for (name in operation_names) {
-    row <- count_values[[name]]
-    current_counts[name, ] <- as.numeric(unlist(row[count_names], use.names = FALSE))
+  # This call's rows come last in tcount_rows, one per argument, repeats included.
+  count_rows <- .result_field(result, "tcount_rows")
+  count_rows <- count_rows[seq.int(length(count_rows) - length(operation_names) + 1L,
+    length.out = length(operation_names))]
+  for (index in seq_along(operation_names)) {
+    row <- count_rows[[index]][[2L]]
+    current_counts[index, ] <- as.numeric(unlist(row[count_names], use.names = FALSE))
   }
   all_counts <- rbind(attr(data1, "tcount"), current_counts)
 
@@ -7865,7 +7868,10 @@ survcheck <- function(formula, data = NULL, subset = NULL, na.action = na.pass,
     raw_status,
     response_states,
     !is.null(initial_codes),
-    initial_labels,
+    # R's survcheck2 tabulates from the states it works out row by row when istate is
+    # missing and the data are (start, stop]: if (inull && ny > 2) cstate2 <- ...
+    if (is.null(initial_values) && response_type %in% c("counting", "mcounting")) NULL
+    else initial_labels,
     call,
     attr(frame, "na.action")
   )

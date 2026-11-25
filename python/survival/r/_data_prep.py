@@ -1704,7 +1704,11 @@ def _tdc_default(argument: _TmergeArgument) -> tuple[Any, str]:
     """
 
     default, mode = argument.default, argument.mode
-    if _is_missing_value(default) or (argument.numeric is None and mode != "character"):
+    if _is_missing_value(default):
+        # A character column's missing value is None, as its data's are; numeric and
+        # logical columns keep NaN.
+        return (None if mode == "character" else default), mode
+    if argument.numeric is None and mode != "character":
         return default, mode
     if mode in {"integer", "double"}:
         try:
@@ -1964,8 +1968,8 @@ def _tmerge_inputs(
     id: Any,
     tstart: Any,
     tstop: Any,
-    operations: Mapping[str, TmergeOperation],
-) -> tuple[Any, Any, Any, Any, Any, dict[str, TmergeOperation]]:
+    operations: Sequence[tuple[str, TmergeOperation]],
+) -> tuple[Any, Any, Any, Any, Any, list[tuple[str, TmergeOperation]]]:
     """Prepare shared one-shot sources once across both frames and all updates.
 
     Only data1 is retained in the result.
@@ -1976,18 +1980,17 @@ def _tmerge_inputs(
     base = _data_column_sources(data1, "data1")
     base_keys = {name: f"base_{index}" for index, name in enumerate(base)}
     inputs.update({base_keys[name]: source for name, source in base.items()})
-    operation_keys = {
-        name: (f"time_{index}", f"value_{index}") for index, name in enumerate(operations)
-    }
-    for name, operation in operations.items():
-        time_key, value_key = operation_keys[name]
-        inputs[time_key], inputs[value_key] = operation.time, operation.value
+    for position, (_name, operation) in enumerate(operations):
+        inputs[f"time_{position}"], inputs[f"value_{position}"] = operation.time, operation.value
     data2, inputs = _prepare_formula_inputs(_data_column_sources(data2, "data2"), **inputs)
     data1 = {name: inputs[key] for name, key in base_keys.items()}
-    prepared = {}
-    for name, operation in operations.items():
-        time_key, value_key = operation_keys[name]
-        prepared[name] = replace(operation, time=inputs[time_key], value=inputs[value_key])
+    prepared = [
+        (
+            name,
+            replace(operation, time=inputs[f"time_{position}"], value=inputs[f"value_{position}"]),
+        )
+        for position, (name, operation) in enumerate(operations)
+    ]
     return data1, data2, inputs["id"], inputs["tstart"], inputs["tstop"], prepared
 
 
@@ -1999,7 +2002,7 @@ def tmerge(
     tstart: Any | None = None,
     tstop: Any | None = None,
     options: Mapping[str, Any] | None = None,
-    operations: Mapping[str, Any] | None = None,
+    operations: Mapping[str, Any] | Sequence[tuple[str, Any]] | None = None,
     metadata: Mapping[str, Any] | None = None,
     **args: Any,
 ) -> TmergeFrame:
@@ -2008,20 +2011,35 @@ def tmerge(
     ``id`` is the name of the subject column (on the first call it must exist in
     both data sets; later calls may pass a vector aligned with ``data2``).  The
     ``tdc``/``cumtdc``/``event``/``cumevent`` arguments follow as keywords whose
-    ``time``/``value`` are column names of ``data2`` or vectors.
+    ``time``/``value`` are column names of ``data2`` or vectors.  ``operations`` holds
+    them as a mapping or, as R's ``...`` does, an ordered sequence of ``(name,
+    operation)`` pairs in which a name may repeat: ``infect=event(etime1),
+    infect=event(etime2)`` adds both sets of events to one column.
     """
 
     if data1 is None or data2 is None or id is None:
         raise ValueError("the data1, data2, and id arguments are required")
-    named = {} if operations is None else dict(operations)
-    duplicated = set(named) & set(args)
+    if operations is None:
+        pairs: list[tuple[Any, Any]] = []
+    elif isinstance(operations, Mapping):
+        pairs = list(operations.items())
+    else:
+        pairs = [tuple(pair) for pair in operations]
+        if any(len(pair) != 2 for pair in pairs):
+            raise TypeError("operations must be (name, operation) pairs")
+    duplicated = {name for name, _value in pairs} & set(args)
     if duplicated:
         raise TypeError(f"duplicate tmerge argument(s): {', '.join(sorted(duplicated))}")
-    named.update(args)
-    if any(not isinstance(name, str) or not name for name in named):
+    pairs.extend(args.items())
+    if any(not isinstance(name, str) or not name for name, _value in pairs):
         raise ValueError("all additional argments must have a name")
-    parsed = {name: _tmerge_operation(value, name) for name, value in named.items()}
+    parsed = [(name, _tmerge_operation(value, name)) for name, value in pairs]
     tname, tevent, tdcvar, tcount = _tmerge_retained(data1, metadata)
+    tcount_rows = (
+        list(data1.tcount_rows)
+        if isinstance(data1, TmergeFrame) and data1.tcount_rows
+        else list(tcount.items())
+    )
     first_call = tname is None
     if first_call and isinstance(id, str):
         control = _tmerge_control({"idname": id, **(dict(options) if options else {})}, None)
@@ -2078,18 +2096,22 @@ def tmerge(
             range_ids,
             tstart,
             tstop,
-            next(iter(parsed.items()), None),
+            parsed[0] if parsed else None,
             control,
         )
 
-    for name, operation in parsed.items():
-        tcount[name] = _apply_tmerge_argument(
+    # R applies the arguments in order; a repeated name updates the column it made.
+    for name, operation in parsed:
+        counts = _apply_tmerge_argument(
             newdata, data2, id2, name, operation, control, tevent, tdcvar, first_call
         )
+        tcount[name] = counts
+        tcount_rows.append((name, counts))
     return TmergeFrame(
         columns=newdata,
         tname={key: str(control[key]) for key in ("idname", "tstartname", "tstopname")},
         tevent=tevent,
         tdcvar=tuple(tdcvar),
         tcount=tcount,
+        tcount_rows=tuple(tcount_rows),
     )

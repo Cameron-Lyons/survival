@@ -261,6 +261,15 @@ Numerical corrections are described under Fixed below.
   instead of the rounding left by its moment difference.
 - Stratum-centered Cox predictions compute finite weighted means when intermediate
   sums overflow, preserving predictions and standard errors for large covariates.
+- `tmerge` applies its update arguments in order, as R's `...` does, so a repeated
+  name such as `infect = event(etime1), infect = event(etime2)` (the cgd vignette)
+  adds every set of events to one column instead of keeping only the last; Python
+  takes them as ordered `(name, operation)` pairs, and `TmergeFrame.tcount_rows`
+  keeps R's per-argument `tcount` rows. A character `tdc` is missing (`None`, `NA`
+  in R) before its first value instead of the string `"NaN"`.
+- The R bridge's `survcheck` tabulates `(start, stop]` transitions without `istate`
+  from the states it works out row by row, as R does, instead of placing every row
+  in the initial state.
 - Aalen–Johansen restricted-mean standard errors integrate retained probability
   influences, including truncation between fitted times and extension beyond the
   final observation. Fits and summaries support infinite time endpoints with R's
