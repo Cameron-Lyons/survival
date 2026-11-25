@@ -8192,7 +8192,8 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
   if (!is.null(dots$id) && is.name(dots$id)) {
     evaluated_dots[["_id_column"]] <- as.character(dots$id)
   }
-  do.call(
+  # R's fit records its call, which update(), drop1() and step() refit from.
+  .with_model_call(match.call(), .formula_environment(formula, parent.frame()), do.call(
     .call_r_api,
     c(
       list(
@@ -8205,7 +8206,7 @@ coxph <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) {
       evaluated_dots,
       list(.wrap = c("survival_py_coxph", "survival_py_model", "survival_py_object"))
     )
-  )
+  ))
 }
 
 survreg.distributions <- list(
@@ -8555,7 +8556,8 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
   if (inherits(formula, "survival_py_surv") && is.matrix(evaluated_dots$x)) {
     evaluated_dots$x <- .as_python_aft_matrix(evaluated_dots$x)
   }
-  do.call(
+  # R's fit records its call, which update(), drop1() and step() refit from.
+  .with_model_call(match.call(), .formula_environment(formula, parent.frame()), do.call(
     .call_r_api,
     c(
       list(
@@ -8568,7 +8570,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
       evaluated_dots,
       list(.wrap = c("survival_py_survreg", "survival_py_model", "survival_py_object"))
     )
-  )
+  ))
 }
 
 basehaz <- function(fit, newdata, centered = TRUE, ...) {
@@ -9081,8 +9083,54 @@ deviance.survival_py_model <- function(object, ...) {
   NULL
 }
 
-nobs.survival_py_model <- function(object, ...) {
+# stats' drop1, add1 and step call nobs(object, use.fallback = TRUE).
+nobs.survival_py_model <- function(object, use.fallback = FALSE, ...) {
   as.integer(.call_r_api("nobs", object, ...))
+}
+
+# R-side components of a bridge fit: its call, and what stats' step() assigns
+# (object$formula, object$call$formula). The Python fit itself is immutable.
+.with_model_call <- function(call, environment, fit) {
+  fields <- attr(fit, "survival_r_fields", exact = TRUE)
+  if (is.null(fields)) fields <- list()
+  fields$call <- call
+  attr(fit, "survival_r_fields") <- fields
+  attr(fit, "survival_formula_environment") <- environment
+  fit
+}
+
+# Where a model formula's variables are found: a formula's own environment, or the
+# caller's for a formula string. formula(fit) returns a formula in it, as R's does.
+.formula_environment <- function(formula, env) {
+  if (inherits(formula, "formula") && is.environment(environment(formula))) {
+    environment(formula)
+  } else {
+    env
+  }
+}
+
+`$.survival_py_model` <- function(x, name) {
+  fields <- attr(x, "survival_r_fields", exact = TRUE)
+  if (name %in% names(fields)) return(fields[[name]])
+  NextMethod("$")
+}
+
+`[[.survival_py_model` <- function(x, i, ..., exact = TRUE) {
+  fields <- attr(x, "survival_r_fields", exact = TRUE)
+  if (is.character(i) && length(i) == 1L) {
+    if (i %in% names(fields)) return(fields[[i]])
+    # getElement(x, "call") asks with exact = TRUE, which reticulate's [[ refuses.
+    return(do.call("$", list(x, i)))
+  }
+  NextMethod("[[")
+}
+
+`$<-.survival_py_model` <- function(x, name, value) {
+  fields <- attr(x, "survival_r_fields", exact = TRUE)
+  if (is.null(fields)) fields <- list()
+  fields[[name]] <- value
+  attr(x, "survival_r_fields") <- fields
+  x
 }
 
 df.residual.survival_py_survreg <- function(object, ...) {
@@ -9096,7 +9144,9 @@ extractAIC.survival_py_model <- function(fit, scale = 0, k = 2, ...) {
 }
 
 formula.survival_py_model <- function(x, ...) {
-  stats::as.formula(.call_r_api("model_formula", x))
+  env <- attr(x, "survival_formula_environment", exact = TRUE)
+  if (!is.environment(env)) env <- parent.frame()
+  stats::as.formula(.call_r_api("model_formula", x), env = env)
 }
 
 terms.survival_py_model <- function(x, ...) {
