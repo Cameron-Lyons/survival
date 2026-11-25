@@ -8,6 +8,8 @@ from dataclasses import dataclass, replace
 from numbers import Real
 from typing import Any, TypedDict
 
+import numpy as np
+
 from .. import _survival as _core
 from ._coerce import (
     _integer_scalar,
@@ -22,7 +24,7 @@ from ._formula import (
     _covariate_term_columns,
     _covariate_term_name,
     _data_column_names,
-    _design_rows_from_spec,
+    _design_array_from_spec,
     _design_term_output_names,
     _split_terms,
 )
@@ -306,7 +308,7 @@ def _yates_sgtt(
     frame = _yates_model_frame(fit)
     rows = len(next(iter(frame.values())))
     result = _core.yates_sgtt(
-        _design_rows_from_spec(frame, full, rows),
+        _design_array_from_spec(frame, full, rows),
         assign,
         adjusters,
         beta,
@@ -389,7 +391,7 @@ def _yates_estimable(fit: Any, design: _FormulaDesign, xmatlist: list[Any]) -> l
 
     if isinstance(fit, YatesFitAdapter):
         n = len(next(iter(fit.model.values())))
-        return _core.yates_estimable(xmatlist, _design_rows_from_spec(fit.model, design, n))
+        return _core.yates_estimable(xmatlist, _design_array_from_spec(fit.model, design, n))
     return _core.yates_estimable(xmatlist, fit.x, intercept=design.intercept)
 
 
@@ -489,8 +491,9 @@ def yates(
         if isinstance(population, str) and population != "data"
         else None
     )
+    # One owned float64 design per level: the native kernels read its rows directly.
     xmatlist = [
-        _design_rows_from_spec(
+        _design_array_from_spec(
             {
                 **pdata,
                 **{
@@ -541,7 +544,7 @@ def yates(
             "test": test_value,
             "term": yates_term.names[0] if len(yates_term.names) == 1 else "global",
         }
-        xmatlist = [_columns(rows, columns) for rows in xmatlist]
+        xmatlist = [np.ascontiguousarray(rows[:, columns]) for rows in xmatlist]
         if setup.response is not None:
             result = _core.yates_response(xmatlist, beta, vmat, setup.response, **simulation)
         elif setup.baseline is None:

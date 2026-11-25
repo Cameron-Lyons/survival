@@ -78,6 +78,10 @@ Numerical corrections are described under Fixed below.
   `survival::tt(...)`, `survival::ridge(...)` and the `survival::frailty*` terms as
   the specials, as R's `removeDoubleColonSurv()` does: the fit is the unprefixed
   formula's, and stores that formula.
+- Formulas accept namespaced calls such as `splines::ns(age, df = 2)`,
+  `stats::poly(age, 2)`, `survival::nsk(age, df = 3)` and `base::log(age)`, which
+  evaluate as the unqualified functions and keep the call as written in their
+  names (`splines::ns(age, df = 2)1`), as R's model frame does.
 - Penalty terms evaluate expression arguments as R's model frame does:
   `pspline(log(age))`, `ridge(age, I(age^2))` and `frailty(factor(inst))` fit as
   the same terms on precomputed columns, before row selection and with their
@@ -255,6 +259,10 @@ Numerical corrections are described under Fixed below.
   are summed directly, with compensated sums throughout. The result is within a few
   ulps of the exact pair sum and no longer depends on the thread count. 100,000
   rows take 38 ms instead of 1.7 s.
+- `yates` builds each level's population design, and the SGTT and estimability
+  designs, as float64 arrays that the native kernels read directly, instead of
+  lists of row lists that were then copied column by column. Results are bitwise
+  identical; population means for 100,000 rows take 40 ms instead of 90 ms.
 
 ### Fixed
 
@@ -285,6 +293,10 @@ Numerical corrections are described under Fixed below.
 - `strata(x, na.group = TRUE)` keeps its missing-x stratum when the formula also
   has a transformed variable such as `log(ph.karno)`; the transformed variable's
   evaluation had returned x to the missing-value scan.
+- `update()`, `getCall()`, `drop1()`, `add1()` and `step()` work on R bridge Cox and
+  survreg fits. A fit records the call that made it, so it can be refit from that
+  call. `step()`'s assignments to `fit$formula` and `fit$call` are kept on the R
+  side, since the Python fit is immutable. `nobs()` accepts `use.fallback`.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve
