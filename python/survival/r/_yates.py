@@ -26,6 +26,7 @@ from ._formula import (
     _data_column_names,
     _design_array_from_spec,
     _design_term_output_names,
+    _single_design_columns,
     _split_terms,
 )
 from ._misc import _coxph_engine, _unique_in_order
@@ -34,9 +35,11 @@ from ._types import (
     CoxSurvfitResult,
     YatesResult,
     _CategoricalDesignTerm,
+    _CovariateTerm,
     _FormulaDesign,
     _InteractionDesignTerm,
     _InteractionTerm,
+    _NumericDesignTerm,
     _SingleDesignTerm,
 )
 from ._yates_model import YatesFitAdapter
@@ -58,12 +61,14 @@ class _SimulationOptions(TypedDict):
 
 @dataclass(frozen=True)
 class _YatesTerm:
-    """Tested variables and their Cartesian product of requested levels."""
+    """Tested variables and their Cartesian product of requested levels; ``variables``
+    are the tested model-frame variables, every other one adjusts."""
 
     columns: list[str]
     names: list[str]
     levels: dict[str, list[Any]]
     estimate_names: list[str]
+    variables: tuple[_CovariateTerm, ...] = ()
 
 
 def _design_factors(design: _FormulaDesign) -> list[_SingleDesignTerm]:
@@ -146,6 +151,7 @@ def _yates_term(design: _FormulaDesign, term: Any, levels: Any | None) -> _Yates
         names,
         _factorial_population({}, selected),
         names if levels is None else columns,
+        tuple(factors[column].term for column in columns),
     )
 
 
@@ -172,43 +178,69 @@ def _yates_model_frame(fit: Any) -> dict[str, list[Any]]:
     )
 
 
+@dataclass(frozen=True)
+class _YatesPopulation:
+    """Population rows for :func:`_yates_population`: the data columns, and the adjusting
+    variables evaluated for those rows (R's ``pdata`` holds model-frame variables, so a
+    variable is never re-evaluated from a column another variable shares)."""
+
+    data: dict[str, list[Any]]
+    evaluated: dict[_CovariateTerm, Any] | None = None
+    factor_values: dict[_CovariateTerm, list[Any]] | None = None
+
+
 def _yates_population(
     mframe: dict[str, list[Any]],
     design: _FormulaDesign,
     term: _YatesTerm,
     population: str,
-) -> dict[str, list[Any]]:
-    """R's ``yates_xmat`` population rows over the adjusting variables."""
+) -> _YatesPopulation:
+    """R's ``yates_xmat`` population over the adjusting model-frame variables.
 
-    adjusters = [spec for spec in _design_factors(design) if spec.term.column not in term.columns]
-    categorical = {
-        (_covariate_term_name(spec.term) if spec.term.strata else spec.term.column): list(
-            spec.levels
-        )
-        for spec in adjusters
-        if isinstance(spec, _CategoricalDesignTerm)
-    }
-    continuous = [
-        spec.term.column for spec in adjusters if not isinstance(spec, _CategoricalDesignTerm)
-    ]
+    ``factorial`` crosses the levels of the categorical adjusters, the other columns taken
+    from the first data row; ``sas`` crosses them with every data row, the continuous
+    adjusters keeping their whole data-row values (``pdata[[j]] <- mframe[[j]][k]``); and
+    ``data`` is the model frame. Categorical adjusters are their factor levels and
+    continuous ones their evaluated design columns, not re-evaluations of the source
+    columns, so ``cut(age) + age`` or ``factor(sex) + sex:age`` keep each variable apart.
+    """
+
+    tested = set(term.variables)
+    adjusters = list(
+        {spec.term: spec for spec in _design_factors(design) if spec.term not in tested}.values()
+    )
+    categorical = [spec for spec in adjusters if isinstance(spec, _CategoricalDesignTerm)]
+    continuous = [spec for spec in adjusters if not isinstance(spec, _CategoricalDesignTerm)]
     if population == "data" or (population == "sas" and not categorical):
-        return mframe
+        return _YatesPopulation(mframe)
     if population == "factorial" and continuous:
         raise ValueError(
             "population=factorial only applies if all the adjusting terms are categorical"
         )
-    pdata = _factorial_population(mframe, categorical)
-    if not continuous:
-        return pdata
-    n_data = len(next(iter(mframe.values())))
-    n_pop = len(next(iter(pdata.values())))
-    out = {
-        name: [values[idx // n_data] for idx in range(n_pop * n_data)]
-        for name, values in pdata.items()
+    grid = _factorial_population(
+        {}, {str(index): list(spec.levels) for index, spec in enumerate(categorical)}
+    )
+    n_grid = math.prod(len(spec.levels) for spec in categorical)
+    n_data = len(next(iter(mframe.values()))) if mframe else 0
+    if continuous:
+        rows = [index % n_data for index in range(n_grid * n_data)]
+        cells = [index // n_data for index in range(n_grid * n_data)]
+    else:
+        rows = [0] * n_grid
+        cells = list(range(n_grid))
+    data = {name: [values[row] for row in rows] for name, values in mframe.items()}
+    factor_values = {
+        spec.term: [grid[str(index)][cell] for cell in cells]
+        for index, spec in enumerate(categorical)
     }
-    for name in continuous:
-        out[name] = [mframe[name][idx % n_data] for idx in range(n_pop * n_data)]
-    return out
+    evaluated: dict[_CovariateTerm, Any] = {}
+    for spec in continuous:
+        columns = _single_design_columns(mframe, spec, n_data)
+        if isinstance(spec, _NumericDesignTerm) and len(columns) == 1:
+            evaluated[spec.term] = [columns[0][row] for row in rows]
+        else:
+            evaluated[spec.term] = [[column[row] for column in columns] for row in rows]
+    return _YatesPopulation(data, evaluated or None, factor_values or None)
 
 
 def _yates_weights(mframe: Mapping[str, list[Any]], population: str) -> list[float] | None:
@@ -470,9 +502,12 @@ def yates(
     if len(vmat) > len(kept):
         vmat = _columns([vmat[idx] for idx in kept], kept)
     yates_term = _yates_term(design, term, levels)
+    evaluated = None
+    factor_values = None
     if isinstance(population, str):
         mframe = _yates_model_frame(fit)
-        pdata = _yates_population(mframe, design, yates_term, population)
+        built = _yates_population(mframe, design, yates_term, population)
+        pdata, evaluated, factor_values = built.data, built.evaluated, built.factor_values
         weights = _yates_weights(mframe, population)
     else:
         pdata = {str(name): _column(population, name) for name in population_names}
@@ -482,15 +517,6 @@ def yates(
     n_pop = len(next(iter(pdata.values())))
     if any(len(values) != n_pop for values in pdata.values()):
         raise ValueError("population columns must have the same length")
-    factor_values = (
-        {
-            spec.term: pdata[_covariate_term_name(spec.term)]
-            for spec in _design_factors(design)
-            if spec.term.strata and _covariate_term_name(spec.term) in pdata
-        }
-        if isinstance(population, str) and population != "data"
-        else None
-    )
     # One owned float64 design per level: the native kernels read its rows directly.
     xmatlist = [
         _design_array_from_spec(
@@ -503,6 +529,7 @@ def yates(
             },
             design,
             n_pop,
+            evaluated=evaluated,
             factor_values=factor_values,
         )
         for combination in zip(*yates_term.levels.values(), strict=True)
