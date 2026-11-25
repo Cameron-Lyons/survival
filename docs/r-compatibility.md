@@ -128,6 +128,13 @@ alongside the corrected oracle.
 
 ### Cox models
 
+- **Offsets in sequential `anova`**: R's `anova.coxph` refits each intermediate
+  model with `offset(object$offset)` only when the fit kept `x = TRUE`. A default
+  fit with an offset therefore compares a NULL row and a full row that include
+  the offset with intermediate rows that do not, and can report negative
+  chi-squares. Lung `age + sex + offset(ph.ecog/10)`: R's `age` row has log
+  likelihood -667.35 and Chisq -0.62; the port keeps the offset in every row
+  (-664.80, Chisq 4.49).
 - **Non-converged variance** (`coxfit6.c`, `coxexact.c`): when iterations run
   out with `iter.max > 1`, R hands the recomputed information matrix to `chinv2`
   without `cholesky2`, so its variance is not the inverse information. The port

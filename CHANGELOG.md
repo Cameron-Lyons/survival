@@ -256,6 +256,13 @@ Numerical corrections are described under Fixed below.
   survreg fits. A fit records the call that made it, so it can be refit from that
   call. `step()`'s assignments to `fit$formula` and `fit$call` are kept on the R
   side, since the Python fit is immutable. `nobs()` accepts `use.fallback`.
+- `summary(coxph, scale =)` multiplies each coefficient by its own element of a
+  `scale` vector, recycled as R's `beta * scale` is, in Python and in the R bridge;
+  the bridge applied the first element to every coefficient, and Python refused a
+  vector.
+- The R bridge's `summary(coxph)$waldtest` tests `coef - init`, as R's `wald.test`
+  does; it tested `coef`, so fits with `init` (or `iter.max = 0`) reported the wrong
+  statistic.
 - A direct `cargo build --features extension-module` links on macOS: `build.rs`
   emits PyO3's extension-module link arguments, which only maturin supplied before.
 - Native Python bindings, prepared matrix fitters and direct Cox curves preserve

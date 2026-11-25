@@ -1414,17 +1414,34 @@ def clogit(
     return ClogitModel(**fit.__dict__)
 
 
+def _scale_factors(scale: Any, n: int) -> list[float]:
+    """The summaries' ``scale``: one number, or one per coefficient recycled as R's
+    ``beta * scale`` recycles it."""
+
+    if isinstance(scale, str):
+        raise TypeError("scale must be numeric")
+    values = (
+        [_finite_float(scale, "scale")]
+        if isinstance(scale, numbers.Real) or getattr(scale, "ndim", None) == 0
+        else [_finite_float(value, "scale") for value in _materialize_1d(scale, "scale")]
+    )
+    if not values:
+        raise ValueError("scale must have at least one value")
+    return [values[idx % len(values)] for idx in range(n)]
+
+
 def _coefficient_table(
-    fit: CoxphModel, scale: float
+    fit: CoxphModel, scale: Sequence[float]
 ) -> tuple[list[str], list[dict[str, float | str]], list[float]]:
     """summary.coxph's coefficient rows under R's column names, and the standard errors
-    the tests use (the robust ones of a robust fit).  As in R, ``se(coef)`` of a robust
-    fit is the unscaled naive standard error."""
+    the tests use (the robust ones of a robust fit), with ``scale[i]`` multiplying the
+    ith coefficient.  As in R, ``se(coef)`` of a robust fit is the unscaled naive
+    standard error."""
 
-    beta = [value * scale for value in fit.coefficients]
+    beta = [value * factor for value, factor in zip(fit.coefficients, scale, strict=True)]
     var = fit.var
     naive = fit.naive_var
-    se = [_r_sqrt(var[idx][idx]) * scale for idx in range(len(beta))]
+    se = [_r_sqrt(var[idx][idx]) * scale[idx] for idx in range(len(beta))]
     rows: list[dict[str, float | str]] = []
     for idx, (name, value) in enumerate(zip(fit.coefficient_names, beta, strict=True)):
         z = value / se[idx] if se[idx] > 0.0 else math.nan
@@ -1473,15 +1490,15 @@ def summary_coxph(
 
     if fit.penalized is not None:
         return summary_coxph_penal(fit, conf_int=conf_int, scale=scale, terms=terms)
-    scale_value = _finite_float(scale, "scale")
     beta = fit.coefficients
+    factors = _scale_factors(scale, len(beta))
     if not beta:
         return fit
     df = _coxph_df(fit)
     loglik = fit.loglik
     score = fit.score if fit.score is not None else math.nan
     logtest = -2.0 * (loglik[0] - loglik[1])
-    columns, rows, se = _coefficient_table(fit, scale_value)
+    columns, rows, se = _coefficient_table(fit, factors)
     from ._coxphms import CoxphmsModel
 
     wald = fit.wald_test
@@ -1492,7 +1509,10 @@ def summary_coxph(
         loglik=list(loglik),
         coefficients=rows,
         conf_int=_conf_int_rows(
-            fit.coefficient_names, [value * scale_value for value in beta], se, conf_int
+            fit.coefficient_names,
+            [value * factor for value, factor in zip(beta, factors, strict=True)],
+            se,
+            conf_int,
         )
         if conf_int
         else None,
@@ -1673,9 +1693,9 @@ def summary_coxph_penal(
     penalized = fit.penalized
     if penalized is None:
         raise TypeError("summary_coxph_penal requires a penalized Cox fit")
-    scale_value = _finite_float(scale, "scale")
     term_tests = _normalize_bool_option(terms, "terms")
     beta = fit.coefficients
+    factors = _scale_factors(scale, len(beta))
     if not beta and penalized.frail is None:
         raise ValueError("Penalized summary function can't be used for a null model")
     var, var2 = fit.var, penalized.var2
@@ -1758,8 +1778,8 @@ def summary_coxph_penal(
         coefficients=rows,
         conf_int=_conf_int_rows(
             fit.coefficient_names,
-            [value * scale_value for value in beta],
-            [_r_sqrt(var[idx][idx]) * scale_value for idx in range(len(beta))],
+            [value * factor for value, factor in zip(beta, factors, strict=True)],
+            [_r_sqrt(var[idx][idx]) * factors[idx] for idx in range(len(beta))],
             conf_int,
         )
         if conf_int and beta

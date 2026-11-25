@@ -726,7 +726,8 @@ attrassign <- function(object, tt) {
   model_type <- as.character(model_type)[[1L]]
   robust <- length(robust) > 0L && isTRUE(as.logical(robust)[[1L]])
   is_survreg <- identical(model_type, "survreg")
-  cox_scale <- if (is_survreg) 1 else as.numeric(scale)[[1L]]
+  # summary.coxph's beta * scale recycles scale over the coefficients.
+  cox_scales <- if (is_survreg) rep(1, length(rows)) else rep_len(as.numeric(scale), length(rows))
   columns <- if (is_survreg) {
     if (robust) {
       c("Value", "Std. Err", "(Naive SE)", "z", "p")
@@ -756,7 +757,7 @@ attrassign <- function(object, tt) {
     }
     as.numeric(value)[[1L]]
   }
-  row_values <- function(row) {
+  row_values <- function(row, cox_scale) {
     if (is_survreg || penalized) {
       result <- vapply(columns, function(column) row_numeric(row, column), numeric(1))
       if (is_survreg && is.na(result[[1L]])) {
@@ -782,7 +783,7 @@ attrassign <- function(object, tt) {
 
   coefficient_names <- vapply(rows, function(row) as.character(row[["name"]]), character(1))
   values <- matrix(
-    unlist(lapply(rows, row_values), use.names = FALSE),
+    unlist(Map(row_values, rows, cox_scales), use.names = FALSE),
     nrow = length(rows),
     ncol = length(columns),
     byrow = TRUE
@@ -9534,18 +9535,9 @@ summary.survival_py_model <- function(object, conf.int = 0.95, scale = 1,
         maxrsq = 1 - exp(2 * null_loglik / result$n)
       )
 
-      unscaled_coefficients <- stats::coef(object)
-      keep <- !is.na(unscaled_coefficients)
-      if (df > 0L && any(keep)) {
-        active_variance <- stats::vcov(object, complete = TRUE)[keep, keep, drop = FALSE]
-        wald <- coxph.wtest(
-          active_variance,
-          unname(as.list(unscaled_coefficients[keep]))
-        )
-        wald_test <- wald$test
-      } else {
-        wald_test <- 0
-      }
+      # The fit's Wald test of coef - init (R's coxph.wtest(var, coef - init)).
+      wald_value <- .result_field(object, "wald_test")
+      wald_test <- if (df > 0L && length(wald_value)) as.numeric(wald_value)[[1L]] else 0
       result$waldtest <- .cox_summary_test(wald_test, df, round.test = TRUE)
     }
   }
