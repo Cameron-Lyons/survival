@@ -339,6 +339,12 @@ Numerical corrections are described under Fixed below.
   as R's long-double sums give, instead of leaving a degenerate fit.
 - `survreg(..., y=True)` stores interval rows with a zero lower bound as the
   left-censored rows that were fitted, as R's `fit$y` does.
+- R bridge print methods match R. Cox (ordinary, null, penalized, stratified,
+  robust and `clogit`), survreg, survfit, survdiff, cox.zph and concordance
+  objects print through the port's R-format reports, under R's call header and
+  default digits; they used to print data frames or bare coefficients. `anova()`
+  returns R's `anova` data frame (a plain data frame for several survreg fits),
+  which prints as R prints it.
 - R bridge: `agexact.fit` fits a design without columns, as R does, and leaves
   residuals unnamed for `rownames = NULL`; `survSplit` takes `timefix` and
   `added`, keeps the data's column order for `~ .` and returns a double event.
