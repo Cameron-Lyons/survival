@@ -8584,7 +8584,7 @@ basehaz <- function(fit, newdata, centered = TRUE, ...) {
   )
 }
 
-.as_brier_result <- function(result) {
+.as_brier_result <- function(result, labels = NULL) {
   out <- list(
     rsquared = .as_numeric_vector(result[["rsquared"]]),
     brier = .as_numeric_vector(result[["brier"]]),
@@ -8595,7 +8595,11 @@ basehaz <- function(fit, newdata, centered = TRUE, ...) {
   }
   if (!is.null(result[["phat"]])) {
     out$phat <- .as_numeric_matrix(result[["phat"]])
-    colnames(out$phat) <- as.character(seq_len(ncol(out$phat)))
+    colnames(out$phat) <- if (length(labels) == ncol(out$phat)) {
+      labels
+    } else {
+      as.character(seq_len(ncol(out$phat)))
+    }
   }
   if (!is.null(result[["eff.n"]])) {
     out$eff.n <- .as_numeric_vector(result[["eff.n"]])
@@ -8605,7 +8609,12 @@ basehaz <- function(fit, newdata, centered = TRUE, ...) {
 
 brier <- function(fit, times, newdata, ties = TRUE, detail = FALSE,
                   timefix = TRUE, efron = FALSE) {
-  .as_brier_result(.call_r_api(
+  # R names phat's columns by the rows scored: the fit's model-frame rows, or newdata's.
+  labels <- NULL
+  if (isTRUE(detail)) {
+    labels <- if (missing(newdata)) rownames(stats::model.matrix(fit)) else row.names(newdata)
+  }
+  .as_brier_result(labels = labels, .call_r_api(
     "brier",
     fit,
     times = if (missing(times)) NULL else as.list(as.numeric(times)),
@@ -8874,6 +8883,15 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
   if (!isTRUE(std.err)) {
     out$var <- out$cvar <- NULL
   }
+  # dfbeta sums the influence by cluster, so R's rowsum() names (and orders) it.
+  if (!missing(cluster) && !is.null(out$dfbeta)) {
+    groups <- rownames(rowsum(rep(0, length(cluster)), cluster))
+    if (is.matrix(out$dfbeta) && nrow(out$dfbeta) == length(groups)) {
+      rownames(out$dfbeta) <- groups
+    } else if (!is.matrix(out$dfbeta) && length(out$dfbeta) == length(groups)) {
+      names(out$dfbeta) <- groups
+    }
+  }
   out
 }
 
@@ -8914,9 +8932,8 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
       as.numeric(variance)
     }
     cvar <- .result_field(result, "cvar")
-    if (!is.null(cvar)) {
-      out$cvar <- if (is.list(cvar) || length(cvar) > 1L) .as_numeric_matrix(cvar) else as.numeric(cvar)
-    }
+    # R's cvar is a vector, one variance per score.
+    if (!is.null(cvar)) out$cvar <- .as_numeric_vector(cvar)
   }
   dfbeta <- .result_field(result, "dfbeta")
   if (!is.null(dfbeta)) {
