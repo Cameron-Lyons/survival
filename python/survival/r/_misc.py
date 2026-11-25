@@ -797,7 +797,9 @@ def royston(
     )
     values = {"D": result.d, "se(D)": result.se_d, "R.D": result.r_d, "R.KO": result.r_ko}
     if newdata is None:
-        values["R.N"] = result.r_n
+        # A null model's loglik has one value in R, so its likelihood-ratio test and R.N
+        # are NA.
+        values["R.N"] = result.r_n if engine.coefficients else math.nan
     values["C.GH"] = result.c_gh
     return values
 

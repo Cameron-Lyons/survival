@@ -7,6 +7,7 @@ times) and the per-stratum split (the ``finegray`` kernel).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -76,12 +77,21 @@ def _finegray_inputs(mf: ModelFrame) -> tuple[Surv, Any, Any]:
         w_arr = _numeric_ndarray(mf.weights)
         if w_arr is not None:
             w_f64 = w_arr.astype(np.float64, copy=False)
-            if not np.isfinite(w_f64).all():
+            if np.isinf(w_f64).any():
                 raise ValueError("weights must be finite")
             weights = w_f64
         else:
-            weights = [_finite_float(v, "weights") for v in mf.weights]
+            weights = [_case_weight(v) for v in mf.weights]
     return response, istrat, weights
+
+
+def _case_weight(value: Any) -> float:
+    """A case weight: a missing one is NaN, which R's finegray carries into the weights of
+    the rows it scales (``split$wt * user.weights[split$row]``)."""
+
+    if _is_missing_value(value):
+        return math.nan
+    return _finite_float(value, "weights")
 
 
 def finegray(

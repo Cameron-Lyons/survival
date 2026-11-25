@@ -4,7 +4,7 @@ use crate::core::strata_order::validate_intervals;
 use crate::data_prep::aeq_counting;
 use crate::error::{SurvivalError, SurvivalResult};
 use crate::internal::numpy_utils::{FloatVec, IntVec};
-use crate::internal::validation::{validate_finite, validate_length};
+use crate::internal::validation::{ValidationError, validate_finite, validate_length};
 use crate::surv_analysis::{SurvfitKMData, SurvfitKMOptions, survfitkm};
 use pyo3::prelude::*;
 
@@ -128,7 +128,20 @@ pub fn finegray_expand(input: &FineGrayInput<'_>) -> SurvivalResult<FineGrayOutp
     }
     if let Some(weights) = input.weights {
         validate_length(n, weights.len(), "weights")?;
-        validate_finite(weights, "weights")?;
+        // A missing weight (NaN, R's NA) leaves NA weights in the rows it scales, as R's
+        // split$wt * user.weights[split$row] does; an infinite one is refused.
+        if let Some((index, &value)) = weights
+            .iter()
+            .enumerate()
+            .find(|(_, weight)| weight.is_infinite())
+        {
+            return Err(ValidationError::NonFinite {
+                name: "weights".to_string(),
+                index,
+                value,
+            }
+            .into());
+        }
     }
     if let Some(start) = input.start {
         validate_length(n, start.len(), "start")?;
@@ -372,6 +385,26 @@ mod tests {
         {
             assert!((value - expected).abs() < 1e-14);
         }
+    }
+
+    #[test]
+    fn missing_weight_is_missing_only_in_the_rows_it_scales() {
+        let times = [1., 2., 2., 3., 4., 5., 6., 7.];
+        let status = [1, 2, 0, 1, 2, 0, 1, 2];
+        let unweighted = finegray_expand(&input(&times, &status)).unwrap();
+        let mut weighted = input(&times, &status);
+        weighted.weights = Some(&[1., f64::NAN, 1., 1., 1., 1., 1., 1.]);
+        let output = finegray_expand(&weighted).unwrap();
+        assert_eq!(output.row, unweighted.row);
+        for ((&row, &value), &expected) in output.row.iter().zip(&output.wt).zip(&unweighted.wt) {
+            if row == 2 {
+                assert!(value.is_nan());
+            } else {
+                assert_eq!(value.to_bits(), expected.to_bits());
+            }
+        }
+        weighted.weights = Some(&[1., f64::INFINITY, 1., 1., 1., 1., 1., 1.]);
+        assert!(finegray_expand(&weighted).is_err());
     }
 
     #[test]
