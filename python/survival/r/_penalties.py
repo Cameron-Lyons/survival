@@ -478,7 +478,7 @@ def _pspline_combine(combine: Any, ncol: int, intercept: bool) -> tuple[int, ...
     with the first column (dropped unless ``intercept``) coded 0 in front of them."""
 
     codes = _float_vector(_scalar_or_vector(combine, "combine"), "combine")
-    if any(not code.is_integer() or code < 0 for code in codes) or any(
+    if any(not float(code).is_integer() or code < 0 for code in codes) or any(
         b < a for a, b in pairwise(codes)
     ):
         raise ValueError("combine must be an increasing vector of positive integers")

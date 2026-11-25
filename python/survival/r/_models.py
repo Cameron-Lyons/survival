@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping, Sequence
 from functools import singledispatch
 from statistics import NormalDist
-from typing import Any, overload
+from typing import Any, cast, overload
 
 import numpy as np
 
@@ -171,9 +171,9 @@ def _r_generic(function: Any) -> Any:
             raise TypeError(f"{function.__name__}() got multiple values for argument 'object'")
         return dispatcher.dispatch(args[0].__class__)(*args, **kwargs)
 
-    generic.register = dispatcher.register  # type: ignore[attr-defined]
-    generic.dispatch = dispatcher.dispatch  # type: ignore[attr-defined]
-    generic.registry = dispatcher.registry  # type: ignore[attr-defined]
+    vars(generic).update(
+        register=dispatcher.register, dispatch=dispatcher.dispatch, registry=dispatcher.registry
+    )
     return generic
 
 
@@ -522,6 +522,7 @@ def _model_matrix_cox(
     position = _sparse_term(fit)
     design = _fit_frame(fit).design if position is not None else fit.design
     fitted_design = design
+    new = None
     if data is None:
         strata = fit.strata
         rows = fit.x
@@ -560,7 +561,7 @@ def _model_matrix_cox(
     names, assign = _model_matrix_names_and_assign(design)
     result = {"data": rows, "columns": names, "assign": assign, "strata": strata}
     if _with_metadata:
-        if data is None and fit.tt:
+        if new is None and fit.tt:
             if fit._matrix_rows is not None:
                 labels = list(fit._matrix_rows)
             else:
@@ -584,7 +585,7 @@ def _model_matrix_cox(
                 labels = _make_unique(
                     [str(row + 1) if source is None else source[row] for row in counts.index]
                 )
-        elif data is None:
+        elif new is None:
             missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
             labels = _prediction_row_labels(
                 fit._prediction_rows, len(rows) + len(missing), missing, False
@@ -1255,8 +1256,9 @@ def _cox_basehaz_frame(result: BasehazResult) -> dict[str, list[Any]]:
     hazard = result.hazard
     frame: dict[str, list[Any]] = {}
     if hazard and isinstance(hazard[0], list):
-        for col in range(len(hazard[0])):
-            frame[f"hazard.{col + 1}"] = [row[col] for row in hazard]
+        matrix = cast(list[list[float]], hazard)
+        for col in range(len(matrix[0])):
+            frame[f"hazard.{col + 1}"] = [row[col] for row in matrix]
     else:
         frame["hazard"] = list(hazard)
     frame["time"] = list(result.time)

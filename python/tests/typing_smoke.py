@@ -1,7 +1,7 @@
-"""Public API types (checked by mypy in CI, not collected by pytest).
+"""Public API types (checked by ty in CI, not collected by pytest).
 
 ``survival.r`` ships no stub, so its inline annotations are the typed surface; these
-``assert_type`` calls fail the lint workflow's mypy step when a public return type
+``assert_type`` calls fail the lint workflow's ty step when a public return type
 regresses to ``Any`` or to the wrong class. ``survival.kernels`` re-exports the
 native signatures and result classes from the generated extension stub.
 """

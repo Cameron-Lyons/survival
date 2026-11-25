@@ -547,7 +547,7 @@ def _missing_rows(x: Surv | Surv2) -> np.ndarray:
         try:
             # A NaN entry makes the sum NaN, so a sum that is not NaN proves the column
             # complete; a missing status (None) or inf - inf takes the array scan.
-            if not math.isnan(sum(column)):
+            if not math.isnan(sum(column)):  # ty: ignore[no-matching-overload]
                 continue
         except (TypeError, OverflowError):
             pass

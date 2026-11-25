@@ -605,7 +605,7 @@ def _matrix_term_selection(
     indices: list[int | None] = []
     overflow = False
     for value in values:
-        if _is_missing_value(value):
+        if value is None or _is_missing_value(value):
             indices.append(None)
         else:
             numeric = float(value)

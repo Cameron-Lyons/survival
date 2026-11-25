@@ -1199,7 +1199,7 @@ Format and lint:
 cargo fmt
 uv run --no-sync ruff format python/ test/ --check
 uv run --no-sync ruff check python/ test/
-uv run --no-sync mypy python/survival/__init__.pyi python/survival/_survival.pyi python/survival/kernels.pyi python/survival/datasets.pyi python/survival/core.pyi python/survival/data_prep.pyi python/survival/interval.pyi python/survival/population.pyi python/survival/regression.pyi python/survival/surv_analysis.pyi python/survival/validation.pyi python/survival/r python/tests/typing_smoke.py --ignore-missing-imports --follow-imports=silent --check-untyped-defs
+uv run --no-sync ty check
 ```
 
 The codebase is organized with:

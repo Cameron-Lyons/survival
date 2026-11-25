@@ -334,7 +334,7 @@ def _pspline_method(
     """The ``fixed``/``aic``/``df`` selection at the top of R's ``pspline``."""
 
     df_value = _finite_float(df, "df")
-    df_value = int(df_value) if df_value.is_integer() else df_value
+    df_value = int(df_value) if float(df_value).is_integer() else df_value
     nterm_value = None if nterm is None else int(round(_finite_float(nterm, "nterm")))
     eps_value = None if eps is None else _finite_float(eps, "eps")
     if theta is not None:

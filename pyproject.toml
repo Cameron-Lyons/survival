@@ -47,7 +47,7 @@ plot = ["matplotlib>=3.8"]
 dev = [
   "pre-commit==4.7.0",
   "ruff==0.17.6",
-  "mypy==2.4.1",
+  "ty==0.0.110",
 ]
 test = [
   "matplotlib>=3.8",
@@ -61,6 +61,21 @@ test = [
 features = ["extension-module"]
 module-name = "survival._survival"
 python-source = "python"
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+possibly-missing-attribute = "error"
+possibly-unresolved-reference = "error"
+
+[tool.ty.environment]
+root = ["python"]
+
+[tool.ty.src]
+include = [
+  "python/survival/*.pyi",
+  "python/survival/r/",
+  "python/tests/typing_smoke.py",
+]
 
 [tool.ruff]
 line-length = 100
@@ -82,6 +97,7 @@ select = [
   "RET",
   "SIM",
   "ERA",
+  "RUF100",
 ]
 ignore = []
 

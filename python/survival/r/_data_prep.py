@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime
 from importlib import import_module
 from itertools import chain, compress
 from operator import index
-from typing import Any, TypeVar, cast
+from typing import Any, cast, overload
 
 import numpy as np
 
@@ -653,10 +653,15 @@ def nostutter(id: Any, x: Any, censor: Any = 0, single: bool = False) -> Factor:
     return Factor(result, list(levels.values()))
 
 
-_SurvT = TypeVar("_SurvT", Surv, Surv2)
+@overload
+def aeqSurv(x: Surv, tolerance: Any | None = None) -> Surv: ...
 
 
-def aeqSurv(x: _SurvT, tolerance: Any | None = None) -> _SurvT:
+@overload
+def aeqSurv(x: Surv2, tolerance: Any | None = None) -> Surv2: ...
+
+
+def aeqSurv(x: Surv | Surv2, tolerance: Any | None = None) -> Surv | Surv2:
     """R's ``aeqSurv``: snap near-tied times of a ``Surv`` or ``Surv2`` object."""
 
     if tolerance is not None:
@@ -740,18 +745,21 @@ def _output_name(value: Any, name: str) -> str:
     return value.strip()
 
 
-def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> dict[str, list[Any]]:
+_SplitFrame = dict[str, list[Any] | Surv | Surv2]
+
+
+def _split_frame(columns: Mapping[str, Sequence[Any]], rows: Sequence[int]) -> _SplitFrame:
     return {name: _select_rows(values, rows) for name, values in columns.items()}
 
 
-def _split_data(data: Any, rows: Sequence[int]) -> dict[str, Any]:
+def _split_data(data: Any, rows: Sequence[int]) -> _SplitFrame:
     """``data[rows, ]`` column by column; plain numeric arrays, and pandas columns of a
     numpy numeric dtype or with categorical codes, are indexed directly."""
 
     sources = _data_column_sources(data, "data")
     index = np.asarray(rows, dtype=np.intp)
     top = index.max() if len(index) else -1
-    frame: dict[str, Any] = {}
+    frame: _SplitFrame = {}
     for column, source in sources.items():
         if isinstance(source, Surv | Surv2):
             frame[column] = _subset_surv(source, list(rows))
@@ -774,7 +782,7 @@ def _split_data(data: Any, rows: Sequence[int]) -> dict[str, Any]:
             if codes is not None and len(codes) > top:
                 ordered = getattr(source, "ordered", getattr(source.dtype, "ordered", False))
                 labels = [*categories, None]
-                selected = list(map(labels.__getitem__, codes[index].tolist()))
+                selected = [labels[code] for code in codes[index].tolist()]
                 frame[column] = Factor(selected, categories, bool(ordered))
                 continue
         frame[column] = _select_rows(_rows_of(source, _materialize_1d(source, column)), rows)
@@ -1083,8 +1091,8 @@ def _survsplit_object(
 
 
 def _split_extras(
-    newdata: dict[str, list[Any]], split: Any, episode: str | None, added: str | None
-) -> dict[str, list[Any]]:
+    newdata: _SplitFrame, split: Any, episode: str | None, added: str | None
+) -> _SplitFrame:
     """survSplit's optional ``episode`` (interval number) and ``added`` (inserted row) columns,
     named by ``make.names`` as R names them."""
 

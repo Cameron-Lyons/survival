@@ -2,7 +2,7 @@
 
 ``survival.r`` ships no stub: type checkers read the inline annotations of its modules
 (``py.typed``), so every exported function must be annotated and the classes the functions
-return must be exported.  ``typing_smoke.py`` checks the same surface with mypy.  The R
+return must be exported.  ``typing_smoke.py`` checks the same surface with ty.  The R
 reference values were computed with R 4.5.3 and survival 3.8-12.
 """
 

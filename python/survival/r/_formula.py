@@ -2064,9 +2064,9 @@ def _parse_penalty_call(
                 try:
                     label = _expression_label(source, keep_integer=True)
                     dependencies = _expression_columns(source)
+                    if not dependencies:
+                        raise ValueError
                 except ValueError:
-                    dependencies = []
-                if not dependencies:
                     raise ValueError(f"unsupported penalty variable {argument!r}") from None
                 claim(label, _expression_key(_parse_expression(source)), argument)
                 expressions[label] = _CovariateTerm(dependencies[0], arithmetic=source)

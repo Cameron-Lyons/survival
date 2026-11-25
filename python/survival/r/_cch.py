@@ -157,9 +157,9 @@ def cch(
     if stratified:
         factor = _strata([("stratum", frame.extra["stratum"])], shortlabel=True)
         stratum_labels = tuple(frame.extra["stratum"])
-        levels = list(factor.levels)
+        stratum_names = tuple(factor.levels)
         codes = _complete_codes(factor, "missing values in the stratum")
-        sizes = _stratified_cohort_sizes(cohort_size, levels)
+        sizes = _stratified_cohort_sizes(cohort_size, stratum_names)
         counts = list(factor.counts)
         if len(id_values) > sum(sizes):
             raise ValueError("Number of records greater than cohort size")
@@ -197,6 +197,7 @@ def cch(
             method=method_name,
             robust=robust_value,
         )
+        stratum_names = None
         subcohort_size = (sum(subcohort),)
         cohort_sizes = (size,)
     return CchModel(
@@ -211,7 +212,7 @@ def cch(
         cohort_size=cohort_sizes,
         subcohort_size=subcohort_size,
         sc_ids=sorted_ids if stratified else None,
-        stratum_names=tuple(levels) if stratified else None,
+        stratum_names=stratum_names,
     )
 
 
