@@ -902,6 +902,19 @@ def _prediction_row_labels(
     return [label for row, label in enumerate(source) if row not in omitted]
 
 
+def _fitted_row_labels(
+    labels: tuple[str, ...] | None, n: int, na_action: NaAction | None
+) -> list[str]:
+    """A fit's model-frame row labels for its per-observation results, R's
+    ``names(object$residuals)``: the rows kept, and with ``na.exclude`` the excluded rows
+    too, where ``naresid`` pads them."""
+
+    missing = [] if na_action is None else [row - 1 for row in na_action.rows]
+    return _prediction_row_labels(
+        labels, n + len(missing), missing, bool(_excluded_rows(na_action))
+    )
+
+
 def _prediction_row_result(
     values: Any,
     fit_names: Sequence[str | None] | None,
