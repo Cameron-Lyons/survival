@@ -136,13 +136,13 @@
   new_variables <- all.vars(rate_call)
   individual <- (!method_missing && startsWith(method, "individual")) || (method_missing && !isTRUE(cohort))
   if (!israte && individual) new_variables <- union(new_variables, all.vars(stats::formula(cox_terms)[[2L]]))
-  expanded <- .formula_with_native_surv_response(stats::formula(Terms), evaluation_env)
+  expanded <- .formula_with_package_surv(stats::formula(Terms), evaluation_env)
   for (name in new_variables) expanded[[length(expanded)]] <- call("+", expanded[[length(expanded)]], as.name(name))
   frame_terms <- stats::terms(expanded)
   if (attr(frame_terms, "response")) {
     source_data <- if ("data" %in% names(Call)) eval(Call$data, evaluation_env) else NULL
     response <- eval(attr(frame_terms, "variables")[[2L]], source_data, environment(frame_terms))
-    if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
+    if (inherits(response, "survival.r._surv.Surv")) response <- .as_native_surv(response)
     predvars <- attr(frame_terms, "variables")
     predvars[[2L]] <- as.call(list(function() response))
     attr(frame_terms, "predvars") <- predvars

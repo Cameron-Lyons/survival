@@ -18,6 +18,7 @@ Imports:
     stats,
     utils
 Suggests:
+    callr,
     survival (>= 3.8-12),
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

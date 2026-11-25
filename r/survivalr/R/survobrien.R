@@ -4,7 +4,7 @@ survobrien <- function(formula, data, subset, na.action, transform) {
     stop("Transform function must be 1 to 1", call. = FALSE)
   }
   if (missing(formula)) stop("A formula argument is required", call. = FALSE)
-  formula <- .formula_with_native_surv_response(formula, parent.frame())
+  formula <- .formula_with_package_surv(formula, parent.frame())
   Terms <- if (missing(data)) {
     stats::terms(formula, specials = c("strata", "cluster", "tt"))
   } else stats::terms(formula, specials = c("strata", "cluster", "tt"), data = data)
@@ -12,7 +12,7 @@ survobrien <- function(formula, data, subset, na.action, transform) {
   source <- if (missing(data)) NULL else data
   formula_env <- environment(Terms)
   response <- eval(attr(Terms, "variables")[[2L]], source, formula_env)
-  if (inherits(response, "survival_py_surv")) response <- .as_native_surv(response)
+  if (inherits(response, "survival.r._surv.Surv")) response <- .as_native_surv(response)
   predvars <- attr(Terms, "variables")
   predvars[[2L]] <- as.call(list(function() response))
   attr(Terms, "predvars") <- predvars

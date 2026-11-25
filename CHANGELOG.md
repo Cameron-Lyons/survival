@@ -233,6 +233,16 @@ Numerical corrections are described under Fixed below.
 - R bridge results take R's shapes:
   - `brier(detail = TRUE)` names `phat`'s columns by the rows scored.
   - `concordancefit`'s `cvar` is a vector, and its `dfbeta` is named by cluster.
+- The R bridge no longer registers a global `model.frame.formula` method, which
+  rewrote every session's `model.frame()` calls, `lm` and `glm` and other packages'
+  formulas included; `stats::model.frame()` now behaves as it does with survival
+  loaded. The wrappers that build R model frames (`aareg`, `cch`, `finegray`,
+  `pyears`, `survexp`, `survobrien`, `survSplit`, `survcheck`, `fromtimeline` and
+  `totimeline`) bind survivalr's `Surv()` themselves, as survival does, so they work
+  without survivalr attached; survSplit and survcheck read their response with the
+  full `Surv()`, as that method had made them. A `Surv` proxy saved by survivalr
+  2.1.0 or earlier keeps its methods, which convert it to survival's matrix, and
+  `Surv(old)` converts it directly.
 - R bridge arguments are matched as R matches them:
   - `coxph` and `survreg` take partial names of their formals and of their control
     options passed through `...`. Examples are `coxph(..., meth = "breslow")`,

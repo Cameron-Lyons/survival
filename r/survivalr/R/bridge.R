@@ -524,58 +524,18 @@ attrassign <- function(object, tt) {
       time2 = NULL, surv_type = surv_type, states = as.list(states),
       clabel = attr(value, "clabel")
     )
-    return(.wrap_python(result, c("survival_py_surv", "survival_py_object")))
+    return(result)
   }
   # array() keeps a one-row response a sequence; a bare length-1 vector would reach
   # Python as a scalar.
   column <- function(k) array(as.numeric(value[, k]))
   if (ncol(value) == 2L) {
-    return(.wrap_python(
-      .python_attr("Surv")(column(1L), column(2L), type = surv_type),
-      c("survival_py_surv", "survival_py_object")
-    ))
+    return(.python_attr("Surv")(column(1L), column(2L), type = surv_type))
   }
   if (ncol(value) == 3L) {
-    return(.wrap_python(
-      .python_attr("Surv")(column(1L), column(2L), column(3L), type = surv_type),
-      c("survival_py_surv", "survival_py_object")
-    ))
+    return(.python_attr("Surv")(column(1L), column(2L), column(3L), type = surv_type))
   }
   stop("unsupported Surv matrix shape", call. = FALSE)
-}
-
-.survsplit_minimal_surv <- function(args) {
-  surv_type <- args[["type"]]
-  origin <- args[["origin"]]
-  if (is.null(origin)) {
-    origin <- 0
-  }
-  args[["type"]] <- NULL
-  args[["origin"]] <- NULL
-  labels <- names(args)
-  if (is.null(labels)) {
-    labels <- rep("", length(args))
-  }
-  if (length(args) == 2L) {
-    empty <- !nzchar(labels)
-    labels[empty] <- c("time", "status")[empty]
-    result <- cbind(as.numeric(args[[1L]]) - origin, as.numeric(args[[2L]]))
-    colnames(result) <- labels
-    attr(result, "type") <- if (is.null(surv_type)) "right" else surv_type
-    class(result) <- "Surv"
-    return(result)
-  }
-  if (length(args) >= 3L) {
-    first_three <- seq_len(3L)
-    empty <- !nzchar(labels[first_three])
-    labels[first_three[empty]] <- c("start", "stop", "status")[empty]
-    result <- cbind(as.numeric(args[[1L]]) - origin, as.numeric(args[[2L]]) - origin, as.numeric(args[[3L]]))
-    colnames(result) <- labels[seq_len(3L)]
-    attr(result, "type") <- if (is.null(surv_type)) "counting" else surv_type
-    class(result) <- "Surv"
-    return(result)
-  }
-  stop("Surv response requires at least two arguments", call. = FALSE)
 }
 
 .warn_deprecated_surv_mstate_type <- function(type) {
@@ -587,59 +547,9 @@ attrassign <- function(object, tt) {
   }
 }
 
-.survsplit_model_frame_surv <- function(time, time2, event, type = NULL,
-                                        origin = 0, time1, start, stop, status) {
-  .warn_deprecated_surv_mstate_type(type)
-  use_named_response <- !missing(time1) || !missing(start) ||
-    !missing(stop) || !missing(status)
-
-  if (use_named_response) {
-    if ((!missing(time)) + (!missing(time1)) + (!missing(start)) > 1L) {
-      base::stop("multiple time= arguments given (time, time1, start)", call. = FALSE)
-    }
-    if ((!missing(time2)) + (!missing(stop)) > 1L) {
-      base::stop("multiple time2= arguments given (time2, stop)", call. = FALSE)
-    }
-    if ((!missing(event)) + (!missing(status)) > 1L) {
-      base::stop("multiple event= arguments given (event, status)", call. = FALSE)
-    }
-    args <- list()
-    if (!missing(time)) {
-      args$time <- time
-    }
-    if (!missing(time1)) {
-      args$time <- time1
-    }
-    if (!missing(start)) {
-      args$time <- start
-    }
-    if (!missing(time2)) {
-      args$time2 <- time2
-    }
-    if (!missing(stop)) {
-      args$time2 <- stop
-    }
-    if (!missing(event)) {
-      args$event <- event
-    }
-    if (!missing(status)) {
-      args$event <- status
-    }
-  } else {
-    args <- list(time)
-    if (!missing(time2)) {
-      args <- c(args, list(time2))
-    }
-    if (!missing(event)) {
-      args <- c(args, list(event))
-    }
-  }
-  if (identical(type, "mstate") || is.factor(args[[length(args)]])) {
-    return(.surv_response_from_args(args, type, origin))
-  }
-  args <- c(args, .compact_null(list(type = type, origin = origin)))
-  .survsplit_minimal_surv(args)
-}
+# survSplit's and survcheck's model frames read the response with survivalr's Surv(), as
+# survival's own functions bind theirs.
+.survsplit_model_frame_surv <- function(...) Surv(...)
 
 .as_numeric_vector <- function(value) {
   as.numeric(unlist(value, recursive = TRUE, use.names = FALSE))
@@ -2685,11 +2595,16 @@ neardate <- function(id1, id2, y1, y2, best = c("after", "prior"), nomatch = NA_
   out
 }
 
-.native_model_frame_surv <- function(...) {
-  .as_native_surv(Surv(...))
-}
-
 Surv <- function(time, time2, event, type = NULL, origin = 0, time1, start, stop, status) {
+  # A response saved by survivalr 2.1.0 or earlier is a Python proxy; Surv() of it alone
+  # is survival's matrix.
+  if (!missing(time) && inherits(time, "survival.r._surv.Surv")) {
+    if (!missing(time2) || !missing(event) || !missing(time1) || !missing(start) ||
+        !missing(stop) || !missing(status) || !is.null(type) || !missing(origin)) {
+      base::stop("a saved Surv response takes no other arguments; use Surv(x)", call. = FALSE)
+    }
+    return(.as_native_surv(time))
+  }
   .warn_deprecated_surv_mstate_type(type)
   use_named_response <- !missing(time1) || !missing(start) ||
     !missing(stop) || !missing(status)
@@ -3883,7 +3798,7 @@ fromtimeline <- function(formula, data, subset, id, repeated = FALSE,
   model_formula <- formula
   if (inherits(model_formula, "formula")) {
     model_env <- new.env(parent = environment(model_formula))
-    model_env$Surv <- .native_model_frame_surv
+    model_env$Surv <- Surv
     environment(model_formula) <- model_env
   }
   frame_call <- call[c(1L, keep)]
@@ -3971,7 +3886,7 @@ totimeline <- function(formula, data, id, istate) {
   model_formula <- formula
   if (inherits(model_formula, "formula")) {
     model_env <- new.env(parent = environment(model_formula))
-    model_env$Surv <- .native_model_frame_surv
+    model_env$Surv <- Surv
     environment(model_formula) <- model_env
   }
   tcall <- call
@@ -4193,6 +4108,7 @@ aareg <- function(formula, data, weights, subset, na.action, qrtol = 1e-07,
     stop("Strata terms not allowed", call. = FALSE)
   }
 
+  formula <- .formula_with_package_surv(formula, parent.frame())
   frame_terms <- if (missing(data)) {
     stats::terms(formula, specials = "strata")
   } else {
@@ -4764,6 +4680,7 @@ cch <- function(formula, data, subcoh, id, stratum = NULL, cohort.size,
   }
 
   frame_call <- match.call(expand.dots = FALSE)
+  frame_call$formula <- .formula_with_package_surv(formula, parent.frame())
   frame_call$method <- frame_call$cohort.size <- frame_call$id <- NULL
   frame_call$subcoh <- frame_call$stratum <- frame_call$robust <- NULL
   frame_call[[1L]] <- quote(stats::model.frame)
@@ -5684,35 +5601,17 @@ as.matrix.Surv2 <- function(x, ...) {
   y
 }
 
-as.matrix.survival_py_surv <- function(x, ...) {
-  as.matrix.Surv(.as_native_surv(x), ...)
-}
-
 length.Surv <- function(x) {
   nrow(x)
-}
-
-length.survival_py_surv <- function(x) {
-  length.Surv(.as_native_surv(x))
 }
 
 names.Surv <- function(x) {
   rownames(x)
 }
 
-names.survival_py_surv <- function(x) {
-  names.Surv(.as_native_surv(x))
-}
-
 `names<-.Surv` <- function(x, value) {
   rownames(x) <- value
   x
-}
-
-`names<-.survival_py_surv` <- function(x, value) {
-  native <- .as_native_surv(x)
-  rownames(native) <- value
-  native
 }
 
 as.logical.Surv <- function(x, ...) {
@@ -5723,24 +5622,12 @@ as.logical.Surv2 <- function(x, ...) {
   stop("invalid operation on a survival time", call. = FALSE)
 }
 
-as.logical.survival_py_surv <- function(x, ...) {
-  as.logical.Surv(.as_native_surv(x), ...)
-}
-
 barplot.Surv <- function(height, ...) {
   stop("not defined for a Surv object", call. = FALSE)
 }
 
-barplot.survival_py_surv <- function(height, ...) {
-  barplot.Surv(.as_native_surv(height), ...)
-}
-
 density.Surv <- function(x, ...) {
   stop("method not defined for a Surv object", call. = FALSE)
-}
-
-density.survival_py_surv <- function(x, ...) {
-  density.Surv(.as_native_surv(x), ...)
 }
 
 hist.Surv <- function(x, ...) {
@@ -5751,20 +5638,12 @@ hist.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
 }
 
-hist.survival_py_surv <- function(x, ...) {
-  hist.Surv(.as_native_surv(x), ...)
-}
-
 identify.Surv <- function(x, ...) {
   stop("method not defined for a Surv object", call. = FALSE)
 }
 
 identify.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
-}
-
-identify.survival_py_surv <- function(x, ...) {
-  identify.Surv(.as_native_surv(x), ...)
 }
 
 image.Surv <- function(x, ...) {
@@ -5775,20 +5654,12 @@ image.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
 }
 
-image.survival_py_surv <- function(x, ...) {
-  image.Surv(.as_native_surv(x), ...)
-}
-
 lines.Surv <- function(x, ...) {
   stop("method not defined for a Surv object", call. = FALSE)
 }
 
 lines.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
-}
-
-lines.survival_py_surv <- function(x, ...) {
-  lines.Surv(.as_native_surv(x), ...)
 }
 
 pairs.Surv <- function(x, ...) {
@@ -5799,16 +5670,8 @@ pairs.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
 }
 
-pairs.survival_py_surv <- function(x, ...) {
-  pairs.Surv(.as_native_surv(x), ...)
-}
-
 plot.Surv <- function(x, ...) {
   graphics::plot(survfit(x), ...)
-}
-
-plot.survival_py_surv <- function(x, ...) {
-  plot.Surv(.as_native_surv(x), ...)
 }
 
 points.Surv <- function(x, ...) {
@@ -5819,10 +5682,6 @@ points.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
 }
 
-points.survival_py_surv <- function(x, ...) {
-  points.Surv(.as_native_surv(x), ...)
-}
-
 text.Surv <- function(x, ...) {
   stop("method not defined for a Surv object", call. = FALSE)
 }
@@ -5831,12 +5690,8 @@ text.Surv2 <- function(x, ...) {
   stop("method not defined for a Surv2 object", call. = FALSE)
 }
 
-text.survival_py_surv <- function(x, ...) {
-  text.Surv(.as_native_surv(x), ...)
-}
-
 .as_surv_arg <- function(x) {
-  if (inherits(x, "survival_py_surv")) {
+  if (inherits(x, "survival.r._surv.Surv")) {
     return(.as_native_surv(x))
   }
   x
@@ -5867,10 +5722,6 @@ c.Surv <- function(...) {
   new
 }
 
-c.survival_py_surv <- function(...) {
-  c.Surv(...)
-}
-
 c.Surv2 <- function(...) {
   slist <- list(...)
   if (!all(vapply(slist, inherits, logical(1L), what = "Surv2"))) {
@@ -5895,20 +5746,12 @@ rev.Surv <- function(x) {
   x[rev(seq_len(nrow(x)))]
 }
 
-rev.survival_py_surv <- function(x) {
-  rev.Surv(.as_native_surv(x))
-}
-
 rev.Surv2 <- function(x) {
   x[rev(seq_len(nrow(x)))]
 }
 
 rep.Surv <- function(x, ...) {
   x[rep(seq_len(nrow(x)), ...)]
-}
-
-rep.survival_py_surv <- function(x, ...) {
-  rep.Surv(.as_native_surv(x), ...)
 }
 
 rep.Surv2 <- function(x, ...) {
@@ -5919,20 +5762,12 @@ rep.int.Surv <- function(x, ...) {
   x[rep.int(seq_len(nrow(x)), ...)]
 }
 
-rep.int.survival_py_surv <- function(x, ...) {
-  rep.int.Surv(.as_native_surv(x), ...)
-}
-
 rep.int.Surv2 <- function(x, ...) {
   x[rep.int(seq_len(nrow(x)), ...)]
 }
 
 rep_len.Surv <- function(x, ...) {
   x[rep_len(seq_len(nrow(x)), ...)]
-}
-
-rep_len.survival_py_surv <- function(x, ...) {
-  rep_len.Surv(.as_native_surv(x), ...)
 }
 
 rep_len.Surv2 <- function(x, ...) {
@@ -5943,10 +5778,6 @@ t.Surv <- function(x) {
   t(as.matrix(x))
 }
 
-t.survival_py_surv <- function(x) {
-  t.Surv(.as_native_surv(x))
-}
-
 t.Surv2 <- function(x) {
   t(as.matrix(x))
 }
@@ -5955,16 +5786,8 @@ head.Surv <- function(x, ...) {
   x[utils::head(seq_len(nrow(x)), ...)]
 }
 
-head.survival_py_surv <- function(x, ...) {
-  head.Surv(.as_native_surv(x), ...)
-}
-
 tail.Surv <- function(x, ...) {
   x[utils::tail(seq_len(nrow(x)), ...)]
-}
-
-tail.survival_py_surv <- function(x, ...) {
-  tail.Surv(.as_native_surv(x), ...)
 }
 
 tail.Surv2 <- function(x, ...) {
@@ -5975,20 +5798,12 @@ anyDuplicated.Surv <- function(x, ...) {
   anyDuplicated(as.matrix(x), ...)
 }
 
-anyDuplicated.survival_py_surv <- function(x, ...) {
-  anyDuplicated.Surv(.as_native_surv(x), ...)
-}
-
 anyDuplicated.Surv2 <- function(x, ...) {
   anyDuplicated(as.matrix(x), ...)
 }
 
 duplicated.Surv <- function(x, ...) {
   duplicated(as.matrix(x), ...)
-}
-
-duplicated.survival_py_surv <- function(x, ...) {
-  duplicated.Surv(.as_native_surv(x), ...)
 }
 
 duplicated.Surv2 <- function(x, ...) {
@@ -5999,24 +5814,12 @@ unique.Surv <- function(x, ...) {
   x[!duplicated(as.matrix(x), ...)]
 }
 
-unique.survival_py_surv <- function(x, ...) {
-  unique.Surv(.as_native_surv(x), ...)
-}
-
 levels.Surv <- function(x) {
   attr(x, "states")
 }
 
-levels.survival_py_surv <- function(x) {
-  levels.Surv(.as_native_surv(x))
-}
-
 Math.Surv <- function(...) {
   stop("Invalid operation on a survival time", call. = FALSE)
-}
-
-Math.survival_py_surv <- function(...) {
-  Math.Surv(...)
 }
 
 Math.Surv2 <- function(...) {
@@ -6027,20 +5830,12 @@ Ops.Surv <- function(...) {
   stop("Invalid operation on a survival time", call. = FALSE)
 }
 
-Ops.survival_py_surv <- function(...) {
-  Ops.Surv(...)
-}
-
 Ops.Surv2 <- function(...) {
   stop("Invalid operation on a survival time", call. = FALSE)
 }
 
 Summary.Surv <- function(...) {
   stop("Invalid operation on a survival time", call. = FALSE)
-}
-
-Summary.survival_py_surv <- function(...) {
-  Summary.Surv(...)
 }
 
 Summary.Surv2 <- function(...) {
@@ -6062,10 +5857,6 @@ xtfrm.Surv <- function(x) {
   temp[index] <- seq_len(nrow(x))
   temp[is.na(x)] <- NA_integer_
   temp
-}
-
-xtfrm.survival_py_surv <- function(x) {
-  xtfrm.Surv(.as_native_surv(x))
 }
 
 .survfit_quantile_findq <- function(x, y, p, tol) {
@@ -6661,21 +6452,12 @@ quantile.Surv <- function(x, probs = c(0.25, 0.5, 0.75), na.rm = FALSE, ...) {
   if (na.rm) {
     x <- x[!is.na(x)]
   }
-  fit <- survfit.survival_py_surv(.as_python_surv(x))
+  fit <- .survfit_python_response(.as_python_surv(x))
   quantile.survival_py_survfit(fit, probs = probs, ...)
-}
-
-quantile.survival_py_surv <- function(x, probs = c(0.25, 0.5, 0.75),
-                                      na.rm = FALSE, ...) {
-  quantile.Surv(.as_native_surv(x), probs = probs, na.rm = na.rm, ...)
 }
 
 median.Surv <- function(x, na.rm = FALSE, ...) {
   quantile.Surv(x, probs = 0.5, na.rm = na.rm, ...)
-}
-
-median.survival_py_surv <- function(x, na.rm = FALSE, ...) {
-  median.Surv(.as_native_surv(x), na.rm = na.rm, ...)
 }
 
 print.Surv <- function(x, quote = FALSE, ...) {
@@ -6694,7 +6476,9 @@ print.Surv2 <- function(x, quote = FALSE, ...) {
     identical(formula[[2L]][[1L]], quote(Surv))
 }
 
-.formula_with_native_surv_response <- function(formula, env) {
+# A formula whose unqualified Surv() is survivalr's, as survival's addSurvFun binds it,
+# so wrappers that build R model frames work without survivalr attached.
+.formula_with_package_surv <- function(formula, env) {
   if (!.formula_has_unqualified_surv_response(formula)) {
     return(formula)
   }
@@ -6704,16 +6488,9 @@ print.Surv2 <- function(x, quote = FALSE, ...) {
     formula_env <- env
   }
   model_env <- new.env(parent = formula_env)
-  model_env$Surv <- .native_model_frame_surv
+  model_env$Surv <- Surv
   environment(formula) <- model_env
   formula
-}
-
-model.frame.formula <- function(formula, ...) {
-  stats::model.frame.default(
-    .formula_with_native_surv_response(formula, parent.frame()),
-    ...
-  )
 }
 
 .surv_na_times <- function(values) {
@@ -6802,29 +6579,16 @@ model.frame.formula <- function(formula, ...) {
   out
 }
 
-`[.survival_py_surv` <- function(x, i, j, drop = FALSE) {
-  native <- .as_native_surv(x)
-  if (missing(j)) {
-    if (missing(i)) {
-      native[]
-    } else {
-      native[i]
-    }
-  } else if (missing(i)) {
-    if (missing(drop)) native[, j] else native[, j, drop = drop]
-  } else {
-    if (missing(drop)) native[i, j] else native[i, j, drop = drop]
-  }
-}
-
 `[.Surv` <- function(x, i, j, drop = FALSE) {
   if (missing(j)) {
     xattr <- attributes(x)
     out <- unclass(x)[i, , drop = FALSE]
     attr(out, "type") <- xattr$type
-    attr(out, "clabel") <- xattr$clabel
     if (!is.null(xattr$states)) {
       attr(out, "states") <- xattr$states
+    }
+    if (!is.null(xattr$clabel)) {
+      attr(out, "clabel") <- xattr$clabel
     }
     if (!is.null(xattr$inputAttributes)) {
       attr(out, "inputAttributes") <- lapply(xattr$inputAttributes, function(value) {
@@ -6858,22 +6622,7 @@ model.frame.formula <- function(formula, ...) {
   }
 }
 
-format.survival_py_surv <- function(x, ...) {
-  as.character(.call_r_api("format_surv", x, ...))
-}
-
-as.character.survival_py_surv <- function(x, ...) {
-  as.character.Surv(.as_native_surv(x), ...)
-}
-
-is.na.survival_py_surv <- function(x) {
-  as.logical(.call_r_api("is_na_surv", x))
-}
-
 as.character.Surv <- function(x, ...) {
-  if (inherits(x, "survival_py_surv")) {
-    return(as.character(.call_r_api("format_surv", x, ...)))
-  }
   new <- switch(attr(x, "type"),
     right = {
       temp <- x[, 2L]
@@ -6919,16 +6668,10 @@ as.character.Surv <- function(x, ...) {
 }
 
 format.Surv <- function(x, ...) {
-  if (inherits(x, "survival_py_surv")) {
-    return(format.survival_py_surv(x, ...))
-  }
   format(as.character.Surv(x), ...)
 }
 
 is.na.Surv <- function(x) {
-  if (inherits(x, "survival_py_surv")) {
-    return(is.na.survival_py_surv(x))
-  }
   as.vector(rowSums(is.na(unclass(x))) > 0)
 }
 
@@ -7296,7 +7039,7 @@ agexact.fit <- function(x, y, strata, offset, init, control, weights, method,
   if (!is.matrix(x)) {
     stop("Invalid formula for cox fitting function", call. = FALSE)
   }
-  if (inherits(y, "survival_py_surv")) {
+  if (inherits(y, "survival.r._surv.Surv")) {
     y <- .as_native_surv(y)
   }
   if (!inherits(y, "Surv") || !is.matrix(y)) {
@@ -7493,7 +7236,7 @@ survfit.character <- function(formula, data = NULL, ..., subset = NULL, na.actio
 }
 
 survfit.Surv <- function(formula, ..., group = NULL, subset = NULL, na.action = NULL) {
-  survfit.survival_py_surv(
+  .survfit_python_response(
     .as_python_surv(formula),
     ...,
     group = group,
@@ -7502,7 +7245,8 @@ survfit.Surv <- function(formula, ..., group = NULL, subset = NULL, na.action = 
   )
 }
 
-survfit.survival_py_surv <- function(formula, ..., group = NULL, subset = NULL, na.action = NULL) {
+# survfit for a Python Surv response, the one conversion survfit.Surv and quantile.Surv make.
+.survfit_python_response <- function(formula, ..., group = NULL, subset = NULL, na.action = NULL) {
   dots <- list(...)
   vector_args <- intersect(c("weights", "id", "cluster", "istate", "etype"), names(dots))
   for (name in vector_args) {
@@ -7555,7 +7299,7 @@ survfitKM <- function(x, y, weights = rep(1, length(x)), stype = 1, ctype = 1,
                       id, cluster, robust, influence = FALSE, type,
                       entry = FALSE, time0 = FALSE) {
   if (!is.factor(x)) stop("x must be a factor", call. = FALSE)
-  if (!inherits(y, "survival_py_surv") && !inherits(y, "Surv")) {
+  if (!inherits(y, c("Surv", "survival.r._surv.Surv"))) {
     stop("y must be a Surv object", call. = FALSE)
   }
   args <- list(
@@ -8891,7 +8635,7 @@ survreg <- function(formula, data = NULL, ..., subset = NULL, na.action = NULL) 
     vector_args = c("weights", "offset", "cluster")
   )
   evaluated_dots <- .normalize_survreg_distribution_dots(evaluated_dots)
-  if (inherits(formula, c("Surv", "survival_py_surv")) && is.matrix(evaluated_dots$x)) {
+  if (inherits(formula, c("Surv", "survival.r._surv.Surv")) && is.matrix(evaluated_dots$x)) {
     evaluated_dots$x <- .as_python_aft_matrix(evaluated_dots$x)
   }
   # R's fit records its call, which update(), drop1() and step() refit from.
@@ -9205,10 +8949,11 @@ concordancefit <- function(y, x, strata, weights, ymin = NULL, ymax = NULL,
                            cluster, influence = 0, ranks = FALSE,
                            reverse = FALSE, timefix = TRUE, keepstrata = 10,
                            std.err = TRUE) {
+  if (inherits(y, "survival.r._surv.Surv")) y <- .as_native_surv(y)
   if (any(is.na(x)) || any(is.na(y))) {
     return(NULL)
   }
-  if (!inherits(y, c("Surv", "survival_py_surv"))) {
+  if (!inherits(y, c("Surv", "survival.r._surv.Surv"))) {
     if (is.factor(y) && (is.ordered(y) || nlevels(y) == 2L)) {
       y <- as.numeric(y)
     } else if (!is.numeric(y) || !is.null(dim(y))) {
@@ -10872,10 +10617,6 @@ as.data.frame.survival_py_survfit <- function(x, row.names = NULL, optional = FA
   frame
 }
 
-as.data.frame.survival_py_surv <- function(x, row.names = NULL, optional = FALSE, ...) {
-  as.data.frame.Surv(.as_native_surv(x), row.names = row.names, optional = optional, ...)
-}
-
 as.data.frame.survival_py_basehaz <- function(x, row.names = NULL, optional = FALSE, ...) {
   .as_r_data_frame(x, row.names = row.names, optional = optional, ...)
 }
@@ -10940,11 +10681,6 @@ print.survival_py_survfit <- function(x, scale = 1, digits = max(options()$digit
       print_rmean = print.rmean, rmean = rmean, width = getOption("width"))
   }
   .cat_report(report)
-  invisible(x)
-}
-
-print.survival_py_surv <- function(x, ...) {
-  print(.as_native_surv(x), ...)
   invisible(x)
 }
 
