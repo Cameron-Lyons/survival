@@ -56,6 +56,7 @@ from ._coerce import (
 from ._fit import (
     _empty_prediction,
     _excluded_rows,
+    _fitted_row_labels,
     _fitted_xlevels,
     _model_matrix_contrasts,
     _model_matrix_evaluated,
@@ -1263,13 +1264,7 @@ def predict_survreg(
     if new is None and not include_se and predict_type in {"response", "link", "lp", "linear"}:
         return _prediction_row_result(output, None, None)
     if new is None:
-        missing = [] if fit.na_action is None else [row - 1 for row in fit.na_action.rows]
-        labels = _prediction_row_labels(
-            fit._prediction_rows,
-            int(fit.fit.n) + len(missing),
-            missing,
-            bool(_excluded_rows(fit.na_action)),
-        )
+        labels = _fitted_row_labels(fit._prediction_rows, int(fit.fit.n), fit.na_action)
     else:
         count = new.n + len(new.missing)
         labels = _prediction_row_labels(
@@ -1376,7 +1371,14 @@ def residuals_survreg(
     elif excluded:
         values = _rowsum_excluded(values, codes, excluded)
     result = _drop(values, residual_type in {"dfbeta", "dfbetas", "matrix"})
-    return {"values": result, "group_names": group_names} if _with_group_names else result
+    if not _with_group_names:
+        return result
+    row_names = (
+        _fitted_row_labels(fit._prediction_rows, int(model.n), fit.na_action)
+        if group_names is None
+        else None
+    )
+    return {"values": result, "group_names": group_names, "row_names": row_names}
 
 
 def _refit_terms(fit: SurvregModel, keep: int) -> Any:

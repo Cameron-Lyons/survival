@@ -2524,9 +2524,9 @@ test_that("R formula wrappers delegate to the Python survival package", {
   expect_equal(nobs(aft_fit), nrow(data))
   expect_null(attr(logLik(aft_fit), "nobs"))
   fit_aic <- extractAIC(fit)
-  expect_named(fit_aic, c("df", "AIC"))
-  expect_equal(fit_aic[["df"]], 1)
-  expect_equal(fit_aic[["AIC"]], as.numeric(AIC(fit)))
+  expect_null(names(fit_aic))
+  expect_equal(fit_aic[[1L]], 1)
+  expect_equal(fit_aic[[2L]], as.numeric(AIC(fit)))
   expect_equal(deparse(formula(fit)), "Surv(time, status) ~ x")
   expect_s3_class(terms(fit), "terms")
   expect_null(weights(fit))
@@ -7945,7 +7945,7 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
   weibull <- survreg(Surv(time, status) ~ age + ph.ecog, data = lung)
   reference_weibull <- survival::survreg(survival::Surv(time, status) ~ age + ph.ecog, data = lung)
   expect_equal(unname(coef(weibull)), unname(coef(reference_weibull)), tolerance = 1e-6)
-  expect_equal(residuals(weibull)[1:5], unname(residuals(reference_weibull)[1:5]), tolerance = 1e-5)
+  expect_equal(residuals(weibull)[1:5], residuals(reference_weibull)[1:5], tolerance = 1e-5)
 
   excluded <- coxph(Surv(time, status) ~ age + ph.ecog, data = lung, na.action = na.exclude)
   reference_excluded <- survival::coxph(
@@ -7953,9 +7953,9 @@ test_that("bridge fits follow R's na.action, labels and multi-state methods", {
     data = lung,
     na.action = na.exclude
   )
-  expect_equal(residuals(excluded), unname(residuals(reference_excluded)), tolerance = 1e-9)
+  expect_equal(residuals(excluded), residuals(reference_excluded), tolerance = 1e-9)
   expect_equal(predict(excluded), unname(predict(reference_excluded)), tolerance = 1e-9)
-  expect_identical(which(is.na(residuals(excluded))), 14L)
+  expect_identical(unname(which(is.na(residuals(excluded)))), 14L)
   expect_false(any(is.nan(residuals(excluded))))
 
   stratified <- coxph(Surv(time, status) ~ age + strata(sex), data = lung)
