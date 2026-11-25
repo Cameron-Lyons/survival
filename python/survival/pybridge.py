@@ -373,6 +373,7 @@ _R_BRIDGE_HELPERS = {
     "_survcheck_codes": ("_misc", "_survcheck_codes"),
     "_prediction_term_names": ("_models", "_prediction_term_names"),
     "_subset_coxms_curves": ("_models", "_subset_coxms_curves"),
+    "_subset_survfit": ("_models", "_subset_survfit"),
     "_subset_survfit_multistate": ("_models", "_subset_survfit_multistate"),
     "_survfit_multistate_structure": ("_models", "_survfit_multistate_structure"),
     "_survfit_strata_curves": ("_models", "_survfit_strata_curves"),

@@ -530,7 +530,7 @@ survfit(formula, ...)
 \method{survfit}{survival_py_surv}(formula, ..., group = NULL, subset = NULL,
   na.action = NULL)
 
-\method{survfit}{survival_py_coxph}(formula, newdata = NULL, ..., se.fit = TRUE)
+\method{survfit}{survival_py_coxph}(formula, newdata = NULL, ..., id, se.fit = TRUE)
 
 \method{model.frame}{formula}(formula, ...)
 
@@ -1016,7 +1016,8 @@ methods and sampling-stratified I.Borgan and II.Borgan methods are supported.}
 \item{id}{Optional generated row identifier column for \code{survSplit}, or
 subject identifiers for \code{survcondense}, \code{survcheck}, timeline
 converters, native \code{cch}, native \code{tmerge}, and
-low-level \code{survfitKM}.}
+low-level \code{survfitKM}. For \code{survfit} on a \code{coxph} fit, the
+subject of each \code{newdata} row, read from \code{newdata} as R does.}
 \item{istate}{Optional initial state vector for \code{survcheck} and
 timeline converters.}
 \item{istate0}{Initial-state label accepted for \code{survcheck}

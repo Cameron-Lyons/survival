@@ -313,6 +313,16 @@ Numerical corrections are described under Fixed below.
   collide with curve fields; the R bridge retains R's duplicate names.
 - `neardate` treats negative and positive zero dates as ties, preserving R's
   first-row (`after`) and last-row (`prior`) tie rules.
+- Three R bridge `survfit` lookups follow R:
+  - `survfit(coxfit, newdata, id = pid)` reads `pid` from `newdata`, as R's model
+    frame does. It failed with "object 'pid' not found", or silently used a
+    calling-environment `pid` instead.
+  - A selection of two or more strata of a grouped Kaplan–Meier or multi-state fit
+    (`fit[1:2]`, `fit[c(1, 3), ]`) keeps the fit that `summary(times =)`, `survfit0`
+    and the other whole-fit methods read; they failed with "function requires a
+    survfit object", and `summary()` lost the strata.
+  - Multi-state `summary(times =)` sorts and deduplicates the times and accumulates
+    the event and censoring counts, as `summary.survfitms` does.
 - `strata` accepts a shared one-shot iterator in multiple columns, including
   iterators with declared factor levels.
 
