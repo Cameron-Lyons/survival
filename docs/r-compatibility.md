@@ -1139,6 +1139,10 @@ counts. Parallel fits preserve the sequential addition order.
   not store, strip trailing spaces and read no global print options. Curve and
   expected-curve output does not reconstruct omission notices, and expected-curve
   output omits R's rate-table prose.
+- In the R bridge, prints equal R's except for the trailing spaces the reports drop.
+  `anova()` of a survreg fit leaves out R's heading line ` distribution with  link`:
+  `anova.survreg` reads `object$family`, which survreg fits lack, so R prints both
+  names empty.
 - `print_survreg_penal` prints the Call block as `survreg(formula = ...)`; R
   `dput()`s the whole call. Its `terms=TRUE` Wald rows keep R's p-value on 1 df
   while the DF column shows the term's df, as `summary_coxph_penal` does.

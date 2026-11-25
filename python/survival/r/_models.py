@@ -1084,9 +1084,30 @@ def _subset_coxms_curves(
     )
 
 
-def _bare_strata_label(name: str) -> str:
-    """``rx=1`` -> ``1`` and ``a=1, b=x`` -> ``1, x`` (the labels the bridge names curves by)."""
+def _bare_strata_label(name: str, terms: Sequence[str] = ()) -> str:
+    """``rx=1`` -> ``1`` and ``a=1, b=x`` -> ``1, x`` (the labels the bridge names curves by).
 
+    R joins one ``term=value`` part per curve term with ``", "``. With the term labels
+    each known prefix is removed once, so a term holding commas keeps its value whole:
+    ``strata(sex, ecog)=sex=1, ecog=0`` -> ``sex=1, ecog=0``. Without them, or for a
+    label they do not spell, any leading ``name=`` of a part goes.
+    """
+
+    values = []
+    rest = name
+    for index, term in enumerate(terms):
+        prefix = f"{term}="
+        if not rest.startswith(prefix):
+            break
+        rest = rest[len(prefix) :]
+        if index + 1 == len(terms):
+            values.append(rest)
+            return ", ".join(values)
+        boundary = rest.find(f", {terms[index + 1]}=")
+        if boundary < 0:
+            break
+        values.append(rest[:boundary])
+        rest = rest[boundary + 2 :]
     return re.sub(r"(^|, )[^=,]+=", r"\1", name)
 
 
@@ -1145,8 +1166,9 @@ def _survfit_strata_curves(result: Any) -> Any:
 
     if not isinstance(result, SurvfitResult | SurvfitMultiStateResult) or not result.strata:
         return result
+    terms = result.call.terms
     return {
-        _bare_strata_label(name): _survfit_stratum(result, index)
+        _bare_strata_label(name, terms): _survfit_stratum(result, index)
         for index, name in enumerate(result.strata)
     }
 
